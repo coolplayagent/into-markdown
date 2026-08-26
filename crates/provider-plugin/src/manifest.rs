@@ -30,7 +30,7 @@ pub struct HostApiRange {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CapabilityKind {
-    /// Legacy binary Office normalization through a private `LibreOffice` runtime.
+    /// Legacy binary Office compatibility extension retained for external manifests.
     LegacyOffice,
     /// Image or rendered-page OCR.
     Ocr,

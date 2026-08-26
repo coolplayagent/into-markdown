@@ -3,9 +3,9 @@
 最终用户应按[安装与部署指南](user-guide.md)校验签名与摘要、安装 Core、离线导入能力插件并
 排障；本文描述跨平台发布装配与验收权威。
 
-Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个只含
-Core 能力的归档，以及 `official.ocr.ppocrv6`、`official.media.whisper` 两个自包含 `.imp`。
-Core 不包含 FFmpeg、ONNX Runtime 或 OCR/语音模型；每个插件包含离线运行所需的完整 runtime、模型、字典、许可、
+Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个包含
+Office 97–2003 原生解析的 Core 归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`
+两个自包含 `.imp`。Core 不包含 FFmpeg、ONNX Runtime 或 OCR/语音模型；每个插件包含离线运行所需的完整 runtime、模型、字典、许可、
 SBOM、签名清单和目标平台声明。
 
 每个最终 Core/插件构件同时发布以完整文件名为前缀的 `.spdx.json`、`.sources.json` 和
@@ -20,7 +20,8 @@ SBOM、签名清单和目标平台声明。
 原生发布入口是 `tools/platform-release/release.py`。它拒绝在非目标架构组装发布件，并固定
 Rust 版本、PDFium、ONNX Runtime、模型、FFmpeg 审计产物、下载大小和 SHA-256。
 Linux 归档为确定性 `tar.gz`，Windows 归档为确定性 ZIP。发行工作流在对应原生 runner 上
-连续组装两次并逐字节比较 Core 和两个插件，然后从归档安装 Core、安装和验证两个插件并卸载。
+连续组装两次并逐字节比较 Core 和两个插件，然后从归档安装 Core、安装和验证两个插件、运行
+DOC/PPT/XLS 真实文件转换并卸载。
 
 Linux 两个架构都在 `authority.json` 固定摘要的 Rocky Linux 8.10 原生容器中构建。发布契约是
 glibc 不高于 2.28、运行内核 5.15 以上；x86_64 使用通用 `x86-64`，ARM64 使用通用 ARMv8-A，

@@ -406,15 +406,6 @@ pub(crate) fn verify_diarization_runtime(
     assemble_diarization_config(loaded, &options, &context, cwd).map(drop)
 }
 
-/// Verify construction of the self-contained legacy Office plugin route.
-pub(crate) fn verify_legacy_office_runtime(
-    loaded: &LoadedConfig,
-    cwd: &Path,
-) -> Result<(), ConversionError> {
-    let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
-    assemble_legacy_office_config(loaded, &context, cwd).map(drop)
-}
-
 /// Revision of plugin and routing authority used to invalidate a
 /// cached unavailable status after an explicit capability installation.
 pub(crate) fn media_model_revision() -> u128 {
@@ -474,17 +465,6 @@ fn assemble_at(
             assemble_diarization_config(loaded, &loaded.options, &context, cwd)
                 .map_err(CliError::from)?,
         );
-    }
-    if needs.legacy_office
-        && (configured_route_is_active(&loaded.effective.capability_routes.legacy_office)
-            || loaded
-                .effective
-                .plugins
-                .get("official.legacy-office.libreoffice")
-                .is_some_and(|plugin| plugin.enabled))
-    {
-        services.legacy_office =
-            Some(assemble_legacy_office_config(loaded, &context, cwd).map_err(CliError::from)?);
     }
     Ok(services)
 }
@@ -637,7 +617,7 @@ fn parse_provider_reference(
 
 const fn capability_name(kind: into_markdown_provider_plugin::CapabilityKind) -> &'static str {
     match kind {
-        into_markdown_provider_plugin::CapabilityKind::LegacyOffice => "legacy-office-plugin",
+        into_markdown_provider_plugin::CapabilityKind::LegacyOffice => "legacy-office-extension",
         into_markdown_provider_plugin::CapabilityKind::Ocr => "ocr-plugin",
         into_markdown_provider_plugin::CapabilityKind::Transcription => "transcription-plugin",
         into_markdown_provider_plugin::CapabilityKind::Diarization => "diarization-plugin",
@@ -649,7 +629,7 @@ const fn capability_setup_hint(
 ) -> &'static str {
     match kind {
         into_markdown_provider_plugin::CapabilityKind::LegacyOffice => {
-            "run `into-md setup legacy-office`"
+            "Office 97-2003 conversion is built into Core"
         }
         into_markdown_provider_plugin::CapabilityKind::Ocr => "run `into-md setup ocr`",
         into_markdown_provider_plugin::CapabilityKind::Transcription
@@ -674,24 +654,6 @@ fn assemble_diarization_config(
     )?
     .diarizer(options.clone())
     .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::Diarizer>)
-}
-
-fn assemble_legacy_office_config(
-    loaded: &LoadedConfig,
-    context: &ExecutionContext,
-    cwd: &Path,
-) -> Result<Arc<dyn into_markdown::LegacyOfficeNormalizer>, ConversionError> {
-    resolve_process_capability(
-        loaded,
-        cwd,
-        into_markdown_provider_plugin::CapabilityKind::LegacyOffice,
-        &loaded.effective.capability_routes.legacy_office,
-        "official.legacy-office.libreoffice/legacy-office",
-        into_markdown_provider_plugin::ResolutionMode::RequiredPrimary,
-        context,
-    )?
-    .legacy_office()
-    .map(|provider| Arc::new(provider) as Arc<dyn into_markdown::LegacyOfficeNormalizer>)
 }
 
 fn assemble_asr(

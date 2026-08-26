@@ -466,9 +466,10 @@ mod macos {
             writeln!(profile, "(allow file-write* (subpath \"{temporary}\"))")
                 .map_err(std::io::Error::other)?;
             if compatibility_child {
-                // LibreOffice derives one per-user, per-profile socket name in
-                // /private/tmp. The nested worker applies the exact literal;
-                // this outer profile grants only the fixed uid-bound namespace.
+                // Compatibility children may derive one per-user, per-profile
+                // socket name in /private/tmp. The nested worker applies the
+                // exact literal; this outer profile grants only the fixed
+                // uid-bound namespace.
                 // SAFETY: geteuid has no arguments and no failure condition.
                 let uid = unsafe { libc::geteuid() };
                 writeln!(

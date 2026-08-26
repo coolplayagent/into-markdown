@@ -539,11 +539,11 @@ const FAMILY_COVERAGE: [(&str, &str, &str, &str, &str, &str); 12] = [
     ),
     (
         "legacy-office",
-        "gate:legacy-office-installed-smoke",
+        "gate:legacy-office-core-installed-smoke",
         "gate:legacy-office-complex-smoke",
         "gate:legacy-office-corrupt-input",
         "gate:legacy-office-resource-limits",
-        "//crates/legacy-office:legacy_office_test",
+        "//crates/converters:converters_test",
     ),
 ];
 

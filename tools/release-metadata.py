@@ -199,7 +199,7 @@ def core_projection(
     }
 
 
-def plugin_owner(path: str, target: str) -> str | None:
+def plugin_owner(path: str) -> str | None:
     if "onnxruntime" in path and path.rsplit("/", 1)[-1].startswith(("libonnxruntime", "onnxruntime")):
         return "onnxruntime-cpu"
     if path.endswith("pp-ocrv6-tiny-detector-onnx/inference.onnx"):
@@ -216,22 +216,6 @@ def plugin_owner(path: str, target: str) -> str | None:
         return "3dspeaker-eres2net-base-onnx-model"
     if path.startswith(("ffmpeg/", "source/ffmpeg-", "relink/ffmpeg-")):
         return "ffmpeg"
-    if path.startswith("legacy-office-runtime/") and not path.endswith(
-        ("legacy-office-worker", "legacy-office-worker.exe", "authority.json")
-    ):
-        return {
-            "aarch64-apple-darwin": "libreoffice-macos-arm64",
-            "x86_64-unknown-linux-gnu": "libreoffice-linux-x86_64",
-            "aarch64-unknown-linux-gnu": "libreoffice-linux-arm64",
-            "x86_64-pc-windows-msvc": "libreoffice-windows-x86_64",
-        }[target]
-    if path == "legacy-office-runtime/authority.json":
-        return {
-            "aarch64-apple-darwin": "libreoffice-macos-arm64",
-            "x86_64-unknown-linux-gnu": "libreoffice-linux-x86_64",
-            "aarch64-unknown-linux-gnu": "libreoffice-linux-arm64",
-            "x86_64-pc-windows-msvc": "libreoffice-windows-x86_64",
-        }[target]
     return None
 
 
@@ -308,7 +292,7 @@ def plugin_projection(
         for info in infos:
             contents = package.read(info)
             path = info.filename
-            owner = plugin_owner(path, target)
+            owner = plugin_owner(path)
             entry = {
                 "path": path,
                 "bytes": len(contents),

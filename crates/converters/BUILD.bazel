@@ -21,7 +21,6 @@ rust_library(
         "//crates/pdf-layout:pdf_layout",
         "//crates/ocr",
         "//crates/http-transport:http_transport",
-        "//crates/legacy-office:legacy_office",
         "@crates//:base64",
         "@crates//:calamine",
         "@crates//:chardetng",
@@ -50,6 +49,7 @@ rust_test(
         "//:Cargo.lock",
         "//:Cargo.toml",
         "//fixtures:corpus",
+        "//tools/macos-release:legacy_fixtures",
     ],
     data = [
         "//fixtures:corpus",
@@ -63,7 +63,6 @@ rust_test(
         "//crates/pdf-layout:pdf_layout",
         "//crates/ocr",
         "//crates/http-transport:http_transport",
-        "//crates/legacy-office:legacy_office",
         "//crates/render-markdown:render_markdown",
         "@crates//:base64",
         "@crates//:calamine",

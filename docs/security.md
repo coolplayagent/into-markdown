@@ -30,31 +30,12 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   closed。stream chain 必须与声明长度所需 sector 数完全一致。CID 和 HTML 外链不触发网络；
   只有 exact canonical CID 引用可绑定通过 MIME 与结构审计的唯一 PNG/JPEG，未引用或非图片
   CID 按普通附件处理；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
-- 旧 Office 的 native 兼容解析只在单请求 `legacy-office-worker` 中发生。父进程先双向校验
-  `authority.json` 与完整 runtime tree，拒绝额外文件、symlink/reparse、许可或 ABI/export
-  漂移；ELF `DT_NEEDED/RPATH/RUNPATH`、Mach-O load command/rpath 与 PE imports 递归解析，
-  非系统依赖必须唯一解析到 inventory，系统依赖必须出现在平台精确 `systemLibraries`
-  identity/path allowlist。绝对逃逸、未列出或歧义依赖在任何 constructor 执行前拒绝。
-  父进程把完整 authority runtime inventory 复制到请求私有只读 inode tree，实际
-  exec/load 只引用该 tree；worker 在 sandbox 安装后才加载 kit。环境从
-  空集合启动，参数均为 canonical absolute path，不读取 `PATH`、HOME、代理、loader 或当前目录
-  authority。协议具有固定 magic/version/kind/request-id、checked 64-bit payload length、完整
-  SHA-256 和 EOF exhaustion；格式混淆、尾随帧与超限输出 fail closed。
-  worker 在读取敌意正文前安装 hard address/file/descriptor limits 与平台 sandbox：macOS seatbelt
-  固定 deny network/fork/exec 且只开放 snapshot/temp 与逐文件 system library，Linux 使用 Landlock 加
-  seccomp（网络、非线程 clone、exec、ptrace、mount、跨进程 kill/pidfd/process_vm 与 io_uring
-  等拒绝），Windows 要求使用预置 profile 的
-  零 capability AppContainer：`CreateProcessW` 只继承 stdin/stdout/stderr，suspended process 先
-  进入 process-memory/active-process=1/kill-on-close Job，复核 token SID 后才 resume；runtime DLL
-  搜索仅允许 authority kit directory 与 System32。profile/ACL 的创建、原子替换和删除属于平台
-  安装事务，转换请求绝不修改。任一证明不可用都返回 `componentUnavailable`，不降级为本进程解析。
-  父进程对取消、deadline、崩溃、协议错误均终止独立 process group/job 并 wait/reap；私有
-  temporary root 在 worker 运行与退出前持续扫描 entry/depth/declared bytes，超过同一请求已预留
-  上限或出现 symlink/special file 会立即终止 worker；input/output/profile 在成功或失败后共同释放。
-  宏以最高 security level 禁用，sandbox 同时阻止外链、任意文件读取与子进程；worker 与父进程
-  使用同一 OOXML audit：完整消费 exact ZIP envelope/central/local/descriptor、拒绝加密、重复、
-  path escape、overlap 与 CRC 错误，并以 `[Content_Types].xml` 和根 relationship 唯一绑定
-  DOCX/PPTX/XLSX family，之后才进入 nested converter。
+- Office 97–2003 与 MSG 共用 Core 内受限 CFB/OLE reader；DIFAT、FAT、miniFAT、目录树、
+  stream chain、sector 所有权、循环、重叠与截断在格式前端运行前统一校验。DOC piece table、
+  PPT record/persist 图和 XLS BIFF8 record 均接入请求取消、内存、结构、表格与 Asset 预算；
+  加密、损坏和超限分别返回稳定的 `encrypted`、`malformed` 与 `resourceLimit`。解析器不创建
+  进程、不读取 PATH 或系统 Office、不访问网络，也不执行宏、ActiveX、公式或嵌入式可执行对象；
+  可安全恢复的内容带结构化 diagnostic，其余内容稳定跳过。
 - PresentationML 只沿 root officeDocument 与 slide order 可达的受授权关系图按需解压；未知或
   未引用 payload 不进入内存。VBA、ActiveX、OLE 与 embedded package 目标同时按 content type
   和关系 type 在解压前隔离，即使目标重命名或伪装为 octet-stream 也不能绕过。所有外部关系

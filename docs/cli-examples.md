@@ -34,8 +34,6 @@
 - OCR：`into-md setup ocr`
 <!-- cli-example: setup media -->
 - 语音：`into-md setup media`
-<!-- cli-example: setup legacy-office -->
-- 旧 Office：`into-md setup legacy-office`
 <!-- cli-example: transcript -->
 - 转写后处理：`into-md transcript --help`
 <!-- cli-example: transcript relabel -->

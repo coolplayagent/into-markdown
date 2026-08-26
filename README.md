@@ -24,9 +24,8 @@ Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它�
 
 当前格式 catalog 包含 PDF、DOCX、PPTX、XLSX、ODT/ODS/ODP、RTF、EPUB、
 TXT、Markdown、HTML、CSV/TSV、JSON、XML、RSS/Atom Feed、Jupyter Notebook、图片、ZIP、
-Outlook MSG、音频和视频。OCR、语音转写与说话人分离由对应能力插件提供。旧版
-`.doc/.ppt/.xls` 不在当前发布中，也不会回退到 LibreOffice；后续解析路线由
-[#191](https://github.com/coolplayagent/into-markdown/issues/191) 跟踪。
+Outlook MSG、音频和视频。Office 97–2003 的 DOC/PPT/XLS 由 Core 原生提供；OCR、语音转写与
+说话人分离由对应能力插件提供。
 
 支持 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows x86_64；不支持 macOS x86_64。
 最终用户的签名校验、安装、离线插件导入、排障和卸载见[安装与部署](docs/user-guide.md)；

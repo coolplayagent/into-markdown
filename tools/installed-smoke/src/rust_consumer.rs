@@ -44,7 +44,7 @@ pub(crate) fn run(
     cases.push(match result {
         Ok(()) => CaseResult::passed(
             "rust-external-consumer",
-            "offline installed library linked and converted memory DTO",
+            "offline installed library linked and converted text plus DOC/PPT/XLS DTOs",
         ),
         Err(error) => CaseResult::failed("rust-external-consumer", "consumerFailed", &error),
     });
@@ -133,7 +133,7 @@ fn compile_and_run(
     let executable = target
         .join("debug")
         .join(format!("installed-smoke-consumer{}", std::env::consts::EXE_SUFFIX));
-    let arguments = Vec::new();
+    let arguments = vec![request.fixtures.join("legacy").display().to_string()];
     let output = executor.execute(CommandSpec {
         program: &executable,
         arguments: &arguments,
@@ -607,6 +607,19 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 fn main() {
     let engine = default_engine().expect("installed engine");
+    let fixture_root = std::path::PathBuf::from(
+        std::env::args_os().nth(1).expect("installed legacy fixture root"),
+    );
+    for (name, family) in [("normal.doc", "doc"), ("normal.ppt", "ppt"), ("normal.xls", "xls")] {
+        let bytes = std::fs::read(fixture_root.join(name)).expect("installed legacy fixture");
+        let request = ConversionRequest::new(InputRef::bytes(bytes, Some(name)));
+        let result = block_on(engine.convert(request)).expect("native legacy Office conversion");
+        assert!(!result.markdown.is_empty(), "{name} produced empty Markdown");
+        assert_eq!(
+            result.document.metadata.properties.get("legacyOffice.family").map(String::as_str),
+            Some(family),
+        );
+    }
     let request = ConversionRequest::new(InputRef::bytes(
         b"Installed Rust consumer\n".as_slice(),
         Some("memory.txt"),

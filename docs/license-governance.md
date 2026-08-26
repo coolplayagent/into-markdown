@@ -48,9 +48,8 @@ The following files are projections or evidence and must agree with the componen
 - `fixtures/manifest.json` and `fixtures/downloads.json` distinguish repository-owned test data from
   manually acquired licensed inputs. Fixtures are not silently promoted to release components.
 
-LibreOffice is excluded from Core and every current release artifact. Its retained authority data
-and isolation code are historical inputs for the replacement work tracked in issue #191, and must
-not enter a release projection. Wasmtime, generated models outside reviewed capability packages, and
+Office 97–2003 parsing is project-owned Rust code in Core and adds no separately distributed runtime
+or license component. Wasmtime, generated models outside reviewed capability packages, and
 distribution fonts remain denied while their inventory entries are planned or lack complete
 immutable acquisition and notice evidence.
 

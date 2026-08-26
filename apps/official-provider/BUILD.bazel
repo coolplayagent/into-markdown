@@ -12,7 +12,6 @@ rust_library(
     edition = "2024",
     deps = [
         "//crates/api:into_markdown",
-        "//crates/legacy-office",
         "//crates/process-plugin",
         "//crates/provider-plugin",
     ] + all_crate_deps(normal = True),
@@ -37,16 +36,6 @@ rust_binary(
     name = "into-md-media-provider",
     srcs = ["src/bin/media.rs"],
     crate_name = "into_md_media_provider",
-    edition = "2024",
-    deps = [":official_provider"] + all_crate_deps(normal = True),
-    proc_macro_deps = all_crate_deps(proc_macro = True),
-    tags = ["manual"],
-)
-
-rust_binary(
-    name = "into-md-legacy-office-provider",
-    srcs = ["src/bin/legacy-office.rs"],
-    crate_name = "into_md_legacy_office_provider",
     edition = "2024",
     deps = [":official_provider"] + all_crate_deps(normal = True),
     proc_macro_deps = all_crate_deps(proc_macro = True),

@@ -126,8 +126,9 @@ PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输
 普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
 第三方声明目录；显式联网制品审计见 `tools/pdfium-audit.sh`。
 
-LibreOffice runtime 不进入仓库、普通测试、Core 或当前发布插件。仓库中保留的旧版 Office
-authority 与隔离代码只作为后续替换工作的历史输入，不能投影进 release set；替代方案由 #191 跟踪。
+Office 97–2003 解析器为仓库自有 Rust 实现并内置 Core，不下载、链接或分发外部办公套件，
+因此没有单独的 runtime、许可组件或发布投影。其仓库原创 corpus 的来源、许可和 SHA-256
+由 fixture manifest 固定。
 
 Wasmtime、字体和未受审能力模型仍是占位项。FFmpeg 只进入语音能力插件，并
 必须记录具体版本、源码 URL、哈希、补丁、构建开关、许可证文本与 NOTICE 要求。

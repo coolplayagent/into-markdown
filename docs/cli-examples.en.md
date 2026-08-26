@@ -35,8 +35,6 @@ Every example invokes `into-md` directly. CI compares coverage with the real `--
 - OCR: `into-md setup ocr`
 <!-- cli-example: setup media -->
 - Media: `into-md setup media`
-<!-- cli-example: setup legacy-office -->
-- Legacy Office: `into-md setup legacy-office`
 <!-- cli-example: transcript -->
 - Transcript processing: `into-md transcript --help`
 <!-- cli-example: transcript relabel -->

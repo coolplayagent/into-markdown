@@ -1,121 +1,30 @@
-//! Process-isolated conversion for legacy binary Office formats.
+//! Bounded, offline conversion for Office 97-2003 compound documents.
+//!
+//! The converter shares the audited CFB reader with MSG, then dispatches to
+//! format-specific parsers. It never launches a process, evaluates macros or
+//! formulae, follows external links, or performs network access.
 
-mod remap;
+mod budget;
+mod builder;
+mod doc;
+mod ppt;
+mod xls;
 
-#[cfg(test)]
-mod tests;
-
+use crate::msg::ole::CompoundFile;
+use budget::{LegacyBudget, malformed};
+use builder::PROVIDER_ID;
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    FormatCandidate, FormatHint, InputFormat, LegacyOfficeRequest, NestedConversionRequest,
-    ProbeOutcome, ResolvedInput, ResourceReservation, Services, SourceMetadata,
+    Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
+    Diagnostic, DiagnosticSeverity, ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome,
+    ProvenanceKind, ResolvedInput, Services, SourceLocator,
 };
-use into_markdown_legacy_office::{LegacyOfficeRuntime, NormalizedFormat};
-use std::fmt;
-use std::sync::Arc;
 
 const FORMATS: &[InputFormat] = &[InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls];
-const PROVIDER_ID: &str = "builtin.converter.legacy-office";
-const EXCLUDED: &[&str] = &[PROVIDER_ID];
-const CFBF_MAGIC: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
+const CFB_MAGIC: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 
-struct AdapterOutput {
-    bytes: Box<[u8]>,
-    format: NormalizedFormat,
-    version: String,
-    artifact_sha256: String,
-    target: String,
-    memory: ResourceReservation,
-}
-
-trait CompatibilityAdapter: Send + Sync {
-    fn normalize(
-        &self,
-        bytes: &[u8],
-        source: InputFormat,
-        maximum_output_bytes: u64,
-        context: &ExecutionContext,
-    ) -> Result<AdapterOutput, ConversionError>;
-}
-
-struct RuntimeAdapter {
-    runtime: Option<LegacyOfficeRuntime>,
-}
-
-impl CompatibilityAdapter for RuntimeAdapter {
-    fn normalize(
-        &self,
-        bytes: &[u8],
-        source: InputFormat,
-        maximum_output_bytes: u64,
-        context: &ExecutionContext,
-    ) -> Result<AdapterOutput, ConversionError> {
-        let packaged;
-        let runtime = if let Some(runtime) = &self.runtime {
-            runtime
-        } else {
-            packaged = LegacyOfficeRuntime::packaged().map_err(|error| match error {
-                ConversionError::ComponentUnavailable { .. } => {
-                    ConversionError::ComponentUnavailable {
-                        component: crate::core_catalog::LEGACY_OFFICE.component.into(),
-                        detail: crate::core_catalog::LEGACY_OFFICE.install_hint.into(),
-                    }
-                }
-                error => error,
-            })?;
-            &packaged
-        };
-        let package = runtime
-            .convert(bytes, source, maximum_output_bytes, context)
-            .map_err(|error| remap_packaged_runtime_error(self.runtime.is_none(), error))?;
-        Ok(AdapterOutput {
-            bytes: package.bytes,
-            format: package.format,
-            version: package.runtime.version().to_owned(),
-            artifact_sha256: package.runtime.artifact_sha256().to_owned(),
-            target: package.runtime.target().to_owned(),
-            memory: package.memory,
-        })
-    }
-}
-
-fn remap_packaged_runtime_error(packaged: bool, error: ConversionError) -> ConversionError {
-    if !packaged {
-        return error;
-    }
-    match error {
-        ConversionError::ComponentUnavailable { component, detail } => {
-            ConversionError::ComponentUnavailable {
-                component: crate::core_catalog::LEGACY_OFFICE.component.into(),
-                detail: format!(
-                    "{}; cause: {component}/{detail}",
-                    crate::core_catalog::LEGACY_OFFICE.install_hint
-                ),
-            }
-        }
-        error => error,
-    }
-}
-
-/// Isolated converter for DOC, PPT/PPS/POT, and XLS compound documents.
-#[derive(Default)]
-pub struct LegacyOfficeConverter {
-    adapter: Option<Arc<dyn CompatibilityAdapter>>,
-}
-
-impl LegacyOfficeConverter {
-    /// Use one explicitly configured, authority-validated compatibility runtime.
-    #[must_use]
-    pub fn with_runtime(runtime: LegacyOfficeRuntime) -> Self {
-        Self { adapter: Some(Arc::new(RuntimeAdapter { runtime: Some(runtime) })) }
-    }
-}
-
-impl fmt::Debug for LegacyOfficeConverter {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("LegacyOfficeConverter").finish_non_exhaustive()
-    }
-}
+/// Native converter for DOC, PPT/PPS/POT, and XLS compound documents.
+#[derive(Debug, Default)]
+pub struct LegacyOfficeConverter;
 
 impl Converter for LegacyOfficeConverter {
     fn id(&self) -> &'static str {
@@ -138,7 +47,7 @@ impl Converter for LegacyOfficeConverter {
     ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            if !FORMATS.contains(&candidate.format) || !input.bytes.starts_with(CFBF_MAGIC) {
+            if !FORMATS.contains(&candidate.format) || !input.bytes.starts_with(CFB_MAGIC) {
                 return Ok(ProbeOutcome::NotApplicable);
             }
             Ok(ProbeOutcome::Match { confidence: 1.0 })
@@ -155,173 +64,293 @@ impl Converter for LegacyOfficeConverter {
         Ok(context.available_memory_bytes())
     }
 
-    // The adapter transaction and normalized-package dispatch stay adjacent so the verified
-    // runtime output cannot bypass the common nested-conversion and diagnostic policy.
-    #[allow(clippy::too_many_lines)]
     fn convert<'a>(
         &'a self,
         input: &'a ResolvedInput,
         candidate: &'a FormatCandidate,
         options: &'a ConversionOptions,
-        services: &'a Services,
+        _: &'a Services,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
-            let nested =
-                services.nested.as_ref().ok_or_else(|| ConversionError::ComponentUnavailable {
-                    component: "nested-conversion".into(),
-                    detail: "the engine did not provide normalized Office dispatch".into(),
-                })?;
-            let maximum_output = options
-                .limits
-                .max_archive_entry_bytes
-                .min(context.available_memory_bytes())
-                .min(into_markdown_legacy_office::MAX_NORMALIZED_PACKAGE_BYTES);
-            let normalized = if let Some(adapter) = &self.adapter {
-                adapter.normalize(&input.bytes, candidate.format, maximum_output, context)?
-            } else {
-                let normalizer = services.legacy_office.as_ref().ok_or_else(|| {
-                    ConversionError::ComponentUnavailable {
-                        component: crate::core_catalog::LEGACY_OFFICE.component.into(),
-                        detail: "run `into-md setup legacy-office`".into(),
-                    }
-                })?;
-                let result = normalizer
-                    .normalize(
-                        LegacyOfficeRequest {
-                            document: &input.bytes,
-                            source_format: candidate.format,
-                            maximum_output_bytes: maximum_output,
-                        },
-                        context,
-                    )
-                    .await?;
-                if result.provider != normalizer.id()
-                    || result.version.trim().is_empty()
-                    || result.artifact_sha256.len() != 64
-                    || !result
-                        .artifact_sha256
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                {
-                    return Err(ConversionError::ComponentUnavailable {
-                        component: normalizer.id().into(),
-                        detail: "legacy Office provider identity is invalid".into(),
-                    });
-                }
-                AdapterOutput {
-                    bytes: result.bytes,
-                    format: normalized_format(result.format)?,
-                    version: result.version,
-                    artifact_sha256: result.artifact_sha256,
-                    target: result.target,
-                    memory: result.memory,
-                }
-            };
-            if normalized.format != expected_output(candidate.format)? {
-                return Err(ConversionError::ComponentUnavailable {
-                    component: "legacy-office-worker".into(),
-                    detail: "workerProtocol".into(),
-                });
-            }
-            let AdapterOutput {
-                bytes,
-                format,
-                version,
-                artifact_sha256,
-                target,
-                memory: normalized_memory,
-            } = normalized;
-            let length =
-                u64::try_from(bytes.len()).map_err(|_| ConversionError::ResourceLimit {
-                    limit: "max_memory_bytes",
-                    detail: "normalized Office package size overflowed".into(),
-                })?;
-            let shared_plan = length
-                .checked_add(u64::try_from(std::mem::size_of::<usize>() * 2).unwrap_or(u64::MAX))
-                .ok_or_else(|| ConversionError::ResourceLimit {
-                    limit: "max_memory_bytes",
-                    detail: "normalized Office shared-buffer plan overflowed".into(),
-                })?;
-            let shared_memory = context.reserve_memory(shared_plan)?;
-            let bytes: Arc<[u8]> = Arc::from(bytes);
-            drop(normalized_memory);
-            let name = format!("normalized.{}", format.extension());
-            let normalized_input = ResolvedInput {
-                bytes,
-                metadata: SourceMetadata {
-                    name: Some(name.clone()),
-                    media_type: Some(normalized_media_type(format).into()),
-                    uri: None,
-                    size: length,
-                },
-            };
-            let hint = FormatHint {
-                format: Some(format.input_format()),
-                filename: Some(name),
-                extension: Some(format.extension().into()),
-                media_type: Some(normalized_media_type(format).into()),
-                charset: None,
-            };
-            let mut output = nested
-                .convert(
-                    NestedConversionRequest {
-                        input: &normalized_input,
-                        hint: &hint,
-                        options,
-                        excluded_converter_ids: EXCLUDED,
-                    },
-                    context,
-                )
-                .await?;
-            drop(normalized_input);
-            drop(shared_memory);
-            remap::remap(
-                &mut output,
-                candidate.format,
-                format,
-                &version,
-                &artifact_sha256,
-                &target,
-            )?;
-            Ok(output)
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                convert_native(&input.bytes, candidate.format, options, context)
+            }))
+            .unwrap_or_else(|_| {
+                Err(malformed("legacy Office", "native parser rejected invalid structure"))
+            })
         })
     }
 }
 
-fn normalized_format(format: InputFormat) -> Result<NormalizedFormat, ConversionError> {
-    match format {
-        InputFormat::Docx => Ok(NormalizedFormat::Docx),
-        InputFormat::Pptx => Ok(NormalizedFormat::Pptx),
-        InputFormat::Xlsx => Ok(NormalizedFormat::Xlsx),
-        _ => Err(ConversionError::ComponentUnavailable {
-            component: "legacy-office-worker".into(),
-            detail: "workerProtocol".into(),
-        }),
-    }
-}
-
-fn normalized_media_type(format: NormalizedFormat) -> &'static str {
-    match format {
-        NormalizedFormat::Docx => {
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        }
-        NormalizedFormat::Pptx => {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        }
-        NormalizedFormat::Xlsx => {
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        }
-    }
-}
-
-fn expected_output(source: InputFormat) -> Result<NormalizedFormat, ConversionError> {
-    match source {
-        InputFormat::Doc => Ok(NormalizedFormat::Docx),
-        InputFormat::Ppt => Ok(NormalizedFormat::Pptx),
-        InputFormat::Xls => Ok(NormalizedFormat::Xlsx),
-        _ => Err(ConversionError::Unsupported {
+fn convert_native(
+    bytes: &[u8],
+    requested: InputFormat,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    if !FORMATS.contains(&requested) {
+        return Err(ConversionError::Unsupported {
             detail: "legacy Office converter accepts only DOC, PPT/PPS/POT, or XLS".into(),
-        }),
+        });
+    }
+    let mut budget = LegacyBudget::new(bytes.len(), options, context)?;
+    let compound = CompoundFile::open(bytes, &mut budget)?;
+    let root = compound.root();
+    let detected = detect_family(root)?;
+    if detected != requested {
+        return Err(ConversionError::Unsupported {
+            detail: format!(
+                "explicit legacy Office format {requested:?} conflicts with detected {detected:?}"
+            ),
+        });
+    }
+    match detected {
+        InputFormat::Doc => doc::convert(root, &mut budget),
+        InputFormat::Ppt => ppt::convert(root, &mut budget),
+        InputFormat::Xls => xls::convert(bytes, root, &mut budget, options, context),
+        _ => unreachable!("family detector returns only legacy Office formats"),
+    }
+}
+
+pub(super) fn normalize_xls_output(output: &mut ConverterOutput) {
+    output.document.metadata.properties.insert("legacyOffice.family".into(), "xls".into());
+    output
+        .document
+        .metadata
+        .properties
+        .insert("legacyOffice.parser".into(), "into-markdown-native".into());
+    rewrite_provenance(&mut output.document.blocks);
+    output.diagnostics.push(Diagnostic {
+        code: "legacyOffice.xls.inertObjectsSkipped".into(),
+        severity: DiagnosticSeverity::Warning,
+        message:
+            "macros, external workbook bindings, and executable embedded objects were not executed"
+                .into(),
+        locator: Some(SourceLocator { part: Some("Workbook".into()), ..SourceLocator::default() }),
+    });
+}
+
+fn rewrite_provenance(nodes: &mut [BlockNode]) {
+    for node in nodes {
+        node.provenance.kind = ProvenanceKind::NativeParser;
+        node.provenance.provider = PROVIDER_ID.into();
+        match &mut node.block {
+            Block::List { items, .. } => {
+                for item in items {
+                    rewrite_provenance(&mut item.blocks);
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &mut row.cells {
+                        rewrite_provenance(&mut cell.blocks);
+                    }
+                }
+            }
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => rewrite_provenance(blocks),
+            _ => {}
+        }
+    }
+}
+
+fn detect_family(root: crate::msg::ole::Storage<'_>) -> Result<InputFormat, ConversionError> {
+    let word = root.stream("WordDocument").is_some();
+    let powerpoint = root.stream("PowerPoint Document").is_some();
+    let workbook = root.stream("Workbook").is_some() || root.stream("Book").is_some();
+    let count = u8::from(word) + u8::from(powerpoint) + u8::from(workbook);
+    if count != 1 {
+        return Err(malformed(
+            "CFB directory",
+            "compound document must identify exactly one DOC, PPT, or XLS family",
+        ));
+    }
+    Ok(if word {
+        InputFormat::Doc
+    } else if powerpoint {
+        InputFormat::Ppt
+    } else {
+        InputFormat::Xls
+    })
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    use into_markdown_core::{ExecutionOptions, ResourceLimits};
+
+    const DOC: &[u8] = include_bytes!("../../../../tools/macos-release/fixtures/normal.doc");
+    const PPT: &[u8] = include_bytes!("../../../../tools/macos-release/fixtures/normal.ppt");
+    const XLS: &[u8] = include_bytes!("../../../../tools/macos-release/fixtures/normal.xls");
+
+    fn convert(bytes: &[u8], format: InputFormat) -> ConverterOutput {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        convert_native(bytes, format, &options, &context).unwrap()
+    }
+
+    fn encoded(bytes: &[u8], format: InputFormat) -> Vec<u8> {
+        let output = convert(bytes, format);
+        serde_json::to_vec(&(output.document, output.assets, output.diagnostics)).unwrap()
+    }
+
+    fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn sector_offset(bytes: &[u8], sector: u32) -> usize {
+        let sector_size = 1usize << u16::from_le_bytes(bytes[30..32].try_into().unwrap());
+        (usize::try_from(sector).unwrap() + 1) * sector_size
+    }
+
+    fn directory_entry(bytes: &[u8], name: &str) -> usize {
+        let encoded = name.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+        bytes
+            .windows(encoded.len())
+            .enumerate()
+            .find(|(offset, window)| offset % 128 == 0 && *window == encoded)
+            .map(|(offset, _)| offset)
+            .unwrap()
+    }
+
+    fn word_stream_offset(bytes: &[u8]) -> usize {
+        bytes
+            .windows(4)
+            .position(|window| {
+                window[..2] == [0xec, 0xa5]
+                    && u16::from_le_bytes(window[2..4].try_into().unwrap()) >= 0x00c1
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn repository_office_corpus_converts_without_optional_services() {
+        let doc = convert(DOC, InputFormat::Doc);
+        assert_eq!(doc.document.blocks.len(), 1);
+        assert!(doc.assets.is_empty());
+
+        let ppt = convert(PPT, InputFormat::Ppt);
+        assert_eq!(
+            ppt.document
+                .blocks
+                .iter()
+                .filter(|node| matches!(node.block, Block::Slide { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(ppt.assets.len(), 1);
+        assert_eq!(ppt.assets[0].media_type, "image/png");
+        assert!(ppt.diagnostics.iter().all(|item| !item.code.is_empty()));
+
+        let xls = convert(XLS, InputFormat::Xls);
+        assert!(matches!(xls.document.blocks[0].block, Block::Sheet { .. }));
+        assert!(xls.document.blocks.iter().all(|node| {
+            node.provenance.provider == PROVIDER_ID
+                && node.provenance.kind == ProvenanceKind::NativeParser
+        }));
+    }
+
+    #[test]
+    fn serial_and_concurrent_outputs_are_byte_deterministic() {
+        for (bytes, format) in
+            [(DOC, InputFormat::Doc), (PPT, InputFormat::Ppt), (XLS, InputFormat::Xls)]
+        {
+            let expected = encoded(bytes, format);
+            for _ in 0..4 {
+                assert_eq!(encoded(bytes, format), expected);
+            }
+            std::thread::scope(|scope| {
+                let handles =
+                    (0..4).map(|_| scope.spawn(|| encoded(bytes, format))).collect::<Vec<_>>();
+                for handle in handles {
+                    assert_eq!(handle.join().unwrap(), expected);
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn format_confusion_and_cfb_corruption_have_stable_errors() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            convert_native(DOC, InputFormat::Ppt, &options, &context),
+            Err(ConversionError::Unsupported { .. })
+        ));
+
+        let mut truncated = DOC[..DOC.len() - 1].to_vec();
+        assert!(matches!(
+            convert_native(&truncated, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Malformed { .. })
+        ));
+        truncated[0] = 0;
+        assert!(matches!(
+            convert_native(&truncated, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn cfb_cycles_overlaps_and_entry_limits_fail_closed() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+
+        let mut cycle = DOC.to_vec();
+        let word_entry = directory_entry(&cycle, "WordDocument");
+        let word_sector = read_u32(&cycle, word_entry + 116);
+        let minifat_sector = read_u32(&cycle, 60);
+        let minifat_entry =
+            sector_offset(&cycle, minifat_sector) + usize::try_from(word_sector).unwrap() * 4;
+        cycle[minifat_entry..minifat_entry + 4].copy_from_slice(&word_sector.to_le_bytes());
+        assert!(matches!(
+            convert_native(&cycle, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let mut overlap = DOC.to_vec();
+        let word_offset = word_stream_offset(&overlap);
+        let flags =
+            u16::from_le_bytes(overlap[word_offset + 10..word_offset + 12].try_into().unwrap());
+        let table_entry =
+            directory_entry(&overlap, if flags & 0x0200 == 0 { "0Table" } else { "1Table" });
+        overlap[table_entry + 116..table_entry + 120].copy_from_slice(&word_sector.to_le_bytes());
+        assert!(matches!(
+            convert_native(&overlap, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let limits = ResourceLimits { max_archive_entries: 1, ..ResourceLimits::default() };
+        let limited = ConversionOptions { limits, ..ConversionOptions::default() };
+        let limited_context =
+            ExecutionContext::new(ExecutionOptions::default(), limited.limits.clone());
+        assert!(matches!(
+            convert_native(DOC, InputFormat::Doc, &limited, &limited_context),
+            Err(ConversionError::ResourceLimit { limit: "max_archive_entries", .. })
+        ));
+    }
+
+    #[test]
+    fn doc_encryption_and_pre_office_97_are_stable_errors() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut encrypted = DOC.to_vec();
+        let word = word_stream_offset(&encrypted);
+        let flags =
+            u16::from_le_bytes(encrypted[word + 10..word + 12].try_into().unwrap()) | 0x0100;
+        encrypted[word + 10..word + 12].copy_from_slice(&flags.to_le_bytes());
+        assert!(matches!(
+            convert_native(&encrypted, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Encrypted)
+        ));
+
+        let mut old = DOC.to_vec();
+        old[word + 2..word + 4].copy_from_slice(&0x00c0u16.to_le_bytes());
+        assert!(matches!(
+            convert_native(&old, InputFormat::Doc, &options, &context),
+            Err(ConversionError::Unsupported { .. })
+        ));
     }
 }

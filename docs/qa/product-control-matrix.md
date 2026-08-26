@@ -122,25 +122,3 @@ Supporting regression evidence does not replace any pending Edge row: 27/27 admi
 | Release Web speech latency | PASS | The same real 31-second WebM completed in Edge in 9,747 ms cold and 6,788 ms immediately repeated. A real 185-second M4A completed pure transcription in 15,128 ms of durable task time, far below source duration; its 76 timestamp ranges were monotonic. The installed-binary repetition remains pending. |
 | Manager-verified runtime dispatch | PASS | The plugin manager now dispatches its private authenticated snapshot directly instead of copying the complete runtime a second time. The real process-plugin E2E passes with a zero temporary-byte dispatch budget, which would reject the former duplicate runtime copy. |
 | Current debug CLI unit suite | PASS | 234/234 CLI unit tests passed; the focused 24-input/eight-worker output-lease regression passed. |
-
-## Historical three-plugin CLI matrix (not the current release contract)
-
-The evidence below predates the decision to stop publishing the LibreOffice plugin. It is retained
-only as historical transaction and isolation evidence. The current release contract contains Core,
-OCR and speech only; its authoritative four combinations, two installation orders, lifecycle,
-real-fixture and Web checks are emitted by `platform_acceptance.py` for every target.
-
-| Requirement | Result | Evidence |
-|---|---:|---|
-| Core-only clean start | PASS | An isolated `INTO_MARKDOWN_USER_DATA_HOME` started with all four routed capabilities `not-installed`; Core remained responsive and returned the complete source list. |
-| All eight plugin combinations | PASS | The six installation-order traces covered none, each single plugin, each pair, and all three plugins. Every installed capability was `ready`; unrelated capabilities retained their prior state. |
-| All six installation orders | PASS | `legacy→OCR→media`, `legacy→media→OCR`, `OCR→legacy→media`, `OCR→media→legacy`, `media→legacy→OCR`, and `media→OCR→legacy` each reached the same verified full state from a clean Core-only state. |
-| Verify / disable / enable | PASS | Each plugin was verified, disabled and re-enabled individually while the other installed capabilities remained `ready`; disabling media consistently changed transcription and diarization together. |
-| Remove / reinstall isolation | PASS | Each plugin was removed and reinstalled individually; only its owned capability routes changed, while the other two plugins and Core remained available. |
-| Same-version repeat install | PASS | Reinstalling the already-installed signed Office package returned success (`0`) and the configured plugin, with no bare `conflict`. |
-| Return to Core-only | PASS | Removing all three plugins restored all capability routes to `not-installed` without damaging the isolated data home. |
-| In-flight disable / remove | PASS | A real 185.008-second transcription completed with a non-empty timed result after media was disabled one second after launch. A separate real 31-second transcription likewise completed after the installed media plugin was removed; the next invocation saw only the new `not-installed` state. Re-enable/reinstall and full verification then succeeded. |
-| Trust, invalid package and interrupted replace rollback | PASS | A conflicting signer fingerprint and a non-ZIP `.imp` both failed without changing the three verified installed plugins. Terminating a same-version media replacement during installation returned 143; the previously installed media package still verified and both speech capabilities remained `ready`. |
-| Wrong platform/ABI | PASS | A correctly signed package declaring only `x86_64-unknown-linux-gnu` failed with the component-unavailable class on Apple Silicon; the three previously installed plugins all still verified and remained `ready`. Protocol/ABI mismatch stays additionally covered by the package-manager tests. |
-| Missing resource repair | PASS | A declared media install-state file was moved out of the isolated installed tree. Media verification failed, Office and OCR still verified, and same-version media reinstall repaired the tree; all three plugins then verified and all four routes returned `ready`. |
-| Disk-full rollback | PASS | Installing the 599 MB media package into an isolated 128 MB APFS volume produced real OS error 28. The data home retained only locks/directories, no config pin or half-installed plugin, and all four capability routes remained cleanly `not-installed`; the volume was detached afterward. |

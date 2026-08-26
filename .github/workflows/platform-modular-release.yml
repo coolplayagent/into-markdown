@@ -224,6 +224,22 @@ jobs:
             "$installed/bin/into-md" plugins verify "$package" --scope global
           done
           "$installed/bin/into-md" capabilities list --json | jq -e '[.capabilities[] | select(.status == "ready")] | length == 3'
+          mkdir "${{ runner.temp }}/smoke-core"
+          archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
+          "$installed/bin/installed-smoke" \
+            --install-root "$installed" \
+            --into-md "$installed/bin/into-md" \
+            --rust-library "$installed/lib/into-markdown-rust" \
+            --manifest "$installed/archive-manifest.json" \
+            --fixtures "$installed/share/into-markdown/smoke/fixtures" \
+            --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" \
+            --temp-root "${{ runner.temp }}/smoke-core" \
+            --report "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json" \
+            --archive-sha256 "$archive_sha" \
+            --cargo "$(rustup which cargo)" \
+            --rustc "$(rustup which rustc)" \
+            --pdfium-library "$installed/lib/pdfium/libpdfium.so" \
+            --timeout-seconds 90
           "${{ runner.temp }}/distribution/uninstall" "${{ runner.temp }}/install" "${{ runner.temp }}/bin"
           diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
       - name: Clean-install and verify all capabilities
@@ -265,6 +281,22 @@ jobs:
           }
           $ready = (& "$installed\bin\into-md.exe" capabilities list --json | ConvertFrom-Json).capabilities | Where-Object status -eq "ready"
           if ($ready.Count -ne 3) { throw "not all published capabilities are ready" }
+          New-Item -ItemType Directory "${{ runner.temp }}\smoke-core" | Out-Null
+          $archiveSha = (Get-FileHash -Algorithm SHA256 "${{ runner.temp }}\${{ matrix.archive }}").Hash.ToLowerInvariant()
+          & "$installed\bin\installed-smoke.exe" `
+            --install-root "$installed" `
+            --into-md "$installed\bin\into-md.exe" `
+            --rust-library "$installed\lib\into-markdown-rust" `
+            --manifest "$installed\archive-manifest.json" `
+            --fixtures "$installed\share\into-markdown\smoke\fixtures" `
+            --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" `
+            --temp-root "${{ runner.temp }}\smoke-core" `
+            --report "${{ runner.temp }}\into-md-${{ matrix.target }}-core-smoke.json" `
+            --archive-sha256 "$archiveSha" `
+            --cargo "$(rustup which cargo)" `
+            --rustc "$(rustup which rustc)" `
+            --pdfium-library "$installed\bin\pdfium.dll" `
+            --timeout-seconds 90
           & "${{ runner.temp }}\distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core uninstaller modified the Agent Skills directory" }
       - name: Run installed Core smoke and platform acceptance

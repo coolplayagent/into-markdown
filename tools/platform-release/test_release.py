@@ -103,7 +103,6 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertEqual(constants["MSVC_VERSION"], windows["msvcTools"])
         self.assertEqual(constants["SDK_VERSION"], windows["windowsSdk"])
-
     def test_windows_zip_is_byte_reproducible_and_contains_only_regular_files(self) -> None:
         config = {"archive": "zip"}
         with tempfile.TemporaryDirectory() as name:

@@ -185,8 +185,8 @@ const availableApi: ApiClient = {
 
 function capabilitySnapshot(ready: boolean) {
   const status = ready ? "ready" as const : "not-installed" as const;
-  const source = (id: "legacy-office" | "ocr" | "transcription" | "diarization") => ready ? `plugin:official.${id}/${id}` : "off";
-  return { schemaVersion: 2 as const, generation: 1, checking: false, checkedAtMs: 1, capabilities: (["legacy-office", "ocr", "transcription", "diarization"] as const).map((id) => ({ id, name: id, status, localStatus: status, currentSource: source(id), currentSourceName: ready ? "Local plugin" : "Off", sources: [source(id), "off"] })) };
+  const source = (id: "ocr" | "transcription" | "diarization") => ready ? `plugin:official.${id}/${id}` : "off";
+  return { schemaVersion: 2 as const, generation: 1, checking: false, checkedAtMs: 1, capabilities: (["ocr", "transcription", "diarization"] as const).map((id) => ({ id, name: id, status, localStatus: status, currentSource: source(id), currentSourceName: ready ? "Local plugin" : "Off", sources: [source(id), "off"] })) };
 }
 
 test("session handoff clears every fragment and survives only in the current tab", () => {

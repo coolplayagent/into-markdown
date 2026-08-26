@@ -177,8 +177,6 @@ pub struct AsrConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CapabilityRoutesConfig {
-    #[serde(rename = "legacy-office")]
-    pub legacy_office: CapabilityRouteConfig,
     pub ocr: CapabilityRouteConfig,
     pub transcription: CapabilityRouteConfig,
     pub diarization: CapabilityRouteConfig,
@@ -692,7 +690,6 @@ fn validate_common(config: &RawConfig) -> Result<(), CliError> {
 
 fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), CliError> {
     for (name, route) in [
-        ("legacy-office", &routes.legacy_office),
         ("ocr", &routes.ocr),
         ("transcription", &routes.transcription),
         ("diarization", &routes.diarization),
@@ -756,7 +753,6 @@ fn validate_capability_routes(routes: &CapabilityRoutesConfig) -> Result<(), Cli
                 CapabilitySourceRef::Off => continue,
             };
             let compatible = match name {
-                "legacy-office" => source_capability == "legacy-office",
                 "ocr" => matches!(source_capability, "ocr" | "vision-ocr"),
                 "transcription" => {
                     matches!(source_capability, "transcription" | "audio-transcription")
@@ -1165,7 +1161,7 @@ pub fn set_capability_source(
     capability: &str,
     source: &str,
 ) -> Result<PathBuf, CliError> {
-    if !matches!(capability, "legacy-office" | "ocr" | "transcription" | "diarization") {
+    if !matches!(capability, "ocr" | "transcription" | "diarization") {
         return Err(CliError::usage(format!("unknown capability '{capability}'")));
     }
     mutate_scope(scope, cwd, |root| {
@@ -1189,7 +1185,7 @@ pub fn reset_capability_source(
     cwd: &Path,
     capability: &str,
 ) -> Result<PathBuf, CliError> {
-    if !matches!(capability, "legacy-office" | "ocr" | "transcription" | "diarization") {
+    if !matches!(capability, "ocr" | "transcription" | "diarization") {
         return Err(CliError::usage(format!("unknown capability '{capability}'")));
     }
     mutate_scope(scope, cwd, |root| remove_nested(root, &format!("capability_routes.{capability}")))
@@ -2036,22 +2032,6 @@ conflict = "rename"
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
-
-    #[test]
-    fn legacy_office_route_uses_the_public_hyphenated_capability_name() {
-        let parsed: RawConfig = toml::from_str(
-            r#"
-[capability_routes.legacy-office]
-mode = "only"
-primary = "plugin:official.legacy-office.libreoffice/legacy-office"
-"#,
-        )
-        .unwrap();
-        assert_eq!(parsed.capability_routes.legacy_office.mode, Some(AiMode::Only));
-        let encoded = toml::to_string(&parsed).unwrap();
-        assert!(encoded.contains("[capability_routes.legacy-office]"));
-        assert!(!encoded.contains("[capability_routes.legacy_office]"));
-    }
 
     #[test]
     fn heterogeneous_capability_routes_reject_contradictions_and_alias_duplicates() {

@@ -5,7 +5,7 @@ use crate::workbook::extras::metadata::display_ranges;
 use crate::workbook::model::{CellCoordinate, Hyperlink, SheetExtras};
 use crate::workbook::output::{data_text, provenance, stable_id};
 use crate::workbook::xlsb::merges::extract_xlsb_merges;
-use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xlsb, Xlsx};
+use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xls, Xlsb, Xlsx};
 use into_markdown_core::{
     Block, BlockNode, Cell, ConversionError, ConversionOptions, ConverterOutput, Document,
     ExecutionContext, Inline, NodeId, TableAlignment, TableRow,
@@ -38,6 +38,36 @@ pub(super) fn convert_xlsx(
         }
     }
     convert_reader(&mut workbook, &sheets, &merges, extras, sheet_bounds, options, context)
+}
+
+pub(crate) fn convert_xls(
+    bytes: &[u8],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    context.checkpoint()?;
+    let mut workbook = Xls::new(Cursor::new(bytes)).map_err(|error| map_calamine("XLS", error))?;
+    context.checkpoint()?;
+    let sheets = workbook.sheets_metadata().to_vec();
+    let mut merges = BTreeMap::new();
+    for sheet in &sheets {
+        context.checkpoint()?;
+        if sheet.typ == SheetType::WorkSheet {
+            let value = workbook
+                .merge_cells_by_sheet_name(&sheet.name)
+                .map_err(|error| map_calamine("XLS merged cells", error))?;
+            merges.insert(sheet.name.clone(), value);
+        }
+    }
+    convert_reader(
+        &mut workbook,
+        &sheets,
+        &merges,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        options,
+        context,
+    )
 }
 
 pub(super) fn convert_xlsb(

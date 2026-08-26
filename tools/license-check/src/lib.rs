@@ -1622,10 +1622,6 @@ fn validate_inventory(
     for required in [
         "pdfium",
         "ffmpeg",
-        "libreoffice-macos-arm64",
-        "libreoffice-linux-x86_64",
-        "libreoffice-linux-arm64",
-        "libreoffice-windows-x86_64",
         "wasmtime",
         "generated-onnx-models",
         "distribution-fonts",
@@ -4618,15 +4614,9 @@ mod tests {
 
     #[test]
     fn release_strictness_cannot_be_disabled() {
-        let mut components = [
-            "pdfium",
-            "ffmpeg",
-            "libreoffice-macos-arm64",
-            "wasmtime",
-            "generated-onnx-models",
-            "distribution-fonts",
-        ]
-        .map(planned_component);
+        let mut components =
+            ["pdfium", "ffmpeg", "wasmtime", "generated-onnx-models", "distribution-fonts"]
+                .map(planned_component);
         components[1].included_in_release = true;
         let inventory = Inventory { schema_version: 1, components: components.into() };
         let mut errors = Vec::new();

@@ -27,10 +27,8 @@ models, or remote content.
 
 The current format catalog includes PDF, DOCX, PPTX, XLSX, ODT/ODS/ODP, RTF, EPUB,
 text, Markdown, HTML, CSV/TSV, JSON, XML, RSS/Atom feeds, Jupyter notebooks, images, ZIP, Outlook
-MSG, audio, and video. OCR, transcription, and diarization use their corresponding capability
-plugins. Legacy `.doc/.ppt/.xls` files are not shipped in the current release and never fall back
-to LibreOffice; [#191](https://github.com/coolplayagent/into-markdown/issues/191) tracks their
-replacement parser path.
+MSG, audio, and video. Core natively handles Office 97–2003 DOC/PPT/XLS; OCR, transcription, and
+diarization use their corresponding capability plugins.
 
 Release targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows x86_64. macOS x86_64 is
 unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature

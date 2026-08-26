@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "generator": "tools/macos-release/fixtures/generate.py",
+  "license": {
+    "spdx": "Apache-2.0",
+    "copyright": "2026 into-markdown contributors",
+    "redistribution": "repository and release test artifacts permitted"
+  },
+  "fixtures": [
+    {
+      "path": "normal.doc",
+      "format": "doc",
+      "bytes": 9216,
+      "sha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "coverage": ["unicode", "paragraphs", "office-97-2003-fib", "cfb"]
+    },
+    {
+      "path": "normal.ppt",
+      "format": "ppt",
+      "bytes": 19968,
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "coverage": ["unicode", "two-slides", "speaker-notes", "persist-order", "bounded-png-asset", "cfb"]
+    },
+    {
+      "path": "normal.xls",
+      "format": "xls",
+      "bytes": 5632,
+      "sha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "coverage": ["biff8", "unicode", "date", "formula-cache", "dangerous-text", "cfb"]
+    }
+  ]
+}

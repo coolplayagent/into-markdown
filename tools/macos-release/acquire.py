@@ -10,15 +10,13 @@ import tarfile
 import urllib.parse
 import urllib.request
 
-from common import ReleaseError, authority, regular_files, run, sha256
+from common import ReleaseError, authority, sha256
 
 ALLOWED_HOSTS = {
-    "download.documentfoundation.org",
     "cdn-lfs-us-1.hf.co",
     "ffmpeg.org",
     "github.com",
     "huggingface.co",
-    "mirror.aarnet.edu.au",
     "objects.githubusercontent.com",
     "paddle-model-ecology.bj.bcebos.com",
     "raw.githubusercontent.com",
@@ -87,45 +85,6 @@ def extract_tar(archive: pathlib.Path, destination: pathlib.Path, members: dict[
             found.add(member.name)
     if found != set(members):
         raise ReleaseError("download archive omits an authorized member")
-
-
-def copy_libreoffice(dmg: pathlib.Path, destination: pathlib.Path) -> None:
-    mount = destination.parent / ".libreoffice-mount"
-    if mount.exists():
-        shutil.rmtree(mount)
-    mount.mkdir()
-    try:
-        run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-noautoopen", "-readonly", "-mountpoint", str(mount), str(dmg)])
-        source = mount / "LibreOffice.app"
-        if not source.is_dir():
-            raise ReleaseError("official LibreOffice image omits LibreOffice.app")
-        copy_tree_without_links(source, destination)
-        regular_files(destination)
-    finally:
-        run(["/usr/bin/hdiutil", "detach", str(mount)])
-        mount.rmdir()
-
-
-def copy_tree_without_links(source: pathlib.Path, destination: pathlib.Path) -> None:
-    """Copy the app while materializing file links and excluding directory aliases."""
-    destination.mkdir()
-    for entry in sorted(source.iterdir(), key=lambda path: path.name):
-        target = destination / entry.name
-        if entry.is_symlink():
-            resolved = entry.resolve(strict=True)
-            if resolved.is_file():
-                shutil.copy2(resolved, target)
-            elif not resolved.is_dir():
-                raise ReleaseError("LibreOffice contains an unsupported link target")
-            continue
-        if entry.is_dir():
-            copy_tree_without_links(entry, target)
-            if not any(target.iterdir()):
-                target.rmdir()
-        elif entry.is_file():
-            shutil.copy2(entry, target)
-        else:
-            raise ReleaseError("LibreOffice contains a non-regular entry")
 
 
 def main() -> None:

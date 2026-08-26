@@ -8,13 +8,13 @@ from the same version and target.
 
 | Capability | Artifact |
 | --- | --- |
-| Ordinary documents, PDF, and Web workbench | Platform Core |
+| Ordinary documents, Office 97–2003, PDF, and Web workbench | Platform Core |
 | OCR | `official.ocr.ppocrv6-<target>.imp` |
 | Transcription and diarization | `official.media.whisper-<target>.imp` |
 | Agent instructions | `into-markdown-skill.zip` |
 
-Legacy `.doc/.ppt/.xls` files are not shipped in the current release and never invoke LibreOffice;
-[#191](https://github.com/coolplayagent/into-markdown/issues/191) tracks the replacement parser path.
+Core natively parses Office 97–2003 `.doc/.ppt/.xls` files without invoking LibreOffice or another
+external office suite.
 
 ## Install Core
 

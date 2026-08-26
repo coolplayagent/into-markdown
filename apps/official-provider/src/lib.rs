@@ -1,6 +1,5 @@
 //! Official offline OCR and media capability workers.
 
-use base64::Engine as _;
 use futures::executor::block_on;
 use into_markdown::{
     CancellationToken, ConversionError, DiarizationRequest, ExecutionContext, ExecutionOptions,
@@ -11,16 +10,14 @@ use into_markdown_process_plugin::worker::{
     WorkerError, WorkerEvents, WorkerRequest, serve_raw_with_isolated_stdout,
 };
 use into_markdown_provider_plugin::{
-    DiarizationParameters, LegacyOfficeCapabilityResponse, LegacyOfficeParameters,
-    OcrCapabilityResponse, OcrParameters, ReadinessParameters, TranscriptionParameters,
+    DiarizationParameters, OcrCapabilityResponse, OcrParameters, ReadinessParameters,
+    TranscriptionParameters,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const OCR_PLUGIN_ID: &str = "official.ocr.ppocrv6";
 const MEDIA_PLUGIN_ID: &str = "official.media.whisper";
-const LEGACY_OFFICE_PLUGIN_ID: &str = "official.legacy-office.libreoffice";
-const LEGACY_OFFICE_PROVIDER_ID: &str = "builtin.legacy-office.libreoffice";
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 /// Serve one OCR request on the authenticated process protocol.
@@ -103,108 +100,6 @@ pub fn serve_media() -> std::io::Result<()> {
                 "unsupportedOperation",
                 "expected transcription or diarization operation",
             )),
-        },
-    )
-}
-
-/// Serve legacy Office normalization using the plugin-owned `LibreOffice` runtime.
-///
-/// # Errors
-///
-/// Returns an I/O error when the authenticated worker protocol cannot be served.
-pub fn serve_legacy_office() -> std::io::Result<()> {
-    serve_raw_with_isolated_stdout(
-        LEGACY_OFFICE_PLUGIN_ID,
-        MAX_FRAME_BYTES,
-        |request, events, cancellation| {
-            let context = execution_context(cancellation, &ResourceLimits::default());
-            let root = distribution_root()?.join("legacy-office-runtime");
-            #[allow(unused_mut)]
-            let mut runtime_config = into_markdown_legacy_office::RuntimeConfig::new(
-                root.join("authority.json"),
-                root.clone(),
-                root.join(legacy_worker_name()),
-            );
-            #[cfg(target_os = "macos")]
-            if std::env::var_os("INTO_MARKDOWN_INHERITED_SANDBOX").as_deref()
-                == Some(std::ffi::OsStr::new("process-v1"))
-            {
-                runtime_config = runtime_config.with_inherited_process_sandbox();
-            }
-            let runtime = into_markdown_legacy_office::LegacyOfficeRuntime::new(runtime_config);
-            if request.input_format == "readiness" {
-                let parameters: ReadinessParameters = parameters(&request)?;
-                if parameters.schema_version != 1 || parameters.capability_id != "legacy-office" {
-                    return Err(WorkerError::new(
-                        "invalidRequest",
-                        "legacy Office readiness identity is invalid",
-                    ));
-                }
-                runtime.verify(&context).map_err(|error| worker_error(&error))?;
-                return Ok("{\"ready\":true}".into());
-            }
-            if request.input_format != "legacy-office" {
-                return Err(WorkerError::new(
-                    "unsupportedOperation",
-                    "expected legacy Office operation",
-                ));
-            }
-            let parameters: LegacyOfficeParameters = parameters(&request)?;
-            if parameters.schema_version != 1 || parameters.capability_id != "legacy-office" {
-                return Err(WorkerError::new(
-                    "invalidRequest",
-                    "legacy Office capability identity is invalid",
-                ));
-            }
-            let source = source_bytes(&request, &context)?;
-            events
-                .progress(
-                    "converting",
-                    Some(0),
-                    Some(1),
-                    Some("provider.legacy-office.start".into()),
-                )
-                .ok();
-            let package = runtime
-                .convert(
-                    &source.bytes,
-                    parameters.source_format,
-                    parameters.maximum_output_bytes,
-                    &context,
-                )
-                .map_err(|error| worker_error(&error))?;
-            events
-                .progress(
-                    "converting",
-                    Some(1),
-                    Some(1),
-                    Some("provider.legacy-office.complete".into()),
-                )
-                .ok();
-            let format = match package.format {
-                into_markdown_legacy_office::NormalizedFormat::Docx => {
-                    into_markdown::InputFormat::Docx
-                }
-                into_markdown_legacy_office::NormalizedFormat::Pptx => {
-                    into_markdown::InputFormat::Pptx
-                }
-                into_markdown_legacy_office::NormalizedFormat::Xlsx => {
-                    into_markdown::InputFormat::Xlsx
-                }
-            };
-            serde_json::to_string(&LegacyOfficeCapabilityResponse {
-                schema_version: 1,
-                capability_id: "legacy-office".into(),
-                provider_id: LEGACY_OFFICE_PROVIDER_ID.into(),
-                bytes_base64: base64::engine::general_purpose::STANDARD.encode(&package.bytes),
-                format,
-                version: package.runtime.version().into(),
-                artifact_sha256: package.runtime.artifact_sha256().into(),
-                target: package.runtime.target().into(),
-            })
-            .map_err(|_| {
-                WorkerError::new("invalidResult", "legacy Office result serialization failed")
-            })
         },
     )
 }
@@ -473,10 +368,6 @@ const fn worker_name() -> &'static str {
 
 const fn ffmpeg_name() -> &'static str {
     if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
-}
-
-const fn legacy_worker_name() -> &'static str {
-    if cfg!(windows) { "legacy-office-worker.exe" } else { "legacy-office-worker" }
 }
 
 #[cfg(test)]

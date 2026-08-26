@@ -348,15 +348,6 @@ pub enum SetupCommand {
         #[arg(long)]
         allow_private_network: bool,
     },
-    /// Install and verify the self-contained `LibreOffice` compatibility plugin.
-    LegacyOffice {
-        /// Allow development transport without TLS certificate validation.
-        #[arg(long)]
-        insecure: bool,
-        /// Permit the pinned HTTPS host to resolve through a private local network route.
-        #[arg(long)]
-        allow_private_network: bool,
-    },
 }
 
 /// `transcript` arguments.

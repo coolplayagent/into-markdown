@@ -114,20 +114,10 @@ renderer。几何继承和 group transform 在 converter 内确定性合成，�
 编号写入每个 material node 的 SourceLocator。转换期间的 package/parser/geometry/codec 峰值
 在物化前由 request context 预留；返回时同一 reservation 经中央 retained estimator 认证并
 收缩为 opaque output lease，typed IR 校验也在独立 working-set preflight 后执行。
-旧 Office 兼容层是另一条独立、单向依赖链：`crates/legacy-office` 拥有 runtime authority、
-length-prefixed protocol、父进程生命周期、平台 sandbox 与窄 LibreOfficeKit C ABI；
-`crates/converters::legacy_office` 只负责 DOC/PPT/XLS probe、调用 worker、nested OOXML dispatch
-和 provenance remap。worker 不依赖 converter、engine 或 renderer；converter 不接触 native ABI，
-也不能给 worker 传 `Services`。一份源文件对应一个新进程和一个 request/response，终态前必须
-kill/wait 或正常 wait，因此 native global state、崩溃与临时 profile 不跨请求复用。
-父进程从 no-follow、hash 匹配的 worker/dependency 文件建立请求私有只读 inode tree，再从该
-tree 启动；Unix fork/exec 间原子关闭除 0/1/2 外的所有 descriptor。worker 重新验证完整
-authority 后，以同样方式复制 kit 与递归依赖闭包，安装 sandbox 后才调用动态加载器，因而路径
-rename/swap 与 library constructor 都不能越过已验证 identity。成功协议状态同时要求请求完整写入、
-单一响应完整读到 EOF 且 worker 正常退出，任一半关闭或提前响应均 terminate/wait。
-Windows 启动器使用显式 `CreateProcessW` attribute list，把三个标准流列为唯一可继承 handle，
-在 suspended 状态下先绑定单进程 Job、复核 AppContainer token SID，再恢复主线程；失败路径统一
-terminate/wait。AppContainer profile 与 runtime ACL 是平台安装事务的输入，不由请求动态修改。
+Office 97–2003 解析也位于 converters 层：DOC、PPT 与 XLS 前端共用 MSG 的受限 CFB/OLE
+基础设施，再分别认证 FIB/piece table、user-edit/persist/record 图和 BIFF8 record。解析器直接生成
+统一 Document IR、Asset 与结构化 diagnostics，不经 OOXML 中转，也不调用进程、网络或平台 Office。
+循环均使用根 `ExecutionContext` checkpoint，并在同步 workbook 组装前完成输入驱动尺寸预检。
 
 AI 提供者不能返回无法追踪的整篇重写文档。它只能返回带 AI 溯源信息的新节点，
 或带版本的 `DocumentPatch`；引擎验证补丁后才能应用。原始来源节点始终可审计。
