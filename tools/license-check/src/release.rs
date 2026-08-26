@@ -404,7 +404,7 @@ fn validate_artifact_files(
                 file.path
             ));
         }
-        if file.bytes == 0 {
+        if file.bytes == 0 && !allowed_empty_vendor_source(file) {
             errors.push(format!("artifact member {} has an empty size", file.path));
         }
         for owner in file.component_id.iter().chain(file.embedded_components.iter()) {
@@ -419,6 +419,47 @@ fn validate_artifact_files(
     }
     for component in selected.difference(&owners) {
         errors.push(format!("artifact component {component} owns no member"));
+    }
+}
+
+fn allowed_empty_vendor_source(file: &ArchiveFile) -> bool {
+    file.kind == ArchiveFileKind::Project
+        && file.component_id.is_none()
+        && file.embedded_components.is_empty()
+        && file.path.starts_with("lib/into-markdown-rust/vendor/")
+        && file.path.len() > "lib/into-markdown-rust/vendor/".len()
+}
+
+#[cfg(test)]
+mod empty_vendor_source_tests {
+    use super::{ArchiveFile, ArchiveFileKind, allowed_empty_vendor_source};
+
+    fn file(path: &str, kind: ArchiveFileKind) -> ArchiveFile {
+        ArchiveFile {
+            path: path.into(),
+            bytes: 0,
+            sha1: Some("0".repeat(40)),
+            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+            kind,
+            component_id: None,
+            embedded_components: vec![],
+        }
+    }
+
+    #[test]
+    fn only_project_files_inside_the_offline_vendor_tree_may_be_empty() {
+        assert!(allowed_empty_vendor_source(&file(
+            "lib/into-markdown-rust/vendor/vcpkg-0.2.15/test-data/empty.dll",
+            ArchiveFileKind::Project,
+        )));
+        assert!(!allowed_empty_vendor_source(&file(
+            "lib/into-markdown-rust/Cargo.toml",
+            ArchiveFileKind::Project,
+        )));
+        assert!(!allowed_empty_vendor_source(&file(
+            "lib/into-markdown-rust/vendor/vcpkg-0.2.15/test-data/empty.dll",
+            ArchiveFileKind::Component,
+        )));
     }
 }
 
