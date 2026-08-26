@@ -189,6 +189,26 @@ class ReleaseMetadataTests(unittest.TestCase):
                 "models/pp-ocrv6-tiny-detector-onnx/inference.onnx", "0" * 64
             )
 
+    def test_projection_ownership_failure_identifies_artifact_and_candidates(self) -> None:
+        projection = {
+            "artifact": "ocr-plugin",
+            "file_name": "official.ocr.ppocrv6-aarch64-apple-darwin.imp",
+            "components": ["ppocrv6-tiny-detector-onnx-model"],
+            "files": [
+                {
+                    "path": "models/unexpected/detector.onnx",
+                    "bytes": 7,
+                    "sha256": "a" * 64,
+                    "kind": "project",
+                }
+            ],
+        }
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "ocr-plugin .*unowned components.*models/unexpected/detector.onnx",
+        ):
+            release_metadata.validate_projection_ownership(projection)
+
     def test_plugin_projection_rejects_duplicate_zip_members(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             artifact = pathlib.Path(name) / "official.ocr.ppocrv6.imp"

@@ -372,6 +372,33 @@ def write_generated(output: pathlib.Path, metadata: dict) -> None:
                 raise RuntimeError(f"generated metadata digest drifted: {path.name}")
 
 
+def validate_projection_ownership(projection: dict) -> None:
+    selected = set(projection["components"])
+    owners: set[str] = set()
+    for item in projection["files"]:
+        owner = item.get("component_id")
+        if owner is not None:
+            owners.add(owner)
+        owners.update(item.get("embedded_components", []))
+    missing = sorted(selected - owners)
+    if not missing:
+        return
+    candidates = [
+        {
+            "path": item["path"],
+            "bytes": item["bytes"],
+            "sha256": item["sha256"],
+            "component_id": item.get("component_id"),
+        }
+        for item in projection["files"]
+        if any(token in item["path"].lower() for token in ("model", "onnx", "dict"))
+    ][:24]
+    raise RuntimeError(
+        f"{projection['artifact']} {projection['file_name']} has unowned components "
+        f"{missing}; bounded model candidates={json.dumps(candidates, sort_keys=True)}"
+    )
+
+
 def generate(
     projection_tool: pathlib.Path,
     target: str,
@@ -398,6 +425,7 @@ def generate(
         projection["build_tools"] = executions
     finalized = []
     for projection in projections:
+        validate_projection_ownership(projection)
         metadata = run_projection(projection_tool, "finalize", projection)
         write_generated(output, metadata)
         finalized.append((projection, metadata))
