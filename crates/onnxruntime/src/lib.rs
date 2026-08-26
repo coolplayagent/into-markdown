@@ -1515,9 +1515,11 @@ mod tests {
             parse_version_pointer(missing_nul.as_ptr()).unwrap_err(),
             LoadError::VersionMismatch
         );
-        let invalid_utf8 = [std::ffi::c_char::MIN, 0];
+        // Keep the invalid byte stable across targets where `c_char` may be
+        // either signed (x86_64) or unsigned (aarch64).
+        let invalid_utf8 = [0xff_u8, 0_u8];
         assert_eq!(
-            parse_version_pointer(invalid_utf8.as_ptr()).unwrap_err(),
+            parse_version_pointer(invalid_utf8.as_ptr().cast()).unwrap_err(),
             LoadError::VersionMismatch
         );
     }
