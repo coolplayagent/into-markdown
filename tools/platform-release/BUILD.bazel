@@ -68,3 +68,16 @@ py_test(
     main = "test_platform_tools.py",
     deps = [":platform_tools_library"],
 )
+
+py_library(
+    name = "public_audit_library",
+    srcs = ["public_audit.py"],
+    imports = ["."],
+)
+
+py_test(
+    name = "public_audit_test",
+    srcs = ["test_public_audit.py"],
+    main = "test_public_audit.py",
+    deps = [":public_audit_library"],
+)

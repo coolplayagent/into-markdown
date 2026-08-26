@@ -12,8 +12,34 @@ import re
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
+
+
+def origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urllib.parse.urlsplit(url)
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never forward the GitHub bearer token to cross-origin download hosts."""
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        file_pointer: object,
+        code: int,
+        message: str,
+        headers: object,
+        new_url: str,
+    ) -> urllib.request.Request | None:
+        redirected = super().redirect_request(
+            request, file_pointer, code, message, headers, new_url
+        )
+        if redirected is not None and origin(request.full_url) != origin(new_url):
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 def request(url: str, token: str) -> bytes:
@@ -28,7 +54,8 @@ def request(url: str, token: str) -> bytes:
     last: Exception | None = None
     for attempt in range(4):
         try:
-            with urllib.request.urlopen(value, timeout=120) as response:
+            opener = urllib.request.build_opener(SafeRedirectHandler())
+            with opener.open(value, timeout=120) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             if error.code < 500 or attempt == 3:
