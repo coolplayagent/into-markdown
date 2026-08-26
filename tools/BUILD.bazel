@@ -6,6 +6,16 @@ py_test(
         "release-metadata.py",
         "release_metadata_test.py",
     ],
+    data = [
+        "//:.bazelversion",
+        "//:package.json",
+        "//:pnpm-lock.yaml",
+        "//:rust-toolchain.toml",
+        "//third_party/licenses:build-tools.json",
+        "//third_party/licenses:downloads.json",
+        "//tools/macos-release:authority.json",
+        "//tools/platform-release:authority.json",
+    ],
     main = "release_metadata_test.py",
 )
 

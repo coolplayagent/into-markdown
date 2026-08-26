@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import pathlib
@@ -18,6 +19,12 @@ ARTIFACTS = {
     "official.ocr.ppocrv6.imp": "ocr-plugin",
     "official.media.whisper.imp": "media-plugin",
 }
+OCR_MODEL_COMPONENTS = {
+    "ppocrv6-tiny-detector-onnx-model",
+    "ppocrv6-tiny-recognizer-character-table",
+    "ppocrv6-tiny-recognizer-onnx-model",
+}
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def plugin_artifact_kind(filename: str, target: str) -> str:
@@ -199,24 +206,58 @@ def core_projection(
     }
 
 
-def plugin_owner(path: str) -> str | None:
+@functools.lru_cache(maxsize=1)
+def ocr_model_digest_owners() -> dict[str, str]:
+    authority = json.loads(
+        (ROOT / "third_party/licenses/downloads.json").read_text(encoding="utf-8")
+    )
+    if authority.get("schema_version") != 1:
+        raise RuntimeError("model download authority schema is invalid")
+    owners: dict[str, str] = {}
+    selected: set[str] = set()
+    for item in authority.get("model_runtime_files", []):
+        owner = item.get("artifact_id")
+        if owner not in OCR_MODEL_COMPONENTS:
+            continue
+        digest = item.get("sha256", "")
+        if (
+            len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+            or digest in owners
+        ):
+            raise RuntimeError("OCR model download authority is ambiguous")
+        owners[digest] = owner
+        selected.add(owner)
+    if selected != OCR_MODEL_COMPONENTS:
+        raise RuntimeError("OCR model download authority is incomplete")
+    return owners
+
+
+def plugin_owner(path: str, digest: str | None = None) -> str | None:
+    path_owner = None
     if "onnxruntime" in path and path.rsplit("/", 1)[-1].startswith(("libonnxruntime", "onnxruntime")):
-        return "onnxruntime-cpu"
-    if path.endswith("pp-ocrv6-tiny-detector-onnx/inference.onnx"):
-        return "ppocrv6-tiny-detector-onnx-model"
-    if path.endswith("pp-ocrv6-tiny-recognizer-onnx/inference.onnx"):
-        return "ppocrv6-tiny-recognizer-onnx-model"
-    if path.endswith("pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt"):
-        return "ppocrv6-tiny-recognizer-character-table"
-    if path.endswith("ggml-small.bin"):
-        return "whisper-small"
-    if path.endswith("silero_vad_half.onnx"):
-        return "silero-vad-half-onnx-model"
-    if path.endswith("3dspeaker_eres2net_base.onnx"):
-        return "3dspeaker-eres2net-base-onnx-model"
-    if path.startswith(("ffmpeg/", "source/ffmpeg-", "relink/ffmpeg-")):
-        return "ffmpeg"
-    return None
+        path_owner = "onnxruntime-cpu"
+    elif path.endswith("pp-ocrv6-tiny-detector-onnx/inference.onnx"):
+        path_owner = "ppocrv6-tiny-detector-onnx-model"
+    elif path.endswith("pp-ocrv6-tiny-recognizer-onnx/inference.onnx"):
+        path_owner = "ppocrv6-tiny-recognizer-onnx-model"
+    elif path.endswith("pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt"):
+        path_owner = "ppocrv6-tiny-recognizer-character-table"
+    elif path.endswith("ggml-small.bin"):
+        path_owner = "whisper-small"
+    elif path.endswith("silero_vad_half.onnx"):
+        path_owner = "silero-vad-half-onnx-model"
+    elif path.endswith("3dspeaker_eres2net_base.onnx"):
+        path_owner = "3dspeaker-eres2net-base-onnx-model"
+    elif path.startswith(("ffmpeg/", "source/ffmpeg-", "relink/ffmpeg-")):
+        path_owner = "ffmpeg"
+
+    digest_owner = ocr_model_digest_owners().get(digest) if digest is not None else None
+    if path_owner in OCR_MODEL_COMPONENTS and digest_owner != path_owner:
+        raise RuntimeError(f"OCR model member differs from download authority: {path}")
+    if digest_owner is not None and path_owner not in {None, digest_owner}:
+        raise RuntimeError(f"OCR model digest has conflicting path ownership: {path}")
+    return path_owner or digest_owner
 
 
 def plugin_projection(
@@ -292,12 +333,13 @@ def plugin_projection(
         for info in infos:
             contents = package.read(info)
             path = info.filename
-            owner = plugin_owner(path)
+            digest = sha256_bytes(contents)
+            owner = plugin_owner(path, digest)
             entry = {
                 "path": path,
                 "bytes": len(contents),
                 "sha1": sha1_bytes(contents),
-                "sha256": sha256_bytes(contents),
+                "sha256": digest,
                 "kind": "component" if owner else "project",
             }
             if owner:

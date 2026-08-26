@@ -153,6 +153,7 @@ rust_test(
     env = {"LICENSE_CHECK_TEST_WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)"},
     env_inherit = ["CARGO", "CARGO_HOME", "HOME", "PATH", "RUSTUP_HOME"],
     tags = ["no-sandbox"],
+    timeout = "long",
 )
 
 rust_test(

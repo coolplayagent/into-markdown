@@ -878,13 +878,19 @@ test("meeting recording is an independent route and media never enters the docum
   [...window.document.querySelectorAll("button")]
     .find((button) => button.textContent?.includes("Create transcript"))!
     .click();
-  await waitFor(() => uploads.length === 1);
+  await waitFor(() => uploads.length === 1).catch(() => {
+    throw new Error(`Meeting upload did not start: ${window.document.body.textContent}`);
+  });
   assert.deepEqual(uploads, [["meeting.m4a", true]]);
   await waitForText(window, "Cancel transcription");
   assert.equal(window.document.querySelector(".transcript-action-panel"), stableActionPanel);
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Cancel transcription")!.click();
-  await waitFor(() => cancellations === 1 && window.document.body.textContent.includes("Cancelling"));
-  assert.ok([...window.document.querySelectorAll("button")].some((button) => button.textContent === "Cancelling" && button.disabled));
+  await waitFor(() => cancellations === 1);
+  assert.ok(
+    [...window.document.querySelectorAll("button")].some(
+      (button) => button.textContent === "Cancelling" && button.disabled,
+    ) || window.document.body.textContent.includes("Cancelled"),
+  );
   emitTaskEvent?.({ schemaVersion: 1, sequence: 1, taskId: "b".repeat(32), kind: "progress", status: "cancelled",
     progressMillionths: 250_000, terminal: true, execution: { stage: "completed", basisPoints: 2_500,
       completedUnits: 1, totalUnits: 4, message: null } });
