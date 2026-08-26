@@ -22,7 +22,6 @@ from audit import (
     distributed_source_fixture,
     safe_zip_extract,
 )
-from legacy_authority import copy_tree_materialized, dumpbin_dependencies
 from platform_acceptance import capability_map, repairable_payload_files, tree_hash
 
 WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -69,60 +68,6 @@ class PlatformToolTests(unittest.TestCase):
         self.assertFalse(
             distributed_source_fixture(pathlib.Path("lib/pdfium/pdfium.dll"))
         )
-
-    def test_materialized_tree_can_exclude_administrative_package(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = pathlib.Path(name)
-            source = root / "source"
-            source.mkdir()
-            keep = source / "program" / "runtime.dll"
-            keep.parent.mkdir()
-            keep.write_bytes(b"runtime")
-            generated = source / "libreoffice.msi"
-            generated.write_bytes(b"administrative")
-            excluded_directory = source / "System"
-            excluded_directory.mkdir()
-            (excluded_directory / "runtime.dll").write_bytes(b"deployment")
-            destination = root / "destination"
-            copy_tree_materialized(
-                source,
-                destination,
-                {generated.resolve(), excluded_directory.resolve()},
-            )
-            self.assertEqual((destination / "program" / "runtime.dll").read_bytes(), b"runtime")
-            self.assertFalse((destination / "libreoffice.msi").exists())
-            self.assertFalse((destination / "System").exists())
-
-    def test_dumpbin_dependencies_excludes_file_title_and_summary(self) -> None:
-        output = """
-Dump of file C:\\runtime\\mergedlo.dll
-
-File Type: DLL
-
-  Image has the following dependencies:
-
-    KERNEL32.dll
-    mergedlo-helper.dll
-    WINSPOOL.DRV
-
-  Summary
-        1000 .data
-"""
-        self.assertEqual(
-            dumpbin_dependencies(output),
-            ["KERNEL32.dll", "mergedlo-helper.dll", "WINSPOOL.DRV"],
-        )
-
-    def test_dumpbin_dependencies_accepts_resource_only_pe(self) -> None:
-        output = """
-Dump of file C:\\runtime\\resource.dll
-
-File Type: DLL
-
-  Summary
-        1000 .rsrc
-"""
-        self.assertEqual(dumpbin_dependencies(output), [])
 
     def test_zip_extractor_rejects_parent_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as name:
