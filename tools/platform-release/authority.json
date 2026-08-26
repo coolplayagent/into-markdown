@@ -78,11 +78,17 @@
   "sharedDownloads": {
     "ocr-detector": {
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
+      "mirror_urls": [
+        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
+      ],
       "bytes": 1792000,
       "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d"
     },
     "ocr-recognizer": {
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "mirror_urls": [
+        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
+      ],
       "bytes": 4526080,
       "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
     },
