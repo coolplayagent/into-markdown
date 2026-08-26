@@ -62,8 +62,11 @@ def run(arguments: Iterable[str], *, cwd: pathlib.Path | None = None, env: dict 
         errors="replace",
     )
     if completed.returncode:
-        detail = completed.stderr.strip().splitlines()[-1:] or ["no diagnostic"]
-        raise ReleaseError(f"command failed ({command[0]}): {detail[0]}")
+        detail = completed.stderr.strip().splitlines()[-40:] or ["no diagnostic"]
+        rendered = "\n".join(detail)
+        raise ReleaseError(
+            f"command failed ({command[0]}, exit {completed.returncode}):\n{rendered}"
+        )
     return completed.stdout
 
 
