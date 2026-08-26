@@ -1,6 +1,6 @@
 # Linux 与 Windows 模块化发布
 
-最终用户应按[安装与部署指南](user-guide.md)校验签名与摘要、安装 Core、离线导入能力插件并
+最终用户应按[安装与部署指南](user-guide.md)校验 signing policy 与摘要、安装 Core、离线导入能力插件并
 排障；本文描述跨平台发布装配与验收权威。
 
 Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个包含
@@ -9,7 +9,8 @@ Office 97–2003 原生解析的 Core 归档，以及 `official.ocr.ppocrv6`、`
 SBOM、签名清单和目标平台声明。
 
 每个最终 Core/插件构件同时发布以完整文件名为前缀的 `.spdx.json`、`.sources.json` 和
-`.THIRD_PARTY_NOTICES.md` sidecar，并保留既有 SHA-256 与签名。每个目标另有
+`.THIRD_PARTY_NOTICES.md` sidecar，并保留 SHA-256。每个目标另有 `*-signing-policy.json`，明确
+记录外部签名模式、发布者身份是否被操作系统验证及对应安装警告。每个目标另有
 `into-markdown-<target>-release-set.json` 和聚合 SPDX；其中 `core` 只引用 Core，
 `complete-offline` 引用 Core 与两个插件，不产生另一份重复归档。
 
@@ -26,11 +27,12 @@ DOC/PPT/XLS 真实文件转换并卸载。
 Linux 两个架构都在 `authority.json` 固定摘要的 Rocky Linux 8.10 原生容器中构建。发布契约是
 glibc 不高于 2.28、运行内核 5.15 以上；x86_64 使用通用 `x86-64`，ARM64 使用通用 ARMv8-A，
 组装器显式传递 `target-cpu`，不接受宿主 `native` 特性。Windows 固定 MSVC 14.44.35207 与
-Windows SDK 10.0.26100.0。`audit.py` 在签名后的真实成员上检查 ELF/PE 架构、GLIBC symbol
+Windows SDK 10.0.26100.0。`audit.py` 在最终真实成员上检查 ELF/PE 架构、GLIBC symbol
 ceiling、解释器、DT_NEEDED、RPATH/RUNPATH、文件模式、PE import 与项目二进制 Authenticode；
-报告作为 `platform-audit.json` 上传。
+在 unsigned 模式下还要求项目二进制没有意外混入外部 Authenticode 身份。报告作为
+`platform-audit.json` 上传。
 
-最终 sidecar 在 Authenticode 或 Linux detached signature 完成后生成。Core 成员来自最终
+最终 sidecar 从最终归档生成。Core 成员来自最终
 归档的干净解包目录，并先由归档内 `archive-check` 与 `archive-manifest.json` 双向核对；插件
 直接遍历最终 ZIP，并要求每个成员的大小和 SHA-256 同时匹配已签名 `plugin.json` 与
 `provider.json` runtime inventory。SPDX 2.3 JSON 还会由固定版本、固定 wheel SHA-256 的官方
@@ -54,14 +56,13 @@ python tools/platform-release/release.py \
   --archive /absolute/into-md-linux-x86_64-core.tar.gz
 ```
 
-Windows 工作流先对两次组装结果做逐字节比较，再从同一批已签名项目二进制生成最终构件。
-受保护的 PFX 只导入当前 runner 的临时 CurrentUser 证书存储，签名命令仅传递非敏感
-thumbprint；语音插件中的 FFmpeg 发布副本也在插件 manifest 哈希生成前执行 Authenticode
-与可信时间戳，插件内 authority 随签名字节重新绑定。Core 的 PDFium 保留固定上游字节，
-因此运行时仍可直接按仓库 authority 校验；ONNX Runtime 保留供应商签名。
-工作流结束后移除证书和 PFX。Linux 对 Core
-和每个 `.imp` 生成受保护 GPG 密钥的 detached signature。缺少发布凭据时工作流必须失败，
-不能用临时签名冒充公开发布签名。
+workflow dispatch 的 `signing_mode` 明确选择 `unsigned` 或 `signed`，默认是可安装的
+`unsigned`。unsigned 不读取 Windows PFX 或 Linux GPG secret；Windows 可能显示 Unknown
+publisher/SmartScreen，Linux 不生成 `.asc`。signed 模式保留原有路径：Windows 只把 PFX 导入
+runner 的临时 CurrentUser 证书存储，并在插件 manifest 哈希前完成项目二进制和 FFmpeg 的
+Authenticode 与可信时间戳；Linux 为 Core 和每个 `.imp` 生成 GPG detached signature。选择
+signed 却缺少对应凭据时必须失败。两种模式都保留内部 `.imp` Ed25519 签名，该密钥用于包清单
+完整性，不是操作系统发布者证书。Core 的 PDFium 保留固定上游字节，ONNX Runtime 保留供应商签名。
 
 Windows 的 OCR 与语音进程使用稳定的零 capability AppContainer 身份。插件管理器只给当前已
 验证、不可变的 runtime 快照授予读取和执行 ACL，并由 kill-on-close Job Object 持有整个进程树。
@@ -92,9 +93,10 @@ Actions 日志和历史 artifacts。任何发现先吊销/轮换并清理精确�
 转换可见性后立即恢复 main 保护、push ruleset、只读默认 token、fork 审批和受保护 `release`
 environment。当前发布 job 只接受 main 或 tag，并且正式凭据只通过该 environment 提供。
 
-正式 workflow dispatch 接收一个有界 `release_tag`，在 Core 的官方发布者记录中写入该 GitHub
+正式 workflow dispatch 接收有界 `release_tag` 和显式 `signing_mode`，在 Core 的官方发布者记录中写入该 GitHub
 Release 的不可变下载根。公开资产使用 `插件ID-目标.imp`，因此三个目标的同 ID 插件可以安全地
 共存于 GitHub Release 的平面命名空间；包内插件 ID 和本地 `.imp` 文件名保持不变。Linux、Windows
-job 全绿后，工作流只创建或更新受保护的 draft release，并同时上传 Core、签名、摘要、SBOM、
+job 全绿后，工作流只创建或更新受保护的 draft release，并同时上传 Core、可选外部签名、摘要、SBOM、
 来源、NOTICE、平台审计、installed-smoke 与 acceptance 报告。macOS 同提交的签名/公证工作流
-补齐自己的目标资产；只有四个平台全部通过并复核摘要后才把 draft 发布为公开 release。
+按同一 signing mode 补齐目标资产；只有四个平台全部通过并复核摘要后才把 draft 发布为公开 release。
+unsigned draft 的标题和说明必须显著标识 `UNSIGNED`，不能让用户误以为操作系统验证了发布者。

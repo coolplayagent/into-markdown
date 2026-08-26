@@ -24,7 +24,6 @@ py_library(
     srcs = [
         "acquire.py",
         "common.py",
-        "legacy_authority.py",
         "release.py",
     ],
     data = ["authority.json"],
@@ -48,7 +47,6 @@ py_library(
     srcs = [
         "audit.py",
         "common.py",
-        "legacy_authority.py",
         "platform_acceptance.py",
     ],
     imports = ["."],

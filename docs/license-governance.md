@@ -182,12 +182,14 @@ plugins on all four supported targets. Component generation can run before targe
 bytes exist; finalization binds its executable, build authority, source and relink members, while
 strict archive verification remains fail-closed when checked-in FFmpeg approval is required.
 
-`finalize` consumes the signed or notarized artifact hash, exact member hashes and ownership, source
+`finalize` consumes the final installable artifact hash (after external signing/notarization when
+enabled), exact member hashes and ownership, source
 revision, and observed build tools. Member SHA-256 remains the release integrity authority; the
 SPDX sidecar additionally records the required SHA-1 and package verification code. It emits
 `<artifact>.spdx.json`, `<artifact>.sources.json`, and
 `<artifact>.THIRD_PARTY_NOTICES.md`. Core tar/ZIP members come from an `archive-check`-verified
-extraction; macOS members come from a read-only mount of the stapled DMG; `.imp` members must agree
+extraction; macOS members come from a read-only mount of the final DMG (stapled in signed mode);
+`.imp` members must agree
 in both directions with `plugin.json` and `provider.json` inventories.
 
 `aggregate` requires exactly Core plus the OCR and media plugins. Its `core` profile

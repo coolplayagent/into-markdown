@@ -141,7 +141,8 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 `npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
 统一 `release-projection` 对 Core 与两个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
 声明，并对 Core 归档清单、最终解包成员以及插件签名/runtime inventory 做双向逐文件检查。
-签名、公证或 stapling 后的最终构件再生成 artifact sidecar；四个平台的聚合 release set
+最终构件（signed 模式在签名、公证或 stapling 后，unsigned 模式在可安装归档完成后）再生成
+artifact sidecar；四个平台的聚合 release set
 明确区分仅 Core 与 Core 加两个插件的完整离线集合。
 
 ## Wasmtime WASI runtime

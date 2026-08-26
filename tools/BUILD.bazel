@@ -17,3 +17,12 @@ py_test(
     ],
     main = "publish_release_assets_test.py",
 )
+
+py_test(
+    name = "release_signing_policy_test",
+    srcs = [
+        "release-signing-policy.py",
+        "release_signing_policy_test.py",
+    ],
+    main = "release_signing_policy_test.py",
+)

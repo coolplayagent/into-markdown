@@ -20,6 +20,7 @@ from audit import (
     AuditFailure,
     clr_il_only,
     distributed_source_fixture,
+    run,
     safe_zip_extract,
 )
 from platform_acceptance import capability_map, repairable_payload_files, tree_hash
@@ -28,6 +29,15 @@ WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 class PlatformToolTests(unittest.TestCase):
+    def test_platform_audit_rejects_unknown_signing_mode_before_io(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported Windows signing mode"):
+            run(
+                "x86_64-pc-windows-msvc",
+                pathlib.Path("missing-core"),
+                pathlib.Path("missing-plugins"),
+                windows_signing_mode="surprise",
+            )
+
     def test_repair_fixture_never_corrupts_plugin_manager_authority(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)

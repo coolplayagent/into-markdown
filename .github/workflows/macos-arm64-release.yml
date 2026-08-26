@@ -7,6 +7,14 @@ on:
         description: GitHub draft release tag that will contain the Core and two target-qualified .imp files
         required: true
         type: string
+      signing_mode:
+        description: External publisher signing policy; unsigned uses ad-hoc Mach-O signatures and is not notarized
+        required: true
+        default: unsigned
+        type: choice
+        options:
+          - unsigned
+          - signed
 
 permissions:
   contents: read
@@ -50,7 +58,7 @@ jobs:
       - name: Validate release assembly and metadata contracts
         run: |
           python3 -m unittest discover -s tools/macos-release -p '*test.py'
-          python3 -m unittest tools.publish_release_assets_test tools.release_metadata_test
+          python3 -m unittest tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
       - name: Build audited LGPL FFmpeg runtime
         env:
           FFMPEG_AUDIT_NETWORK: "1"
@@ -84,6 +92,7 @@ jobs:
             cmp "$RUNNER_TEMP/plugins-a/$package.imp" "$RUNNER_TEMP/plugins-b/$package.imp"
           done
       - name: Import protected Apple signing and notarization credentials
+        if: inputs.signing_mode == 'signed'
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -110,6 +119,7 @@ jobs:
             -k "$RELEASE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db"
           security list-keychains -d user -s "$RUNNER_TEMP/release.keychain-db"
       - name: Assemble Developer ID signed release artifacts
+        if: inputs.signing_mode == 'signed'
         env:
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
           PLUGIN_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}
@@ -117,25 +127,50 @@ jobs:
           set -eu
           test -n "$APPLE_CODESIGN_IDENTITY"
           PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
-            --output "$RUNNER_TEMP/core-stage-signed" \
+            --output "$RUNNER_TEMP/core-stage-final" \
             --cache "$RUNNER_TEMP/release-cache" \
             --build-root "$RUNNER_TEMP/build-a" \
             --skip-build \
             --ffmpeg-artifacts "$RUNNER_TEMP/ffmpeg-audit" \
             --plugin-signing-key "$RUNNER_TEMP/official-plugin-signing-key.pk8" \
             --plugin-base-url "$PLUGIN_BASE_URL" \
-            --plugins-output "$RUNNER_TEMP/plugins-signed" \
+            --plugins-output "$RUNNER_TEMP/plugins-final" \
             --archive "$RUNNER_TEMP/into-md-macos-arm64-core-signed.tar.gz" \
             --codesign-identity "$APPLE_CODESIGN_IDENTITY"
           hdiutil create -quiet -fs HFS+ -format UDZO \
             -volname "into-markdown" \
-            -srcfolder "$RUNNER_TEMP/core-stage-signed" \
+            -srcfolder "$RUNNER_TEMP/core-stage-final" \
             "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           /usr/bin/codesign --force --sign "$APPLE_CODESIGN_IDENTITY" \
             --timestamp --options runtime "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           /usr/bin/codesign --verify --strict --verbose=2 \
             "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
+      - name: Assemble installable unsigned release artifacts
+        if: inputs.signing_mode == 'unsigned'
+        env:
+          PLUGIN_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}
+        run: |
+          set -eu
+          PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+            --output "$RUNNER_TEMP/core-stage-final" \
+            --cache "$RUNNER_TEMP/release-cache" \
+            --build-root "$RUNNER_TEMP/build-a" \
+            --skip-build \
+            --ffmpeg-artifacts "$RUNNER_TEMP/ffmpeg-audit" \
+            --plugin-signing-key "$RUNNER_TEMP/official-plugin-signing-key.pk8" \
+            --plugin-base-url "$PLUGIN_BASE_URL" \
+            --plugins-output "$RUNNER_TEMP/plugins-final" \
+            --archive "$RUNNER_TEMP/into-md-macos-arm64-core-unsigned.tar.gz" \
+            --codesign-identity "-"
+          hdiutil create -quiet -fs HFS+ -format UDZO \
+            -volname "into-markdown" \
+            -srcfolder "$RUNNER_TEMP/core-stage-final" \
+            "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
+          /usr/bin/codesign --force --sign - "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
+          /usr/bin/codesign --verify --strict --verbose=2 \
+            "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
       - name: Notarize Core and two capability plugins
+        if: inputs.signing_mode == 'signed'
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -149,17 +184,24 @@ jobs:
             --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
           xcrun stapler staple "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           xcrun stapler validate "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
-          core_sha=$(shasum -a 256 "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" | awk '{print $1}')
-          printf '%s  %s\n' "$core_sha" "into-md-macos-arm64-core.dmg" \
-            > "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256"
           for package in official.ocr.ppocrv6 official.media.whisper; do
-            cp "$RUNNER_TEMP/plugins-signed/$package.imp" "$RUNNER_TEMP/$package.zip"
+            cp "$RUNNER_TEMP/plugins-final/$package.imp" "$RUNNER_TEMP/$package.zip"
             xcrun notarytool submit "$RUNNER_TEMP/$package.zip" \
               --key "$RUNNER_TEMP/notary-key.p8" \
               --key-id "$APPLE_NOTARY_KEY_ID" \
               --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
             rm "$RUNNER_TEMP/$package.zip"
           done
+      - name: Record final Core digest and external signing policy
+        run: |
+          core_sha=$(shasum -a 256 "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" | awk '{print $1}')
+          printf '%s  %s\n' "$core_sha" "into-md-macos-arm64-core.dmg" \
+            > "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256"
+          python3 tools/release-signing-policy.py \
+            --target aarch64-apple-darwin \
+            --mode "${{ inputs.signing_mode }}" \
+            --source-revision "${{ github.sha }}" \
+            --output "$RUNNER_TEMP/aarch64-apple-darwin-signing-policy.json"
       - name: Generate and externally validate release SBOMs
         run: |
           set -eu
@@ -167,7 +209,7 @@ jobs:
           mount="$RUNNER_TEMP/core-dmg-readonly"
           mkdir "$mount"
           python3 tools/publish_release_assets.py \
-            --source "$RUNNER_TEMP/plugins-signed" \
+            --source "$RUNNER_TEMP/plugins-final" \
             --output "$RUNNER_TEMP/published-plugins" \
             --target aarch64-apple-darwin
           hdiutil attach -readonly -nobrowse -mountpoint "$mount" \
@@ -191,7 +233,7 @@ jobs:
             638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a
           python3 -m pip install "$wheel"
           for document in "$metadata"/*.spdx.json; do pyspdxtools -i "$document"; done
-      - name: Verify notarized clean install and plugin lifecycle
+      - name: Verify final clean install and plugin lifecycle
         run: |
           mkdir -p "$HOME/.agents/skills/existing-skill"
           printf '%s\n' 'preserve user-owned skill' > "$HOME/.agents/skills/existing-skill/SENTINEL"
@@ -213,8 +255,8 @@ jobs:
           signer_id=$(jq -r '.signingKeyId' "$installed/share/into-markdown/plugins/official-publisher.json")
           signer_sha=$(jq -r '.signingKeySha256' "$installed/share/into-markdown/plugins/official-publisher.json")
           for package in official.ocr.ppocrv6 official.media.whisper; do
-            sha=$(shasum -a 256 "$RUNNER_TEMP/plugins-signed/$package.imp" | awk '{print $1}')
-            "$installed/bin/into-md" plugins install "$RUNNER_TEMP/plugins-signed/$package.imp" \
+            sha=$(shasum -a 256 "$RUNNER_TEMP/plugins-final/$package.imp" | awk '{print $1}')
+            "$installed/bin/into-md" plugins install "$RUNNER_TEMP/plugins-final/$package.imp" \
               --sha256 "$sha" --signing-key-id "$signer_id" \
               --signing-key-sha256 "$signer_sha" --scope global
             "$installed/bin/into-md" plugins verify "$package" --scope global
@@ -249,11 +291,13 @@ jobs:
             ${{ runner.temp }}/published-plugins/*
             ${{ runner.temp }}/into-md-macos-arm64-core-smoke.json
             ${{ runner.temp }}/release-metadata/*
+            ${{ runner.temp }}/aarch64-apple-darwin-signing-policy.json
           if-no-files-found: error
-      - name: Add notarized macOS assets to the protected draft release
+      - name: Add final macOS assets to the protected draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
           set -eu
           publish="$RUNNER_TEMP/publish"
@@ -263,16 +307,24 @@ jobs:
           cp "$RUNNER_TEMP/published-plugins"/* "$publish"/
           cp "$RUNNER_TEMP/into-md-macos-arm64-core-smoke.json" \
             "$publish/aarch64-apple-darwin-installed-smoke.json"
+          cp "$RUNNER_TEMP/aarch64-apple-darwin-signing-policy.json" "$publish/"
           for document in "$RUNNER_TEMP"/release-metadata/*; do
             cp "$document" "$publish/${document##*/}"
           done
+          if [ "$SIGNING_MODE" = unsigned ]; then
+            title="Into Markdown $RELEASE_TAG [UNSIGNED]"
+            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
+          else
+            title="Into Markdown $RELEASE_TAG"
+            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           else
             gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
-              --title "Into Markdown $RELEASE_TAG" \
-              --notes "Core plus target-specific OCR and speech plugins. Draft until Linux, Windows, and macOS release gates all pass."
+              --title "$title" --notes "$notes"
           fi
+          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
           gh release upload "$RELEASE_TAG" "$publish"/* --clobber
       - name: Remove release credentials
         if: always()
