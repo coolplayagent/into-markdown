@@ -10,8 +10,20 @@ pub(crate) struct ProcessTree {
 }
 
 #[cfg(unix)]
-pub(crate) fn configure(command: &mut Command) {
+#[allow(clippy::unnecessary_wraps)] // Linux can fail while enabling subreaping.
+pub(crate) fn configure(command: &mut Command) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
+    #[cfg(target_os = "linux")]
+    // Make killed grandchildren reparent to the smoke runner, not to a
+    // container PID 1 that may never reap them.
+    // SAFETY: PR_SET_CHILD_SUBREAPER changes only the calling process's child
+    // reparenting policy and is idempotent.
+    if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) } != 0 {
+        return Err(format!(
+            "cannot establish subprocess reaper: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
     // SAFETY: `setpgid` is async-signal-safe and only assigns the child to a
     // fresh process group before exec.
     unsafe {
@@ -19,6 +31,7 @@ pub(crate) fn configure(command: &mut Command) {
             if libc::setpgid(0, 0) == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
         });
     }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -29,11 +42,27 @@ pub(crate) fn own(child: &Child) -> Result<ProcessTree, String> {
 
 #[cfg(unix)]
 impl ProcessTree {
-    pub(crate) fn terminate(&mut self) {
+    pub(crate) fn terminate_and_reap(&mut self, child: &mut Child) {
         // SAFETY: a negative PID addresses only the fresh group created for
         // this smoke subprocess. ESRCH is an already-terminated success case.
         unsafe {
             libc::kill(-self.group, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        #[cfg(target_os = "linux")]
+        loop {
+            // Grandchildren killed with the group are now direct children due
+            // to PR_SET_CHILD_SUBREAPER. Reap only this owned process group.
+            // SAFETY: a negative first argument selects children in this fresh
+            // process group; the status is intentionally discarded.
+            let result = unsafe { libc::waitpid(-self.group, std::ptr::null_mut(), 0) };
+            if result > 0 {
+                continue;
+            }
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            break;
         }
     }
 }
@@ -42,12 +71,14 @@ impl ProcessTree {
 pub(crate) struct ProcessTree(std::os::windows::io::OwnedHandle);
 
 #[cfg(windows)]
-pub(crate) fn configure(command: &mut Command) {
+#[allow(clippy::unnecessary_wraps)] // Shared fallible cross-platform boundary.
+pub(crate) fn configure(command: &mut Command) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED,
     };
     command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -100,13 +131,14 @@ pub(crate) fn own(child: &Child) -> Result<ProcessTree, String> {
 
 #[cfg(windows)]
 impl ProcessTree {
-    pub(crate) fn terminate(&mut self) {
+    pub(crate) fn terminate_and_reap(&mut self, child: &mut Child) {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::TerminateJobObject;
         // SAFETY: the owned job handle remains live for this call.
         unsafe {
             TerminateJobObject(self.0.as_raw_handle(), 1);
         }
+        let _ = child.wait();
     }
 }
 
@@ -114,7 +146,9 @@ impl ProcessTree {
 pub(crate) struct ProcessTree;
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn configure(_: &mut Command) {}
+pub(crate) fn configure(_: &mut Command) -> Result<(), String> {
+    Err("process-tree ownership is unsupported on this platform".into())
+}
 
 #[cfg(not(any(unix, windows)))]
 pub(crate) fn own(_: &Child) -> Result<ProcessTree, String> {
@@ -123,5 +157,5 @@ pub(crate) fn own(_: &Child) -> Result<ProcessTree, String> {
 
 #[cfg(not(any(unix, windows)))]
 impl ProcessTree {
-    pub(crate) fn terminate(&mut self) {}
+    pub(crate) fn terminate_and_reap(&mut self, _: &mut Child) {}
 }
