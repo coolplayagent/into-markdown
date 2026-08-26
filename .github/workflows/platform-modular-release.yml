@@ -7,6 +7,14 @@ on:
         description: GitHub draft release tag that will contain every target's Core and two .imp files
         required: true
         type: string
+      signing_mode:
+        description: External publisher signing policy; unsigned remains installable but triggers OS trust warnings
+        required: true
+        default: unsigned
+        type: choice
+        options:
+          - unsigned
+          - signed
 
 permissions:
   contents: read
@@ -112,16 +120,22 @@ jobs:
           umask 077
           test -n "$PLUGIN_SIGNING_KEY_BASE64"
           printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/plugin-key.pk8"
-      - name: Decode protected signing material
+      - name: Decode protected plugin signing key on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         env:
           PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
+        run: |
+          if (-not $env:PLUGIN_SIGNING_KEY_BASE64) { throw "plugin signing key is absent" }
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\plugin-key.pk8", [Convert]::FromBase64String($env:PLUGIN_SIGNING_KEY_BASE64))
+      - name: Import protected Windows signing material
+        if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
+        shell: pwsh
+        env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
-          if (-not $env:PLUGIN_SIGNING_KEY_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_PASSWORD) { throw "release signing material is absent" }
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\plugin-key.pk8", [Convert]::FromBase64String($env:PLUGIN_SIGNING_KEY_BASE64))
+          if (-not $env:WINDOWS_SIGNING_PFX_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_PASSWORD) { throw "Windows signing material is absent" }
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\release-signing.pfx", [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
           $password = ConvertTo-SecureString $env:WINDOWS_SIGNING_PFX_PASSWORD -AsPlainText -Force
           $certificate = Import-PfxCertificate -FilePath "$env:RUNNER_TEMP\release-signing.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $password
@@ -147,12 +161,12 @@ jobs:
           "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ matrix.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Run target-native Cargo, Clippy, and Bazel gates
         run: |
-          python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test
+          python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
           cargo test --workspace --all-targets --locked -- --test-threads=1
           cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
           bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.bazel_config }} --lockfile_mode=error //...
       - name: Authenticode-sign project executables
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh
         run: |
           $names = @("into-md.exe", "installed-smoke.exe", "archive-check.exe", "into-md-installer.exe", "into-md-ocr-provider.exe", "into-md-media-provider.exe", "onnxruntime-worker.exe")
@@ -184,7 +198,7 @@ jobs:
           Remove-Item "${{ runner.temp }}\core-a", "${{ runner.temp }}\core-b", "${{ runner.temp }}\plugins-a", "${{ runner.temp }}\plugins-b" -Recurse -Force
           Remove-Item "${{ runner.temp }}\${{ matrix.archive }}.a", "${{ runner.temp }}\${{ matrix.archive }}.a.sha256", "${{ runner.temp }}\${{ matrix.archive }}.b", "${{ runner.temp }}\${{ matrix.archive }}.b.sha256" -Force
       - name: Assemble Authenticode release artifacts
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh
         run: >-
           python tools/platform-release/release.py
@@ -199,11 +213,27 @@ jobs:
           --plugins-output "${{ runner.temp }}/plugins-a"
           --archive "${{ runner.temp }}/${{ matrix.archive }}"
           --windows-signing-thumbprint $env:WINDOWS_SIGNING_THUMBPRINT
+      - name: Assemble unsigned Windows release artifacts
+        if: runner.os == 'Windows' && inputs.signing_mode == 'unsigned'
+        shell: pwsh
+        run: >-
+          python tools/platform-release/release.py
+          --target ${{ matrix.target }}
+          --build-root "${{ runner.temp }}/build"
+          --skip-build
+          --cache "${{ runner.temp }}/cache"
+          --ffmpeg-artifacts ffmpeg-audit-output
+          --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8"
+          --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}"
+          --output "${{ runner.temp }}/core-final"
+          --plugins-output "${{ runner.temp }}/plugins-a"
+          --archive "${{ runner.temp }}/${{ matrix.archive }}"
       - name: Clean-install and verify all capabilities
         if: runner.os == 'Linux'
         env:
           INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}/clean-user-data
         run: |
+          mkdir -m 700 "$INTO_MARKDOWN_USER_DATA_HOME"
           mkdir -p "$HOME/.agents/skills/existing-skill"
           printf '%s\n' 'preserve user-owned skill' > "$HOME/.agents/skills/existing-skill/SENTINEL"
           cp -R "$HOME/.agents/skills" "${{ runner.temp }}/agent-skills-before"
@@ -248,6 +278,11 @@ jobs:
         env:
           INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}\clean-user-data
         run: |
+          New-Item -ItemType Directory -Path $env:INTO_MARKDOWN_USER_DATA_HOME | Out-Null
+          $identity = "$env:USERDOMAIN\$env:USERNAME"
+          & "$env:SystemRoot\System32\icacls.exe" $env:INTO_MARKDOWN_USER_DATA_HOME /inheritance:r /grant:r "${identity}:(OI)(CI)F" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot protect isolated user-data directory" }
+          $env:INTO_MARKDOWN_USER_DATA_HOME = "\\?\$((Resolve-Path $env:INTO_MARKDOWN_USER_DATA_HOME).Path)"
           $agentSkills = "$HOME\.agents\skills"
           New-Item -ItemType Directory -Force "$agentSkills\existing-skill" | Out-Null
           Set-Content -NoNewline "$agentSkills\existing-skill\SENTINEL" "preserve user-owned skill"
@@ -264,7 +299,7 @@ jobs:
           $agentSkillsBefore = @(Get-AgentSkillTree $agentSkills)
           Expand-Archive -LiteralPath "${{ runner.temp }}\${{ matrix.archive }}" -DestinationPath "${{ runner.temp }}\distribution"
           & "${{ runner.temp }}\distribution\bin\archive-check.exe" "${{ runner.temp }}\distribution"
-          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}\distribution" --plugins "${{ runner.temp }}\plugins-a" --report "${{ runner.temp }}\platform-audit.json"
+          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}\distribution" --plugins "${{ runner.temp }}\plugins-a" --report "${{ runner.temp }}\platform-audit.json" --windows-signing-mode "${{ inputs.signing_mode }}"
           & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
           if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core installer modified the Agent Skills directory" }
@@ -326,7 +361,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "installed platform acceptance failed" }
           & "$distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
       - name: Sign Linux release artifacts
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && inputs.signing_mode == 'signed'
         env:
           RELEASE_GPG_PRIVATE_KEY_BASE64: ${{ secrets.RELEASE_GPG_PRIVATE_KEY_BASE64 }}
           RELEASE_GPG_KEY_FINGERPRINT: ${{ secrets.RELEASE_GPG_KEY_FINGERPRINT }}
@@ -337,6 +372,13 @@ jobs:
           printf '%s' "$RELEASE_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --import
           test "$(gpg --batch --with-colons --fingerprint "$RELEASE_GPG_KEY_FINGERPRINT" | awk -F: '$1 == "fpr" {print $10; exit}')" = "$RELEASE_GPG_KEY_FINGERPRINT"
           for artifact in "${{ runner.temp }}/${{ matrix.archive }}" "${{ runner.temp }}/plugins-a/"*.imp; do gpg --batch --local-user "$RELEASE_GPG_KEY_FINGERPRINT" --detach-sign --armor "$artifact"; done
+      - name: Record external signing policy
+        run: >-
+          python tools/release-signing-policy.py
+          --target ${{ matrix.target }}
+          --mode ${{ inputs.signing_mode }}
+          --source-revision "${{ github.sha }}"
+          --output "${{ runner.temp }}/${{ matrix.target }}-signing-policy.json"
       - name: Materialize target-qualified public plugin assets
         run: >-
           python tools/publish_release_assets.py
@@ -371,6 +413,7 @@ jobs:
             ${{ runner.temp }}/platform-audit.json
             ${{ runner.temp }}/installed-smoke.json
             ${{ runner.temp }}/platform-acceptance.json
+            ${{ runner.temp }}/${{ matrix.target }}-signing-policy.json
           if-no-files-found: error
       - name: Remove Windows signing credentials
         if: always() && runner.os == 'Windows'
@@ -398,6 +441,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
           set -eu
           publish="$RUNNER_TEMP/publish"
@@ -409,15 +453,23 @@ jobs:
             for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
               cp "$directory/$report" "$publish/$target-$report"
             done
+            cp "$directory/$target-signing-policy.json" "$publish/"
             for document in "$directory"/release-metadata/*; do
               cp "$document" "$publish/${document##*/}"
             done
           done
+          if [ "$SIGNING_MODE" = unsigned ]; then
+            title="Into Markdown $RELEASE_TAG [UNSIGNED]"
+            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
+          else
+            title="Into Markdown $RELEASE_TAG"
+            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
+          fi
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           else
             gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
-              --title "Into Markdown $RELEASE_TAG" \
-              --notes "Core plus target-specific OCR and speech plugins. Draft until Linux, Windows, and macOS release gates all pass."
+              --title "$title" --notes "$notes"
           fi
+          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
           gh release upload "$RELEASE_TAG" "$publish"/* --clobber

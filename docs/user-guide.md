@@ -3,7 +3,9 @@
 [English](user-guide.en.md) · [CLI 示例](cli-examples.md)
 
 正式发布由一个平台 Core、两个自包含能力插件和 Agent Skill 组成。每个 Core/插件同时发布
-SHA-256、签名、SPDX、来源与第三方声明 sidecar。只组合相同版本和目标平台的构件。
+SHA-256、SPDX、来源与第三方声明 sidecar；每个目标的 `*-signing-policy.json` 明确说明是否具有
+外部发布者签名。只组合相同版本和目标平台的构件。当前默认发布模式是 `unsigned`：可以安装，
+但操作系统不能验证发布者身份。两个 `.imp` 始终保留内部 Ed25519 清单签名和 SHA-256 固定。
 
 | 能力 | 构件 |
 | --- | --- |
@@ -16,24 +18,27 @@ Office 97–2003 的 `.doc/.ppt/.xls` 由 Core 原生解析，不调用 LibreOff
 
 ## 安装 Core
 
-macOS ARM64 校验摘要、公证与挂载内容后运行 DMG 根目录安装器：
+macOS ARM64 先校验摘要，再根据 signing policy 挂载 DMG 并运行根目录安装器：
 
 ```sh
 shasum -a 256 -c into-md-macos-arm64-core.dmg.sha256
-spctl --assess --type open --verbose=2 into-md-macos-arm64-core.dmg
+# unsigned 发布在摘要匹配后可移除下载隔离；signed 发布改用 spctl 验证
+xattr -d com.apple.quarantine into-md-macos-arm64-core.dmg 2>/dev/null || true
 hdiutil attach into-md-macos-arm64-core.dmg
-cd "/Volumes/Into Markdown"
+# 使用 hdiutil 输出的实际卷路径
+cd "/Volumes/into-markdown"
 ./bin/archive-check .
 ./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
 ```
 
-卷名以 `hdiutil` 输出为准；不支持 macOS x86_64。
+unsigned DMG 使用 ad-hoc Mach-O 签名保证 Apple silicon 可执行性，但没有 Developer ID 或 Apple
+公证；也可以保留 quarantine，并在“系统设置 → 隐私与安全”中选择“仍要打开”。只有 policy 为
+`signed` 时才应执行 `spctl --assess --type open --verbose=2` 并要求通过。不支持 macOS x86_64。
 
 Linux 选择与 `uname -m` 匹配的 x86_64 或 ARM64 归档：
 
 ```sh
 sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-gpg --verify into-md-linux-x86_64-core.tar.gz.asc into-md-linux-x86_64-core.tar.gz
 mkdir into-md-core
 tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
 cd into-md-core
@@ -41,19 +46,23 @@ cd into-md-core
 ./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
 ```
 
-ARM64 使用 `into-md-linux-arm64-core.tar.gz`。安装器不修改 shell profile。
+ARM64 使用 `into-md-linux-arm64-core.tar.gz`。只有 signing policy 为 `signed` 时才会发布 `.asc`，
+此时额外运行 `gpg --verify`；unsigned 模式以 GitHub Release 旁的 SHA-256 sidecar 为安装前校验
+权威。安装器不修改 shell profile。
 
-Windows x86_64 在 PowerShell 校验 ZIP 摘要及内部项目可执行文件的 Authenticode：
+Windows x86_64 在 PowerShell 先校验 ZIP 摘要；unsigned ZIP 只有在摘要匹配后才解除下载标记：
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash
+Unblock-File .\into-md-windows-x86_64-core.zip
 Expand-Archive .\into-md-windows-x86_64-core.zip .\into-md-core
-Get-AuthenticodeSignature .\into-md-core\bin\into-md.exe | Format-List
 & .\into-md-core\bin\archive-check.exe .\into-md-core
-& .\into-md-core\Install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\into-md-core\Install.ps1
 ```
 
-摘要必须匹配发布 sidecar，Authenticode `Status` 必须为 `Valid`。
+摘要必须匹配发布 sidecar。unsigned 发布会显示 `Unknown publisher` 或 SmartScreen 提示，这是预期
+行为；不要在摘要不匹配时绕过提示。只有 signing policy 为 `signed` 时才运行
+`Get-AuthenticodeSignature` 并要求 `Status` 为 `Valid`。
 
 Linux 和 Windows 重复运行同一安装命令会验证并修复相同版本，而不是返回冲突。升级保留旧的
 不可变版本，只有新归档完整校验后才切换。Windows PATH 中的 `into-md.exe` 是稳定 launcher，

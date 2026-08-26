@@ -166,7 +166,7 @@ def audit_windows(
     root: pathlib.Path,
     expected_machine: str,
     audit: Audit,
-    allow_unsigned_test_artifacts: bool,
+    signing_mode: str,
 ) -> None:
     dumpbin = resolve_msvc_tool("dumpbin.exe")
     signtool = resolve_windows_sdk_tool("signtool.exe")
@@ -224,12 +224,12 @@ def audit_windows(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
-            if allow_unsigned_test_artifacts and signature.returncode != 0:
-                audit.record(
+            if signing_mode == "unsigned":
+                audit.require(
                     relative,
-                    "authenticode-local-test-exemption",
-                    True,
-                    "unsigned local test artifact; production Authenticode was not evaluated",
+                    "authenticode-unsigned-distribution",
+                    signature.returncode != 0,
+                    "unsigned distribution must not carry an unexpected Authenticode identity",
                 )
             else:
                 audit.require(
@@ -246,7 +246,17 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--core-root", type=pathlib.Path, required=True)
     parser.add_argument("--plugins", type=pathlib.Path, required=True)
     parser.add_argument("--report", type=pathlib.Path, required=True)
-    parser.add_argument("--allow-unsigned-test-artifacts", action="store_true")
+    parser.add_argument(
+        "--windows-signing-mode",
+        choices=("signed", "unsigned"),
+        default="signed",
+        help="Expected Authenticode policy for Windows project binaries.",
+    )
+    parser.add_argument(
+        "--allow-unsigned-test-artifacts",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser.parse_args()
 
 
@@ -255,8 +265,13 @@ def run(
     core_root: pathlib.Path,
     plugins: pathlib.Path,
     *,
+    windows_signing_mode: str = "signed",
     allow_unsigned_test_artifacts: bool = False,
 ) -> dict[str, object]:
+    if windows_signing_mode not in {"signed", "unsigned"}:
+        raise ValueError(f"unsupported Windows signing mode: {windows_signing_mode}")
+    if allow_unsigned_test_artifacts:
+        windows_signing_mode = "unsigned"
     platform, machine = TARGETS[target]
     audit = Audit(target)
     artifacts: list[dict[str, str]] = []
@@ -277,16 +292,16 @@ def run(
             if platform == "linux":
                 audit_linux(root, machine, audit)
             else:
-                audit_windows(root, machine, audit, allow_unsigned_test_artifacts)
+                audit_windows(root, machine, audit, windows_signing_mode)
             audit.record(label, "platform-audit", True, "passed")
     finally:
         temporary.cleanup()
     return {
         "schemaVersion": 1,
         "target": target,
-        "testMode": {
-            "allowUnsignedArtifacts": allow_unsigned_test_artifacts,
-            "formalReleaseEligible": not allow_unsigned_test_artifacts,
+        "distributionSigning": {
+            "mode": windows_signing_mode if platform == "windows" else "not-audited",
+            "publisherIdentityVerified": windows_signing_mode == "signed" if platform == "windows" else None,
         },
         "artifacts": artifacts,
         "findings": [finding.__dict__ for finding in audit.findings],
@@ -302,6 +317,7 @@ def main() -> int:
             arguments.target,
             arguments.core_root.resolve(strict=True),
             arguments.plugins.resolve(strict=True),
+            windows_signing_mode=arguments.windows_signing_mode,
             allow_unsigned_test_artifacts=arguments.allow_unsigned_test_artifacts,
         )
     except Exception as error:

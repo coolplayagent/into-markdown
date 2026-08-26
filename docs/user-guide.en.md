@@ -3,8 +3,10 @@
 [中文](user-guide.md) · [CLI examples](cli-examples.en.md)
 
 A release contains one platform Core, two self-contained capability plugins, and the Agent Skill.
-Every Core/plugin has SHA-256, signature, SPDX, source, and notice sidecars. Combine only artifacts
-from the same version and target.
+Every Core/plugin has SHA-256, SPDX, source, and notice sidecars. Each target's
+`*-signing-policy.json` states whether an external publisher signature is present. The default release
+mode is `unsigned`: it is installable, but the operating system cannot verify the publisher identity.
+Both `.imp` files always retain internal Ed25519 manifest signatures and pinned SHA-256 values.
 
 | Capability | Artifact |
 | --- | --- |
@@ -18,24 +20,26 @@ external office suite.
 
 ## Install Core
 
-On macOS ARM64, verify digest, notarization, and mounted content before running the DMG installer:
+On macOS ARM64, verify the digest, then mount the DMG according to its signing policy:
 
 ```sh
 shasum -a 256 -c into-md-macos-arm64-core.dmg.sha256
-spctl --assess --type open --verbose=2 into-md-macos-arm64-core.dmg
+# For unsigned releases only, remove quarantine after the digest matches.
+xattr -d com.apple.quarantine into-md-macos-arm64-core.dmg 2>/dev/null || true
 hdiutil attach into-md-macos-arm64-core.dmg
-cd "/Volumes/Into Markdown"
+cd "/Volumes/into-markdown" # use the actual path printed by hdiutil
 ./bin/archive-check .
 ./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
 ```
 
-Use the volume name printed by `hdiutil`; macOS x86_64 is unsupported.
+Unsigned DMGs use ad-hoc Mach-O signatures for Apple silicon execution, but have no Developer ID or
+Apple notarization. Alternatively, keep quarantine and choose Open Anyway in Privacy & Security.
+Only a `signed` policy should pass `spctl --assess --type open --verbose=2`. macOS x86_64 is unsupported.
 
 On Linux, select the x86_64 or ARM64 archive matching `uname -m`:
 
 ```sh
 sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-gpg --verify into-md-linux-x86_64-core.tar.gz.asc into-md-linux-x86_64-core.tar.gz
 mkdir into-md-core
 tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
 cd into-md-core
@@ -43,19 +47,24 @@ cd into-md-core
 ./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
 ```
 
-Use `into-md-linux-arm64-core.tar.gz` on ARM64. The installer never edits shell profiles.
+Use `into-md-linux-arm64-core.tar.gz` on ARM64. A `.asc` is present only for a `signed` policy; verify
+it with GPG in that mode. For unsigned releases, the SHA-256 sidecar adjacent to the GitHub Release
+asset is the pre-install authority. The installer never edits shell profiles.
 
-On Windows x86_64, verify the ZIP digest and Authenticode of project executables inside it:
+On Windows x86_64, verify the ZIP digest first. For an unsigned ZIP, remove its download mark only
+after that digest matches:
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash
+Unblock-File .\into-md-windows-x86_64-core.zip
 Expand-Archive .\into-md-windows-x86_64-core.zip .\into-md-core
-Get-AuthenticodeSignature .\into-md-core\bin\into-md.exe | Format-List
 & .\into-md-core\bin\archive-check.exe .\into-md-core
-& .\into-md-core\Install.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\into-md-core\Install.ps1
 ```
 
-The digest must match the release sidecar and Authenticode `Status` must be `Valid`.
+The digest must match the release sidecar. Unknown publisher and SmartScreen warnings are expected
+for unsigned releases; never bypass them if the digest differs. Only a `signed` policy should be
+checked with `Get-AuthenticodeSignature`, whose `Status` must then be `Valid`.
 
 Repeating the same Linux or Windows install verifies and repairs that version instead of returning
 a conflict. An upgrade keeps the immutable old version and switches authority only after the new
