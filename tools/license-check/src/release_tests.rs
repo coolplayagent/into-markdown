@@ -217,6 +217,56 @@ fn twelve_product_target_fixtures_generate_authoritative_metadata() {
 }
 
 #[test]
+fn plugin_runtime_closures_do_not_cross_capability_boundaries() {
+    let repository = root();
+    let ocr = [
+        "onnxruntime-cpu",
+        "ppocrv6-tiny-detector-onnx-model",
+        "ppocrv6-tiny-recognizer-onnx-model",
+        "ppocrv6-tiny-recognizer-character-table",
+    ];
+    let speech = [
+        "3dspeaker-eres2net-base-onnx-model",
+        "ffmpeg",
+        "onnxruntime-cpu",
+        "silero-vad-half-onnx-model",
+        "whisper-small",
+    ];
+    for target in crate::schema::SUPPORTED_TARGETS {
+        let ocr_request = fs::read_to_string(
+            repository
+                .join("tools/license-check/fixtures")
+                .join(format!("release-request-ocr-plugin-{target}.json")),
+        )
+        .unwrap();
+        let ocr_inputs = generate_release_inputs_unchecked(&repository, &ocr_request).unwrap();
+        assert!(ocr.iter().all(|id| ocr_inputs.component_ids.iter().any(|item| item == id)));
+        assert!(
+            speech
+                .iter()
+                .filter(|id| **id != "onnxruntime-cpu")
+                .all(|id| { !ocr_inputs.component_ids.iter().any(|item| item == id) })
+        );
+
+        let media_request = fs::read_to_string(
+            repository
+                .join("tools/license-check/fixtures")
+                .join(format!("release-request-media-plugin-{target}.json")),
+        )
+        .unwrap();
+        let media_inputs = generate_release_inputs_unchecked(&repository, &media_request).unwrap();
+        assert!(
+            speech.iter().all(|id| { media_inputs.component_ids.iter().any(|item| item == id) })
+        );
+        assert!(
+            ocr.iter()
+                .filter(|id| **id != "onnxruntime-cpu")
+                .all(|id| { !media_inputs.component_ids.iter().any(|item| item == id) })
+        );
+    }
+}
+
+#[test]
 fn four_release_set_fixtures_preserve_exact_profile_difference() {
     let repository = root();
     for target in crate::schema::SUPPORTED_TARGETS {
@@ -1157,7 +1207,15 @@ fn sources_manifest_carries_scoped_ecosystem_and_native_integrity_authority() {
 #[test]
 fn native_runtime_is_bound_to_target_manifest_and_download() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
-    select(&mut projection, &["onnxruntime-cpu"]);
+    select(
+        &mut projection,
+        &[
+            "onnxruntime-cpu",
+            "ppocrv6-tiny-detector-onnx-model",
+            "ppocrv6-tiny-recognizer-onnx-model",
+            "ppocrv6-tiny-recognizer-character-table",
+        ],
+    );
     projection.files.extend(ocr_model_files());
     projection.files.push(ArchiveFile {
         path: "lib/libonnxruntime.dylib".into(),
@@ -1181,6 +1239,7 @@ fn model_runtime_is_bound_to_exact_reviewed_bytes() {
     select(
         &mut projection,
         &[
+            "onnxruntime-cpu",
             "ppocrv6-tiny-detector-onnx-model",
             "ppocrv6-tiny-recognizer-onnx-model",
             "ppocrv6-tiny-recognizer-character-table",
