@@ -37,10 +37,11 @@ struct CargoNode {
 pub(crate) fn run(
     request: &ValidatedRequest,
     root: &Path,
+    target: &str,
     executor: &dyn Executor,
     cases: &mut Vec<CaseResult>,
 ) {
-    let result = compile_and_run(request, root, executor);
+    let result = compile_and_run(request, root, target, executor);
     cases.push(match result {
         Ok(()) => CaseResult::passed(
             "rust-external-consumer",
@@ -53,6 +54,7 @@ pub(crate) fn run(
 fn compile_and_run(
     request: &ValidatedRequest,
     root: &Path,
+    platform_target: &str,
     executor: &dyn Executor,
 ) -> Result<(), String> {
     let consumer = root.join("c");
@@ -74,7 +76,7 @@ fn compile_and_run(
         ("RUSTC".into(), cargo_path(&request.rustc)?),
     ]));
     configure_macos_linker(&mut environment)?;
-    configure_windows_linker(request, &mut environment)?;
+    configure_windows_linker(platform_target, &mut environment)?;
     let invocation_root = filesystem_root(&home)?;
     validate_installed_metadata(request, &invocation_root, &home, &environment, executor)?;
 
@@ -301,11 +303,14 @@ fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<
 
 #[cfg(windows)]
 fn configure_windows_linker(
-    _: &ValidatedRequest,
+    platform_target: &str,
     environment: &mut BTreeMap<String, String>,
 ) -> Result<(), String> {
     const MSVC_VERSION: &str = "14.44.35207";
     const SDK_VERSION: &str = "10.0.26100.0";
+    if platform_target != "x86_64-pc-windows-msvc" {
+        return Ok(());
+    }
     if std::env::consts::ARCH != "x86_64" {
         return Err(
             "installed Rust consumer has no fixed Windows linker for this architecture".into()
@@ -316,26 +321,13 @@ fn configure_windows_linker(
         .map(PathBuf::from)
         .ok_or_else(|| "fixed Windows system root is unavailable".to_owned())?;
     let system_root = fixed_directory(&system_root, "Windows system root")?;
-    let volume = system_root
-        .ancestors()
-        .last()
-        .ok_or_else(|| "fixed Windows system volume is unavailable".to_owned())?;
-    let program_files = fixed_directory(&volume.join("Program Files (x86)"), "Program Files")?;
-    let mut installations = ["Enterprise", "Professional", "Community", "BuildTools"]
-        .into_iter()
-        .map(|edition| {
-            program_files
-                .join("Microsoft Visual Studio/2022")
-                .join(edition)
-                .join("VC/Tools/MSVC")
-                .join(MSVC_VERSION)
-        })
-        .filter(|candidate| candidate.is_dir())
-        .collect::<Vec<_>>();
-    if installations.len() != 1 {
-        return Err("a unique fixed MSVC installation is unavailable".into());
+    let configured_tools = std::env::var_os("VCToolsInstallDir")
+        .map(PathBuf::from)
+        .ok_or_else(|| "fixed MSVC installation is unavailable".to_owned())?;
+    if configured_tools.file_name().and_then(|value| value.to_str()) != Some(MSVC_VERSION) {
+        return Err("activated MSVC installation differs from the fixed release toolset".into());
     }
-    let tools = fixed_directory(&installations.remove(0), "MSVC tools")?;
+    let tools = fixed_directory(&configured_tools, "MSVC tools")?;
     let tool_bin = fixed_directory(&tools.join("bin/HostX64/x64"), "MSVC executable directory")?;
     let linker = fixed_file(&tool_bin.join("link.exe"), "MSVC linker")?;
     let compiler = fixed_file(&tool_bin.join("cl.exe"), "MSVC compiler")?;
@@ -343,7 +335,15 @@ fn configure_windows_linker(
     let vc_library = fixed_directory(&tools.join("lib/x64"), "MSVC library directory")?;
     let vc_include = fixed_directory(&tools.join("include"), "MSVC include directory")?;
 
-    let kits = fixed_directory(&program_files.join("Windows Kits/10"), "Windows SDK")?;
+    let configured_sdk = std::env::var_os("WindowsSdkDir")
+        .map(PathBuf::from)
+        .ok_or_else(|| "fixed Windows SDK is unavailable".to_owned())?;
+    let configured_sdk_version = std::env::var("WindowsSDKVersion")
+        .map_err(|_| "fixed Windows SDK version is unavailable".to_owned())?;
+    if configured_sdk_version.trim_end_matches(['\\', '/']) != SDK_VERSION {
+        return Err("activated Windows SDK differs from the fixed release SDK".into());
+    }
+    let kits = fixed_directory(&configured_sdk, "Windows SDK")?;
     let sdk_bin =
         fixed_directory(&kits.join(format!("bin/{SDK_VERSION}/x64")), "Windows SDK tools")?;
     fixed_file(&sdk_bin.join("rc.exe"), "Windows resource compiler")?;
@@ -435,10 +435,7 @@ fn legacy_windows_path(path: &Path, label: &str) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(windows))]
-fn configure_windows_linker(
-    _: &ValidatedRequest,
-    _: &mut BTreeMap<String, String>,
-) -> Result<(), String> {
+fn configure_windows_linker(_: &str, _: &mut BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 

@@ -7,7 +7,9 @@ $ErrorActionPreference = "Stop"
 function Assert-AbsoluteNormalized([string]$Path, [string]$Label) {
   if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw "installPathUnsafe: $Label must be absolute" }
   $full = [IO.Path]::GetFullPath($Path)
-  if ($full.TrimEnd('\') -ne $Path.TrimEnd('\')) { throw "installPathUnsafe: $Label must be normalized" }
+  if (-not [StringComparer]::OrdinalIgnoreCase.Equals($full.TrimEnd('\'), $Path.TrimEnd('\'))) {
+    throw "installPathUnsafe: $Label must be normalized"
+  }
 }
 
 function Assert-NoReparseChain([string]$Path) {

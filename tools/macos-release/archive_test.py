@@ -3,8 +3,7 @@ import tempfile
 import unittest
 
 from archive import create, extract
-from common import ReleaseError, sha256
-from release import published_plugin_file
+from common import ReleaseError, published_plugin_file, sha256
 
 
 class ArchiveTest(unittest.TestCase):

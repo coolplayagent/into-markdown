@@ -41,6 +41,7 @@ platform(
 )
 
 exports_files([
+    ".github/workflows/platform-modular-release.yml",
     ".bazelversion",
     "Cargo.lock",
     "Cargo.toml",

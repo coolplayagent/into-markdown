@@ -14,7 +14,16 @@ import zipfile
 from acquire import acquire, extract_tar
 from archive import create as create_archive
 from audit import audit as audit_macho
-from common import ROOT, ReleaseError, authority, regular_files, run, sha256, write_json
+from common import (
+    ROOT,
+    ReleaseError,
+    authority,
+    published_plugin_file,
+    regular_files,
+    run,
+    sha256,
+    write_json,
+)
 from rust_package import materialize as materialize_rust
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release"))
@@ -33,13 +42,6 @@ FIXTURES = [
     "text/normal.txt", "xlsx/normal.xlsx", "xlsb/normal.xlsb", "pptx/normal.pptx",
     "odt/normal.odt", "ods/normal.ods", "odp/normal.odp",
 ]
-
-
-def published_plugin_file(filename: str) -> str:
-    path = pathlib.PurePosixPath(filename)
-    if path.name != filename or path.suffix != ".imp" or not path.stem:
-        raise ReleaseError("plugin package filename is invalid")
-    return f"{path.stem}-{TARGET}.imp"
 
 
 def check_host() -> None:

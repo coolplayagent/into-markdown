@@ -19,6 +19,13 @@ class ReleaseError(RuntimeError):
     """Stable packaging failure."""
 
 
+def published_plugin_file(filename: str) -> str:
+    path = pathlib.PurePosixPath(filename)
+    if path.name != filename or path.suffix != ".imp" or not path.stem:
+        raise ReleaseError("plugin package filename is invalid")
+    return f"{path.stem}-{TARGET}.imp"
+
+
 def authority() -> dict:
     value = json.loads(AUTHORITY.read_text(encoding="utf-8"))
     if value.get("schemaVersion") != 1 or value.get("target") != TARGET:

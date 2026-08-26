@@ -4993,9 +4993,9 @@ fn plan_stdout_asset_output(
     if emit == EmitKind::Bundle {
         return Ok(AssetOutputPlan { uri_prefix: Some("assets".into()), external_directory: None });
     }
-    let external_directory = configured_directory
-        .map(Path::to_path_buf)
-        .or_else(|| local_input.map(default_asset_directory));
+    let external_directory = configured_directory.map(Path::to_path_buf).or_else(|| {
+        local_input.map(|input| default_stdout_asset_directory(input, working_directory))
+    });
     let uri_prefix = external_directory
         .as_deref()
         .map(|directory| asset_uri_prefix_for_stdout(directory, working_directory))
@@ -5466,6 +5466,11 @@ fn default_asset_directory(path: &Path) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("document");
     parent.join(format!("{stem}_assets"))
+}
+
+fn default_stdout_asset_directory(input: &Path, working_directory: &Path) -> PathBuf {
+    let stem = input.file_stem().and_then(|value| value.to_str()).unwrap_or("document");
+    working_directory.join(format!("{stem}_assets"))
 }
 
 fn parse_input(value: &OsStr) -> Result<InputRef, CliError> {
@@ -6294,6 +6299,18 @@ mod tests {
             );
             assert_bundle_image_href_hits_entry(asset_output.uri_prefix.as_deref().unwrap());
         }
+    }
+
+    #[test]
+    fn stdout_default_assets_are_relative_to_the_markdown_working_directory() {
+        let working_directory = Path::new("/work/output");
+        assert_eq!(
+            default_stdout_asset_directory(
+                Path::new("/different-volume/report.pptx"),
+                working_directory
+            ),
+            working_directory.join("report_assets")
+        );
     }
 
     #[test]

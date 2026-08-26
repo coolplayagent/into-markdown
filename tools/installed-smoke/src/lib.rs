@@ -77,7 +77,7 @@ fn run_with_executor(
             &mut cases,
             &mut capabilities,
         )?;
-        rust_consumer::run(&validated, &run_root, executor, &mut cases);
+        rust_consumer::run(&validated, &run_root, platform.target(), executor, &mut cases);
         Ok(())
     })();
 

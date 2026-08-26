@@ -37,7 +37,10 @@ py_library(
 py_test(
     name = "release_test",
     srcs = ["test_release.py"],
-    data = ["//tools/installed-smoke:rust_consumer_source"],
+    data = [
+        "//:.github/workflows/platform-modular-release.yml",
+        "//tools/installed-smoke:rust_consumer_source",
+    ],
     main = "test_release.py",
     deps = [":release_library"],
 )
