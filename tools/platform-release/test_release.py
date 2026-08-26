@@ -37,6 +37,24 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
 
+    def test_linux_release_bootstrap_installs_hash_pinned_bazelisk(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("bazelbuild/bazelisk/releases/download/v1.27.0", workflow)
+        self.assertIn("bazelisk-linux-amd64", workflow)
+        self.assertIn("bazelisk-linux-arm64", workflow)
+        self.assertIn(
+            "e1508323f347ad1465a887bc5d2bfb91cffc232d11e8e997b623227c6b32fb76",
+            workflow,
+        )
+        self.assertIn(
+            "bb608519a440d45d10304eb684a73a2b6bb7699c5b0e5434361661b25f113a5d",
+            workflow,
+        )
+        self.assertIn("sha256sum --check", workflow)
+        self.assertIn("ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel", workflow)
+
     def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
