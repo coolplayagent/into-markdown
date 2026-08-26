@@ -25,12 +25,12 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             archive: into-md-linux-x86_64-core.tar.gz
-            container: docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             bazel_config: linux_x86_64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: into-md-linux-arm64-core.tar.gz
-            container: docker.io/library/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             bazel_config: linux_arm64
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
