@@ -133,14 +133,9 @@ fn main() -> std::io::Result<()> {
                     // new child, which the inherited sandbox intentionally denies.
                     unsafe { command.pre_exec(|| Ok(())) };
                 }
-                let mut child = command
-                    .spawn()
-                    .map_err(|error| {
-                        WorkerError::new(
-                            "childLaunch",
-                            format!("child helper launch failed: {error}"),
-                        )
-                    })?;
+                let mut child = command.spawn().map_err(|error| {
+                    WorkerError::new("childLaunch", format!("child helper launch failed: {error}"))
+                })?;
                 drop(child.stdin.take());
                 let output = child
                     .wait_with_output()
