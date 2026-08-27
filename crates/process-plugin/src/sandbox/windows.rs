@@ -668,19 +668,19 @@ fn validate_acl_aces(
         }
         let sid = (&raw const ace.SidStart).cast_mut().cast();
         let identity = allowed.iter().position(|allowed| unsafe { EqualSid(sid, *allowed) } != 0);
-        let (identity_name, expected_mask) = if let Some(identity) = identity {
+        let (identity_name, expected_mask, os_administrator) = if let Some(identity) = identity {
             if seen[identity] {
                 return Err(format!("ACE {index} duplicates an allowed SID"));
             }
             seen[identity] = true;
-            ("user", masks[identity])
+            ("user", masks[identity], false)
         } else if allow_os_administrators && unsafe { IsWellKnownSid(sid, WinLocalSystemSid) } != 0
         {
             if seen_system {
                 return Err(format!("ACE {index} duplicates LocalSystem"));
             }
             seen_system = true;
-            ("LocalSystem", FILE_ALL_ACCESS)
+            ("LocalSystem", FILE_ALL_ACCESS, true)
         } else if allow_os_administrators
             && unsafe { IsWellKnownSid(sid, WinBuiltinAdministratorsSid) } != 0
         {
@@ -688,13 +688,13 @@ fn validate_acl_aces(
                 return Err(format!("ACE {index} duplicates Builtin Administrators"));
             }
             seen_administrators = true;
-            ("Builtin Administrators", FILE_ALL_ACCESS)
+            ("Builtin Administrators", FILE_ALL_ACCESS, true)
         } else {
             return Err(format!("ACE {index} has an unauthorized SID"));
         };
-        let expected_inheritance = if is_directory { 3 } else { 0 };
+        let inheritance = ace.Header.AceFlags & !INHERITED_ACE_FLAG;
         if ace.Mask != expected_mask
-            || ace.Header.AceFlags & !INHERITED_ACE_FLAG != expected_inheritance
+            || !valid_ace_inheritance(is_directory, os_administrator, inheritance)
         {
             return Err(format!(
                 "ACE {index} for {identity_name} has mask 0x{:08x} and flags 0x{:02x}",
@@ -706,6 +706,17 @@ fn validate_acl_aces(
         return Err("an expected allowed SID is absent".to_owned());
     }
     Ok(())
+}
+
+const fn valid_ace_inheritance(
+    is_directory: bool,
+    os_administrator: bool,
+    inheritance: u8,
+) -> bool {
+    if !is_directory {
+        return inheritance == 0;
+    }
+    inheritance == 3 || os_administrator && inheritance == 0
 }
 
 struct CurrentUser {
@@ -1494,5 +1505,16 @@ mod tests {
         let process_unc = wide_process_path(Path::new(r"\\?\UNC\server\share\working")).unwrap();
         let process_unc = String::from_utf16(&process_unc[..process_unc.len() - 1]).unwrap();
         assert_eq!(process_unc, r"\\server\share\working");
+    }
+
+    #[test]
+    fn os_administrator_directory_ace_may_be_narrower_than_user_inheritance() {
+        assert!(valid_ace_inheritance(true, true, 0));
+        assert!(valid_ace_inheritance(true, true, 3));
+        assert!(!valid_ace_inheritance(true, true, 1));
+        assert!(!valid_ace_inheritance(true, false, 0));
+        assert!(valid_ace_inheritance(true, false, 3));
+        assert!(valid_ace_inheritance(false, true, 0));
+        assert!(!valid_ace_inheritance(false, true, 3));
     }
 }

@@ -40,13 +40,17 @@ HOME 和 loader 变量不会继承。原生 provider 也必须把该协议变量
 
 - Linux：`RLIMIT_AS/FSIZE/NOFILE/CORE`，Landlock 只读 runtime/动态加载器目录且只允许
   私有临时目录写入，seccomp 拒绝 socket、跨进程信号、fork、namespace、mount、ptrace
-  等调用；只允许同进程线程 clone。
+  等调用；只允许同进程线程 clone。签名 manifest 明确允许认证 helper 时，协调进程的
+  `RLIMIT_AS` 额外包含固定 512 MiB 虚拟地址开销；能力声明的实际内存预算保持不变，
+  helper 仍在加载 runtime/model 前安装由其合同计算的独立硬上限。
 - macOS：固定虚拟地址上限、父进程物理内存监控和 deny-default Seatbelt；拒绝网络，
   只读 runtime/模型/系统 dyld 支持目录，只写私有临时目录。只有签名 manifest 显式声明
   时才允许从已认证 runtime 启动 helper。
 - Windows：安装层预创建并 ACL 授权的 AppContainer SID；启动时 capability 数量为零，
   仅继承三根协议 handle。主线程在 Job 的单进程、内存和 close-kill 限制安装并复核 token
-  SID 后才恢复。cwd 必须与该 SID 的 storage identity 精确一致。
+  SID 后才恢复。cwd 必须与该 SID 的 storage identity 精确一致。私有根只额外接受
+  LocalSystem/Builtin Administrators 的精确完全控制 ACE；目录本身的非继承管理 ACE 与
+  子项继承 ACE 均可接受，其他 SID、mask 或 inheritance 组合仍拒绝。
 
 某个平台不能建立这些边界时，运行时返回 `pluginSandboxUnavailable`，不会降级为普通
 子进程。文件大小、句柄、内存、握手时间、不可关闭的硬请求期限和 frame/output 上限均由宿主策略限制。

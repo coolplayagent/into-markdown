@@ -16,7 +16,25 @@ use std::time::Duration;
 const PROTOCOL_VERSION: u32 = 1;
 const FRAME_OVERHEAD: u64 = 1024 * 1024;
 const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
+// RLIMIT_AS accounts every mapping in the provider coordinator, not only
+// resident capability data. A provider that is authorized to launch an
+// authenticated helper therefore needs fixed virtual-address headroom while
+// the helper installs its own model-derived hard limit before loading ORT.
+const LINUX_CHILD_COORDINATOR_ADDRESS_SPACE_BYTES: u64 = 512 * 1024 * 1024;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn process_address_space_limit(
+    declared_memory: u64,
+    allow_child_processes: bool,
+) -> Result<u64, ConversionError> {
+    if cfg!(target_os = "linux") && allow_child_processes {
+        declared_memory
+            .checked_add(LINUX_CHILD_COORDINATOR_ADDRESS_SPACE_BYTES)
+            .ok_or_else(|| unavailable("process-v1", "provider address-space limit overflowed"))
+    } else {
+        Ok(declared_memory)
+    }
+}
 
 /// Authenticated process runtime bound to one self-contained installed capability.
 pub struct ProcessCapability {
@@ -74,7 +92,10 @@ impl ProcessCapability {
                 unavailable(&binding.provider_id, "capability frame limit is invalid")
             })?,
             max_output_bytes: capability.resources.max_output_bytes,
-            max_memory_bytes: capability.resources.max_memory_bytes,
+            max_memory_bytes: process_address_space_limit(
+                capability.resources.max_memory_bytes,
+                manifest.permissions.child_processes,
+            )?,
             max_file_bytes: capability
                 .resources
                 .max_input_bytes
@@ -757,6 +778,21 @@ mod tests {
                 locator: SourceLocator { time: Some(range), ..SourceLocator::default() },
                 confidence: Some(0.9),
             },
+        }
+    }
+
+    #[test]
+    fn child_provider_address_space_keeps_declared_memory_separate() {
+        let declared = 768 * 1024 * 1024;
+        let expected = if cfg!(target_os = "linux") {
+            declared + LINUX_CHILD_COORDINATOR_ADDRESS_SPACE_BYTES
+        } else {
+            declared
+        };
+        assert_eq!(process_address_space_limit(declared, true).unwrap(), expected);
+        assert_eq!(process_address_space_limit(declared, false).unwrap(), declared);
+        if cfg!(target_os = "linux") {
+            assert!(process_address_space_limit(u64::MAX, true).is_err());
         }
     }
 
