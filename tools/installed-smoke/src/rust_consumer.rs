@@ -307,14 +307,19 @@ fn configure_linux_linker(
     platform_target: &str,
     environment: &mut BTreeMap<String, String>,
 ) -> Result<(), String> {
-    let linker_variable = match (std::env::consts::ARCH, platform_target) {
-        ("x86_64", "x86_64-unknown-linux-gnu") => "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
-        ("aarch64", "aarch64-unknown-linux-gnu") => "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
-        _ => {
+    let linker_variable = match platform_target {
+        "x86_64-unknown-linux-gnu" if std::env::consts::ARCH == "x86_64" => {
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+        }
+        "aarch64-unknown-linux-gnu" if std::env::consts::ARCH == "aarch64" => {
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+        }
+        "x86_64-unknown-linux-gnu" | "aarch64-unknown-linux-gnu" => {
             return Err(
                 "installed Rust consumer has no fixed Linux linker for this architecture".into()
             );
         }
+        _ => return Ok(()),
     };
     let compiler = fixed_linux_file("/usr/bin/gcc", "Linux C compiler")?;
     let cxx = fixed_linux_file("/usr/bin/g++", "Linux C++ compiler")?;
@@ -680,6 +685,14 @@ mod tests {
     use std::time::Duration;
 
     struct FakeExecutor(Mutex<Option<CommandOutput>>);
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_linker_configuration_ignores_synthetic_test_targets() {
+        let mut environment = BTreeMap::new();
+        configure_linux_linker("test-target", &mut environment).unwrap();
+        assert!(environment.is_empty());
+    }
 
     #[test]
     fn installed_library_snapshot_copies_an_exact_regular_tree() {
