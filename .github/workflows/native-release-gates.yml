@@ -115,9 +115,8 @@ jobs:
         run: |
           cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ inputs.target }}"
           "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ inputs.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Run target-native Cargo, Clippy, and Bazel gates
+      - name: Run target-native Clippy and Bazel gates
         run: |
           python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
-          cargo test --workspace --all-targets --locked -- --test-threads=1
           cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
           bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ inputs.bazel_config }} --lockfile_mode=error --local_test_jobs=1 --test_env=RUST_TEST_THREADS=1 //...

@@ -20,6 +20,22 @@ SPEC.loader.exec_module(release_metadata)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_generated_metadata_preserves_declared_utf8_bytes(self) -> None:
+        contents = "line one\nline two\n"
+        encoded = contents.encode("utf-8")
+        metadata = {
+            "sbom": {
+                "path": "artifact.spdx.json",
+                "contents": contents,
+                "bytes": len(encoded),
+                "sha256": release_metadata.sha256_bytes(encoded),
+            }
+        }
+        with tempfile.TemporaryDirectory() as name:
+            output = pathlib.Path(name)
+            release_metadata.write_generated(output, metadata)
+            self.assertEqual((output / "artifact.spdx.json").read_bytes(), encoded)
+
     def test_build_tool_integrity_digests_match_every_authority_subject(self) -> None:
         repository = SCRIPT.parent.parent
         inventory = json.loads(
