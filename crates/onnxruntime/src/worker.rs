@@ -349,6 +349,14 @@ fn spawn_worker(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::process::CommandExt as _;
+            // An inherited process-plugin seccomp policy permits declared clone/exec but denies
+            // signaling arbitrary PIDs. glibc 2.28 posix_spawn uses tgkill on the new child, so
+            // force Rust's fork+exec path without widening the sandbox's signal authority.
+            unsafe { command.pre_exec(|| Ok(())) };
+        }
         // The worker installs the platform-native limit before authority parsing,
         // ORT loading, model receipt, or additional threads. On macOS the parent
         // enforces the fixed physical-footprint ceiling instead of RLIMIT_AS.

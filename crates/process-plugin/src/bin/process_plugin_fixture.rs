@@ -118,13 +118,22 @@ fn main() -> std::io::Result<()> {
                     .ok_or_else(|| {
                         WorkerError::new("childPrepare", "private child directory is unavailable")
                     })?;
-                let mut child = std::process::Command::new(helper)
+                let mut command = std::process::Command::new(helper);
+                command
                     .arg("--child-probe")
                     .current_dir(child_directory)
                     .env_clear()
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                #[cfg(target_os = "linux")]
+                {
+                    use std::os::unix::process::CommandExt as _;
+                    // Force fork+exec: Rocky 8's posix_spawn uses tgkill on the
+                    // new child, which the inherited sandbox intentionally denies.
+                    unsafe { command.pre_exec(|| Ok(())) };
+                }
+                let mut child = command
                     .spawn()
                     .map_err(|error| {
                         WorkerError::new(
