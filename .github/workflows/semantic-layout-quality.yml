@@ -50,7 +50,7 @@ permissions:
   contents: read
 
 jobs:
-  four-platform-golden:
+  five-target-golden:
     name: ${{ matrix.config }} normalized IR and GFM
     strategy:
       fail-fast: false
@@ -68,6 +68,9 @@ jobs:
           - os: windows-2025
             config: windows_x86_64
             target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            config: windows_arm64
+            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

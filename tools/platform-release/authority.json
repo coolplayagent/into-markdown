@@ -73,6 +73,29 @@
         "member": "onnxruntime-win-x64-1.29.0/lib/onnxruntime.dll",
         "destination": "onnxruntime/lib/onnxruntime.dll"
       }
+    },
+    "aarch64-pc-windows-msvc": {
+      "os": "windows",
+      "architecture": "aarch64",
+      "archive": "zip",
+      "buildBaseline": {
+        "cpu": "generic",
+        "msvcTools": "14.44.35207",
+        "windowsSdk": "10.0.26100.0"
+      },
+      "pdfium": {
+        "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-win-arm64.tgz",
+        "bytes": 3553849,
+        "sha256": "ccc39582f8d9ac0bd57b8e279e8cfc5067cc0f0b4db9bc179ddf7cd3636c0bd6",
+        "member": "bin/pdfium.dll",
+        "destination": "lib/pdfium/pdfium.dll"
+      },
+      "onnxruntime": {
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-arm64-1.29.0.zip",
+        "sha256": "a094a49c3ced0f9fca554647cc7566ae99d93a63a8ce6bf47975561c2de7608e",
+        "member": "onnxruntime-win-arm64-1.29.0/lib/onnxruntime.dll",
+        "destination": "onnxruntime/lib/onnxruntime.dll"
+      }
     }
   },
   "sharedDownloads": {

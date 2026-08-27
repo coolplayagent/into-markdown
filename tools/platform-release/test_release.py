@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,21 +27,31 @@ from release import (
 
 class PlatformReleaseTests(unittest.TestCase):
     def test_expensive_native_gates_run_in_parallel_with_release_acceptance(self) -> None:
-        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+        orchestrator = (ROOT / ".github/workflows/release.yml").read_text(
+            encoding="utf-8"
+        )
+        component = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
         gates = (ROOT / ".github/workflows/native-release-gates.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("native-gates:", workflow)
-        self.assertIn("needs: [native-gates, native-release]", workflow)
-        self.assertNotIn("cargo test --workspace --all-targets", workflow)
+        self.assertIn("native-gates:", orchestrator)
+        self.assertIn(
+            "needs: [verify-release-authority, agent-skill, native-gates, "
+            "linux-windows, macos]",
+            orchestrator,
+        )
+        self.assertNotIn("cargo test --workspace --all-targets", component)
         self.assertIn("cargo test --workspace --all-targets", gates)
         self.assertIn("cargo clippy --workspace", gates)
         self.assertIn("run: cargo fetch --locked", gates)
         self.assertIn("~/.cargo/registry", gates)
         self.assertIn("repository-cache: true", gates)
         self.assertIn("disk-cache: release-gates-${{ inputs.bazel_config }}", gates)
+        self.assertIn("arch: ${{ inputs.msvc_arch }}", gates)
+        self.assertIn("target: aarch64-pc-windows-msvc", orchestrator)
+        self.assertIn("runner: windows-11-arm", orchestrator)
 
     def test_native_release_reuses_fixed_toolchain_cargo_dependencies(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -227,6 +239,27 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertEqual(constants["MSVC_VERSION"], windows["msvcTools"])
         self.assertEqual(constants["SDK_VERSION"], windows["windowsSdk"])
+
+    def test_msvc_adapter_reports_the_selected_target_architecture(self) -> None:
+        adapter = ROOT / "tools/msvc-cl-adapter.sh"
+        for architecture in ("x64", "ARM64"):
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "INTO_MD_REAL_CL": "/bin/true",
+                    "INTO_MD_MSVC_BANNER_VERSION": "19.44.35207",
+                    "INTO_MD_MSVC_BANNER_ARCH": architecture,
+                }
+            )
+            result = subprocess.run(
+                [str(adapter)],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertIn(f"for {architecture}", result.stdout)
+
     def test_windows_zip_is_byte_reproducible_and_contains_only_regular_files(self) -> None:
         config = {"archive": "zip"}
         with tempfile.TemporaryDirectory() as name:

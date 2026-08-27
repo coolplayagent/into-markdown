@@ -38,6 +38,7 @@ def foreign_rejecting_toolchains():
         "linux_x86_64": ["@platforms//os:linux", "@platforms//cpu:x86_64"],
         "linux_arm64": ["@platforms//os:linux", "@platforms//cpu:aarch64"],
         "windows_x86_64": ["@platforms//os:windows", "@platforms//cpu:x86_64"],
+        "windows_arm64": ["@platforms//os:windows", "@platforms//cpu:aarch64"],
     }
     # This implementation is selected through the registered toolchains, not
     # built as a top-level product by //... expansion.
@@ -76,6 +77,7 @@ def _target(ctx):
         (ctx.attr._linux, ctx.attr._x86_64, "x86_64-unknown-linux-gnu", "linux_x86_64"),
         (ctx.attr._linux, ctx.attr._aarch64, "aarch64-unknown-linux-gnu", "linux_arm64"),
         (ctx.attr._windows, ctx.attr._x86_64, "x86_64-pc-windows-msvc", "windows_x86_64"),
+        (ctx.attr._windows, ctx.attr._aarch64, "aarch64-pc-windows-msvc", "windows_arm64"),
     ]
     for os_target, cpu_target, triple, config in public_targets:
         os_constraint = os_target[platform_common.ConstraintValueInfo]
@@ -89,7 +91,7 @@ def _guard(ctx):
     target_triple, target_config = _target(ctx)
     host_triple = ctx.toolchains["//toolchains:platform_contract_type"].platform_contract.triple
     if target_triple == None:
-        fail("unsupported Bazel target platform: the public contract only covers macos_arm64, linux_x86_64, linux_arm64, and windows_x86_64")
+        fail("unsupported Bazel target platform: the public contract only covers macos_arm64, linux_x86_64, linux_arm64, windows_x86_64, and windows_arm64")
     if target_triple != host_triple:
         fail((
             "unsupported Bazel host/target combination: native exec platform {host} " +

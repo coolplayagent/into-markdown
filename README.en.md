@@ -27,8 +27,8 @@ text, Markdown, HTML, CSV/TSV, JSON, XML, RSS/Atom feeds, Jupyter notebooks, ima
 MSG, audio, and video. Core natively handles Office 97–2003 DOC/PPT/XLS; OCR, transcription, and
 diarization use their corresponding capability plugins.
 
-Release targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows x86_64. macOS x86_64 is
-unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature
+Release targets are macOS ARM64, Linux x86_64, Linux ARM64, Windows x86_64, and Windows ARM64.
+macOS x86_64 is unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature
 verification, installation, offline plugin import, troubleshooting, and uninstall. Platform release
 contracts are the [macOS release](docs/macos-arm64-release.md) and
 [Linux/Windows release](docs/platform-modular-release.md).

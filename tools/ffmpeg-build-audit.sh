@@ -79,15 +79,28 @@ case "$(uname -s)-$(uname -m)" in
     target=x86_64-unknown-linux-gnu; format=elf; arch=x86_64; toolchain_args=
     ;;
   Linux-aarch64) target=aarch64-unknown-linux-gnu; format=elf; arch=aarch64; toolchain_args= ;;
-  MINGW*-x86_64|MSYS*-x86_64)
+  MINGW*-x86_64|MSYS*-x86_64|MINGW*-aarch64|MSYS*-aarch64|MINGW*-arm64|MSYS*-arm64)
     command -v objdump >/dev/null || fail "objdump is unavailable in the MSYS2 release shell"
-    target=x86_64-pc-windows-msvc; format=pe; arch=x86_64
-    toolchain_args='--toolchain=msvc --disable-x86asm'
-    msvc_tools=$(jq -er '.targets["x86_64-pc-windows-msvc"].buildBaseline.msvcTools' "$root/tools/platform-release/authority.json")
+    case "${FFMPEG_AUDIT_TARGET:-x86_64-pc-windows-msvc}" in
+      x86_64-pc-windows-msvc)
+        target=x86_64-pc-windows-msvc; format=pe; arch=x86_64
+        toolchain_args='--toolchain=msvc --disable-x86asm'
+        INTO_MD_MSVC_BANNER_ARCH=x64
+        ;;
+      aarch64-pc-windows-msvc)
+        target=aarch64-pc-windows-msvc; format=pe; arch=aarch64
+        toolchain_args='--arch=aarch64 --toolchain=msvc --disable-asm'
+        INTO_MD_MSVC_BANNER_ARCH=ARM64
+        ;;
+      *) fail "unsupported requested Windows FFmpeg target: ${FFMPEG_AUDIT_TARGET}" ;;
+    esac
+    msvc_tools=$(jq -er --arg target "$target" '.targets[$target].buildBaseline.msvcTools' "$root/tools/platform-release/authority.json")
     if command -v cl.exe >/dev/null 2>&1; then
       INTO_MD_REAL_CL=$(command -v cl.exe)
     elif [ -n "${VCToolsInstallDir:-}" ]; then
-      INTO_MD_REAL_CL=$(cygpath -u "$VCToolsInstallDir")/bin/HostX64/x64/cl.exe
+      host_arch=${VSCMD_ARG_HOST_ARCH:-x64}
+      target_arch=${VSCMD_ARG_TGT_ARCH:-x64}
+      INTO_MD_REAL_CL=$(cygpath -u "$VCToolsInstallDir")/bin/Host${host_arch}/$target_arch/cl.exe
       test -f "$INTO_MD_REAL_CL" \
         || fail "cl.exe is missing from fixed VCToolsInstallDir: $INTO_MD_REAL_CL"
     else
@@ -117,6 +130,7 @@ case "$(uname -s)-$(uname -m)" in
     test -n "$INTO_MD_MSVC_BANNER_VERSION" \
       || fail "could not determine the MSVC compiler version from cl.exe"
     export INTO_MD_MSVC_BANNER_VERSION
+    export INTO_MD_MSVC_BANNER_ARCH
     msvc_cc_adapter="$root/tools/msvc-cl-adapter.sh"
     test -x "$msvc_cc_adapter" || fail "MSVC compiler adapter is missing or not executable"
     ;;
@@ -232,6 +246,7 @@ case "$format-$arch" in
   elf-x86_64) file "$tool" | grep -q 'ELF 64-bit.*x86-64' ;;
   elf-aarch64) file "$tool" | grep -q 'ELF 64-bit.*ARM aarch64' ;;
   pe-x86_64) file "$tool" | grep -Eq 'PE32\+ executable.*x86-64' ;;
+  pe-aarch64) file "$tool" | grep -Eq 'PE32\+ executable.*(Aarch64|ARM64)' ;;
 esac
 configure=$(printf '%s\n' "$@" | jq -Rsc 'split("\n")[:-1]')
 jq -n --arg version "$version" --arg target "$target" --arg sha "$sha" --argjson bytes "$bytes" \

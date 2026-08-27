@@ -5,6 +5,7 @@ py_test(
     srcs = [
         "release-metadata.py",
         "release_metadata_test.py",
+        "release_version.py",
     ],
     data = [
         "//:.bazelversion",
@@ -17,6 +18,37 @@ py_test(
         "//tools/platform-release:authority.json",
     ],
     main = "release_metadata_test.py",
+)
+
+py_test(
+    name = "release_version_test",
+    srcs = [
+        "release_version.py",
+        "release_version_test.py",
+    ],
+    main = "release_version_test.py",
+)
+
+py_test(
+    name = "finalize_release_test",
+    srcs = [
+        "finalize_release.py",
+        "finalize_release_test.py",
+        "release_version.py",
+    ],
+    data = ["//:Cargo.toml"],
+    main = "finalize_release_test.py",
+)
+
+py_test(
+    name = "release_workflow_test",
+    srcs = ["release_workflow_test.py"],
+    data = [
+        "//:.github/workflows/macos-arm64-release.yml",
+        "//:.github/workflows/platform-modular-release.yml",
+        "//:.github/workflows/release.yml",
+    ],
+    main = "release_workflow_test.py",
 )
 
 py_test(

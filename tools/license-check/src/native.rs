@@ -59,7 +59,9 @@ fn validate_transformations(
 ) {
     let expected_kind = match target {
         "aarch64-apple-darwin" => Some(NativeTransformationKind::AppleCodeSign),
-        "x86_64-pc-windows-msvc" => Some(NativeTransformationKind::Authenticode),
+        "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" => {
+            Some(NativeTransformationKind::Authenticode)
+        }
         _ => None,
     };
     let mut subjects = HashSet::new();

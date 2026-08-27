@@ -343,7 +343,7 @@ Provider 配置只保存环境变量名。命令完成 URL、host allowlist、DN
 Clone、不可 Debug/Display 的请求局部对象持有，Authorization 请求缓冲和密钥在释放时清零，
 错误、JSON 输出、日志和配置没有响应自由文本或密钥字段。
 
-传输固定使用 Rustls 0.23.32、ring、socket2 0.6.5 和 webpki-roots 1.0.3 的 Mozilla 根集合，四个目标平台
+传输固定使用 Rustls 0.23.32、ring、socket2 0.6.5 和 webpki-roots 1.0.3 的 Mozilla 根集合，五个原生目标
 使用同一根策略；传输库本身不读取平台证书库、HTTP(S)_PROXY、PATH 或代理环境变量。DNS 在有界工作
 线程池及有界队列解析；空结果、超量/超容量/端口不符结果，或同时包含公网与未授权私网地址
 均 fail closed。连接只使用已检查的具体

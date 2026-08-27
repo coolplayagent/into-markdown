@@ -31,7 +31,7 @@ fn hash(bytes: &[u8]) -> String {
 fn observed_build_tools(target: &str) -> Vec<serde_json::Value> {
     let platform = match target {
         "aarch64-apple-darwin" => "apple-xcode-toolchain",
-        "x86_64-pc-windows-msvc" => "windows-msvc-toolchain",
+        "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" => "windows-msvc-toolchain",
         _ => "ubuntu-build-toolchain",
     };
     ["rust-toolchain", "bazel", "node", "pnpm", "python", platform]
@@ -197,7 +197,7 @@ fn finalization_and_aggregation_reject_orphans_and_profile_drift() {
 }
 
 #[test]
-fn twelve_product_target_fixtures_generate_authoritative_metadata() {
+fn fifteen_product_target_fixtures_generate_authoritative_metadata() {
     let repository = root();
     for target in crate::schema::SUPPORTED_TARGETS {
         for file in [
@@ -267,7 +267,7 @@ fn plugin_runtime_closures_do_not_cross_capability_boundaries() {
 }
 
 #[test]
-fn four_release_set_fixtures_preserve_exact_profile_difference() {
+fn five_release_set_fixtures_preserve_exact_profile_difference() {
     let repository = root();
     for target in crate::schema::SUPPORTED_TARGETS {
         let request = fs::read_to_string(
@@ -667,7 +667,7 @@ fn push_external_material(
 }
 
 #[test]
-fn four_platform_requests_use_one_license_conclusion() {
+fn five_target_requests_use_one_license_conclusion() {
     let repository = root();
     let mut notices = Vec::new();
     for target in crate::schema::SUPPORTED_TARGETS {

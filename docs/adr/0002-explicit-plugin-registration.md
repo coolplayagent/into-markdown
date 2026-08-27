@@ -17,6 +17,6 @@ AppContainer，并在恢复主线程前绑定只允许一个进程的 Job。协�
 逐项声明的变量可见。任何平台无法安装对应原生边界时都以稳定错误拒绝启动。
 
 隔离插件使用固定 Wasmtime 的真实 WASI Preview 2 command component 和版本 1 JSON
-协议，且必须使用相同的公共 IR、错误、资源和溯源规则。能力、资源边界与四平台门禁见
+协议，且必须使用相同的公共 IR、错误、资源和溯源规则。能力、资源边界与五目标门禁见
 [`../wasi-plugins.md`](../wasi-plugins.md)。OCR、转写和说话人分离的签名包、显式注册及
 readiness 路由见 [`../capability-plugins.md`](../capability-plugins.md)。

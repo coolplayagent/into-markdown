@@ -23,7 +23,7 @@ LGPL 对应源码、告知、逆向工程及重新链接/替换权利等义务�
 - `third_party/licenses/npm-release.spdx.json` 是嵌入式控制台生产 JavaScript 的确定性
   SPDX 2.3 SBOM。document namespace 绑定实际资产完整 SHA-256，creationInfo 固定且不含
   时间漂移、本机路径或随机值；包、文件与 relationship ID 必须唯一且不能悬空。
-- `third_party/licenses/build-tools.json` 固定四平台 Rust、Bazel、Node、pnpm、Python 与原生
+- `third_party/licenses/build-tools.json` 固定五目标 Rust、Bazel、Node、pnpm、Python 与原生
   编译/链接工具的官方来源、版本、许可和仓库 authority 哈希。最终 `.sources.json` 追加本次
   runner 实际执行文件的版本、大小与 SHA-256；这些工具记录为 `distributed: false`。
 - `third_party/licenses/non-distributed-sources.json` 单独记录生成测试图片所用字体与质量测试
@@ -85,7 +85,7 @@ TXT 字符集实现使用 `chardetng 0.1.17` 与 `encoding_rs 0.8.35`。前者�
 cargo run --locked --offline -p license-check --bin release-audit
 ```
 
-ONNX Runtime 的唯一版本、API level、四平台压缩包 SHA-256 和解包动态库 SHA-256
+ONNX Runtime 的唯一版本、API level、五目标压缩包 SHA-256 和解包动态库 SHA-256
 及固定二进制的 load identity/系统动态依赖审计结果记录在
 `third_party/onnxruntime/manifest.json`；`downloads.json` 只把同一组压缩包映射
 为显式 Bazel repository。`ort`/`ort-sys` 固定为 `2.0.0-rc.13`，选择 MIT 许可，关闭
@@ -122,7 +122,7 @@ runtime dependency 是 `num-traits`。任何版本升级都必须重新审计源
 runtime 角色。schema 1 只兼容 planned source-only bundle；available/runtime 语义会由产品
 validator 与 release audit 双向拒绝。
 
-PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输入且不进入
+PDFium `153.0.7999.0` 已按五个目标固定并审查，但仍是 `manual` 输入且不进入
 普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
 第三方声明目录；显式联网制品审计见 `tools/pdfium-audit.sh`。
 
@@ -142,7 +142,7 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 统一 `release-projection` 对 Core 与两个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
 声明，并对 Core 归档清单、最终解包成员以及插件签名/runtime inventory 做双向逐文件检查。
 最终构件（signed 模式在签名、公证或 stapling 后，unsigned 模式在可安装归档完成后）再生成
-artifact sidecar；四个平台的聚合 release set
+artifact sidecar；五个目标的聚合 release set
 明确区分仅 Core 与 Core 加两个插件的完整离线集合。
 
 ## Wasmtime WASI runtime
@@ -154,7 +154,7 @@ targets, and the preserved Apache-2.0 WITH LLVM-exception text. The complete
 transitive lock graph has explicit conclusions in `rust-lock.tsv`; the CLI
 normal-runtime projection remains fail-closed and does not claim Wasmtime is in
 the release until plugin registration makes it reachable. Upgrades require a
-new source, unsafe/build-script, WASI capability, four-platform, license, and
+new source, unsafe/build-script, WASI capability, five-target, license, and
 SBOM audit.
 
 ## Bundled SQLite

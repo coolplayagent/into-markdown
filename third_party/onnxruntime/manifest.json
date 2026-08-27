@@ -100,6 +100,32 @@
         { "load_name": "api-ms-win-crt-locale-l1-1-0.dll" }
       ],
       "companion_dependencies": []
+    },
+    "aarch64-pc-windows-msvc": {
+      "asset": "onnxruntime-win-arm64-1.29.0.zip",
+      "sha256": "a094a49c3ced0f9fca554647cc7566ae99d93a63a8ce6bf47975561c2de7608e",
+      "library": "lib/onnxruntime.dll",
+      "library_bytes": 16261432,
+      "worker_address_space_overhead_bytes": 536870912,
+      "worker_physical_memory_overhead_bytes": 536870912,
+      "binary_format": "pe",
+      "binary_architecture": "aarch64",
+      "load_identity": "onnxruntime.dll",
+      "library_sha256": "7c7df2cefd6910f50f44792e8f8f71b371bf9675f9273e70a9277eb92e4d75ed",
+      "rpaths": [],
+      "system_dependencies": [
+        { "load_name": "KERNEL32.dll" }, { "load_name": "ADVAPI32.dll" },
+        { "load_name": "MSVCP140.dll" }, { "load_name": "MSVCP140_1.dll" },
+        { "load_name": "api-ms-win-core-path-l1-1-0.dll" }, { "load_name": "dbghelp.dll" },
+        { "load_name": "SETUPAPI.dll" }, { "load_name": "dxgi.dll" },
+        { "load_name": "VCRUNTIME140.dll" },
+        { "load_name": "api-ms-win-crt-heap-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-runtime-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-stdio-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-string-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-convert-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-time-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-filesystem-l1-1-0.dll" }, { "load_name": "api-ms-win-crt-math-l1-1-0.dll" },
+        { "load_name": "api-ms-win-crt-locale-l1-1-0.dll" }
+      ],
+      "companion_dependencies": []
     }
   }
 }

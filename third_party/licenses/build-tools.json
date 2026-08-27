@@ -8,7 +8,7 @@
       "license": "Apache-2.0 OR MIT",
       "scope": "build",
       "distributed": false,
-      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "targets": ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
       "integrity": [{"algorithm":"SHA-256","digest":"279d77167cec5426fa80f457cd066dc74a360fbe4e2816f4f3fa01487a918fdc","subject":"rust-toolchain.toml"}],
       "executables": []
     },
@@ -19,7 +19,7 @@
       "license": "Apache-2.0",
       "scope": "source-build",
       "distributed": false,
-      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "targets": ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
       "integrity": [{"algorithm":"SHA-256","digest":"1b9487d55bea47fea50d226cc9c53bc548877ad2a318bac8fbc8b320f429e5c5","subject":".bazelversion"}],
       "executables": []
     },
@@ -30,7 +30,7 @@
       "license": "MIT",
       "scope": "frontend-build",
       "distributed": false,
-      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "targets": ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
       "integrity": [{"algorithm":"SHA-256","digest":"961212f04ad6acd17e41e71944690ec577c4856e69e5b8212d09e1800d4578f4","subject":"package.json"}],
       "executables": []
     },
@@ -41,7 +41,7 @@
       "license": "MIT",
       "scope": "frontend-build",
       "distributed": false,
-      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "targets": ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
       "integrity": [{"algorithm":"SHA-256","digest":"f1952290e6d24dc908a4e911a6fec86417a454a635d95e1d40bc24e84e29f304","subject":"pnpm-lock.yaml"}],
       "executables": []
     },
@@ -52,8 +52,8 @@
       "license": "Python-2.0",
       "scope": "release-assembly",
       "distributed": false,
-      "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"5b40f688a7f47d493688af6482a4ced0951bc1251cb4e9c0bdb6747c14dc8738","subject":"tools/platform-release/authority.json"}],
+      "targets": ["aarch64-apple-darwin", "aarch64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"4253ae5118d54f4f6ab6a8e30140750fcc0614dcd1ddefe7176eb4f499ebecf1","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -75,18 +75,18 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-      "integrity": [{"algorithm":"SHA-256","digest":"5b40f688a7f47d493688af6482a4ced0951bc1251cb4e9c0bdb6747c14dc8738","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"4253ae5118d54f4f6ab6a8e30140750fcc0614dcd1ddefe7176eb4f499ebecf1","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
       "id": "windows-msvc-toolchain",
-      "version": "MSVC 14.44.35207 and Windows SDK 10.0.26100.0 on windows-2025",
+      "version": "MSVC 14.44.35207 and Windows SDK 10.0.26100.0",
       "source": "https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md",
       "license": "LicenseRef-Microsoft-Visual-Studio",
       "scope": "compile-sign-package",
       "distributed": false,
-      "targets": ["x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"5b40f688a7f47d493688af6482a4ced0951bc1251cb4e9c0bdb6747c14dc8738","subject":"tools/platform-release/authority.json"}],
+      "targets": ["aarch64-pc-windows-msvc", "x86_64-pc-windows-msvc"],
+      "integrity": [{"algorithm":"SHA-256","digest":"4253ae5118d54f4f6ab6a8e30140750fcc0614dcd1ddefe7176eb4f499ebecf1","subject":"tools/platform-release/authority.json"}],
       "executables": []
     }
   ]

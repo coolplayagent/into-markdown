@@ -50,7 +50,9 @@ ARM64 使用 `into-md-linux-arm64-core.tar.gz`。只有 signing policy 为 `sign
 此时额外运行 `gpg --verify`；unsigned 模式以 GitHub Release 旁的 SHA-256 sidecar 为安装前校验
 权威。安装器不修改 shell profile。
 
-Windows x86_64 在 PowerShell 先校验 ZIP 摘要；unsigned ZIP 只有在摘要匹配后才解除下载标记：
+Windows x86_64 与 Windows ARM64 在 PowerShell 先校验 ZIP 摘要；ARM64 使用
+`into-md-windows-arm64-core.zip`，以下 x86_64 示例中的文件名按架构替换。unsigned ZIP 只有在
+摘要匹配后才解除下载标记：
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash

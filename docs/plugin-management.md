@@ -72,8 +72,8 @@ bazel test //crates/plugin-manager:plugin_manager_test //crates/plugin-manager:p
 
 For `wasi-v1`, `runtimeManifest` is the inventoried WASI runtime-manifest path. For
 `process-v1` it must be null. The supported target set and entrypoint-map keys must be identical
-and may contain only `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`.
+and may contain only `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`,
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`.
 
 The Ed25519 input is the compact UTF-8 JSON emitted by `serde_json::to_vec` for these fields in
 this exact order:

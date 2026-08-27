@@ -1,0 +1,230 @@
+name: Unified native release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Candidate tag; must exactly match v plus the Cargo workspace version
+        required: true
+        default: v0.0.0
+        type: string
+      signing_mode:
+        description: Candidate external signing policy; tag publication always requires signed
+        required: true
+        default: unsigned
+        type: choice
+        options:
+          - unsigned
+          - signed
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-release-authority:
+    runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.authority.outputs.release_tag }}
+      release_version: ${{ steps.authority.outputs.release_version }}
+      signing_mode: ${{ steps.authority.outputs.signing_mode }}
+      prerelease: ${{ steps.authority.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: authority
+        name: Bind SemVer tag to Cargo and event policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          CANDIDATE_TAG: ${{ inputs.release_tag }}
+          CANDIDATE_SIGNING_MODE: ${{ inputs.signing_mode }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from tools.release_version import validate_version
+
+          event = os.environ["EVENT_NAME"]
+          tag = os.environ["PUSH_TAG"] if event == "push" else os.environ["CANDIDATE_TAG"]
+          if not tag.startswith("v"):
+              raise SystemExit("release tag must be v-prefixed SemVer")
+          version = validate_version(tag[1:], __import__("pathlib").Path.cwd())
+          if tag != f"v{version}":
+              raise SystemExit("release tag is not the exact Cargo workspace version")
+          signing_mode = "signed" if event == "push" else os.environ["CANDIDATE_SIGNING_MODE"]
+          if signing_mode not in {"signed", "unsigned"}:
+              raise SystemExit("release signing mode is invalid")
+          print(f"release_tag={tag}")
+          print(f"release_version={version}")
+          print(f"signing_mode={signing_mode}")
+          print(f"prerelease={'true' if '-' in version.split('+', 1)[0] else 'false'}")
+          PY
+      - name: Validate release orchestration contracts
+        run: >-
+          python3 -m unittest
+          tools.release_version_test
+          tools.release_workflow_test
+          tools.finalize_release_test
+
+  agent-skill:
+    needs: verify-release-authority
+    uses: ./.github/workflows/agent-skill-release.yml
+
+  native-gates:
+    needs: verify-release-authority
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_x86_64
+            msvc_arch: x64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_arm64
+            msvc_arch: arm64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            container: ''
+            bazel_config: windows_x86_64
+            msvc_arch: x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            container: ''
+            bazel_config: windows_arm64
+            msvc_arch: arm64
+    uses: ./.github/workflows/native-release-gates.yml
+    with:
+      runner: ${{ matrix.runner }}
+      target: ${{ matrix.target }}
+      container: ${{ matrix.container }}
+      bazel_config: ${{ matrix.bazel_config }}
+      msvc_arch: ${{ matrix.msvc_arch }}
+
+  linux-windows:
+    needs: verify-release-authority
+    uses: ./.github/workflows/platform-modular-release.yml
+    with:
+      release_tag: ${{ needs.verify-release-authority.outputs.release_tag }}
+      release_version: ${{ needs.verify-release-authority.outputs.release_version }}
+      signing_mode: ${{ needs.verify-release-authority.outputs.signing_mode }}
+    secrets: inherit
+
+  macos:
+    needs: verify-release-authority
+    uses: ./.github/workflows/macos-arm64-release.yml
+    with:
+      release_tag: ${{ needs.verify-release-authority.outputs.release_tag }}
+      release_version: ${{ needs.verify-release-authority.outputs.release_version }}
+      signing_mode: ${{ needs.verify-release-authority.outputs.signing_mode }}
+    secrets: inherit
+
+  finalize-candidate:
+    needs: [verify-release-authority, agent-skill, native-gates, linux-windows, macos]
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/release-artifacts
+      - name: Validate exact five-target release set
+        run: >-
+          python3 tools/finalize_release.py
+          --source "${{ runner.temp }}/release-artifacts"
+          --output "${{ runner.temp }}/publish"
+          --tag "${{ needs.verify-release-authority.outputs.release_tag }}"
+          --version "${{ needs.verify-release-authority.outputs.release_version }}"
+          --source-revision "${{ github.sha }}"
+          --signing-mode "${{ needs.verify-release-authority.outputs.signing_mode }}"
+      - name: Sign aggregate release authority
+        if: needs.verify-release-authority.outputs.signing_mode == 'signed'
+        env:
+          RELEASE_GPG_PRIVATE_KEY_BASE64: ${{ secrets.RELEASE_GPG_PRIVATE_KEY_BASE64 }}
+          RELEASE_GPG_KEY_FINGERPRINT: ${{ secrets.RELEASE_GPG_KEY_FINGERPRINT }}
+        run: |
+          set -eu
+          test -n "$RELEASE_GPG_PRIVATE_KEY_BASE64"
+          test -n "$RELEASE_GPG_KEY_FINGERPRINT"
+          export GNUPGHOME="$RUNNER_TEMP/release-gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          printf '%s' "$RELEASE_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --import
+          test "$(gpg --batch --with-colons --fingerprint "$RELEASE_GPG_KEY_FINGERPRINT" | awk -F: '$1 == "fpr" {print $10; exit}')" = "$RELEASE_GPG_KEY_FINGERPRINT"
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            case "$target" in
+              x86_64-*) core=into-md-linux-x86_64-core.tar.gz ;;
+              aarch64-*) core=into-md-linux-arm64-core.tar.gz ;;
+            esac
+            gpg --batch --verify "$RUNNER_TEMP/publish/$core.asc" "$RUNNER_TEMP/publish/$core"
+            for plugin in official.ocr.ppocrv6 official.media.whisper; do
+              artifact="$plugin-$target.imp"
+              gpg --batch --verify "$RUNNER_TEMP/publish/$artifact.asc" "$RUNNER_TEMP/publish/$artifact"
+            done
+          done
+          for artifact in into-markdown-skill.zip release-manifest.json SHA256SUMS; do
+            gpg --batch --local-user "$RELEASE_GPG_KEY_FINGERPRINT" --detach-sign --armor "$RUNNER_TEMP/publish/$artifact"
+            gpg --batch --verify "$RUNNER_TEMP/publish/$artifact.asc" "$RUNNER_TEMP/publish/$artifact"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-${{ needs.verify-release-authority.outputs.release_tag }}
+          path: ${{ runner.temp }}/publish/*
+          if-no-files-found: error
+      - name: Remove aggregate signing credentials
+        if: always() && needs.verify-release-authority.outputs.signing_mode == 'signed'
+        run: rm -rf "$RUNNER_TEMP/release-gnupg"
+
+  publish-release:
+    if: github.event_name == 'push'
+    needs: [verify-release-authority, finalize-candidate]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate-${{ needs.verify-release-authority.outputs.release_tag }}
+          path: ${{ runner.temp }}/publish
+      - name: Attest the exact release payload
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ runner.temp }}/publish/*
+      - name: Publish verified draft atomically
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.verify-release-authority.outputs.release_tag }}
+          SOURCE_REVISION: ${{ github.sha }}
+          PRERELEASE: ${{ needs.verify-release-authority.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          publish="$RUNNER_TEMP/publish"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+            test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .target_commitish)" = "$SOURCE_REVISION"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[].id' | while read -r asset_id; do
+                test -n "$asset_id" && gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+              done
+          else
+            prerelease=()
+            if [ "$PRERELEASE" = true ]; then prerelease+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --draft --target "$SOURCE_REVISION" \
+              --title "Into Markdown $RELEASE_TAG" --generate-notes "${prerelease[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" "$publish"/*
+          find "$publish" -maxdepth 1 -type f -printf '%f\n' | sort > "$RUNNER_TEMP/local-assets"
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/remote-assets"
+          diff -u "$RUNNER_TEMP/local-assets" "$RUNNER_TEMP/remote-assets"
+          gh release edit "$RELEASE_TAG" --draft=false

@@ -9,7 +9,7 @@
 - [CLI](cli.md)：转换、批量、Bundle、能力、Provider、插件、配置和诊断命令。
 - [可执行命令与格式示例](cli-examples.md) / [English](cli-examples.en.md)：全部公共命令和
   当前可用格式的可运行示例。
-- [安装与部署](user-guide.md) / [English](user-guide.en.md)：四平台校验、安装、离线能力、
+- [安装与部署](user-guide.md) / [English](user-guide.en.md)：五目标校验、安装、离线能力、
   排障和卸载。
 - [配置](configuration.md)：分层配置、profile、网络授权和能力路由。
 - [格式矩阵](formats.md)：catalog 中的格式、检测、转换和失败边界。

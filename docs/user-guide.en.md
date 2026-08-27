@@ -50,8 +50,9 @@ Use `into-md-linux-arm64-core.tar.gz` on ARM64. A `.asc` is present only for a `
 it with GPG in that mode. For unsigned releases, the SHA-256 sidecar adjacent to the GitHub Release
 asset is the pre-install authority. The installer never edits shell profiles.
 
-On Windows x86_64, verify the ZIP digest first. For an unsigned ZIP, remove its download mark only
-after that digest matches:
+On Windows x86_64 and Windows ARM64, verify the ZIP digest first. ARM64 uses
+`into-md-windows-arm64-core.zip`; replace the x86_64 filename in the example below for that
+architecture. For an unsigned ZIP, remove its download mark only after that digest matches:
 
 ```powershell
 (Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash

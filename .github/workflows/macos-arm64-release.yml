@@ -1,34 +1,25 @@
 name: macOS ARM64 modular release
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       release_tag:
-        description: GitHub draft release tag that will contain the Core and two target-qualified .imp files
+        required: true
+        type: string
+      release_version:
         required: true
         type: string
       signing_mode:
-        description: External publisher signing policy; unsigned uses ad-hoc Mach-O signatures and is not notarized
         required: true
-        default: unsigned
-        type: choice
-        options:
-          - unsigned
-          - signed
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  agent-skill:
-    uses: ./.github/workflows/agent-skill-release.yml
-
   release:
-    needs: agent-skill
     runs-on: macos-14
     environment: release
-    permissions:
-      contents: write
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +30,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           tag = os.environ["RELEASE_TAG"]
-          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tag):
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", tag):
               raise SystemExit("release tag must be a bounded URL-safe Git ref component")
           PY
       - uses: dtolnay/rust-toolchain@stable
@@ -58,7 +49,7 @@ jobs:
       - name: Validate release assembly and metadata contracts
         run: |
           python3 -m unittest discover -s tools/macos-release -p '*test.py'
-          python3 -m unittest tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
+          python3 -m unittest tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test tools.release_version_test tools.finalize_release_test tools.release_workflow_test
       - name: Build audited LGPL FFmpeg runtime
         env:
           FFMPEG_AUDIT_NETWORK: "1"
@@ -77,6 +68,7 @@ jobs:
             > "$RUNNER_TEMP/official-plugin-signing-key.pk8"
           for sample in a b; do
             PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+              --version "${{ inputs.release_version }}" \
               --output "$RUNNER_TEMP/core-stage-$sample" \
               --cache "$RUNNER_TEMP/release-cache" \
               --build-root "$RUNNER_TEMP/build-$sample" \
@@ -127,6 +119,7 @@ jobs:
           set -eu
           test -n "$APPLE_CODESIGN_IDENTITY"
           PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+            --version "${{ inputs.release_version }}" \
             --output "$RUNNER_TEMP/core-stage-final" \
             --cache "$RUNNER_TEMP/release-cache" \
             --build-root "$RUNNER_TEMP/build-a" \
@@ -136,7 +129,8 @@ jobs:
             --plugin-base-url "$PLUGIN_BASE_URL" \
             --plugins-output "$RUNNER_TEMP/plugins-final" \
             --archive "$RUNNER_TEMP/into-md-macos-arm64-core-signed.tar.gz" \
-            --codesign-identity "$APPLE_CODESIGN_IDENTITY"
+            --codesign-identity "$APPLE_CODESIGN_IDENTITY" \
+            --audit-report "$RUNNER_TEMP/platform-audit.json"
           hdiutil create -quiet -fs HFS+ -format UDZO \
             -volname "into-markdown" \
             -srcfolder "$RUNNER_TEMP/core-stage-final" \
@@ -152,6 +146,7 @@ jobs:
         run: |
           set -eu
           PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+            --version "${{ inputs.release_version }}" \
             --output "$RUNNER_TEMP/core-stage-final" \
             --cache "$RUNNER_TEMP/release-cache" \
             --build-root "$RUNNER_TEMP/build-a" \
@@ -161,7 +156,8 @@ jobs:
             --plugin-base-url "$PLUGIN_BASE_URL" \
             --plugins-output "$RUNNER_TEMP/plugins-final" \
             --archive "$RUNNER_TEMP/into-md-macos-arm64-core-unsigned.tar.gz" \
-            --codesign-identity "-"
+            --codesign-identity "-" \
+            --audit-report "$RUNNER_TEMP/platform-audit.json"
           hdiutil create -quiet -fs HFS+ -format UDZO \
             -volname "into-markdown" \
             -srcfolder "$RUNNER_TEMP/core-stage-final" \
@@ -219,6 +215,7 @@ jobs:
           python3 tools/release-metadata.py \
             --projection-tool "$RUNNER_TEMP/build-a/release/release-projection" \
             --target aarch64-apple-darwin \
+            --version "${{ inputs.release_version }}" \
             --source-revision "${{ github.sha }}" \
             --core-artifact "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" \
             --core-root "$mount" \
@@ -277,12 +274,25 @@ jobs:
             --fixtures "$installed/share/into-markdown/smoke/fixtures" \
             --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" \
             --temp-root "$RUNNER_TEMP/smoke-core" \
-            --report "$RUNNER_TEMP/into-md-macos-arm64-core-smoke.json" \
+            --report "$RUNNER_TEMP/installed-smoke.json" \
             --archive-sha256 "$archive_sha" \
             --cargo "$(rustup which cargo)" \
             --rustc "$(rustup which rustc)" \
             --pdfium-library "$installed/lib/pdfium/libpdfium.dylib" \
             --timeout-seconds 90
+          python3 tools/platform-release/platform_acceptance.py \
+            --target aarch64-apple-darwin \
+            --install-root "$installed" \
+            --into-md "$installed/bin/into-md" \
+            --plugins "$RUNNER_TEMP/plugins-final" \
+            --publisher "$installed/share/into-markdown/plugins/official-publisher.json" \
+            --fixtures "$installed/share/into-markdown/smoke/fixtures" \
+            --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" \
+            --work-root "$RUNNER_TEMP/platform-acceptance-state" \
+            --archive-sha256 "$archive_sha" \
+            --platform-audit "$RUNNER_TEMP/platform-audit.json" \
+            --report "$RUNNER_TEMP/platform-acceptance.json" \
+            --timeout-seconds 900
           "$distribution/uninstall" "$RUNNER_TEMP/install-core" "$RUNNER_TEMP/bin-core"
           diff -ru "$RUNNER_TEMP/agent-skills-before" "$HOME/.agents/skills"
           hdiutil detach -quiet "$distribution"
@@ -294,43 +304,12 @@ jobs:
             ${{ runner.temp }}/into-md-macos-arm64-core.dmg
             ${{ runner.temp }}/into-md-macos-arm64-core.dmg.sha256
             ${{ runner.temp }}/published-plugins/*
-            ${{ runner.temp }}/into-md-macos-arm64-core-smoke.json
+            ${{ runner.temp }}/installed-smoke.json
+            ${{ runner.temp }}/platform-audit.json
+            ${{ runner.temp }}/platform-acceptance.json
             ${{ runner.temp }}/release-metadata/*
             ${{ runner.temp }}/aarch64-apple-darwin-signing-policy.json
           if-no-files-found: error
-      - name: Add final macOS assets to the protected draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          SIGNING_MODE: ${{ inputs.signing_mode }}
-        run: |
-          set -eu
-          publish="$RUNNER_TEMP/publish"
-          mkdir "$publish"
-          cp "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" "$publish/"
-          cp "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256" "$publish/"
-          cp "$RUNNER_TEMP/published-plugins"/* "$publish"/
-          cp "$RUNNER_TEMP/into-md-macos-arm64-core-smoke.json" \
-            "$publish/aarch64-apple-darwin-installed-smoke.json"
-          cp "$RUNNER_TEMP/aarch64-apple-darwin-signing-policy.json" "$publish/"
-          for document in "$RUNNER_TEMP"/release-metadata/*; do
-            cp "$document" "$publish/${document##*/}"
-          done
-          if [ "$SIGNING_MODE" = unsigned ]; then
-            title="Into Markdown $RELEASE_TAG [UNSIGNED]"
-            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
-          else
-            title="Into Markdown $RELEASE_TAG"
-            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          else
-            gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
-              --title "$title" --notes "$notes"
-          fi
-          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
-          gh release upload "$RELEASE_TAG" "$publish"/* --clobber
       - name: Remove release credentials
         if: always()
         run: |

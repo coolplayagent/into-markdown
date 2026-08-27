@@ -7,6 +7,11 @@ set -eu
 # itself authoritative and adapt only the two banner probes.
 : "${INTO_MD_REAL_CL:?INTO_MD_REAL_CL must name the fixed MSVC cl.exe}"
 : "${INTO_MD_MSVC_BANNER_VERSION:?INTO_MD_MSVC_BANNER_VERSION must be pinned}"
+: "${INTO_MD_MSVC_BANNER_ARCH:?INTO_MD_MSVC_BANNER_ARCH must be pinned}"
+case "$INTO_MD_MSVC_BANNER_ARCH" in
+  x64|ARM64) ;;
+  *) echo "unsupported MSVC banner architecture: $INTO_MD_MSVC_BANNER_ARCH" >&2; exit 2 ;;
+esac
 
 banner_probe=false
 if [ "$#" -eq 0 ]; then
@@ -21,8 +26,8 @@ else
 fi
 
 if [ "$banner_probe" = true ]; then
-  printf 'Microsoft (R) C/C++ Optimizing Compiler Version %s for x64\n' \
-    "$INTO_MD_MSVC_BANNER_VERSION"
+  printf 'Microsoft (R) C/C++ Optimizing Compiler Version %s for %s\n' \
+    "$INTO_MD_MSVC_BANNER_VERSION" "$INTO_MD_MSVC_BANNER_ARCH"
   "$INTO_MD_REAL_CL" "$@"
   exit $?
 fi

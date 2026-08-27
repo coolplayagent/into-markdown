@@ -2552,7 +2552,8 @@ fn validate_transaction(transaction: &Transaction) -> Result<(), ManagerError> {
 fn known_target(value: &str) -> bool {
     matches!(
         value,
-        "x86_64-pc-windows-msvc"
+        "aarch64-pc-windows-msvc"
+            | "x86_64-pc-windows-msvc"
             | "x86_64-unknown-linux-gnu"
             | "aarch64-unknown-linux-gnu"
             | "aarch64-apple-darwin"
@@ -2562,6 +2563,8 @@ fn known_target(value: &str) -> bool {
 fn current_target() -> &'static str {
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
     return "x86_64-pc-windows-msvc";
+    #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+    return "aarch64-pc-windows-msvc";
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     return "x86_64-unknown-linux-gnu";
     #[cfg(all(target_arch = "aarch64", target_os = "linux"))]

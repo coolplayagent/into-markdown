@@ -14,6 +14,9 @@ import sys
 import tempfile
 import zipfile
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parent))
+from release_version import VersionError, validate_version
+
 
 ARTIFACTS = {
     "official.ocr.ppocrv6.imp": "ocr-plugin",
@@ -117,7 +120,7 @@ def build_tool_executions(target: str) -> list[dict]:
                 ("ubuntu-build-toolchain", "gpg", ["--version"]),
             ]
         )
-    elif target == "x86_64-pc-windows-msvc":
+    elif target.endswith("-pc-windows-msvc"):
         commands.extend(
             [
                 ("windows-msvc-toolchain", "cl", ["/?"]),
@@ -488,17 +491,21 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--projection-tool", required=True, type=pathlib.Path)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--version", default="0.0.0")
+    parser.add_argument("--version", required=True)
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--core-artifact", required=True, type=pathlib.Path)
     parser.add_argument("--core-root", required=True, type=pathlib.Path)
     parser.add_argument("--plugins", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args()
+    try:
+        version = validate_version(arguments.version, ROOT)
+    except VersionError as error:
+        raise SystemExit(str(error)) from error
     generate(
         arguments.projection_tool.resolve(),
         arguments.target,
-        arguments.version,
+        version,
         arguments.source_revision,
         arguments.core_artifact.resolve(),
         arguments.core_root.resolve(),

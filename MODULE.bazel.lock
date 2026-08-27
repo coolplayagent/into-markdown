@@ -257,8 +257,8 @@
         "usagesDigest": "YItk5McM/nU5ZVdSduh0zAeBNSl8iILaQ3P/JbSrpag=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
-          "FILE:@@//third_party/licenses/downloads.json 8b3b5301ae0b22f0821931428dfabe32e95d4d3f35898b539f7f12141d2d2574",
-          "FILE:@@//third_party/pdfium/manifest.json c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368"
+          "FILE:@@//third_party/licenses/downloads.json 30fe9fdcaafdbfd4720ac9f9a2f4c5832a45d0cd14e219d7184e37c7b4f59a3c",
+          "FILE:@@//third_party/pdfium/manifest.json 8fe15c602f4283693c1ce72477674964f65c86a19fe9f99c66e02f474e3b4953"
         ],
         "generatedRepoSpecs": {
           "ppocrv6_tiny_detector_source": {
@@ -417,6 +417,17 @@
               ]
             }
           },
+          "onnxruntime_windows_arm64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
+              "sha256": "a094a49c3ced0f9fca554647cc7566ae99d93a63a8ce6bf47975561c2de7608e",
+              "urls": [
+                "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-win-arm64-1.29.0.zip"
+              ],
+              "strip_prefix": "onnxruntime-win-arm64-1.29.0"
+            }
+          },
           "onnxruntime_macos_arm64": {
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
@@ -459,6 +470,16 @@
                 "https://github.com/microsoft/onnxruntime/releases/download/v1.29.0/onnxruntime-linux-x64-1.29.0.tgz"
               ],
               "strip_prefix": "onnxruntime-linux-x64-1.29.0"
+            }
+          },
+          "pdfium_windows_arm64": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "build_file_content": "\nexports_files(glob([\"**\"]), visibility = [\"//visibility:public\"])\nfilegroup(\n    name = \"distribution\",\n    srcs = [\"bin/pdfium.dll\"] + glob([\"LICENSE\", \"licenses/**\"]),\n    visibility = [\"//visibility:public\"],\n)\n",
+              "sha256": "ccc39582f8d9ac0bd57b8e279e8cfc5067cc0f0b4db9bc179ddf7cd3636c0bd6",
+              "urls": [
+                "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7999/pdfium-win-arm64.tgz"
+              ]
             }
           },
           "pdfium_macos_arm64": {

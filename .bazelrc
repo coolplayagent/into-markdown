@@ -23,3 +23,4 @@ build:macos_arm64 --platforms=//:macos_arm64_platform --aspects=//toolchains:pla
 build:linux_x86_64 --platforms=//:linux_x86_64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
 build:linux_arm64 --platforms=//:linux_arm64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
 build:windows_x86_64 --platforms=//:windows_x86_64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect
+build:windows_arm64 --platforms=//:windows_arm64_platform --aspects=//toolchains:platform_contract.bzl%platform_contract_aspect --action_env=CMAKE_GENERATOR=Ninja --action_env=LDFLAGS=

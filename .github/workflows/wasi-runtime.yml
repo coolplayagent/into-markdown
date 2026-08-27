@@ -1,4 +1,4 @@
-name: WASI runtime four-platform gate
+name: WASI runtime five-target gate
 
 on:
   pull_request:
@@ -38,6 +38,8 @@ jobs:
         include:
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm

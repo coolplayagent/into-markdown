@@ -73,13 +73,15 @@ done
 
 if [ "${1:-}" = --native-smoke ]; then
   if [ "${PDFIUM_NATIVE_SMOKE:-}" != 1 ]; then echo "set PDFIUM_NATIVE_SMOKE=1" >&2; exit 2; fi
-  case "$(uname -s)-$(uname -m)" in
+  case "${PDFIUM_AUDIT_TARGET:-$(uname -s)-$(uname -m)}" in
     Darwin-arm64) runtime="$audit_dir/pdfium-mac-arm64/lib/libpdfium.dylib" ;;
-    *) echo "native smoke is supported on macOS ARM64 in this workflow" >&2; exit 2 ;;
+    x86_64-pc-windows-msvc) runtime=$(cygpath -w "$audit_dir/pdfium-win-x64/bin/pdfium.dll") ;;
+    aarch64-pc-windows-msvc) runtime=$(cygpath -w "$audit_dir/pdfium-win-arm64/bin/pdfium.dll") ;;
+    *) echo "native smoke requires a supported macOS or Windows target" >&2; exit 2 ;;
   esac
   PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown-pdfium native_smoke -- --ignored
   PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown-converters native_production_converter_is_serialized_and_emits_unified_ir -- --ignored
   PDFIUM_LIBRARY="$runtime" cargo test -p into-markdown native_pdf_runs_through_engine_and_emits_internal_page_anchor -- --ignored
 fi
 
-echo "PDFium four-platform artifact audit passed"
+echo "PDFium five-target artifact audit passed"

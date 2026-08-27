@@ -116,6 +116,8 @@ pub(crate) fn run_admin_cli_arguments(
 pub(crate) const fn admin_plugin_target() -> &'static str {
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
     return "x86_64-pc-windows-msvc";
+    #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+    return "aarch64-pc-windows-msvc";
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     return "x86_64-unknown-linux-gnu";
     #[cfg(all(target_arch = "aarch64", target_os = "linux"))]
@@ -5652,6 +5654,8 @@ mod tests {
         let fingerprint = format!("{:x}", Sha256::digest(public));
         #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
         let target = "x86_64-pc-windows-msvc".to_owned();
+        #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+        let target = "aarch64-pc-windows-msvc".to_owned();
         #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
         let target = "x86_64-unknown-linux-gnu".to_owned();
         #[cfg(all(target_arch = "aarch64", target_os = "linux"))]

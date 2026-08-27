@@ -22,6 +22,11 @@ config_setting(
     constraint_values = ["@platforms//cpu:x86_64", "@platforms//os:windows"],
 )
 
+config_setting(
+    name = "is_windows_arm64",
+    constraint_values = ["@platforms//cpu:aarch64", "@platforms//os:windows"],
+)
+
 # These manual targets pin official CPU distributions. Future FFI targets will
 # select the matching package for the current supported platform.
 filegroup(
@@ -38,6 +43,7 @@ filegroup(
         ":is_linux_x86_64": [":linux_x86_64"],
         ":is_macos_arm64": [":macos_arm64"],
         ":is_windows_x86_64": [":windows_x86_64"],
+        ":is_windows_arm64": [":windows_arm64"],
         "//conditions:default": [],
     }),
     tags = ["manual"],
@@ -65,6 +71,13 @@ filegroup(
 filegroup(
     name = "windows_x86_64",
     srcs = ["@onnxruntime_windows_x86_64//:lib/onnxruntime.dll"],
+    tags = ["manual"],
+    visibility = ["//crates/onnxruntime:__pkg__"],
+)
+
+filegroup(
+    name = "windows_arm64",
+    srcs = ["@onnxruntime_windows_arm64//:lib/onnxruntime.dll"],
     tags = ["manual"],
     visibility = ["//crates/onnxruntime:__pkg__"],
 )

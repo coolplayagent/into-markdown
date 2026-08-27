@@ -160,6 +160,8 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
         "--disable-shared",
         "--toolchain=msvc",
         "--disable-x86asm",
+        "--arch=aarch64",
+        "--disable-asm",
         "--extra-cflags=-mmacosx-version-min=14.0",
         "--extra-ldflags=-mmacosx-version-min=14.0",
     ]
@@ -181,6 +183,9 @@ fn policy_is_lgpl_compatible(policy: &BuildPolicy) -> bool {
             .collect(),
             "x86_64-pc-windows-msvc" => {
                 ["--toolchain=msvc", "--disable-x86asm"].into_iter().collect()
+            }
+            "aarch64-pc-windows-msvc" => {
+                ["--arch=aarch64", "--toolchain=msvc", "--disable-asm"].into_iter().collect()
             }
             _ => BTreeSet::new(),
         };
@@ -216,6 +221,9 @@ fn expected_target_identity(target: &str) -> Option<(&'static str, &'static str,
         }
         "x86_64-pc-windows-msvc" => {
             ("pe", "x86_64", &["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"])
+        }
+        "aarch64-pc-windows-msvc" => {
+            ("pe", "aarch64", &["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"])
         }
         _ => return None,
     };

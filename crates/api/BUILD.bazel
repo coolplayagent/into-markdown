@@ -88,6 +88,13 @@ rust_test(
             "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_windows_x86_64",
             "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
         },
+        "//third_party/onnxruntime:is_windows_arm64": {
+            "OCR_DETECTOR_REPOSITORY": "+downloads+ppocrv6_tiny_detector_onnx_model_archive",
+            "OCR_RECOGNIZER_REPOSITORY": "+downloads+ppocrv6_tiny_recognizer_onnx_model_archive",
+            "OCR_QUALITY_ORT_LIBRARY": "lib/onnxruntime.dll",
+            "OCR_QUALITY_ORT_REPOSITORY": "+downloads+onnxruntime_windows_arm64",
+            "OCR_QUALITY_WORKER": "_main/crates/onnxruntime/onnxruntime_worker.exe",
+        },
         "//conditions:default": {
             "OCR_DETECTOR_REPOSITORY": "unsupported",
             "OCR_RECOGNIZER_REPOSITORY": "unsupported",

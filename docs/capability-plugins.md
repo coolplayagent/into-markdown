@@ -24,7 +24,7 @@ flowchart LR
 - `official.media.whisper-<target>.imp`：转写/分离 provider、受审计 FFmpeg、ONNX Runtime、worker 与模型。
 
 `<target>` 是 `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`、
-`x86_64-pc-windows-msvc` 或 `aarch64-apple-darwin`。目标后缀只解决 GitHub Release 的平面资产
+`x86_64-pc-windows-msvc`、`aarch64-pc-windows-msvc` 或 `aarch64-apple-darwin`。目标后缀只解决 GitHub Release 的平面资产
 命名冲突；下载后的包内 ID、签名 authority 和插件管理命令仍使用不带后缀的稳定插件 ID。
 
 `into-md setup ocr|media` 下载、安装并验证整个能力插件及其中固定的模型与运行时。普通转换

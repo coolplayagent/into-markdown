@@ -178,7 +178,7 @@ declarations and generated metadata have no component owner. All paths are norma
 paths; all file hashes are lowercase SHA-256 values.
 
 The checked-in files under `tools/license-check/fixtures/` exercise Core and both capability
-plugins on all four supported targets. Component generation can run before target-native FFmpeg
+plugins on all five supported targets. Component generation can run before target-native FFmpeg
 bytes exist; finalization binds its executable, build authority, source and relink members, while
 strict archive verification remains fail-closed when checked-in FFmpeg approval is required.
 

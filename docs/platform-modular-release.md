@@ -3,7 +3,7 @@
 最终用户应按[安装与部署指南](user-guide.md)校验 signing policy 与摘要、安装 Core、离线导入能力插件并
 排障；本文描述跨平台发布装配与验收权威。
 
-Linux x86_64、Linux ARM64 与 Windows x86_64 和 macOS ARM64 使用相同产品边界：一个包含
+Linux x86_64、Linux ARM64、Windows x86_64、Windows ARM64 与 macOS ARM64 使用相同产品边界：一个包含
 Office 97–2003 原生解析的 Core 归档，以及 `official.ocr.ppocrv6`、`official.media.whisper`
 两个自包含 `.imp`。Core 归档承载转换与管理功能；每个能力插件包含离线运行所需的完整
 FFmpeg/ONNX Runtime、模型、字典、许可、SBOM、签名清单和目标平台声明。
@@ -42,11 +42,13 @@ ceiling、解释器、DT_NEEDED、RPATH/RUNPATH、文件模式、PE import 与�
 ```sh
 python tools/platform-release/release.py \
   --target x86_64-unknown-linux-gnu \
+  --version 0.0.0 \
   --build-root /absolute/build \
   --build-only
 
 python tools/platform-release/release.py \
   --target x86_64-unknown-linux-gnu \
+  --version 0.0.0 \
   --build-root /absolute/build --skip-build \
   --cache /absolute/cache \
   --ffmpeg-artifacts /absolute/ffmpeg-audit \
@@ -57,7 +59,7 @@ python tools/platform-release/release.py \
   --archive /absolute/into-md-linux-x86_64-core.tar.gz
 ```
 
-workflow dispatch 的 `signing_mode` 明确选择 `unsigned` 或 `signed`，默认是可安装的
+手动候选运行的 `signing_mode` 明确选择 `unsigned` 或 `signed`，默认是可安装的
 `unsigned`。unsigned 不读取 Windows PFX 或 Linux GPG secret；Windows 可能显示 Unknown
 publisher/SmartScreen，Linux 不生成 `.asc`。signed 模式保留原有路径：Windows 只把 PFX 导入
 runner 的临时 CurrentUser 证书存储，并在插件 manifest 哈希前完成项目二进制和 FFmpeg 的
@@ -68,9 +70,9 @@ signed 却缺少对应凭据时必须失败。两种模式都保留内部 `.imp`
 Windows 的 OCR 与语音进程使用稳定的零 capability AppContainer 身份。插件管理器只给当前已
 验证、不可变的 runtime 快照授予读取和执行 ACL，并由 kill-on-close Job Object 持有整个进程树。
 
-跨平台归档工作流使用 GitHub 当前公开的原生 `ubuntu-24.04-arm` 标签，而不是在 x86_64
-runner 上把交叉编译误报为 ARM64 运行验收。所有发布结论仍以原生安装后的公开 CLI/Web E2E
-报告为准。平台无关的 skill 工作流先通过后，三平台发布 job 才开始组装 Core 与能力插件。
+跨平台归档工作流使用原生 `ubuntu-24.04-arm` 与 `windows-11-arm` runner，而不是把交叉编译
+误报为 ARM64 运行验收。所有五个目标的发布结论都以原生安装后的公开 CLI/Web E2E 报告为准。
+平台无关的 skill 与五个目标制品由统一发布入口共同收敛。
 
 Linux 与 Windows 的安装脚本只是 `bin/into-md-installer` 原生事务工具的兼容包装。Core 进入
 以 `archive-manifest.json` SHA-256 命名的不可变 `versions/` 目录；事务日志在发布前写穿，
@@ -92,12 +94,17 @@ authority 的 loopback API 对两个本地 `.imp` 执行上传、授权安装、
 SHA-256 的 Gitleaks 扫描完整 Git 历史，并下载扫描 issue/PR metadata、用户附件、仍可读取的
 Actions 日志和历史 artifacts。任何发现先吊销/轮换并清理精确历史数据；仓库 owner/admin
 转换可见性后立即恢复 main 保护、push ruleset、只读默认 token、fork 审批和受保护 `release`
-environment。当前发布 job 只接受 main 或 tag，并且正式凭据只通过该 environment 提供。
+environment。候选与 tag 发布 job 都只通过该 environment 获取凭据，只有 tag 事件拥有公开
+Release 所需的 `contents: write` 权限。
 
-正式 workflow dispatch 接收有界 `release_tag` 和显式 `signing_mode`，在 Core 的官方发布者记录中写入该 GitHub
-Release 的不可变下载根。公开资产使用 `插件ID-目标.imp`，因此三个目标的同 ID 插件可以安全地
-共存于 GitHub Release 的平面命名空间；包内插件 ID 和本地 `.imp` 文件名保持不变。Linux、Windows
-job 全绿后，工作流只创建或更新受保护的 draft release，并同时上传 Core、可选外部签名、摘要、SBOM、
-来源、NOTICE、平台审计、installed-smoke 与 acceptance 报告。macOS 同提交的签名/公证工作流
-按同一 signing mode 补齐目标资产；只有四个平台全部通过并复核摘要后才把 draft 发布为公开 release。
-unsigned draft 的标题和说明必须显著标识 `UNSIGNED`，不能让用户误以为操作系统验证了发布者。
+统一入口 `.github/workflows/release.yml` 自动响应与 Cargo `workspace.package.version` 完全一致的
+`v<SemVer>` tag。正式 tag 发布强制 `signed`：两个 Linux 目标生成 GPG detached signature，
+两个 Windows 目标使用 Authenticode，macOS 使用 Developer ID、公证与 stapling；任一凭据或任一
+原生验收失败都不会产生公开 Release。手动 dispatch 只生成候选 Actions artifact，允许 unsigned，
+不会创建或修改公开 Release。
+
+公开资产使用 `插件ID-目标.imp`，五个目标的同 ID 插件可安全共存于 GitHub Release 的平面命名空间；
+包内插件 ID 和本地 `.imp` 文件名保持不变。统一收敛 job 拒绝重复文件名、缺少的 Core/插件/摘要、
+签名策略漂移、未通过的平台审计、installed-smoke、acceptance 或 release-set，并生成
+`release-manifest.json` 与 `SHA256SUMS`。正式路径把精确资产集上传到 draft，核对远端文件名后才
+切换为公开 Release，避免组件工作流各自发布不完整集合。

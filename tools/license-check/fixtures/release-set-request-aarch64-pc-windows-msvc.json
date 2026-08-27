@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-pc-windows-msvc",
+  "version": "0.0.0",
+  "source_revision": "0000000000000000000000000000000000000000",
+  "artifacts": [
+    {"artifact":"core","file_name":"into-md-aarch64-pc-windows-msvc-core.pkg","bytes":1,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","components":["pdfium"],"sbom_sha256":"1111111111111111111111111111111111111111111111111111111111111111","sources_sha256":"2222222222222222222222222222222222222222222222222222222222222222","notices_sha256":"3333333333333333333333333333333333333333333333333333333333333333"},
+    {"artifact":"ocr-plugin","file_name":"official.ocr.ppocrv6.imp","bytes":2,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","components":["onnxruntime-cpu","ppocrv6-tiny-detector-onnx-model"],"sbom_sha256":"4444444444444444444444444444444444444444444444444444444444444444","sources_sha256":"5555555555555555555555555555555555555555555555555555555555555555","notices_sha256":"6666666666666666666666666666666666666666666666666666666666666666"},
+    {"artifact":"media-plugin","file_name":"official.media.whisper.imp","bytes":3,"sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","components":["ffmpeg","onnxruntime-cpu","whisper-small"],"sbom_sha256":"7777777777777777777777777777777777777777777777777777777777777777","sources_sha256":"8888888888888888888888888888888888888888888888888888888888888888","notices_sha256":"9999999999999999999999999999999999999999999999999999999999999999"}
+  ]
+}

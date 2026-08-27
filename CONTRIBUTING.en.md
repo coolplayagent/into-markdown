@@ -3,7 +3,7 @@
 [中文](CONTRIBUTING.md)
 
 Thank you for improving Into Markdown. This repository owns the local-first conversion Core,
-two complete capability plugins, the Agent Skill, installers, and four-platform release
+two complete capability plugins, the Agent Skill, installers, and five-native-target release
 authority. A change must preserve the common IR, offline default, explicit authority, and
 reproducible release boundary rather than making only one entry point appear to work.
 
@@ -73,5 +73,5 @@ directories.
 
 Describe the user-visible result, security and compatibility impact, tests executed, and exact
 gates that could not run locally. Before submission, review the README, authoritative docs,
-CLI/Web behavior, install and uninstall paths, four-platform releases, and supply-chain evidence
+CLI/Web behavior, install and uninstall paths, five-target releases, and supply-chain evidence
 as one product. Remove temporary files and debug switches, and ensure `git diff --check` passes.

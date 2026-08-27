@@ -15,6 +15,9 @@ on:
       bazel_config:
         required: true
         type: string
+      msvc_arch:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -94,6 +97,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
+          arch: ${{ inputs.msvc_arch }}
           toolset: 14.44.35207
           sdk: 10.0.26100.0
       - name: Bind CMake to the activated Windows toolchain

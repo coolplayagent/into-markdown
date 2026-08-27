@@ -527,7 +527,7 @@ fn runtime_authority() -> Result<(String, u32), ConversionError> {
         || authority.api_version == 0
         || authority.source.is_empty()
         || authority.license != "MIT"
-        || authority.targets.len() != 4
+        || authority.targets.len() != 5
     {
         return Err(runtime_error("invalidRuntimeAuthority"));
     }

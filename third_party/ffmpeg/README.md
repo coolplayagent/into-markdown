@@ -40,10 +40,9 @@ platform ceilings. PCM grows in small fallible chunks under a 512 MiB protocol
 ceiling, and the returned `PcmAudio` exposes only a read-only slice while
 retaining its request memory reservation for the sample buffer's lifetime.
 
-The workflow is configured for all four targets. Repository evidence in this
-change records an executed macOS ARM64 build and smoke only; the other three
-target builds remain evidence produced by the manual CI workflow, not a claim
-that they ran on the author's host.
+The workflow is configured for all five targets: Linux x86-64/ARM64, Windows
+x86-64/ARM64, and macOS ARM64. Evidence is produced by target-native CI jobs;
+cross-compilation is not treated as runtime or loader acceptance.
 
 Production packages must authenticate and embed that generated authority next
 to the matching CI artifact. `FfmpegRuntime::load` fails closed if either is

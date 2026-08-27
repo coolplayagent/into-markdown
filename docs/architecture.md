@@ -210,6 +210,7 @@ reservation，失败与 Drop 都释放配额。结构化差异和 IR/GFM hash au
 - Linux x86_64
 - Linux ARM64
 - Windows x86_64
+- Windows ARM64
 
 项目明确不支持 macOS x86_64。CPU 推理是跨平台基线；未来可通过独立 Bazel
 配置增加可选 GPU Execution Provider，而无需修改 `OcrEngine` 或

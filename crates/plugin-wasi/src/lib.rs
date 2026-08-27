@@ -70,8 +70,9 @@ const DOCUMENT_PARSE_BYTES_PER_JSON_BYTE: u64 = 256;
 const RESOURCE_MATERIALIZE_BYTES_PER_RAW_BYTE: u64 = 16;
 const CLOCKS_DENIED: &str = "capability denied: clocks";
 const RANDOM_DENIED: &str = "capability denied: random";
-const SUPPORTED_TARGETS: [&str; 4] = [
+const SUPPORTED_TARGETS: [&str; 5] = [
     "aarch64-apple-darwin",
+    "aarch64-pc-windows-msvc",
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
@@ -1615,6 +1616,8 @@ fn is_private(address: IpAddr) -> bool {
 fn current_target() -> &'static str {
     #[cfg(all(target_arch = "x86_64", target_os = "windows"))]
     return "x86_64-pc-windows-msvc";
+    #[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+    return "aarch64-pc-windows-msvc";
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
     return "x86_64-unknown-linux-gnu";
     #[cfg(all(target_arch = "aarch64", target_os = "linux"))]

@@ -61,8 +61,9 @@ pub use runtime::{
     SessionAdapter, SessionFactory, SessionOptions, TensorElementType, TensorSpec,
 };
 
-const SUPPORTED_TARGETS: [&str; 4] = [
+const SUPPORTED_TARGETS: [&str; 5] = [
     "aarch64-apple-darwin",
+    "aarch64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
@@ -371,7 +372,7 @@ impl ModelManifest {
                 || targets != BTreeSet::from(SUPPORTED_TARGETS)
             {
                 return Err(invalid_manifest(format!(
-                    "{} must declare exactly four targets",
+                    "{} must declare exactly five targets",
                     bundle.id
                 )));
             }
@@ -608,6 +609,7 @@ fn validate_native_downloads(
     }
     let repositories = BTreeMap::from([
         ("aarch64-apple-darwin", "onnxruntime_macos_arm64"),
+        ("aarch64-pc-windows-msvc", "onnxruntime_windows_arm64"),
         ("x86_64-unknown-linux-gnu", "onnxruntime_linux_x86_64"),
         ("aarch64-unknown-linux-gnu", "onnxruntime_linux_arm64"),
         ("x86_64-pc-windows-msvc", "onnxruntime_windows_x86_64"),
@@ -691,7 +693,7 @@ fn validate_native_downloads(
         }
     }
     if targets != BTreeSet::from(SUPPORTED_TARGETS) {
-        return Err(invalid_manifest("native downloads must declare exactly four targets"));
+        return Err(invalid_manifest("native downloads must declare exactly five targets"));
     }
     Ok(())
 }
@@ -2726,7 +2728,7 @@ mod tests {
         assert_eq!(pipeline.kind, "ocr-pipeline");
         assert_eq!(pipeline.availability, "available");
         assert!(pipeline.runtime_artifacts.is_empty());
-        assert_eq!(pipeline.platforms.len(), 4);
+        assert_eq!(pipeline.platforms.len(), 5);
         assert_eq!(manifest.bundles[1].id, detector_model::DETECTOR_MODEL_ID);
         assert_eq!(manifest.bundles[2].id, "pp-ocrv6-tiny-recognizer-onnx");
         assert!(manifest.bundles[1..].iter().all(

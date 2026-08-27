@@ -1,56 +1,23 @@
 name: Linux and Windows modular release
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       release_tag:
-        description: GitHub draft release tag that will contain every target's Core and two .imp files
+        required: true
+        type: string
+      release_version:
         required: true
         type: string
       signing_mode:
-        description: External publisher signing policy; unsigned remains installable but triggers OS trust warnings
         required: true
-        default: unsigned
-        type: choice
-        options:
-          - unsigned
-          - signed
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  agent-skill:
-    uses: ./.github/workflows/agent-skill-release.yml
-
-  native-gates:
-    needs: agent-skill
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_x86_64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_arm64
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            container: ''
-            bazel_config: windows_x86_64
-    uses: ./.github/workflows/native-release-gates.yml
-    with:
-      runner: ${{ matrix.runner }}
-      target: ${{ matrix.target }}
-      container: ${{ matrix.container }}
-      bazel_config: ${{ matrix.bazel_config }}
-
   native-release:
-    needs: agent-skill
     environment: release
     strategy:
       fail-fast: false
@@ -61,19 +28,27 @@ jobs:
             archive: into-md-linux-x86_64-core.tar.gz
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             bazel_config: linux_x86_64
+            msvc_arch: x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             archive: into-md-linux-arm64-core.tar.gz
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             bazel_config: linux_arm64
+            msvc_arch: arm64
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
             archive: into-md-windows-x86_64-core.zip
             container: ''
             bazel_config: windows_x86_64
+            msvc_arch: x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive: into-md-windows-arm64-core.zip
+            container: ''
+            bazel_config: windows_arm64
+            msvc_arch: arm64
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 240
     steps:
       - name: Bootstrap fixed Linux build container
@@ -128,7 +103,7 @@ jobs:
           python - <<'PY'
           import os, re
           tag = os.environ["RELEASE_TAG"]
-          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tag):
+          if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", tag):
               raise SystemExit("release tag must be a bounded URL-safe Git ref component")
           PY
       - uses: dtolnay/rust-toolchain@stable
@@ -157,6 +132,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
+          arch: ${{ matrix.msvc_arch }}
           toolset: 14.44.35207
           sdk: 10.0.26100.0
       - name: Bind CMake to the activated Windows toolchain
@@ -171,6 +147,7 @@ jobs:
           FFMPEG_AUDIT_NETWORK: "1"
           FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
           FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
+          FFMPEG_AUDIT_TARGET: ${{ matrix.target }}
         run: ./tools/ffmpeg-build-audit.sh
       - name: Build and audit FFmpeg on Windows
         if: runner.os == 'Windows'
@@ -179,6 +156,7 @@ jobs:
           FFMPEG_AUDIT_NETWORK: "1"
           FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
           FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
+          FFMPEG_AUDIT_TARGET: ${{ matrix.target }}
         run: ./tools/ffmpeg-build-audit.sh
       - name: Decode protected plugin signing key
         if: runner.os == 'Linux'
@@ -214,6 +192,7 @@ jobs:
         run: >-
           python tools/platform-release/release.py
           --target ${{ matrix.target }}
+          --version ${{ inputs.release_version }}
           --build-root "${{ runner.temp }}/build"
           --build-only
       - name: Prepare Cargo plugin lifecycle fixture on Linux
@@ -241,16 +220,16 @@ jobs:
           }
       - name: Assemble deterministic Core and plugin packages twice
         run: |
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-a" --plugins-output "${{ runner.temp }}/plugins-a" --archive "${{ runner.temp }}/${{ matrix.archive }}.a"
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-b" --plugins-output "${{ runner.temp }}/plugins-b" --archive "${{ runner.temp }}/${{ matrix.archive }}.b"
-      - name: Verify deterministic bytes
+          python tools/platform-release/release.py --target ${{ matrix.target }} --version ${{ inputs.release_version }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-a" --plugins-output "${{ runner.temp }}/plugins-a" --archive "${{ runner.temp }}/${{ matrix.archive }}.a"
+          python tools/platform-release/release.py --target ${{ matrix.target }} --version ${{ inputs.release_version }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-b" --plugins-output "${{ runner.temp }}/plugins-b" --archive "${{ runner.temp }}/${{ matrix.archive }}.b"
+      - name: Verify deterministic bytes on Linux
         if: runner.os == 'Linux'
         run: |
           cmp "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}.b"
           for package in official.ocr.ppocrv6 official.media.whisper; do cmp "${{ runner.temp }}/plugins-a/$package.imp" "${{ runner.temp }}/plugins-b/$package.imp"; done
           mv "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}"
           sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | sed 's/\.a$//' > "${{ runner.temp }}/${{ matrix.archive }}.sha256"
-      - name: Verify deterministic bytes
+      - name: Verify deterministic bytes on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -266,6 +245,7 @@ jobs:
         run: >-
           python tools/platform-release/release.py
           --target ${{ matrix.target }}
+          --version ${{ inputs.release_version }}
           --build-root "${{ runner.temp }}/build"
           --skip-build
           --cache "${{ runner.temp }}/cache"
@@ -282,6 +262,7 @@ jobs:
         run: >-
           python tools/platform-release/release.py
           --target ${{ matrix.target }}
+          --version ${{ inputs.release_version }}
           --build-root "${{ runner.temp }}/build"
           --skip-build
           --cache "${{ runner.temp }}/cache"
@@ -463,6 +444,7 @@ jobs:
           python tools/release-metadata.py
           --projection-tool "${{ runner.temp }}/build/release/release-projection${{ runner.os == 'Windows' && '.exe' || '' }}"
           --target ${{ matrix.target }}
+          --version ${{ inputs.release_version }}
           --source-revision "${{ github.sha }}"
           --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
           --core-root "${{ runner.temp }}/distribution"
@@ -497,52 +479,8 @@ jobs:
           }
           Remove-Item "$env:RUNNER_TEMP\release-signing.pfx" -Force -ErrorAction SilentlyContinue
           Remove-Item "${{ runner.temp }}\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
-
-  publish-draft:
-    needs: [native-gates, native-release]
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: modular-*
-          path: ${{ runner.temp }}/release-artifacts
-      - name: Prepare flat target-qualified release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          SIGNING_MODE: ${{ inputs.signing_mode }}
+      - name: Remove Linux signing credentials
+        if: always() && runner.os == 'Linux'
         run: |
-          set -eu
-          publish="$RUNNER_TEMP/publish"
-          mkdir "$publish"
-          for directory in "$RUNNER_TEMP"/release-artifacts/modular-*; do
-            target=${directory##*/modular-}
-            cp "$directory"/into-md-* "$publish"/
-            cp "$directory"/published-plugins/* "$publish"/
-            for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
-              cp "$directory/$report" "$publish/$target-$report"
-            done
-            cp "$directory/$target-signing-policy.json" "$publish/"
-            for document in "$directory"/release-metadata/*; do
-              cp "$document" "$publish/${document##*/}"
-            done
-          done
-          if [ "$SIGNING_MODE" = unsigned ]; then
-            title="Into Markdown $RELEASE_TAG [UNSIGNED]"
-            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
-          else
-            title="Into Markdown $RELEASE_TAG"
-            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
-          fi
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          else
-            gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
-              --title "$title" --notes "$notes"
-          fi
-          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
-          gh release upload "$RELEASE_TAG" "$publish"/* --clobber
+          rm -f "${{ runner.temp }}/plugin-key.pk8"
+          rm -rf "${{ runner.temp }}/release-gnupg"

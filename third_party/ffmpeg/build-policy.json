@@ -63,6 +63,12 @@
       "binary_architecture": "x86_64",
       "additional_flags": ["--toolchain=msvc", "--disable-x86asm"],
       "dynamic_dependencies": ["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"]
+    },
+    "aarch64-pc-windows-msvc": {
+      "binary_format": "pe",
+      "binary_architecture": "aarch64",
+      "additional_flags": ["--arch=aarch64", "--toolchain=msvc", "--disable-asm"],
+      "dynamic_dependencies": ["KERNEL32.dll", "PSAPI.DLL", "SHELL32.dll", "bcrypt.dll"]
     }
   }
 }

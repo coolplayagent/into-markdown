@@ -9,7 +9,7 @@ import shutil
 from common import ROOT, ReleaseError, run
 
 
-def materialize(destination: pathlib.Path) -> None:
+def materialize(destination: pathlib.Path, version: str) -> None:
     metadata = json.loads(run(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
@@ -50,7 +50,7 @@ def materialize(destination: pathlib.Path) -> None:
         shutil.copy2(source, target)
     facade = (api / "Cargo.toml").read_text(encoding="utf-8")
     facade = facade.replace("rust-version.workspace = true", 'rust-version = "1.97.1"')
-    facade = facade.replace("version.workspace = true", 'version = "0.0.0"')
+    facade = facade.replace("version.workspace = true", f'version = "{version}"')
     facade = facade.replace("edition.workspace = true", 'edition = "2024"')
     facade = facade.replace("publish.workspace = true", "publish = false")
     facade = facade.replace("license.workspace = true", 'license = "Apache-2.0"')
@@ -66,7 +66,7 @@ def materialize(destination: pathlib.Path) -> None:
         facade
         + "\n[workspace]\nresolver = \"3\"\nmembers = [\n"
         + "\n".join(members)
-        + "\n]\n\n[workspace.package]\nversion = \"0.0.0\"\nedition = \"2024\"\n"
+        + f'\n]\n\n[workspace.package]\nversion = "{version}"\nedition = "2024"\n'
         + "rust-version = \"1.97.1\"\npublish = false\nlicense = \"Apache-2.0\"\n\n"
         + "[workspace.dependencies]\n"
         + dependencies

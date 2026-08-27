@@ -33,9 +33,9 @@ Core 内置实现必须复用统一的 Document IR、source locator、Asset、�
 
 ## 结果
 
-Core 在 macOS ARM64、Linux x86_64、Linux ARM64 与 Windows x86_64 安装后直接提供旧 Office
+Core 在 macOS ARM64、Linux x86_64、Linux ARM64、Windows x86_64 与 Windows ARM64 安装后直接提供旧 Office
 能力。发布图由 Core 内置 converter 提供该能力；格式目录、doctor 和 Web 管理页均按 Core
 能力报告其状态。
 
 代价是格式前端与安全语义由本仓库维护；因此真实 fixture、损坏语料、确定性、fuzz、资源边界、
-临时安装目录 smoke 与四平台回归属于该 converter 的持续合入门禁。
+临时安装目录 smoke 与五目标回归属于该 converter 的持续合入门禁。

@@ -22,11 +22,12 @@ from common import resolve_msvc_tool, resolve_windows_sdk_tool
 TARGETS = {
     "x86_64-unknown-linux-gnu": ("linux", "Advanced Micro Devices X86-64"),
     "aarch64-unknown-linux-gnu": ("linux", "AArch64"),
+    "aarch64-pc-windows-msvc": ("windows", "AA64 machine (ARM64)"),
     "x86_64-pc-windows-msvc": ("windows", "8664 machine (x64)"),
 }
 PROJECT_WINDOWS_BINARIES = re.compile(
     r"(?:into-md(?:-(?:installer|ocr-provider|media-provider))?"
-    r"|installed-smoke|archive-check|onnxruntime-worker)\.exe$",
+    r"|installed-smoke|archive-check|onnxruntime-worker|ffmpeg)\.exe$",
     re.IGNORECASE,
 )
 GLIBC = re.compile(r"GLIBC_(\d+)\.(\d+)")

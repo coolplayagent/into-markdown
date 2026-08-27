@@ -33,7 +33,10 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release
 from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
 from skill_release import materialize as materialize_agent_skill  # noqa: E402
 
-VERSION = "0.0.0"
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+from release_version import VersionError, validate_version  # noqa: E402
+
+VERSION: str | None = None
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = [
     "onnxruntime-cpu",
@@ -67,6 +70,12 @@ FIXTURES = [
 ]
 
 
+def release_version() -> str:
+    if VERSION is None:
+        raise ReleaseError("release version authority is not initialized")
+    return VERSION
+
+
 def published_plugin_file(filename: str, target: str) -> str:
     path = pathlib.PurePosixPath(filename)
     if path.name != filename or path.suffix != ".imp" or not path.stem:
@@ -84,15 +93,20 @@ def check_host(target: str, config: dict) -> None:
         ]
         if sys.platform != "linux" or machine not in expected:
             raise ReleaseError(f"{target} assembly requires its native Linux architecture")
-    elif os.name != "nt" or machine not in {"amd64", "x86_64"}:
-        raise ReleaseError("Windows release assembly requires native Windows x86_64")
+    else:
+        expected = {
+            "x86_64": {"amd64", "x86_64"},
+            "aarch64": {"arm64", "aarch64"},
+        }[config["architecture"]]
+        if os.name != "nt" or machine not in expected:
+            raise ReleaseError(f"{target} assembly requires its native Windows architecture")
     rust = run(["rustc", "--version"]).split()[1]
     if rust != authority()["rust"]:
         raise ReleaseError(f"rustc {rust} disagrees with fixed toolchain {authority()['rust']}")
 
 
 def executable_name(name: str, target: str) -> str:
-    return f"{name}.exe" if target == "x86_64-pc-windows-msvc" else name
+    return f"{name}.exe" if target.endswith("-pc-windows-msvc") else name
 
 
 def source_revision() -> str:
@@ -146,12 +160,13 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
     target_cpu = {
         "x86_64-unknown-linux-gnu": "x86-64",
         "aarch64-unknown-linux-gnu": "generic",
+        "aarch64-pc-windows-msvc": "generic",
         "x86_64-pc-windows-msvc": "x86-64",
     }[target]
     rustflags.extend(["-C", f"target-cpu={target_cpu}"])
     if target.endswith("linux-gnu"):
         rustflags.extend(["-C", "link-arg=-Wl,-rpath,$ORIGIN/../lib/pdfium"])
-    elif target == "x86_64-pc-windows-msvc":
+    elif target.endswith("-pc-windows-msvc"):
         rustflags.extend(
             [
                 "-C",
@@ -230,7 +245,7 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             "-C",
             f"target-cpu={target_cpu}",
     ]
-    if target == "x86_64-pc-windows-msvc":
+    if target.endswith("-pc-windows-msvc"):
         installer_command.extend(
             [
                 "-C",
@@ -339,7 +354,7 @@ def write_plugin_declarations(
             "schema_version": 1,
             "target": target,
             "artifact": artifact,
-            "version": VERSION,
+            "version": release_version(),
             "source_revision": source_revision(),
             "components": components,
         },
@@ -373,7 +388,7 @@ def provider_manifest(
     return {
         "schemaVersion": 1,
         "id": plugin_id,
-        "version": VERSION,
+        "version": release_version(),
         "publisher": "official.into-markdown",
         "hostApi": {"minimum": 1, "maximum": 1},
         "protocol": "capability-provider",
@@ -461,7 +476,7 @@ def package_plugins(
     if packages.exists():
         raise ReleaseError("plugin output directory already exists")
     packages.mkdir(parents=True)
-    suffix = ".exe" if target == "x86_64-pc-windows-msvc" else ""
+    suffix = ".exe" if target.endswith("-pc-windows-msvc") else ""
     packager = release_bin / executable_name("package_plugin", target)
     projection_tool = release_bin / executable_name("release-projection", target)
     signer = None
@@ -522,7 +537,7 @@ def package_plugins(
 
 def write_release_inputs(output: pathlib.Path, projection: pathlib.Path, target: str) -> None:
     request = output.parent / "core-release-request.json"
-    write_json(request, {"schema_version": 1, "target": target, "artifact": "core", "version": VERSION, "source_revision": source_revision(), "components": CORE_COMPONENTS})
+    write_json(request, {"schema_version": 1, "target": target, "artifact": "core", "version": release_version(), "source_revision": source_revision(), "components": CORE_COMPONENTS})
     inputs = json.loads(run([projection, "generate", request], cwd=ROOT))
     for key in ["notice", "third_party_notices", "sbom", "sources", "core_catalog"]:
         item = inputs[key]
@@ -604,14 +619,14 @@ def core_projection(output: pathlib.Path, materials: list[dict], target: str, pd
         if relative in {"bin/into-md", "bin/into-md.exe"}:
             entry["embedded_components"] = embedded
         files.append(entry)
-    return {"schema_version": 1, "target": target, "version": VERSION, "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
+    return {"schema_version": 1, "target": target, "version": release_version(), "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
 
 
 def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, records: dict, signer: tuple[str, str], base_url: str, target: str, target_config: dict, windows_signing_thumbprint: str | None) -> pathlib.Path:
     if output.exists():
         raise ReleaseError("Core output directory already exists")
     output.mkdir(parents=True)
-    suffix = ".exe" if target == "x86_64-pc-windows-msvc" else ""
+    suffix = ".exe" if target.endswith("-pc-windows-msvc") else ""
     for name in ["into-md", "installed-smoke", "archive-check", "into-md-installer"]:
         copy_file(release_bin / executable_name(name, target), output / f"bin/{name}{suffix}", True)
     if target_config["os"] == "linux":
@@ -628,7 +643,7 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     for name in ["normal.doc", "normal.ppt", "normal.xls"]:
         copy_file(ROOT / "tools/macos-release/fixtures" / name, fixture_root / "legacy" / name)
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
-    materialize_rust(output / "lib/into-markdown-rust")
+    materialize_rust(output / "lib/into-markdown-rust", release_version())
     copy_file(ROOT / "LICENSE", output / "LICENSE")
     catalog = {
         identity: {
@@ -662,8 +677,10 @@ def create_archive(source: pathlib.Path, destination: pathlib.Path, target_confi
 
 
 def main() -> None:
+    global VERSION
     parser = argparse.ArgumentParser()
     parser.add_argument("--target", required=True, choices=sorted(authority()["targets"]))
+    parser.add_argument("--version", required=True, help="SemVer equal to workspace.package.version")
     parser.add_argument("--output", type=pathlib.Path)
     parser.add_argument("--cache", type=pathlib.Path)
     parser.add_argument("--build-root", required=True, type=pathlib.Path)
@@ -676,6 +693,10 @@ def main() -> None:
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--build-only", action="store_true")
     arguments = parser.parse_args()
+    try:
+        VERSION = validate_version(arguments.version, ROOT)
+    except VersionError as error:
+        raise ReleaseError(str(error)) from error
     config = authority()["targets"][arguments.target]
     check_host(arguments.target, config)
     if arguments.windows_signing_thumbprint is not None and config["os"] != "windows":

@@ -265,7 +265,7 @@
       "version": "39.0.1",
       "source": "https://github.com/bytecodealliance/wasmtime/tree/0163804870a2149c113a31a58da4635f79fc25ec",
       "license": "Apache-2.0 WITH LLVM-exception",
-      "obligations": "Preserve the complete Apache-2.0 WITH LLVM-exception license in third_party/licenses/wasmtime-Apache-2.0-LLVM-exception.txt when the WASI runtime is distributed. Cargo.lock and third_party/wasmtime/source.json bind the exact crates.io checksums, upstream commit, and reviewed features; upgrades require renewed capability, unsafe/build-script, four-platform, license, and SBOM review."
+      "obligations": "Preserve the complete Apache-2.0 WITH LLVM-exception license in third_party/licenses/wasmtime-Apache-2.0-LLVM-exception.txt when the WASI runtime is distributed. Cargo.lock and third_party/wasmtime/source.json bind the exact crates.io checksums, upstream commit, and reviewed features; upgrades require renewed capability, unsafe/build-script, five-target, license, and SBOM review."
     },
     {"id": "generated-onnx-models", "kind": "model", "status": "planned", "included_in_release": false, "release_eligible": false},
     {"id": "distribution-fonts", "kind": "font", "status": "planned", "included_in_release": false, "release_eligible": false}

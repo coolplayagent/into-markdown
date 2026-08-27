@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  static-four-platform:
+  static-five-target:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -33,4 +33,38 @@ jobs:
         env:
           PDFIUM_AUDIT_NETWORK: "1"
           PDFIUM_NATIVE_SMOKE: "1"
+        run: ./tools/pdfium-audit.sh --native-smoke
+
+  native-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            msvc_arch: x64
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            msvc_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: msys2/setup-msys2@v2
+        with:
+          install: curl file jq mingw-w64-ucrt-x86_64-llvm perl tar
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
+      - name: Audit artifacts and run production-loader smoke test
+        shell: msys2 {0}
+        env:
+          PDFIUM_AUDIT_NETWORK: "1"
+          PDFIUM_NATIVE_SMOKE: "1"
+          PDFIUM_AUDIT_TARGET: ${{ matrix.target }}
         run: ./tools/pdfium-audit.sh --native-smoke

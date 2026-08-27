@@ -18,15 +18,23 @@ jobs:
           - os: macos-14
             config: macos_arm64
             triple: aarch64-apple-darwin
+            msvc_arch: arm64
           - os: ubuntu-24.04
             config: linux_x86_64
             triple: x86_64-unknown-linux-gnu
+            msvc_arch: x64
           - os: ubuntu-24.04-arm
             config: linux_arm64
             triple: aarch64-unknown-linux-gnu
+            msvc_arch: arm64
           - os: windows-2025
             config: windows_x86_64
             triple: x86_64-pc-windows-msvc
+            msvc_arch: x64
+          - os: windows-11-arm
+            config: windows_arm64
+            triple: aarch64-pc-windows-msvc
+            msvc_arch: arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -43,6 +51,12 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: ${{ matrix.triple }}
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: startsWith(matrix.config, 'windows_')
+        with:
+          arch: ${{ matrix.msvc_arch }}
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
       - name: Check Cargo target boundary with its native C toolchain
         run: cargo check --locked --workspace --all-targets --target ${{ matrix.triple }}
       - name: Resolve both toolchains and build public Rust products
@@ -63,7 +77,7 @@ jobs:
           bazel test --config=macos_arm64 --lockfile_mode=error
           //tools/macos-release:installer_attack_test
       - name: Run Windows installer transaction security tests outside the Bazel pipe
-        if: matrix.config == 'windows_x86_64'
+        if: startsWith(matrix.config, 'windows_')
         run: >-
           python tools/platform-release/test_platform_tools.py
           PlatformToolTests.test_windows_native_install_is_idempotent_and_rolls_back_bad_upgrade
@@ -104,7 +118,7 @@ jobs:
             fi
           }
 
-          for config in macos_arm64 linux_x86_64 linux_arm64 windows_x86_64; do
+          for config in macos_arm64 linux_x86_64 linux_arm64 windows_x86_64 windows_arm64; do
             if [[ "$config" == "$NATIVE_CONFIG" ]]; then
               continue
             fi
@@ -150,7 +164,8 @@ jobs:
             'macos_arm64 //:macos_arm64_platform' \
             'linux_x86_64 //:linux_x86_64_platform' \
             'linux_arm64 //:linux_arm64_platform' \
-            'windows_x86_64 //:windows_x86_64_platform'; do
+            'windows_x86_64 //:windows_x86_64_platform' \
+            'windows_arm64 //:windows_arm64_platform'; do
             read -r config platform <<<"$entry"
             if [[ "$config" == "$NATIVE_CONFIG" ]]; then
               continue

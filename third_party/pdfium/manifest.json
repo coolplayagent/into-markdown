@@ -72,6 +72,16 @@
       "library_sha256": "fb898a1f5ace57805834f390407500bdb6ef93eff326a252ad334a8aae809d8e",
       "format_pattern": "PE32+.*x86-64|coff-x86-64",
       "allowed_dependencies": ["KERNEL32.dll", "ADVAPI32.dll", "GDI32.dll", "USER32.dll"]
+    },
+    "aarch64-pc-windows-msvc": {
+      "asset": "pdfium-win-arm64.tgz",
+      "archive_size": 3553849,
+      "archive_sha256": "ccc39582f8d9ac0bd57b8e279e8cfc5067cc0f0b4db9bc179ddf7cd3636c0bd6",
+      "library": "bin/pdfium.dll",
+      "library_size": 6705152,
+      "library_sha256": "8644d3b7e3d8999cef35de74ba8172ac0aeac75b90e6556b62e4dfadac2ca815",
+      "format_pattern": "PE32+.*Aarch64|coff-arm64",
+      "allowed_dependencies": ["KERNEL32.dll", "ADVAPI32.dll", "GDI32.dll", "USER32.dll"]
     }
   }
 }

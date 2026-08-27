@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import platform
 import stat
 import subprocess
 from collections.abc import Iterable
@@ -23,6 +24,7 @@ def authority() -> dict:
     if value.get("schemaVersion") != 1 or set(value.get("targets", {})) != {
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
+        "aarch64-pc-windows-msvc",
         "x86_64-pc-windows-msvc",
     }:
         raise ReleaseError("platform release authority schema or targets are invalid")
@@ -95,9 +97,9 @@ def write_json(path: pathlib.Path, value: object) -> None:
 def resolve_msvc_tool(name: str) -> pathlib.Path:
     if os.name != "nt" or pathlib.Path(name).name != name:
         raise ReleaseError("MSVC tool resolution requires a simple tool name on Windows")
-    version = authority()["targets"]["x86_64-pc-windows-msvc"]["buildBaseline"][
-        "msvcTools"
-    ]
+    arm64 = platform.machine().lower() in {"arm64", "aarch64"}
+    target = "aarch64-pc-windows-msvc" if arm64 else "x86_64-pc-windows-msvc"
+    version = authority()["targets"][target]["buildBaseline"]["msvcTools"]
     configured = os.environ.get("VCToolsInstallDir")
     if configured:
         tools = pathlib.Path(configured)
@@ -117,7 +119,11 @@ def resolve_msvc_tool(name: str) -> pathlib.Path:
                 "-products",
                 "*",
                 "-requires",
-                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                (
+                    "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+                    if arm64
+                    else "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+                ),
                 "-property",
                 "installationPath",
             ]
@@ -125,18 +131,20 @@ def resolve_msvc_tool(name: str) -> pathlib.Path:
         if len(installations) != 1:
             raise ReleaseError("a unique Visual Studio C++ installation is unavailable")
         tools = pathlib.Path(installations[0]) / f"VC/Tools/MSVC/{version}"
-    candidate = tools / f"bin/HostX64/x64/{name}"
-    if not candidate.is_file() or candidate.is_symlink():
-        raise ReleaseError(f"fixed MSVC tool is unavailable: {candidate}")
+    architectures = [("HostARM64", "arm64"), ("HostX64", "arm64")] if arm64 else [("HostX64", "x64")]
+    candidates = [tools / "bin" / host / target_arch / name for host, target_arch in architectures]
+    candidate = next((item for item in candidates if item.is_file() and not item.is_symlink()), None)
+    if candidate is None:
+        raise ReleaseError(f"fixed MSVC tool is unavailable: {candidates}")
     return candidate.resolve(strict=True)
 
 
 def resolve_windows_sdk_tool(name: str) -> pathlib.Path:
     if os.name != "nt" or pathlib.Path(name).name != name:
         raise ReleaseError("Windows SDK tool resolution requires a simple tool name on Windows")
-    version = authority()["targets"]["x86_64-pc-windows-msvc"]["buildBaseline"][
-        "windowsSdk"
-    ]
+    arm64 = platform.machine().lower() in {"arm64", "aarch64"}
+    target = "aarch64-pc-windows-msvc" if arm64 else "x86_64-pc-windows-msvc"
+    version = authority()["targets"][target]["buildBaseline"]["windowsSdk"]
     configured = os.environ.get("WindowsSdkDir")
     if configured:
         kits = pathlib.Path(configured)
@@ -145,7 +153,9 @@ def resolve_windows_sdk_tool(name: str) -> pathlib.Path:
         if not program_files:
             raise ReleaseError("ProgramFiles(x86) is unavailable")
         kits = pathlib.Path(program_files) / "Windows Kits/10"
-    candidate = kits / f"bin/{version}/x64/{name}"
-    if not candidate.is_file() or candidate.is_symlink():
-        raise ReleaseError(f"fixed Windows SDK tool is unavailable: {candidate}")
+    architectures = ["arm64", "x64"] if arm64 else ["x64"]
+    candidates = [kits / "bin" / version / architecture / name for architecture in architectures]
+    candidate = next((item for item in candidates if item.is_file() and not item.is_symlink()), None)
+    if candidate is None:
+        raise ReleaseError(f"fixed Windows SDK tool is unavailable: {candidates}")
     return candidate.resolve(strict=True)

@@ -25,6 +25,7 @@ FFMPEG_AUDIT_OUTPUT_DIR="$PWD/target/ffmpeg-audit-aarch64" \
 ./tools/ffmpeg-build-audit.sh
 
 PYTHONPATH=tools/macos-release python3 tools/macos-release/release.py \
+  --version 0.0.0 \
   --output /private/tmp/into-md-core-stage \
   --cache /private/tmp/into-md-release-cache \
   --build-root /private/tmp/into-md-build \
@@ -55,8 +56,9 @@ package/runtime inventory 双向核对。每个构件发布 `.spdx.json`、`.sou
 keychain 密码和 App Store Connect API key；缺少任一对应凭据会失败。unsigned 模式无需 Apple
 开发者账号，工作流结束时仍删除所有临时密钥文件。项目 Mach-O、FFmpeg 与 PDFium 的最终副本
 在 manifest/SBOM 哈希前完成所选模式的 codesign；已具备有效上游 Developer ID 签名的 ONNX
-Runtime 保留供应商签名。workflow dispatch 使用与 Linux/Windows 相同的 `release_tag` 和
-`signing_mode`，向受保护 draft release 补齐 DMG、两个目标限定插件、signing policy 及报告。
+Runtime 保留供应商签名。macOS 工作流只上传 Actions 制品；统一发布入口使用与 Linux/Windows
+相同的 tag、版本和 signing mode 校验五目标完整集合。手动运行只保留候选 artifact，正式
+`v<SemVer>` tag 在所有目标通过后才将受保护 draft 切换为公开 Release。
 
 ## 安装与能力管理
 

@@ -12,6 +12,7 @@ TARGET_POLICIES = {
     "x86_64-unknown-linux-gnu": ("GPG detached signatures", "No GPG identity signature is included."),
     "aarch64-unknown-linux-gnu": ("GPG detached signatures", "No GPG identity signature is included."),
     "x86_64-pc-windows-msvc": ("Authenticode", "Windows may show Unknown publisher or SmartScreen warnings."),
+    "aarch64-pc-windows-msvc": ("Authenticode", "Windows may show Unknown publisher or SmartScreen warnings."),
     "aarch64-apple-darwin": ("Developer ID and Apple notarization", "macOS may require Open Anyway or removal of quarantine after SHA-256 verification."),
 }
 

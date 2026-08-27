@@ -130,6 +130,10 @@ rust_test(
             "PDF_LAYOUT_PDFIUM_LIBRARY": "bin/pdfium.dll",
             "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_windows_x86_64",
         },
+        "//third_party/pdfium:is_windows_arm64": {
+            "PDF_LAYOUT_PDFIUM_LIBRARY": "bin/pdfium.dll",
+            "PDF_LAYOUT_PDFIUM_REPOSITORY": "+downloads+pdfium_windows_arm64",
+        },
         "//conditions:default": {
             "PDF_LAYOUT_PDFIUM_LIBRARY": "unsupported",
             "PDF_LAYOUT_PDFIUM_REPOSITORY": "unsupported",

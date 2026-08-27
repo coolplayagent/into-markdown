@@ -3,7 +3,7 @@
 `into-markdown-plugin-wasi` 运行实现 `wasi:cli/run@0.2.x` 的真实 WASI Preview 2
 command component。宿主固定 Wasmtime 39.0.1，插件清单必须声明 `protocol =
 "wasi-v1"`、`wasiPreview = "preview2"`、该精确 runtime 版本、component SHA-256
-和当前四平台 target。未知字段、版本、target 或非小写 64 位摘要均 fail closed。
+和当前五个 target。未知字段、版本、target 或非小写 64 位摘要均 fail closed。
 
 ## 线协议
 
@@ -57,9 +57,9 @@ response。returned resources 已包含在该受限 envelope 中，不重复虚�
 `invalidOutput`、`invalidIr`、`io` 和 `runtime`。非 WASI import 不会被动态链接，归类为
 `invalidHostcall`；fuel、越界、输出溢出、取消和 deadline 有独立稳定分类。
 
-## 可复现 fixture 与四平台门禁
+## 可复现 fixture 与五目标门禁
 
-fixture 源码、独立 lockfile、工具链 commit、构建命令、component bytes/摘要和四个 host
+fixture 源码、独立 lockfile、工具链 commit、构建命令、component bytes/摘要和五个 host
 target 绑定在 `crates/plugin-wasi/tests/fixtures/authority.json`。以下命令从源码重建并
 逐字节比较 checked-in component：
 
@@ -69,9 +69,9 @@ cargo test --locked -p into-markdown-plugin-wasi --test runtime -j1
 bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resources=memory=4096
 ```
 
-`.github/workflows/wasi-runtime.yml` 在 Windows x86-64、Linux x86-64、Linux ARM64 和
+`.github/workflows/wasi-runtime.yml` 在 Windows x86-64、Windows ARM64、Linux x86-64、Linux ARM64 和
 macOS ARM64 的真实 runner 上执行同一重建、Cargo 与 Bazel 门禁；没有 ignored 或异平台
-别名测试。Wasmtime source/tag/commit、crate checksums/features、完整 license 与四 target
+别名测试。Wasmtime source/tag/commit、crate checksums/features、完整 license 与五 target
 authority 位于 `third_party/wasmtime/`，由 license-check mutation tests 绑定。
 
 从协议选择、manifest、签名到安装与移除验收见[插件开发](plugin-development.md)。

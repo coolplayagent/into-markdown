@@ -12,7 +12,7 @@ doctor JSON，并验证本地 Markdown 链接及 README 双语入口。公共命
 [`semantic-layout-quality.md`](semantic-layout-quality.md)。平台无关核心及真实 package
 fixture 由 `//crates/layout-quality:layout_quality_test` 和
 `//crates/layout-quality:semantic_layout_quality` 执行；PDF 与 OCR 保留各自真实 runtime 的
-显式 gate，Office 97–2003 直接从临时 Core 安装运行，不用 mock 结果替代。四个受支持平台分别运行相同 authority，
+显式 gate，Office 97–2003 直接从临时 Core 安装运行，不用 mock 结果替代。五个受支持目标分别运行相同 authority，
 任何规范 IR/GFM byte 差异都会失败。
 
 WASI Preview 2 runtime 的真实 component 门禁为：
@@ -26,10 +26,10 @@ bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resour
 fixture 重建必须逐字节匹配 authority；测试实际执行 command component，覆盖默认权限
 拒绝和精确 grant、非法 host import、preopen traversal/symlink escape、TCP loopback、fuel、
 epoch timeout/取消、memory growth/越界、输出、IR/resource/provenance。GitHub workflow 在
-Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 的真实 runner 上执行同一组
-Cargo/Bazel 测试；异平台 compile 或四个 manifest 别名不计作证据。
+Windows x86-64、Windows ARM64、Linux x86-64、Linux ARM64 和 macOS ARM64 的真实 runner 上执行同一组
+Cargo/Bazel 测试；异平台 compile 或五个 manifest 别名不计作证据。
 
-插件管理器在四个平台运行 `cargo test --locked -p into-markdown-plugin-manager -j1`，并与
+插件管理器在五个目标运行 `cargo test --locked -p into-markdown-plugin-manager -j1`，并与
 HTTP transport、process-v1、WASI runtime 的真实执行门禁组合验证签名安装、精确 scope pin、
 默认零网络权限、崩溃恢复、恶意 ZIP 与启停/移除。Bazel 对应目标为
 `//crates/plugin-manager:plugin_manager_test`。
@@ -91,7 +91,7 @@ real parser evidence as well as common-enricher evidence:
   are separate evidence; they do not claim a real MSG API end-to-end run.
 - Office 97–2003 DOC/PPT/XLS 使用仓库原创且可重复生成的 CFB corpus，直接进入 Core 原生
   converter。转换器测试覆盖格式混淆、CFB 损坏、稳定错误和串行/重复/并发的 Document JSON、
-  Markdown、Asset、diagnostic 确定性；持续 fuzz smoke 分别调用三个格式入口。四个平台的发布
+  Markdown、Asset、diagnostic 确定性；持续 fuzz smoke 分别调用三个格式入口。五个目标的发布
   workflow 从临时安装目录运行 `installed-smoke`，同时验证 CLI golden 和离线 Rust API consumer，
   不把源码树中的 converter、PATH、系统 Office 或网络作为实现来源。
 - `tools/legacy-office-performance.py` 在同一 Linux runner 比较 PR base 与候选 Core CLI，记录
@@ -213,7 +213,7 @@ native huge count/name/rank 在分配前拒绝、并发 single-flight、失败�
 bazel test --config=macos_arm64 //crates/onnxruntime:native_runtime_validation
 ```
 
-其它三个配置分别为 `linux_x86_64`、`linux_arm64` 和 `windows_x86_64`。没有 macOS
+其它四个配置分别为 `linux_x86_64`、`linux_arm64`、`windows_x86_64` 和 `windows_arm64`。没有 macOS
 x86_64 target。fake 测试只证明加载与 session adapter 契约，不宣称完成真实模型推理；
 显式 native target 会用完整的极小 Identity `ModelProto` 创建真实 ORT session 并执行一次
 CPU 推理，以验证 adapter、factory 重建和退出析构顺序；另一个真实 Expand fixture 请求约
@@ -242,28 +242,29 @@ PDF 普通 Cargo/Bazel 测试使用纯 Rust mock、生成式小型数据和缺 r
 代码生成（项目自身 MIT 许可），包含 100×200 的 0/90/180/270 度页面、文本、字符几何/字体、
 注释与 web link、内部 page destination、嵌入图片及页面 render；另生成 text-only、mixed、
 full-page scanned、加密、损坏和超页数 fixture，同时运行 production converter 的并发、统一 IR、
-auto/always/off、低预算，以及完整 Engine→中央 renderer→安全 page anchor 分支。四平台下载制品的 export/格式/依赖/哈希
-审计与 native smoke 只由以下 opt-in 命令运行：
+auto/always/off、低预算，以及完整 Engine→中央 renderer→安全 page anchor 分支。五目标下载制品的 export/格式/依赖/哈希
+审计与 macOS/Windows native smoke 只由以下 opt-in 命令运行：
 
 ```shell
 PDFIUM_AUDIT_NETWORK=1 ./tools/pdfium-audit.sh
 PDFIUM_NATIVE_SMOKE=1 PDFIUM_AUDIT_NETWORK=1 ./tools/pdfium-audit.sh --native-smoke
 ```
-独立 `native_archive_binary_audit` 显式 target 会下载四个固定官方包，但不执行异平台
-代码；它有界解析并精确核对四个平台的格式、架构、SONAME/install name、imports 与
+独立 `native_archive_binary_audit` 显式 target 会下载五个固定官方包，但不执行异平台
+代码；它有界解析并精确核对五个目标的格式、架构、SONAME/install name、imports 与
 RPATH。普通 `//...` 不包含这些 manual targets。native adapter 的输出检查在任何
 `GetTensorMutableData`、slice 或 Rust 值复制前完成，超界输出直接释放 native value。
 
 PDF 页面布局质量由独立 authority 绑定 fixture manifest、PDFium runtime manifest 和 OCR
 merge quality authority。显式 target 通过 production `PdfConverter` 读取 12 个真实 PDF，精确
 核对多栏、旋转、标题、列表与表格语义序列，并要求语义 precision/recall 均不低于 90%；同一
-输入重复转换必须得到 byte-identical IR。四个受支持配置分别执行：
+输入重复转换必须得到 byte-identical IR。五个受支持配置分别执行：
 
 ```shell
 bazel test --config=macos_arm64 //crates/converters:pdf_layout_quality
 bazel test --config=linux_x86_64 //crates/converters:pdf_layout_quality
 bazel test --config=linux_arm64 //crates/converters:pdf_layout_quality
 bazel test --config=windows_x86_64 //crates/converters:pdf_layout_quality
+bazel test --config=windows_arm64 //crates/converters:pdf_layout_quality
 ```
 
 该 target 为显式 manual gate；普通 build/test 不下载或映射 PDFium。
@@ -308,9 +309,10 @@ cargo check --workspace --all-targets --target aarch64-apple-darwin
 cargo check --workspace --all-targets --target x86_64-unknown-linux-gnu
 cargo check --workspace --all-targets --target aarch64-unknown-linux-gnu
 cargo check --workspace --all-targets --target x86_64-pc-windows-msvc
+cargo check --workspace --all-targets --target aarch64-pc-windows-msvc
 ```
 
-四个公开 Bazel config 是严格的 **native host/exec → 同平台 target** 合约，不是任意
+五个公开 Bazel config 是严格的 **native host/exec → 同平台 target** 合约，不是任意
 交叉编译入口。每个 config 注册 rules_rust 1.97.1 的对应 target std，并要求 native
 C++ toolchain；CI 在匹配 runner 上实际构建 toolchain probe、`//crates/core:core` 和
 平台无关的 `//tests/contracts:public_api_consumer`，再运行 core 测试和真实的
@@ -325,6 +327,7 @@ bazel build --config=macos_arm64 --lockfile_mode=error //toolchains:native_toolc
 bazel build --config=linux_x86_64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
 bazel build --config=linux_arm64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
 bazel build --config=windows_x86_64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
+bazel build --config=windows_arm64 --lockfile_mode=error //toolchains:native_toolchain_contract //crates/core:core //tests/contracts:public_api_consumer
 bazel test --config=<matching-config> --lockfile_mode=error //crates/core:core_test //toolchains:allocator_bridge_test
 ```
 
@@ -333,15 +336,15 @@ bazel test --config=<matching-config> --lockfile_mode=error //crates/core:core_t
 `unsupported Bazel host/target combination`；这比借用宿主 clang 或注册一个能完成分析、
 却不能产出目标二进制的伪 C++ provider 更诚实。该拒绝路径也由 CI 断言不得退化为
 `No matching toolchains`。为保证 mandatory C++ consumer 和 test target 也能得到同样稳定的
-边界错误，仓库为十二种 `exec != target` 组合注册拒绝型 C++ 与 test execution toolchain。
+边界错误，仓库为二十种 `exec != target` 组合注册拒绝型 C++ 与 test execution toolchain。
 它们不会转发宿主 C++ provider 或伪造 test runner，
 而是在被选择时直接终止分析，因此即使调用方使用裸 `--platforms` 或显式清空 config aspect，
-也不能让宿主 clang 伪装成 foreign compiler、生成 action 或得到分析成功；它也不会匹配四种
-native `exec == target` 组合。CI 在四个 native runner 上对其余三个 foreign config × core、
+也不能让宿主 clang 伪装成 foreign compiler、生成 action 或得到分析成功；它也不会匹配五种
+native `exec == target` 组合。CI 在五个 native runner 上对其余四个 foreign config × core、
 core test、public consumer、probe、C++ embedding test 和普通聚合目标逐项检查 config 入口，
-覆盖全部十二种 host→foreign 组合；还单独绕过 aspect 验证 mandatory C++ 与 test consumer
+覆盖全部二十种 host→foreign 组合；还单独绕过 aspect 验证 mandatory C++ 与 test consumer
 仍被 toolchain 自身拒绝。这些普通目标不引用 manual ONNX Runtime、PDFium、FFmpeg 或
-能力插件资源目标，因此 Core 四平台门禁不会获取其大型制品。
+能力插件资源目标，因此 Core 五目标门禁不会获取其大型制品。
 
 仓库为对象安全 SPI、稳定错误码、确定性注册表校验、显式回退语义、默认
 离线、资源预算、模型清单校验、CLI 骨架和 GFM 渲染器提供契约测试。渲染器测试
@@ -567,11 +570,11 @@ fail closed；官方插件目录与安装 transport 固定 HTTPS 来源、完整
 其它 host 或篡改 hash 均稳定拒绝。库与确定性测试
 不读取环境变量：默认客户端行为与所有既有测试在设置代理变量的环境中不变。
 
-## 四目标模块化发布验收
+## 五目标模块化发布验收
 
-四目标模块化发布的原生归档、插件安装、确定性和签名门禁见
+五目标模块化发布的原生归档、插件安装、确定性和签名门禁见
 [`platform-modular-release.md`](platform-modular-release.md)。交叉编译只验证接口和工具链，不能
-替代 Linux ARM64 或 Windows 的真实安装、OCR、音频和卸载验收。
+替代 Linux ARM64、Windows x86-64 或 Windows ARM64 的真实安装、OCR、音频和卸载验收。
 
 ## Agent Skill 发布验收
 

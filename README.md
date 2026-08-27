@@ -25,7 +25,8 @@ TXT、Markdown、HTML、CSV/TSV、JSON、XML、RSS/Atom Feed、Jupyter Notebook�
 Outlook MSG、音频和视频。Office 97–2003 的 DOC/PPT/XLS 由 Core 原生提供；OCR、语音转写与
 说话人分离由对应能力插件提供。
 
-支持 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows x86_64；不支持 macOS x86_64。
+支持 macOS ARM64、Linux x86_64、Linux ARM64、Windows x86_64 和 Windows ARM64；
+不支持 macOS x86_64。
 最终用户的签名校验、安装、离线插件导入、排障和卸载见[安装与部署](docs/user-guide.md)；
 平台发布边界见 [macOS 发布](docs/macos-arm64-release.md)与
 [Linux/Windows 发布](docs/platform-modular-release.md)。

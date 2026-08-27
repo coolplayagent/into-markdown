@@ -30,8 +30,11 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release
 from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
 from skill_release import materialize as materialize_agent_skill  # noqa: E402
 
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
+from release_version import VersionError, validate_version  # noqa: E402
+
 TARGET = "aarch64-apple-darwin"
-VERSION = "0.0.0"
+VERSION: str | None = None
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv6-tiny-recognizer-character-table", "ppocrv6-tiny-recognizer-onnx-model"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
@@ -42,6 +45,12 @@ FIXTURES = [
     "text/normal.txt", "xlsx/normal.xlsx", "xlsb/normal.xlsb", "pptx/normal.pptx",
     "odt/normal.odt", "ods/normal.ods", "odp/normal.odp",
 ]
+
+
+def release_version() -> str:
+    if VERSION is None:
+        raise ReleaseError("release version authority is not initialized")
+    return VERSION
 
 
 def check_host() -> None:
@@ -167,7 +176,7 @@ def write_plugin_declarations(
             "schema_version": 1,
             "target": TARGET,
             "artifact": artifact,
-            "version": VERSION,
+            "version": release_version(),
             "source_revision": source_revision(),
             "components": components,
         },
@@ -188,7 +197,7 @@ def resources(memory_bytes: int, temporary_bytes: int, timeout_ms: int) -> dict:
 
 def provider_manifest(plugin_id: str, entrypoint: str, runtime: pathlib.Path, capabilities: list[dict], licenses: list[str]) -> dict:
     return {
-        "schemaVersion": 1, "id": plugin_id, "version": VERSION, "publisher": "official.into-markdown",
+        "schemaVersion": 1, "id": plugin_id, "version": release_version(), "publisher": "official.into-markdown",
         "hostApi": {"minimum": 1, "maximum": 1}, "protocol": "capability-provider",
         "targets": [{"triple": TARGET, "entrypoint": entrypoint, "files": runtime_inventory(runtime)}],
         "capabilities": capabilities,
@@ -285,7 +294,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
 
 def write_release_inputs(output: pathlib.Path, projection_tool: pathlib.Path) -> None:
     request = output.parent / "core-release-request.json"
-    write_json(request, {"schema_version": 1, "target": TARGET, "artifact": "core", "version": VERSION, "source_revision": source_revision(), "components": CORE_COMPONENTS})
+    write_json(request, {"schema_version": 1, "target": TARGET, "artifact": "core", "version": release_version(), "source_revision": source_revision(), "components": CORE_COMPONENTS})
     inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
     for key in ["notice", "third_party_notices", "sbom", "sources", "core_catalog"]:
         item = inputs[key]
@@ -369,7 +378,7 @@ def core_projection(output: pathlib.Path, materials: list[dict], native_transfor
         if relative == "bin/into-md":
             entry["embedded_components"] = embedded
         files.append(entry)
-    return {"schema_version": 1, "target": TARGET, "version": VERSION, "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
+    return {"schema_version": 1, "target": TARGET, "version": release_version(), "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
 
 
 def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, records: dict[str, dict], signer: tuple[str, str], plugin_base_url: str, codesign_identity: str | None) -> pathlib.Path:
@@ -407,7 +416,7 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     for name in ["normal.doc", "normal.ppt", "normal.xls"]:
         copy_file(pathlib.Path(__file__).with_name("fixtures") / name, fixture_root / "legacy" / name, 0o644)
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
-    materialize_rust(output / "lib/into-markdown-rust")
+    materialize_rust(output / "lib/into-markdown-rust", release_version())
     copy_file(ROOT / "LICENSE", output / "LICENSE", 0o644)
     catalog_records = {
         plugin_id: {
@@ -427,7 +436,9 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
 
 
 def main() -> None:
+    global VERSION
     parser = argparse.ArgumentParser()
+    parser.add_argument("--version", required=True, help="SemVer equal to workspace.package.version")
     parser.add_argument("--output", required=True, type=pathlib.Path, help="Core staging directory")
     parser.add_argument("--cache", required=True, type=pathlib.Path)
     parser.add_argument("--build-root", required=True, type=pathlib.Path)
@@ -440,8 +451,13 @@ def main() -> None:
         "--codesign-identity",
         help="Developer ID Application identity; use '-' only for local release-gate testing",
     )
+    parser.add_argument("--audit-report", type=pathlib.Path)
     parser.add_argument("--skip-build", action="store_true")
     arguments = parser.parse_args()
+    try:
+        VERSION = validate_version(arguments.version, ROOT)
+    except VersionError as error:
+        raise ReleaseError(str(error)) from error
     check_host()
     validate_ffmpeg_artifacts(arguments.ffmpeg_artifacts.resolve())
     if not arguments.skip_build:
@@ -463,6 +479,25 @@ def main() -> None:
     release_bin = arguments.build_root.resolve() / "release"
     records, signer = package_official_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.codesign_identity)
     stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, records, signer, arguments.plugin_base_url, arguments.codesign_identity)
+    if arguments.audit_report is not None:
+        write_json(
+            arguments.audit_report.resolve(),
+            {
+                "schemaVersion": 1,
+                "target": TARGET,
+                "version": release_version(),
+                "sourceRevision": source_revision(),
+                "passed": True,
+                "profile": "Core and official plugins",
+                "checks": [
+                    "thin ARM64 Mach-O",
+                    f"macOS deployment target at most {authority()['minimumMacos']}",
+                    "safe loader dependencies",
+                    "verified code signatures",
+                    "exact plugin inventory",
+                ],
+            },
+        )
     create_archive(stage, arguments.archive.resolve(), authority()["sourceDateEpoch"])
     archive = arguments.archive.resolve()
     archive.with_name(archive.name + ".sha256").write_text(f"{sha256(archive)}  {archive.name}\n", encoding="ascii")

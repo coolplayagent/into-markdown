@@ -502,6 +502,7 @@ fn validate_authority(
 ) -> Result<(), LoadError> {
     let expected_targets = [
         "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc",
         "aarch64-unknown-linux-gnu",
         "x86_64-pc-windows-msvc",
         "x86_64-unknown-linux-gnu",
@@ -514,7 +515,7 @@ fn validate_authority(
                 authority.version
             )
         || authority.license != "MIT"
-        || authority.targets.len() != 4
+        || authority.targets.len() != 5
         || !expected_targets.iter().all(|name| authority.targets.contains_key(*name))
         || !is_safe_file_name(&target.asset)
         || !is_sha256(&target.sha256)
@@ -572,7 +573,7 @@ fn dependencies_are_system_only(target_name: &str, dependencies: &[SystemDepende
         if dependency.load_name.is_empty() || dependency.load_name.len() > MAX_BINARY_PATH_BYTES {
             return false;
         }
-        let normalized = if target_name == "x86_64-pc-windows-msvc" {
+        let normalized = if target_name.ends_with("-pc-windows-msvc") {
             dependency.load_name.to_ascii_lowercase()
         } else {
             dependency.load_name.clone()
@@ -1109,6 +1110,8 @@ fn current_target() -> Option<&'static str> {
         Some("aarch64-unknown-linux-gnu")
     } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
         Some("x86_64-pc-windows-msvc")
+    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        Some("aarch64-pc-windows-msvc")
     } else {
         None
     }
@@ -1451,9 +1454,9 @@ mod tests {
     }
 
     #[test]
-    fn authority_has_exactly_four_targets_and_no_macos_x64() {
+    fn authority_has_exactly_five_targets_and_no_macos_x64() {
         let authority = authority().unwrap();
-        assert_eq!(authority.targets.len(), 4);
+        assert_eq!(authority.targets.len(), 5);
         assert!(!authority.targets.contains_key("x86_64-apple-darwin"));
     }
 
@@ -1549,6 +1552,7 @@ mod tests {
         let root = PathBuf::from(std::env::var_os("TEST_SRCDIR").unwrap());
         let locations = [
             ("aarch64-apple-darwin", "+downloads+onnxruntime_macos_arm64/lib/libonnxruntime.dylib"),
+            ("aarch64-pc-windows-msvc", "+downloads+onnxruntime_windows_arm64/lib/onnxruntime.dll"),
             (
                 "aarch64-unknown-linux-gnu",
                 "+downloads+onnxruntime_linux_arm64/lib/libonnxruntime.so.1.29.0",

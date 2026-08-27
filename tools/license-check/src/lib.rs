@@ -311,8 +311,9 @@ struct WasmtimeCrate {
     features: Vec<String>,
 }
 
-const SUPPORTED_MODEL_TARGETS: [&str; 4] = [
+const SUPPORTED_MODEL_TARGETS: [&str; 5] = [
     "aarch64-apple-darwin",
+    "aarch64-pc-windows-msvc",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
@@ -2610,6 +2611,33 @@ fn pdfium_expected_targets() -> BTreeMap<&'static str, ExpectedPdfiumTarget> {
             },
         ),
         (
+            "aarch64-pc-windows-msvc",
+            ExpectedPdfiumTarget {
+                repository: "pdfium_windows_arm64",
+                artifact: PdfiumTarget {
+                    asset: "pdfium-win-arm64.tgz".to_owned(),
+                    archive_size: 3_553_849,
+                    archive_sha256:
+                        "ccc39582f8d9ac0bd57b8e279e8cfc5067cc0f0b4db9bc179ddf7cd3636c0bd6"
+                            .to_owned(),
+                    library: "bin/pdfium.dll".to_owned(),
+                    library_size: 6_705_152,
+                    library_sha256:
+                        "8644d3b7e3d8999cef35de74ba8172ac0aeac75b90e6556b62e4dfadac2ca815"
+                            .to_owned(),
+                    format_pattern: "PE32+.*Aarch64|coff-arm64".to_owned(),
+                    allowed_dependencies: [
+                        "KERNEL32.dll",
+                        "ADVAPI32.dll",
+                        "GDI32.dll",
+                        "USER32.dll",
+                    ]
+                    .map(str::to_owned)
+                    .into(),
+                },
+            },
+        ),
+        (
             "x86_64-pc-windows-msvc",
             ExpectedPdfiumTarget {
                 repository: "pdfium_windows_x86_64",
@@ -3209,6 +3237,7 @@ fn validate_ort_manifest(
 
     let expected_targets = BTreeMap::from([
         ("aarch64-apple-darwin", "onnxruntime_macos_arm64"),
+        ("aarch64-pc-windows-msvc", "onnxruntime_windows_arm64"),
         ("aarch64-unknown-linux-gnu", "onnxruntime_linux_arm64"),
         ("x86_64-pc-windows-msvc", "onnxruntime_windows_x86_64"),
         ("x86_64-unknown-linux-gnu", "onnxruntime_linux_x86_64"),
@@ -3217,7 +3246,7 @@ fn validate_ort_manifest(
     let expected_keys: BTreeSet<_> = expected_targets.keys().copied().collect();
     if actual_keys != expected_keys {
         errors.push(
-            "ONNX Runtime manifest must contain the exact four supported target keys".to_owned(),
+            "ONNX Runtime manifest must contain the exact five supported target keys".to_owned(),
         );
     }
     let mut by_target = BTreeMap::new();
@@ -3297,7 +3326,7 @@ fn ort_target_audit_is_valid(target: &str, asset: &OrtTarget) -> bool {
 fn ort_dependencies_are_system_only(target: &str, dependencies: &[OrtSystemDependency]) -> bool {
     let mut unique = BTreeSet::new();
     dependencies.iter().all(|dependency| {
-        let normalized = if target == "x86_64-pc-windows-msvc" {
+        let normalized = if target.ends_with("-pc-windows-msvc") {
             dependency.load_name.to_ascii_lowercase()
         } else {
             dependency.load_name.clone()
@@ -4437,15 +4466,16 @@ mod tests {
 
     #[allow(
         clippy::too_many_lines,
-        reason = "four-platform authority fixture is intentionally explicit"
+        reason = "five-platform authority fixture is intentionally explicit"
     )]
     fn ort_fixture() -> (OrtManifest, Inventory, DownloadManifest) {
         let version = "1.2.3";
         let target_repositories = [
             ("aarch64-apple-darwin", "onnxruntime_macos_arm64", "mac.tgz", 'a'),
             ("aarch64-unknown-linux-gnu", "onnxruntime_linux_arm64", "arm.tgz", 'b'),
-            ("x86_64-pc-windows-msvc", "onnxruntime_windows_x86_64", "windows.zip", 'c'),
-            ("x86_64-unknown-linux-gnu", "onnxruntime_linux_x86_64", "linux.tgz", 'd'),
+            ("aarch64-pc-windows-msvc", "onnxruntime_windows_arm64", "windows-arm64.zip", 'c'),
+            ("x86_64-pc-windows-msvc", "onnxruntime_windows_x86_64", "windows.zip", 'd'),
+            ("x86_64-unknown-linux-gnu", "onnxruntime_linux_x86_64", "linux.tgz", 'e'),
         ];
         let mut targets = BTreeMap::new();
         let mut native_archives = Vec::new();
@@ -4462,7 +4492,7 @@ mod tests {
                     worker_physical_memory_overhead_bytes: 512 * 1024 * 1024,
                     binary_format: if target == "aarch64-apple-darwin" {
                         "mach-o"
-                    } else if target == "x86_64-pc-windows-msvc" {
+                    } else if target.ends_with("-pc-windows-msvc") {
                         "pe"
                     } else {
                         "elf"
@@ -4476,7 +4506,7 @@ mod tests {
                     .to_owned(),
                     load_identity: if target == "aarch64-apple-darwin" {
                         "@rpath/libonnxruntime.1.dylib"
-                    } else if target == "x86_64-pc-windows-msvc" {
+                    } else if target.ends_with("-pc-windows-msvc") {
                         "onnxruntime.dll"
                     } else {
                         "libonnxruntime.so.1"
@@ -4493,7 +4523,7 @@ mod tests {
                     system_dependencies: vec![OrtSystemDependency {
                         load_name: if target == "aarch64-apple-darwin" {
                             "/usr/lib/libSystem.B.dylib"
-                        } else if target == "x86_64-pc-windows-msvc" {
+                        } else if target.ends_with("-pc-windows-msvc") {
                             "KERNEL32.dll"
                         } else {
                             "libc.so.6"
@@ -4750,7 +4780,7 @@ version = "9.9.9"
         manifest.targets.remove("x86_64-pc-windows-msvc");
         let mut errors = Vec::new();
         validate_ort_manifest(&inventory, &manifest, &downloads, &mut errors);
-        assert!(errors.iter().any(|error| error.contains("exact four supported target keys")));
+        assert!(errors.iter().any(|error| error.contains("exact five supported target keys")));
         assert!(errors.iter().any(|error| {
             error.contains("aarch64-apple-darwin")
                 && error.contains("disagrees with authoritative download")

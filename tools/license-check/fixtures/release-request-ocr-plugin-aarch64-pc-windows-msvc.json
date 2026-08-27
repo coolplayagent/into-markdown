@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target": "aarch64-pc-windows-msvc",
+  "artifact": "ocr-plugin",
+  "version": "0.0.0",
+  "source_revision": "0000000000000000000000000000000000000000",
+  "components": [
+    "onnxruntime-cpu",
+    "ppocrv6-tiny-detector-onnx-model",
+    "ppocrv6-tiny-recognizer-character-table",
+    "ppocrv6-tiny-recognizer-onnx-model"
+  ]
+}

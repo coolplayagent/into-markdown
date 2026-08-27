@@ -227,6 +227,7 @@ pub enum Platform {
     LinuxX64,
     LinuxArm64,
     WindowsX64,
+    WindowsArm64,
 }
 
 /// Reviewed artifact identity for one target.
@@ -260,6 +261,7 @@ impl Platform {
             ("linux", "x86_64") => Ok(Self::LinuxX64),
             ("linux", "aarch64") => Ok(Self::LinuxArm64),
             ("windows", "x86_64") => Ok(Self::WindowsX64),
+            ("windows", "aarch64") => Ok(Self::WindowsArm64),
             _ => Err(Error::UnsupportedPlatform { os: os.into(), arch: arch.into() }),
         }
     }
@@ -314,6 +316,7 @@ impl Platform {
             Self::LinuxX64 => "x86_64-unknown-linux-gnu",
             Self::LinuxArm64 => "aarch64-unknown-linux-gnu",
             Self::WindowsX64 => "x86_64-pc-windows-msvc",
+            Self::WindowsArm64 => "aarch64-pc-windows-msvc",
         }
     }
 }
@@ -321,6 +324,7 @@ impl Platform {
 fn validate_manifest(manifest: &RuntimeManifest) -> Result<(), Error> {
     let expected_targets = BTreeSet::from([
         "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc",
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
         "x86_64-pc-windows-msvc",
@@ -2313,6 +2317,7 @@ fn expected_binary_identity(platform: Platform) -> (BinaryFormat, Architecture) 
         Platform::LinuxX64 => (BinaryFormat::Elf, Architecture::X86_64),
         Platform::LinuxArm64 => (BinaryFormat::Elf, Architecture::Aarch64),
         Platform::WindowsX64 => (BinaryFormat::Pe, Architecture::X86_64),
+        Platform::WindowsArm64 => (BinaryFormat::Pe, Architecture::Aarch64),
     }
 }
 
@@ -2356,9 +2361,13 @@ mod tests {
 
     #[test]
     fn manifest_is_strict_and_exactly_binds_consumed_ffi() {
-        for platform in
-            [Platform::MacArm64, Platform::LinuxX64, Platform::LinuxArm64, Platform::WindowsX64]
-        {
+        for platform in [
+            Platform::MacArm64,
+            Platform::LinuxX64,
+            Platform::LinuxArm64,
+            Platform::WindowsX64,
+            Platform::WindowsArm64,
+        ] {
             let artifact = platform.artifact().unwrap();
             assert_eq!(artifact.target, platform.target());
             assert!(artifact.library_size > 1_000_000);

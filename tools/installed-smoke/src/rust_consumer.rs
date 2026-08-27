@@ -358,10 +358,13 @@ fn configure_windows_linker(
 ) -> Result<(), String> {
     const MSVC_VERSION: &str = "14.44.35207";
     const SDK_VERSION: &str = "10.0.26100.0";
-    if platform_target != "x86_64-pc-windows-msvc" {
-        return Ok(());
-    }
-    if std::env::consts::ARCH != "x86_64" {
+    let (architecture, host_architecture, cargo_prefix) = match platform_target {
+        "x86_64-pc-windows-msvc" => ("x64", "HostX64", "X86_64"),
+        "aarch64-pc-windows-msvc" => ("arm64", "HostARM64", "AARCH64"),
+        _ => return Ok(()),
+    };
+    let expected_host = if architecture == "arm64" { "aarch64" } else { "x86_64" };
+    if std::env::consts::ARCH != expected_host {
         return Err(
             "installed Rust consumer has no fixed Windows linker for this architecture".into()
         );
@@ -378,11 +381,15 @@ fn configure_windows_linker(
         return Err("activated MSVC installation differs from the fixed release toolset".into());
     }
     let tools = fixed_directory(&configured_tools, "MSVC tools")?;
-    let tool_bin = fixed_directory(&tools.join("bin/HostX64/x64"), "MSVC executable directory")?;
+    let tool_bin = fixed_directory(
+        &tools.join(format!("bin/{host_architecture}/{architecture}")),
+        "MSVC executable directory",
+    )?;
     let linker = fixed_file(&tool_bin.join("link.exe"), "MSVC linker")?;
     let compiler = fixed_file(&tool_bin.join("cl.exe"), "MSVC compiler")?;
     let librarian = fixed_file(&tool_bin.join("lib.exe"), "MSVC librarian")?;
-    let vc_library = fixed_directory(&tools.join("lib/x64"), "MSVC library directory")?;
+    let vc_library =
+        fixed_directory(&tools.join(format!("lib/{architecture}")), "MSVC library directory")?;
     let vc_include = fixed_directory(&tools.join("include"), "MSVC include directory")?;
 
     let configured_sdk = std::env::var_os("WindowsSdkDir")
@@ -394,13 +401,15 @@ fn configure_windows_linker(
         return Err("activated Windows SDK differs from the fixed release SDK".into());
     }
     let kits = fixed_directory(&configured_sdk, "Windows SDK")?;
-    let sdk_bin =
-        fixed_directory(&kits.join(format!("bin/{SDK_VERSION}/x64")), "Windows SDK tools")?;
+    let sdk_bin = fixed_directory(
+        &kits.join(format!("bin/{SDK_VERSION}/{architecture}")),
+        "Windows SDK tools",
+    )?;
     fixed_file(&sdk_bin.join("rc.exe"), "Windows resource compiler")?;
     let sdk_library = ["ucrt", "um"]
         .map(|kind| {
             fixed_directory(
-                &kits.join(format!("Lib/{SDK_VERSION}/{kind}/x64")),
+                &kits.join(format!("Lib/{SDK_VERSION}/{kind}/{architecture}")),
                 "Windows SDK library",
             )
         })
@@ -416,10 +425,14 @@ fn configure_windows_linker(
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
 
-    environment
-        .insert("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER".into(), linker.display().to_string());
-    environment
-        .insert("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_AR".into(), librarian.display().to_string());
+    environment.insert(
+        format!("CARGO_TARGET_{cargo_prefix}_PC_WINDOWS_MSVC_LINKER"),
+        linker.display().to_string(),
+    );
+    environment.insert(
+        format!("CARGO_TARGET_{cargo_prefix}_PC_WINDOWS_MSVC_AR"),
+        librarian.display().to_string(),
+    );
     environment.insert("CC".into(), compiler.display().to_string());
     environment.insert("CXX".into(), compiler.display().to_string());
     environment.insert("AR".into(), librarian.display().to_string());
