@@ -6,10 +6,12 @@ use super::protocol::{
     INIT, INIT_OK, MAX_MESSAGES, RUN, RUN_OK, SHUTDOWN,
 };
 use super::{RuntimeLibrary, authority, current_target, ort_error, private_tempdir};
-use into_markdown_core::{ConversionError, ExecutionContext, Tensor};
+use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, Tensor};
 use into_markdown_ocr::{Dimension, ModelContract, ModelMetadata, SessionOptions, TensorSpec};
 use std::ffi::OsString;
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -19,6 +21,8 @@ use tempfile::TempDir;
 
 const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
+#[cfg(target_os = "linux")]
+const MAX_WORKER_EXECUTABLE_BYTES: u64 = 128 * 1024 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 pub(crate) struct WorkerClient {
@@ -31,6 +35,7 @@ pub(crate) struct WorkerClient {
     request_id: u64,
     stopped: bool,
     _working_directory: TempDir,
+    _worker_copy_reservation: Option<ResourceReservation>,
 }
 
 impl WorkerClient {
@@ -47,8 +52,14 @@ impl WorkerClient {
         let limits = worker_limits(library, model, contract)?;
         let working_directory = private_tempdir("into-md-ort-worker-cwd-", authenticated_snapshot)
             .map_err(|_| ort_error("workerLaunch"))?;
-        let mut process = spawn_worker(
+        let (worker_executable, worker_copy_reservation) = stage_linux_worker(
             worker_executable,
+            working_directory.path(),
+            context,
+            authenticated_snapshot,
+        )?;
+        let mut process = spawn_worker(
+            &worker_executable,
             library.private_path(),
             working_directory.path(),
             limits,
@@ -104,6 +115,7 @@ impl WorkerClient {
             request_id: 0,
             stopped: false,
             _working_directory: working_directory,
+            _worker_copy_reservation: worker_copy_reservation,
         };
         let payload = protocol::encode_init(model, contract, options)
             .map_err(|()| resource_error("workerProtocol"))?;
@@ -287,6 +299,95 @@ struct RusageInfoV2 {
 #[link(name = "proc")]
 unsafe extern "C" {
     fn proc_pid_rusage(pid: libc::c_int, flavor: libc::c_int, buffer: *mut libc::c_void) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+fn stage_linux_worker(
+    source: &Path,
+    working_directory: &Path,
+    context: &ExecutionContext,
+    authenticated_snapshot: bool,
+) -> Result<(PathBuf, Option<ResourceReservation>), ConversionError> {
+    use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
+
+    if !authenticated_snapshot {
+        return Ok((source.to_path_buf(), None));
+    }
+    validate_worker_path(source, true)?;
+    let path_metadata =
+        std::fs::symlink_metadata(source).map_err(|_| ort_error("workerLaunchPermission"))?;
+    if path_metadata.len() == 0
+        || path_metadata.len() > MAX_WORKER_EXECUTABLE_BYTES
+        || path_metadata.nlink() != 1
+        // SAFETY: `geteuid` takes no arguments and has no failure condition.
+        || path_metadata.uid() != unsafe { libc::geteuid() }
+        || path_metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(ort_error("workerLaunchPermission"));
+    }
+    let mut input = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(source)
+        .map_err(|_| ort_error("workerLaunchPermission"))?;
+    let opened = input.metadata().map_err(|_| ort_error("workerLaunchPermission"))?;
+    if opened.dev() != path_metadata.dev()
+        || opened.ino() != path_metadata.ino()
+        || opened.len() != path_metadata.len()
+    {
+        return Err(ort_error("workerLaunchPermission"));
+    }
+    let reservation = context
+        .reserve_temporary(opened.len())
+        .map_err(|_| resource_error("nativeWorkerTemporary"))?;
+    let destination = working_directory.join("onnxruntime-worker");
+    let mut output = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o500)
+        .open(&destination)
+        .map_err(|_| ort_error("workerLaunchPermission"))?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied = 0_u64;
+    loop {
+        context.checkpoint()?;
+        let count = input.read(&mut buffer).map_err(|_| ort_error("workerLaunchPermission"))?;
+        if count == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(count as u64)
+            .filter(|value| *value <= opened.len())
+            .ok_or_else(|| ort_error("workerLaunchPermission"))?;
+        output.write_all(&buffer[..count]).map_err(|_| ort_error("workerLaunchPermission"))?;
+    }
+    if copied != opened.len() {
+        return Err(ort_error("workerLaunchPermission"));
+    }
+    output.flush().map_err(|_| ort_error("workerLaunchPermission"))?;
+    drop(output);
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o500))
+        .map_err(|_| ort_error("workerLaunchPermission"))?;
+    let final_source = input.metadata().map_err(|_| ort_error("workerLaunchPermission"))?;
+    if final_source.dev() != opened.dev()
+        || final_source.ino() != opened.ino()
+        || final_source.len() != opened.len()
+    {
+        return Err(ort_error("workerLaunchPermission"));
+    }
+    validate_worker_path(&destination, true)?;
+    Ok((destination, Some(reservation)))
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::unnecessary_wraps)] // Linux reports authenticated staging failures.
+fn stage_linux_worker(
+    source: &Path,
+    _: &Path,
+    _: &ExecutionContext,
+    _: bool,
+) -> Result<(PathBuf, Option<ResourceReservation>), ConversionError> {
+    Ok((source.to_path_buf(), None))
 }
 
 fn spawn_worker(
@@ -856,6 +957,29 @@ mod tests {
                 .to_string()
                 .contains("workerLaunch")
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn authenticated_linux_worker_is_staged_private_executable_and_budgeted() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let source_directory = tempfile::tempdir().unwrap();
+        let source = source_directory.path().join("worker");
+        std::fs::write(&source, b"authenticated-worker").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let working = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits::default(),
+        );
+
+        let (staged, reservation) =
+            stage_linux_worker(&source, working.path(), &context, true).unwrap();
+
+        assert_eq!(std::fs::read(&staged).unwrap(), b"authenticated-worker");
+        assert_eq!(std::fs::metadata(staged).unwrap().permissions().mode() & 0o777, 0o500);
+        assert!(reservation.is_some());
     }
 
     #[test]
