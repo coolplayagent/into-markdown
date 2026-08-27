@@ -80,6 +80,24 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("${{ github.workspace }}/fixtures/asr-quality", workflow)
         self.assertNotIn(r"${{ github.workspace }}\fixtures\asr-quality", workflow)
 
+    def test_installed_smoke_failures_print_the_machine_report(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(workflow.count('cat "${{ runner.temp }}/installed-smoke.json"'), 1)
+        self.assertEqual(
+            workflow.count('Get-Content "${{ runner.temp }}\\installed-smoke.json" -Raw'),
+            1,
+        )
+        self.assertIn(
+            'cat "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"',
+            workflow,
+        )
+        self.assertIn(
+            'Get-Content "${{ runner.temp }}\\into-md-${{ matrix.target }}-core-smoke.json" -Raw',
+            workflow,
+        )
+
     def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
