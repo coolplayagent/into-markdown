@@ -1600,6 +1600,7 @@ fn reserved_environment_name(value: &str) -> bool {
         value,
         "INTO_MARKDOWN_PLUGIN_PROTOCOL"
             | "INTO_MARKDOWN_INHERITED_SANDBOX"
+            | "INTO_MARKDOWN_PRIVATE_TEMP"
             | "SYSTEMROOT"
             | "WINDIR"
             | "SYSTEMDRIVE"
@@ -1638,6 +1639,7 @@ mod tests {
         for name in [
             "INTO_MARKDOWN_PLUGIN_PROTOCOL",
             "INTO_MARKDOWN_INHERITED_SANDBOX",
+            "INTO_MARKDOWN_PRIVATE_TEMP",
             "SYSTEMROOT",
             "WINDIR",
             "SYSTEMDRIVE",
