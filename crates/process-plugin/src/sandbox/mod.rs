@@ -54,7 +54,7 @@ pub(crate) fn spawn(
         command.env(name, value);
     }
     #[cfg(unix)]
-    command.env("TMPDIR", directory);
+    command.env("TMPDIR", directory).env("INTO_MARKDOWN_PRIVATE_TEMP", directory);
     command.env("INTO_MARKDOWN_PLUGIN_PROTOCOL", "process-v1");
     #[cfg(target_os = "macos")]
     if policy.macos_compatibility_child {

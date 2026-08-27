@@ -87,6 +87,24 @@ fn main() -> std::io::Result<()> {
                     "secret-leaked"
                 },
             )),
+            "private-temp" => {
+                let private =
+                    std::env::var_os("INTO_MARKDOWN_PRIVATE_TEMP").map(std::path::PathBuf::from);
+                let standard = std::env::var_os(if cfg!(windows) { "TEMP" } else { "TMPDIR" })
+                    .map(std::path::PathBuf::from);
+                let usable = private.as_ref().is_some_and(|root| {
+                    root.is_absolute()
+                        && (cfg!(windows) || standard.as_ref() == Some(root))
+                        && root.is_dir()
+                        && std::fs::OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(root.join("private-temp-probe"))
+                            .and_then(|_| std::fs::remove_file(root.join("private-temp-probe")))
+                            .is_ok()
+                });
+                Ok(result(if usable { "private-temp-ready" } else { "private-temp-invalid" }))
+            }
             "child" => {
                 let executable = std::env::current_exe()
                     .map_err(|_| WorkerError::new("childPrepare", "child helper is unavailable"))?;

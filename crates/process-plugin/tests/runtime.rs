@@ -24,6 +24,9 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let secret = harness.execute(b"secret", ExecutionOptions::default()).unwrap();
     assert_eq!(secret.result.markdown, "secret-denied");
 
+    let private_temp = harness.execute(b"private-temp", ExecutionOptions::default()).unwrap();
+    assert_eq!(private_temp.result.markdown, "private-temp-ready");
+
     let outside = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(outside.path(), b"host-secret").unwrap();
     let file = harness
