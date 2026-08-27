@@ -328,16 +328,19 @@ mod linux {
             filters.push(stmt(LD_W_ABS, 16));
             process_instruction = filters.len();
             filters.push(jump(JMP_JEQ_K, 0, 1, 0));
-            filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
+            filters.push(stmt(RET_K, ERRNO | libc::E2BIG as u32));
             filters.push(stmt(RET_K, ALLOW));
-            for syscall in denied.into_iter().chain(legacy.iter().copied()) {
+            for (index, syscall) in denied.into_iter().chain(legacy.iter().copied()).enumerate() {
                 filters.push(jump(
                     JMP_JEQ_K,
                     u32::try_from(syscall).map_err(std::io::Error::other)?,
                     0,
                     1,
                 ));
-                filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
+                filters.push(stmt(
+                    RET_K,
+                    ERRNO | u32::try_from(100 + index).map_err(std::io::Error::other)?,
+                ));
             }
             filters.push(stmt(RET_K, ALLOW));
             let filter_count = u16::try_from(filters.len()).map_err(std::io::Error::other)?;
