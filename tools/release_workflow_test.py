@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
 import re
 import unittest
@@ -70,6 +72,38 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertIn("gpg --batch --verify", workflow)
         self.assertIn("if: github.event_name == 'push'", workflow)
         self.assertIn('gh release edit "$RELEASE_TAG" --draft=false', workflow)
+
+    def test_every_release_target_has_a_bazel_rust_toolchain(self) -> None:
+        module = (ROOT / "MODULE.bazel").read_text(encoding="utf-8")
+        workflows = "\n".join(
+            (
+                self.read("release.yml"),
+                self.read("platform-modular-release.yml"),
+                self.read("macos-arm64-release.yml"),
+            )
+        )
+        for target in (
+            "aarch64-apple-darwin",
+            "aarch64-pc-windows-msvc",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+        ):
+            with self.subTest(target=target):
+                self.assertIn(f'"{target}"', module)
+                self.assertIn(target, workflows)
+
+    def test_layout_quality_tracks_the_current_pdfium_authority(self) -> None:
+        manifest = ROOT / "third_party" / "pdfium" / "manifest.json"
+        authority = json.loads(
+            (ROOT / "fixtures" / "pdf-layout-quality-authority.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            authority["pdfium_manifest_sha256"],
+            hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        )
 
 
 if __name__ == "__main__":
