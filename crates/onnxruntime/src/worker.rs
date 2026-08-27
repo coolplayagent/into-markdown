@@ -318,7 +318,7 @@ fn spawn_worker(
         // The worker installs the platform-native limit before authority parsing,
         // ORT loading, model receipt, or additional threads. On macOS the parent
         // enforces the fixed physical-footprint ceiling instead of RLIMIT_AS.
-        let child = command.spawn().map_err(|_| ort_error("workerLimitUnavailable"))?;
+        let child = command.spawn().map_err(classify_unix_spawn_error)?;
         return Ok(WorkerProcess {
             child,
             #[cfg(target_os = "macos")]
@@ -334,6 +334,16 @@ fn spawn_worker(
         component: "onnxruntime-cpu".into(),
         detail: "workerLimitUnavailable".into(),
     })
+}
+
+#[cfg(unix)]
+fn classify_unix_spawn_error(error: std::io::Error) -> ConversionError {
+    let detail = match error.raw_os_error() {
+        Some(code) if code == libc::EACCES || code == libc::EPERM => "workerLaunchDenied",
+        Some(code) if code == libc::ENOMEM || code == libc::EAGAIN => "workerLimitUnavailable",
+        _ => "workerLaunch",
+    };
+    ort_error(detail)
 }
 
 #[cfg(windows)]
@@ -821,6 +831,30 @@ mod tests {
                 .checked_add(contract.session_memory_bytes)
                 .and_then(|value| value.checked_add(contract.run_memory_bytes))
                 .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_worker_spawn_errors_keep_authority_and_resource_failures_distinct() {
+        for code in [libc::EACCES, libc::EPERM] {
+            assert!(
+                classify_unix_spawn_error(std::io::Error::from_raw_os_error(code))
+                    .to_string()
+                    .contains("workerLaunchDenied")
+            );
+        }
+        for code in [libc::ENOMEM, libc::EAGAIN] {
+            assert!(
+                classify_unix_spawn_error(std::io::Error::from_raw_os_error(code))
+                    .to_string()
+                    .contains("workerLimitUnavailable")
+            );
+        }
+        assert!(
+            classify_unix_spawn_error(std::io::Error::from_raw_os_error(libc::ENOENT))
+                .to_string()
+                .contains("workerLaunch")
         );
     }
 
