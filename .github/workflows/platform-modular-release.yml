@@ -333,6 +333,7 @@ jobs:
             --rustc "$(rustup which rustc)" \
             --pdfium-library "$installed/lib/pdfium/libpdfium.so" \
             --timeout-seconds 90; then
+            jq -r '.cases[] | select(.status == "failed") | .detail' "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"
             cat "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"
             exit 1
           fi
@@ -412,7 +413,11 @@ jobs:
           installed=$("$distribution/install" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin" | tail -1)
           mkdir "${{ runner.temp }}/installed-smoke-state"
           archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
-          if ! "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90; then cat "${{ runner.temp }}/installed-smoke.json"; exit 1; fi
+          if ! "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90; then
+            jq -r '.cases[] | select(.status == "failed") | .detail' "${{ runner.temp }}/installed-smoke.json"
+            cat "${{ runner.temp }}/installed-smoke.json"
+            exit 1
+          fi
           python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root "$installed" --into-md "$installed/bin/into-md" --plugins "${{ runner.temp }}/plugins-a" --publisher "$installed/share/into-markdown/plugins/official-publisher.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --work-root "${{ runner.temp }}/platform-acceptance-state" --archive-sha256 "$archive_sha" --platform-audit "${{ runner.temp }}/platform-audit.json" --report "${{ runner.temp }}/platform-acceptance.json" --timeout-seconds 900
           "$distribution/uninstall" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin"
       - name: Run installed Core smoke and platform acceptance on Windows

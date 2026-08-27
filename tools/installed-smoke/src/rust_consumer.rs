@@ -329,6 +329,10 @@ fn configure_linux_linker(
         ("AR".into(), librarian),
         ("CC".into(), compiler),
         ("CXX".into(), cxx),
+        // GCC invokes its assembler and linker as child tools. Keep those
+        // lookups inside fixed system directories without restoring the
+        // caller's mutable development PATH.
+        ("PATH".into(), "/usr/bin:/bin".into()),
     ]));
     Ok(())
 }
@@ -692,6 +696,22 @@ mod tests {
         let mut environment = BTreeMap::new();
         configure_linux_linker("test-target", &mut environment).unwrap();
         assert!(environment.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_linker_configuration_uses_only_fixed_system_tool_directories() {
+        let native_target = match std::env::consts::ARCH {
+            "x86_64" => "x86_64-unknown-linux-gnu",
+            "aarch64" => "aarch64-unknown-linux-gnu",
+            architecture => panic!("unsupported Linux test architecture: {architecture}"),
+        };
+        let mut environment = BTreeMap::new();
+        configure_linux_linker(native_target, &mut environment).unwrap();
+        assert_eq!(environment.get("PATH").map(String::as_str), Some("/usr/bin:/bin"));
+        assert!(environment.get("CC").is_some_and(|value| Path::new(value).is_file()));
+        assert!(environment.get("CXX").is_some_and(|value| Path::new(value).is_file()));
+        assert!(environment.get("AR").is_some_and(|value| Path::new(value).is_file()));
     }
 
     #[test]
