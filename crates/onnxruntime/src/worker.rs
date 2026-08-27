@@ -967,7 +967,7 @@ mod tests {
         let source_directory = tempfile::tempdir().unwrap();
         let source = source_directory.path().join("worker");
         std::fs::write(&source, b"authenticated-worker").unwrap();
-        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o500)).unwrap();
         let working = tempfile::tempdir().unwrap();
         let context = ExecutionContext::new(
             into_markdown_core::ExecutionOptions::default(),
