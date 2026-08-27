@@ -299,7 +299,7 @@ jobs:
             --rust-library "$installed/lib/into-markdown-rust" \
             --manifest "$installed/archive-manifest.json" \
             --fixtures "$installed/share/into-markdown/smoke/fixtures" \
-            --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" \
+            --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" \
             --temp-root "${{ runner.temp }}/smoke-core" \
             --report "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json" \
             --archive-sha256 "$archive_sha" \
@@ -361,7 +361,7 @@ jobs:
             --rust-library "$installed\lib\into-markdown-rust" `
             --manifest "$installed\archive-manifest.json" `
             --fixtures "$installed\share\into-markdown\smoke\fixtures" `
-            --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" `
+            --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" `
             --temp-root "${{ runner.temp }}\smoke-core" `
             --report "${{ runner.temp }}\into-md-${{ matrix.target }}-core-smoke.json" `
             --archive-sha256 "$archiveSha" `
@@ -379,8 +379,8 @@ jobs:
           installed=$("$distribution/install" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin" | tail -1)
           mkdir "${{ runner.temp }}/installed-smoke-state"
           archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
-          "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90
-          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root "$installed" --into-md "$installed/bin/into-md" --plugins "${{ runner.temp }}/plugins-a" --publisher "$installed/share/into-markdown/plugins/official-publisher.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "${{ github.workspace }}/fixtures/asr-quality/source/en-clear.wav" --work-root "${{ runner.temp }}/platform-acceptance-state" --archive-sha256 "$archive_sha" --platform-audit "${{ runner.temp }}/platform-audit.json" --report "${{ runner.temp }}/platform-acceptance.json" --timeout-seconds 900
+          "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90
+          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root "$installed" --into-md "$installed/bin/into-md" --plugins "${{ runner.temp }}/plugins-a" --publisher "$installed/share/into-markdown/plugins/official-publisher.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --work-root "${{ runner.temp }}/platform-acceptance-state" --archive-sha256 "$archive_sha" --platform-audit "${{ runner.temp }}/platform-audit.json" --report "${{ runner.temp }}/platform-acceptance.json" --timeout-seconds 900
           "$distribution/uninstall" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin"
       - name: Run installed Core smoke and platform acceptance on Windows
         if: runner.os == 'Windows'
@@ -392,9 +392,9 @@ jobs:
           $installed = "${{ runner.temp }}\accept-install\versions\$identity"
           New-Item -ItemType Directory "${{ runner.temp }}\installed-smoke-state" | Out-Null
           $archiveSha = (Get-FileHash -Algorithm SHA256 "${{ runner.temp }}\${{ matrix.archive }}").Hash.ToLowerInvariant()
-          & "$installed\bin\installed-smoke.exe" --install-root $installed --into-md "$installed\bin\into-md.exe" --rust-library "$installed\lib\into-markdown-rust" --manifest "$installed\archive-manifest.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" --temp-root "${{ runner.temp }}\installed-smoke-state" --report "${{ runner.temp }}\installed-smoke.json" --archive-sha256 $archiveSha --cargo (rustup which cargo) --rustc (rustup which rustc) --pdfium-library "$installed\lib\pdfium\pdfium.dll" --timeout-seconds 90
+          & "$installed\bin\installed-smoke.exe" --install-root $installed --into-md "$installed\bin\into-md.exe" --rust-library "$installed\lib\into-markdown-rust" --manifest "$installed\archive-manifest.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" --temp-root "${{ runner.temp }}\installed-smoke-state" --report "${{ runner.temp }}\installed-smoke.json" --archive-sha256 $archiveSha --cargo (rustup which cargo) --rustc (rustup which rustc) --pdfium-library "$installed\lib\pdfium\pdfium.dll" --timeout-seconds 90
           if ($LASTEXITCODE -ne 0) { throw "installed Core smoke failed" }
-          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root $installed --into-md "$installed\bin\into-md.exe" --plugins "${{ runner.temp }}\plugins-a" --publisher "$installed\share\into-markdown\plugins\official-publisher.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "${{ github.workspace }}\fixtures\asr-quality\source\en-clear.wav" --work-root "${{ runner.temp }}\platform-acceptance-state" --archive-sha256 $archiveSha --platform-audit "${{ runner.temp }}\platform-audit.json" --report "${{ runner.temp }}\platform-acceptance.json" --timeout-seconds 900
+          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root $installed --into-md "$installed\bin\into-md.exe" --plugins "${{ runner.temp }}\plugins-a" --publisher "$installed\share\into-markdown\plugins\official-publisher.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" --work-root "${{ runner.temp }}\platform-acceptance-state" --archive-sha256 $archiveSha --platform-audit "${{ runner.temp }}\platform-audit.json" --report "${{ runner.temp }}\platform-acceptance.json" --timeout-seconds 900
           if ($LASTEXITCODE -ne 0) { throw "installed platform acceptance failed" }
           & "$distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
       - name: Sign Linux release artifacts

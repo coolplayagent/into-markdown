@@ -67,6 +67,19 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("$RUNNER_TEMP/plugin-key.pk8", workflow)
         self.assertNotIn(r"$env:RUNNER_TEMP\plugin-key.pk8", workflow)
 
+    def test_runtime_fixtures_use_shell_native_workspace_authorities(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        fixture = "fixtures/asr-quality/source/en-clear.wav"
+        self.assertEqual(workflow.count(f"$GITHUB_WORKSPACE/{fixture}"), 3)
+        self.assertEqual(
+            workflow.count(r"$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav"),
+            3,
+        )
+        self.assertNotIn("${{ github.workspace }}/fixtures/asr-quality", workflow)
+        self.assertNotIn(r"${{ github.workspace }}\fixtures\asr-quality", workflow)
+
     def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
