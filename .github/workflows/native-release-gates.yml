@@ -1,0 +1,115 @@
+name: Native release gates
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      container:
+        required: true
+        type: string
+      bazel_config:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  native-gates:
+    runs-on: ${{ inputs.runner }}
+    container: ${{ inputs.container }}
+    timeout-minutes: 180
+    steps:
+      - name: Bootstrap fixed Linux gate container
+        if: runner.os == 'Linux'
+        run: |
+          dnf install --assumeyes binutils clang-libs cmake curl diffutils file findutils gcc gcc-c++ git gzip jq make patch perl pkgconf-pkg-config python3.11 python3.11-pip tar unzip which xz zip
+          if [ "$(uname -m)" = x86_64 ]; then
+            dnf --enablerepo=powertools install --assumeyes nasm
+            nasm -v
+          fi
+          case "$(uname -m)" in
+            x86_64)
+              bazelisk_asset=bazelisk-linux-amd64
+              bazelisk_sha256=e1508323f347ad1465a887bc5d2bfb91cffc232d11e8e997b623227c6b32fb76
+              ;;
+            aarch64)
+              bazelisk_asset=bazelisk-linux-arm64
+              bazelisk_sha256=bb608519a440d45d10304eb684a73a2b6bb7699c5b0e5434361661b25f113a5d
+              ;;
+            *)
+              echo "unsupported Linux gate architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output /usr/local/bin/bazelisk \
+            "https://github.com/bazelbuild/bazelisk/releases/download/v1.27.0/$bazelisk_asset"
+          echo "$bazelisk_sha256  /usr/local/bin/bazelisk" | sha256sum --check
+          chmod 0755 /usr/local/bin/bazelisk
+          ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
+          ln -sf /usr/bin/python3.11 /usr/local/bin/python
+          ln -sf /usr/bin/python3.11 /usr/local/bin/python3
+          libclang_path="$(rpm -ql clang-libs | grep -E '/libclang\.so(\.[0-9]+)*$' | head -n 1)"
+          test -f "$libclang_path"
+          echo "LIBCLANG_PATH=$(dirname "$libclang_path")" >> "$GITHUB_ENV"
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+      - uses: actions/checkout@v4
+      - name: Bind fixed Linux checkout ownership
+        if: runner.os == 'Linux'
+        run: |
+          git config --global --unset-all safe.directory || true
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: release-gates-${{ inputs.bazel_config }}
+          repository-cache: true
+      - name: Activate fixed pnpm toolchain
+        run: |
+          corepack enable
+          corepack pnpm --version
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: make diffutils xz curl gnupg jq file binutils python coreutils perl
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          toolset: 14.44.35207
+          sdk: 10.0.26100.0
+      - name: Bind CMake to the activated Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "CMAKE_GENERATOR=NMake Makefiles" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Prepare Cargo plugin lifecycle fixture on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ inputs.target }}"
+          echo "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD/target/${{ inputs.target }}/debug/plugin_manager_process_fixture" >> "$GITHUB_ENV"
+      - name: Prepare Cargo plugin lifecycle fixture on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ inputs.target }}"
+          "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ inputs.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Run target-native Cargo, Clippy, and Bazel gates
+        run: |
+          python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
+          cargo test --workspace --all-targets --locked -- --test-threads=1
+          cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ inputs.bazel_config }} --lockfile_mode=error --local_test_jobs=1 --test_env=RUST_TEST_THREADS=1 //...
