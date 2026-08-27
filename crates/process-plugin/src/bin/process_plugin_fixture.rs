@@ -126,13 +126,6 @@ fn main() -> std::io::Result<()> {
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped());
-                #[cfg(target_os = "linux")]
-                {
-                    use std::os::unix::process::CommandExt as _;
-                    // Force fork+exec: Rocky 8's posix_spawn uses tgkill on the
-                    // new child, which the inherited sandbox intentionally denies.
-                    unsafe { command.pre_exec(|| Ok(())) };
-                }
                 let mut child = command.spawn().map_err(|error| {
                     WorkerError::new("childLaunch", format!("child helper launch failed: {error}"))
                 })?;
