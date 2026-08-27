@@ -155,7 +155,7 @@ jobs:
         run: |
           umask 077
           test -n "$PLUGIN_SIGNING_KEY_BASE64"
-          printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/plugin-key.pk8"
+          printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode > "${{ runner.temp }}/plugin-key.pk8"
       - name: Decode protected plugin signing key on Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -163,7 +163,7 @@ jobs:
           PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
         run: |
           if (-not $env:PLUGIN_SIGNING_KEY_BASE64) { throw "plugin signing key is absent" }
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\plugin-key.pk8", [Convert]::FromBase64String($env:PLUGIN_SIGNING_KEY_BASE64))
+          [IO.File]::WriteAllBytes("${{ runner.temp }}\plugin-key.pk8", [Convert]::FromBase64String($env:PLUGIN_SIGNING_KEY_BASE64))
       - name: Import protected Windows signing material
         if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh
@@ -459,7 +459,7 @@ jobs:
             Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_SIGNING_THUMBPRINT" -Force -ErrorAction SilentlyContinue
           }
           Remove-Item "$env:RUNNER_TEMP\release-signing.pfx" -Force -ErrorAction SilentlyContinue
-          Remove-Item "$env:RUNNER_TEMP\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
+          Remove-Item "${{ runner.temp }}\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
 
   publish-draft:
     needs: native-release

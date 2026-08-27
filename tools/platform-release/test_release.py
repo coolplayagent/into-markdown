@@ -55,6 +55,17 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("sha256sum --check", workflow)
         self.assertIn("ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel", workflow)
 
+    def test_plugin_key_uses_the_same_authoritative_temp_path_as_packaging(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        key_path = "${{ runner.temp }}/plugin-key.pk8"
+        windows_key_path = r"${{ runner.temp }}\plugin-key.pk8"
+        self.assertGreaterEqual(workflow.count(key_path), 3)
+        self.assertIn(windows_key_path, workflow)
+        self.assertNotIn("$RUNNER_TEMP/plugin-key.pk8", workflow)
+        self.assertNotIn(r"$env:RUNNER_TEMP\plugin-key.pk8", workflow)
+
     def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
