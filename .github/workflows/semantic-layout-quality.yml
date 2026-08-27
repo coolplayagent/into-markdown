@@ -97,6 +97,11 @@ jobs:
           //crates/converters:pdf_layout_quality
           //crates/api:ppocrv6_image_quality
           --jobs=1 --local_resources=memory=4096 --test_output=errors
+      - name: Run the OCR merge and runtime regressions
+        run: >-
+          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.config }} --lockfile_mode=error
+          //crates/ocr:ocr_test
+          --jobs=1 --local_resources=memory=4096 --test_output=errors
 
   repository-boundary:
     runs-on: ubuntu-24.04
