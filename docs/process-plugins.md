@@ -48,7 +48,9 @@ HOME 和 loader 变量不会继承。原生 provider 也必须把该协议变量
   时才允许从已认证 runtime 启动 helper。
 - Windows：安装层预创建并 ACL 授权的 AppContainer SID；启动时 capability 数量为零，
   仅继承三根协议 handle。主线程在 Job 的单进程、内存和 close-kill 限制安装并复核 token
-  SID 后才恢复。cwd 必须与该 SID 的 storage identity 精确一致。
+  SID 后才恢复。cwd 必须与该 SID 的 storage identity 精确一致。私有根只额外接受
+  LocalSystem/Builtin Administrators 的精确完全控制 ACE；目录本身的非继承管理 ACE 与
+  子项继承 ACE 均可接受，其他 SID、mask 或 inheritance 组合仍拒绝。
 
 某个平台不能建立这些边界时，运行时返回 `pluginSandboxUnavailable`，不会降级为普通
 子进程。文件大小、句柄、内存、握手时间、不可关闭的硬请求期限和 frame/output 上限均由宿主策略限制。
