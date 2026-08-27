@@ -318,6 +318,21 @@ mod linux {
                 1,
             ));
             filters.push(stmt(RET_K, ERRNO | libc::ENOSYS as u32));
+            if allow_child_processes {
+                // Rust's child launch path uses a private Unix socketpair to report an exec
+                // error to its parent. AF_UNIX socketpairs are local IPC and confer no network
+                // namespace authority; every socket/connect/bind/listen syscall remains denied.
+                filters.push(jump(
+                    JMP_JEQ_K,
+                    u32::try_from(libc::SYS_socketpair).map_err(std::io::Error::other)?,
+                    0,
+                    4,
+                ));
+                filters.push(stmt(LD_W_ABS, 16));
+                filters.push(jump(JMP_JEQ_K, libc::AF_UNIX as u32, 1, 0));
+                filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
+                filters.push(stmt(RET_K, ALLOW));
+            }
             let process_instruction;
             filters.push(jump(
                 JMP_JEQ_K,
@@ -330,7 +345,11 @@ mod linux {
             filters.push(jump(JMP_JEQ_K, 0, 1, 0));
             filters.push(stmt(RET_K, ERRNO | libc::EPERM as u32));
             filters.push(stmt(RET_K, ALLOW));
-            for syscall in denied.into_iter().chain(legacy.iter().copied()) {
+            for syscall in denied
+                .into_iter()
+                .chain(legacy.iter().copied())
+                .filter(|syscall| !allow_child_processes || *syscall != libc::SYS_socketpair)
+            {
                 filters.push(jump(
                     JMP_JEQ_K,
                     u32::try_from(syscall).map_err(std::io::Error::other)?,
