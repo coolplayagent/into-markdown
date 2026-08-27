@@ -61,6 +61,7 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         key_path = "${{ runner.temp }}/plugin-key.pk8"
         windows_key_path = r"${{ runner.temp }}\plugin-key.pk8"
+        self.assertIn('install -d -m 700 "${{ runner.temp }}"', workflow)
         self.assertGreaterEqual(workflow.count(key_path), 3)
         self.assertIn(windows_key_path, workflow)
         self.assertNotIn("$RUNNER_TEMP/plugin-key.pk8", workflow)
