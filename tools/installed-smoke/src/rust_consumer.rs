@@ -75,6 +75,7 @@ fn compile_and_run(
         ("CARGO_TARGET_DIR".into(), cargo_path(&target)?),
         ("RUSTC".into(), cargo_path(&request.rustc)?),
     ]));
+    configure_linux_linker(platform_target, &mut environment)?;
     configure_macos_linker(&mut environment)?;
     configure_windows_linker(platform_target, &mut environment)?;
     let invocation_root = filesystem_root(&home)?;
@@ -298,6 +299,50 @@ fn configure_macos_linker(environment: &mut BTreeMap<String, String>) -> Result<
             ("SDKROOT".into(), sdk.display().to_string()),
         ]));
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_linker(
+    platform_target: &str,
+    environment: &mut BTreeMap<String, String>,
+) -> Result<(), String> {
+    let linker_variable = match (std::env::consts::ARCH, platform_target) {
+        ("x86_64", "x86_64-unknown-linux-gnu") => "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+        ("aarch64", "aarch64-unknown-linux-gnu") => "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
+        _ => {
+            return Err(
+                "installed Rust consumer has no fixed Linux linker for this architecture".into()
+            );
+        }
+    };
+    let compiler = fixed_linux_file("/usr/bin/gcc", "Linux C compiler")?;
+    let cxx = fixed_linux_file("/usr/bin/g++", "Linux C++ compiler")?;
+    let librarian = fixed_linux_file("/usr/bin/ar", "Linux librarian")?;
+    environment.extend(BTreeMap::from([
+        (linker_variable.into(), compiler.clone()),
+        ("AR".into(), librarian),
+        ("CC".into(), compiler),
+        ("CXX".into(), cxx),
+    ]));
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn fixed_linux_file(path: &str, label: &str) -> Result<String, String> {
+    let canonical =
+        Path::new(path).canonicalize().map_err(|_| format!("fixed {label} is unavailable"))?;
+    if !canonical.is_file() {
+        return Err(format!("fixed {label} is not a regular file"));
+    }
+    canonical
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("fixed {label} path is not Unicode"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_linux_linker(_: &str, _: &mut BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
