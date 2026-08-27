@@ -23,6 +23,32 @@ jobs:
   agent-skill:
     uses: ./.github/workflows/agent-skill-release.yml
 
+  native-gates:
+    needs: agent-skill
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            bazel_config: linux_arm64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            container: ''
+            bazel_config: windows_x86_64
+    uses: ./.github/workflows/native-release-gates.yml
+    with:
+      runner: ${{ matrix.runner }}
+      target: ${{ matrix.target }}
+      container: ${{ matrix.container }}
+      bazel_config: ${{ matrix.bazel_config }}
+
   native-release:
     needs: agent-skill
     environment: release
@@ -108,12 +134,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/build
+          key: native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
       - uses: bazel-contrib/setup-bazel@0.15.0
         with:
           bazelisk-cache: true
+          disk-cache: platform-release-${{ matrix.bazel_config }}
+          repository-cache: true
       - name: Activate fixed pnpm toolchain
         run: |
           corepack enable
@@ -196,12 +228,6 @@ jobs:
         run: |
           cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ matrix.target }}"
           "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ matrix.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Run target-native Cargo, Clippy, and Bazel gates
-        run: |
-          python -m unittest tools.platform-release.test_release tools.platform-release.test_platform_tools tools.publish_release_assets_test tools.release_metadata_test tools.release_signing_policy_test
-          cargo test --workspace --all-targets --locked -- --test-threads=1
-          cargo clippy --workspace --exclude whisper-rs --all-targets --no-deps --locked -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
-          bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.bazel_config }} --lockfile_mode=error --local_test_jobs=1 --test_env=RUST_TEST_THREADS=1 //...
       - name: Authenticode-sign project executables
         if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh
@@ -473,7 +499,7 @@ jobs:
           Remove-Item "${{ runner.temp }}\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
 
   publish-draft:
-    needs: native-release
+    needs: [native-gates, native-release]
     runs-on: ubuntu-24.04
     environment: release
     permissions:

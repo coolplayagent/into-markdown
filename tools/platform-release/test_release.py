@@ -24,6 +24,32 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_expensive_native_gates_run_in_parallel_with_release_acceptance(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        gates = (ROOT / ".github/workflows/native-release-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("native-gates:", workflow)
+        self.assertIn("needs: [native-gates, native-release]", workflow)
+        self.assertNotIn("cargo test --workspace --all-targets", workflow)
+        self.assertIn("cargo test --workspace --all-targets", gates)
+        self.assertIn("cargo clippy --workspace", gates)
+        self.assertIn("repository-cache: true", gates)
+        self.assertIn("disk-cache: release-gates-${{ inputs.bazel_config }}", gates)
+
+    def test_native_release_reuses_fixed_toolchain_cargo_dependencies(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("path: ${{ runner.temp }}/build", workflow)
+        self.assertIn(
+            "key: native-release-rust-1.97.1-${{ runner.os }}-"
+            "${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}",
+            workflow,
+        )
+
     def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
         source = (ROOT / "tools/platform-release/release.py").read_text(
             encoding="utf-8"
