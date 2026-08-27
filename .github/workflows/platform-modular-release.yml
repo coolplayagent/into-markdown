@@ -397,7 +397,7 @@ jobs:
             --archive-sha256 "$archiveSha" `
             --cargo "$(rustup which cargo)" `
             --rustc "$(rustup which rustc)" `
-            --pdfium-library "$installed\bin\pdfium.dll" `
+            --pdfium-library "$installed\lib\pdfium\pdfium.dll" `
             --timeout-seconds 90
           if ($LASTEXITCODE -ne 0) {
             Get-Content "${{ runner.temp }}\into-md-${{ matrix.target }}-core-smoke.json" -Raw

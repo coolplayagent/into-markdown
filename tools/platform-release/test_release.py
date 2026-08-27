@@ -41,6 +41,16 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("repository-cache: true", gates)
         self.assertIn("disk-cache: release-gates-${{ inputs.bazel_config }}", gates)
 
+    def test_windows_core_smoke_uses_installed_pdfium_destination(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn(r'--pdfium-library "$installed\bin\pdfium.dll"', workflow)
+        self.assertGreaterEqual(
+            workflow.count(r'--pdfium-library "$installed\lib\pdfium\pdfium.dll"'),
+            2,
+        )
+
     def test_native_release_reuses_fixed_toolchain_cargo_dependencies(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
