@@ -20,7 +20,7 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024 * 1024;
 // resident capability data. A provider that is authorized to launch an
 // authenticated helper therefore needs fixed virtual-address headroom while
 // the helper installs its own model-derived hard limit before loading ORT.
-const LINUX_CHILD_COORDINATOR_ADDRESS_SPACE_BYTES: u64 = 512 * 1024 * 1024;
+const LINUX_CHILD_COORDINATOR_ADDRESS_SPACE_BYTES: u64 = 1024 * 1024 * 1024;
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 fn process_address_space_limit(
