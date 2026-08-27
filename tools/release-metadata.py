@@ -399,7 +399,9 @@ def write_generated(output: pathlib.Path, metadata: dict) -> None:
         item = metadata.get(key)
         if item is not None:
             path = output / item["path"]
-            path.write_text(item["contents"], encoding="utf-8")
+            # Projection digests bind UTF-8 bytes. Writing text would translate
+            # LF to CRLF on Windows and invalidate the digest after generation.
+            path.write_bytes(item["contents"].encode("utf-8"))
             if path.stat().st_size != item["bytes"] or sha256(path) != item["sha256"]:
                 raise RuntimeError(f"generated metadata digest drifted: {path.name}")
 
