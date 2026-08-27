@@ -126,7 +126,12 @@ fn main() -> std::io::Result<()> {
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
                     .spawn()
-                    .map_err(|_| WorkerError::new("childLaunch", "child helper launch failed"))?;
+                    .map_err(|error| {
+                        WorkerError::new(
+                            "childLaunch",
+                            format!("child helper launch failed: {error}"),
+                        )
+                    })?;
                 drop(child.stdin.take());
                 let output = child
                     .wait_with_output()

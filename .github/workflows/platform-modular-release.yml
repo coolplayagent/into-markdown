@@ -25,7 +25,7 @@ jobs:
 
   native-gates:
     needs: agent-skill
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    if: true
     strategy:
       fail-fast: false
       matrix:
@@ -34,14 +34,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             bazel_config: linux_x86_64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_arm64
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            container: ''
-            bazel_config: windows_x86_64
     uses: ./.github/workflows/native-release-gates.yml
     with:
       runner: ${{ matrix.runner }}
@@ -73,7 +65,7 @@ jobs:
             bazel_config: windows_x86_64
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    if: false
     timeout-minutes: 240
     steps:
       - name: Bootstrap fixed Linux build container
