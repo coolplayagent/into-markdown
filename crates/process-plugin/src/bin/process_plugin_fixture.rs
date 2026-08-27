@@ -117,32 +117,8 @@ fn main() -> std::io::Result<()> {
                     .map(std::path::PathBuf::from)
                     .ok_or_else(|| {
                         WorkerError::new("childPrepare", "private child directory is unavailable")
-                    })?
-                    .join("nested-child");
-                std::fs::create_dir(&child_directory).map_err(|_| {
-                    WorkerError::new("childPrepare", "private child directory cannot be created")
-                })?;
-                let staged_helper = child_directory.join(helper.file_name().ok_or_else(|| {
-                    WorkerError::new("childPrepare", "child helper name is unavailable")
-                })?);
-                std::fs::copy(helper, &staged_helper).map_err(|_| {
-                    WorkerError::new("childPrepare", "private child helper cannot be staged")
-                })?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt as _;
-                    std::fs::set_permissions(
-                        &staged_helper,
-                        std::fs::Permissions::from_mode(0o500),
-                    )
-                    .map_err(|_| {
-                        WorkerError::new(
-                            "childPrepare",
-                            "private child helper permissions cannot be set",
-                        )
                     })?;
-                }
-                let mut child = std::process::Command::new(staged_helper)
+                let mut child = std::process::Command::new(helper)
                     .arg("--child-probe")
                     .current_dir(child_directory)
                     .env_clear()
