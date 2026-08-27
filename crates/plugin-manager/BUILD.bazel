@@ -45,6 +45,7 @@ rust_binary(
         "@crates//:serde",
         "@crates//:serde_json",
         "@crates//:sha2",
+        "@crates//:tempfile",
         "@crates//:zip",
     ],
 )
