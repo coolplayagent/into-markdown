@@ -24,6 +24,8 @@ use tempfile::TempDir;
 const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+#[cfg(target_os = "linux")]
+const LINUX_PHYSICAL_MEMORY_EXIT_CODE: i32 = 71;
 
 pub(crate) struct WorkerClient {
     process: WorkerProcess,
@@ -196,8 +198,32 @@ impl WorkerClient {
                     return Ok(frame);
                 }
                 Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.terminate();
-                    return Err(resource_error("nativeWorkerMemory"));
+                    #[cfg(target_os = "linux")]
+                    {
+                        let mut memory_limit_exit = false;
+                        for _ in 0..100 {
+                            match self.process.child.try_wait() {
+                                Ok(Some(status)) => {
+                                    memory_limit_exit =
+                                        linux_worker_exit_is_memory_limit(status.code());
+                                    break;
+                                }
+                                Ok(None) => std::thread::sleep(POLL_INTERVAL),
+                                Err(_) => break,
+                            }
+                        }
+                        self.terminate();
+                        return if memory_limit_exit {
+                            Err(resource_error("nativeWorkerMemory"))
+                        } else {
+                            Err(ort_error("workerCrashed"))
+                        };
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        self.terminate();
+                        return Err(resource_error("nativeWorkerMemory"));
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if let Err(error) = context.checkpoint() {
@@ -226,6 +252,11 @@ impl WorkerClient {
         }
         let _ = self.stderr.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len();
     }
+}
+
+#[cfg(target_os = "linux")]
+const fn linux_worker_exit_is_memory_limit(code: Option<i32>) -> bool {
+    matches!(code, Some(LINUX_PHYSICAL_MEMORY_EXIT_CODE))
 }
 
 impl Drop for WorkerClient {
@@ -963,6 +994,9 @@ mod tests {
     #[test]
     fn linux_worker_reads_a_nonzero_kernel_physical_high_water_mark() {
         assert!(linux_peak_resident_bytes().is_some_and(|bytes| bytes > 0));
+        assert!(linux_worker_exit_is_memory_limit(Some(71)));
+        assert!(!linux_worker_exit_is_memory_limit(Some(70)));
+        assert!(!linux_worker_exit_is_memory_limit(None));
     }
 
     #[cfg(windows)]
