@@ -210,20 +210,19 @@ fn large_text_checkpoint_observes_timeout_after_work_begins() {
     text::set_test_hook(Some(Box::new(move |stage, bytes| {
         if stage == text::TextStage::Associate {
             hook_reached.store(bytes, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(30));
+            std::thread::sleep(Duration::from_millis(1_100));
         }
     })));
     let _reset = ResetTextHook;
     let detected = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
     let large = "a".repeat(16 * 1024);
     let recognized = recognition(&[(0, &large, 0.99)]);
-    // Fixture allocation is outside the request deadline. The test measures
-    // timeout observation during merge work, not runner scheduling or setup.
+    // Fixture allocation is outside the request deadline. Keep enough time for
+    // loaded CI runners to enter the checkpoint, then make the hook itself
+    // cross the deadline so this measures timeout observation during merge
+    // work rather than scheduler latency.
     let context = ExecutionContext::new(
-        ExecutionOptions {
-            timeout: Some(Duration::from_millis(10)),
-            ..ExecutionOptions::default()
-        },
+        ExecutionOptions { timeout: Some(Duration::from_secs(1)), ..ExecutionOptions::default() },
         ResourceLimits::default(),
     );
     let error = merge_document(
