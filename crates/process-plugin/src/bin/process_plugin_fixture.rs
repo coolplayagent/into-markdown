@@ -113,8 +113,14 @@ fn main() -> std::io::Result<()> {
                 } else {
                     "verified-helper"
                 });
+                let child_directory = std::env::var_os("INTO_MARKDOWN_PRIVATE_TEMP")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        WorkerError::new("childPrepare", "private child directory is unavailable")
+                    })?;
                 let mut child = std::process::Command::new(helper)
                     .arg("--child-probe")
+                    .current_dir(child_directory)
                     .env_clear()
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())

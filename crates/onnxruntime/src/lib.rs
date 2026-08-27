@@ -281,6 +281,10 @@ fn private_tempdir(prefix: &str, authenticated_snapshot: bool) -> Result<TempDir
     if !authenticated_snapshot {
         return builder.tempdir().map_err(|_| "private-directory");
     }
+    builder.tempdir_in(private_temp_root()?).map_err(|_| "private-temp-create")
+}
+
+pub(crate) fn private_temp_root() -> Result<PathBuf, &'static str> {
     // The official process sandbox supplies an authenticated per-request
     // writable authority. AppContainer activation can rewrite standard TEMP,
     // so use the host-only variable that plugin policy is forbidden to set.
@@ -301,7 +305,7 @@ fn private_tempdir(prefix: &str, authenticated_snapshot: bool) -> Result<TempDir
     {
         return Err("private-temp-authority");
     }
-    builder.tempdir_in(root).map_err(|_| "private-temp-create")
+    Ok(root)
 }
 
 const fn snapshot_or_io(authenticated_snapshot: bool, stage: &'static str) -> LoadError {
