@@ -161,7 +161,8 @@ impl SandboxChild {
         {
             let Self::Unix(child) = self;
             return match std::fs::read_to_string(format!("/proc/{}/status", child.id())) {
-                Ok(status) => linux_peak_resident_bytes(&status).map(|bytes| bytes > limit),
+                Ok(status) => linux_peak_resident_bytes(&status)
+                    .map(|bytes| bytes.is_some_and(|bytes| bytes > limit)),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
                 Err(_) => Err(()),
             };
@@ -213,9 +214,13 @@ impl SandboxChild {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_peak_resident_bytes(status: &str) -> Result<u64, ()> {
+fn linux_peak_resident_bytes(status: &str) -> Result<Option<u64>, ()> {
     let mut maximum_kibibytes = None;
+    let mut zombie = false;
     for line in status.lines() {
+        if let Some(value) = line.strip_prefix("State:") {
+            zombie = value.split_ascii_whitespace().next() == Some("Z");
+        }
         let Some(value) = line.strip_prefix("VmRSS:").or_else(|| line.strip_prefix("VmHWM:"))
         else {
             continue;
@@ -228,7 +233,10 @@ fn linux_peak_resident_bytes(status: &str) -> Result<u64, ()> {
         maximum_kibibytes =
             Some(maximum_kibibytes.map_or(kibibytes, |current: u64| current.max(kibibytes)));
     }
-    maximum_kibibytes.ok_or(())?.checked_mul(1024).ok_or(())
+    if zombie {
+        return Ok(None);
+    }
+    maximum_kibibytes.ok_or(())?.checked_mul(1024).map(Some).ok_or(())
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -237,8 +245,9 @@ mod linux_memory_tests {
 
     #[test]
     fn physical_memory_parser_uses_the_peak_and_rejects_ambiguous_units() {
-        let status = "Name:\tfixture\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n";
-        assert_eq!(linux_peak_resident_bytes(status), Ok(2 * 1024 * 1024));
+        let status = "Name:\tfixture\nState:\tS (sleeping)\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n";
+        assert_eq!(linux_peak_resident_bytes(status), Ok(Some(2 * 1024 * 1024)));
+        assert_eq!(linux_peak_resident_bytes("State:\tZ (zombie)\n"), Ok(None));
         assert!(linux_peak_resident_bytes("VmRSS: 1 MB\n").is_err());
         assert!(linux_peak_resident_bytes("Name: fixture\n").is_err());
     }
