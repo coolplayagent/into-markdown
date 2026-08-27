@@ -152,10 +152,20 @@ impl SandboxChild {
         }
     }
 
-    // The cross-platform worker loop intentionally has one fallible query contract; only
-    // macOS can currently obtain the process-group physical footprint through this handle.
-    #[cfg_attr(not(target_os = "macos"), allow(clippy::unused_self, clippy::unnecessary_wraps))]
+    // The cross-platform worker loop intentionally has one fallible physical-memory query
+    // contract. Linux reads the kernel-owned per-PID high-water mark while macOS uses the
+    // platform physical-footprint API; Windows enforces the same value in a Job Object.
+    #[cfg_attr(windows, allow(clippy::unused_self, clippy::unnecessary_wraps))]
     pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
+        #[cfg(target_os = "linux")]
+        {
+            let Self::Unix(child) = self;
+            return match std::fs::read_to_string(format!("/proc/{}/status", child.id())) {
+                Ok(status) => linux_peak_resident_bytes(&status).map(|bytes| bytes > limit),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(_) => Err(()),
+            };
+        }
         #[cfg(target_os = "macos")]
         {
             let Self::Unix(child) = self;
@@ -177,7 +187,7 @@ impl SandboxChild {
             }
             return Err(());
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(windows)]
         {
             let _ = limit;
             Ok(false)
@@ -199,6 +209,38 @@ impl SandboxChild {
             #[cfg(windows)]
             Self::Windows(child) => child.terminate(),
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_peak_resident_bytes(status: &str) -> Result<u64, ()> {
+    let mut maximum_kibibytes = None;
+    for line in status.lines() {
+        let Some(value) = line.strip_prefix("VmRSS:").or_else(|| line.strip_prefix("VmHWM:"))
+        else {
+            continue;
+        };
+        let mut fields = value.split_ascii_whitespace();
+        let kibibytes = fields.next().ok_or(())?.parse::<u64>().map_err(|_| ())?;
+        if fields.next() != Some("kB") || fields.next().is_some() {
+            return Err(());
+        }
+        maximum_kibibytes =
+            Some(maximum_kibibytes.map_or(kibibytes, |current: u64| current.max(kibibytes)));
+    }
+    maximum_kibibytes.ok_or(())?.checked_mul(1024).ok_or(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_memory_tests {
+    use super::linux_peak_resident_bytes;
+
+    #[test]
+    fn physical_memory_parser_uses_the_peak_and_rejects_ambiguous_units() {
+        let status = "Name:\tfixture\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n";
+        assert_eq!(linux_peak_resident_bytes(status), Ok(2 * 1024 * 1024));
+        assert!(linux_peak_resident_bytes("VmRSS: 1 MB\n").is_err());
+        assert!(linux_peak_resident_bytes("Name: fixture\n").is_err());
     }
 }
 
