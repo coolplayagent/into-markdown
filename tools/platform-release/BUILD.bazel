@@ -38,6 +38,7 @@ py_test(
     name = "release_test",
     srcs = ["test_release.py"],
     data = [
+        "//:.github/workflows/native-release-gates.yml",
         "//:.github/workflows/platform-modular-release.yml",
         "//tools/installed-smoke:rust_consumer_source",
     ],
