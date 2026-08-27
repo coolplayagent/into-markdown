@@ -36,6 +36,8 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("cargo test --workspace --all-targets", workflow)
         self.assertIn("cargo test --workspace --all-targets", gates)
         self.assertIn("cargo clippy --workspace", gates)
+        self.assertIn("run: cargo fetch --locked", gates)
+        self.assertIn("~/.cargo/registry", gates)
         self.assertIn("repository-cache: true", gates)
         self.assertIn("disk-cache: release-gates-${{ inputs.bazel_config }}", gates)
 
