@@ -155,6 +155,7 @@ jobs:
         run: |
           umask 077
           test -n "$PLUGIN_SIGNING_KEY_BASE64"
+          install -d -m 700 "${{ runner.temp }}"
           printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode > "${{ runner.temp }}/plugin-key.pk8"
       - name: Decode protected plugin signing key on Windows
         if: runner.os == 'Windows'
