@@ -43,8 +43,6 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: ${{ matrix.triple }}
-      - name: Check Cargo target boundary with its native C toolchain
-        run: cargo check --locked --workspace --all-targets --target ${{ matrix.triple }}
       - name: Resolve both toolchains and build public Rust products
         run: >-
           bazel build --config=${{ matrix.config }} --lockfile_mode=error

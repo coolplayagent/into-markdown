@@ -83,11 +83,7 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: ${{ matrix.target }}
-      - name: Run the bounded quality engine and real converter goldens with Cargo
-        run: >-
-          cargo test --locked --target ${{ matrix.target }} -j1
-          -p into-markdown-layout-quality
-      - name: Run the same quality boundary through Bazel
+      - name: Run the bounded quality engine and real converter goldens through Bazel
         run: >-
           bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.config }} --lockfile_mode=error
           //crates/layout-quality:layout_quality_test
