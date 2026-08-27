@@ -50,6 +50,7 @@ jobs:
           bazel build --config=${{ matrix.config }} --lockfile_mode=error
           //toolchains:native_toolchain_contract
           //crates/core:core
+          //crates/plugin-manager:package_plugin
           //tests/contracts:public_api_consumer
       - name: Run the platform-independent core test
         run: >-
