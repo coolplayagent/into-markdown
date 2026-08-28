@@ -52,12 +52,43 @@ SPEECH_COMPONENTS = [
     "3dspeaker-eres2net-base-onnx-model",
 ]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
+GGML_CPU_VARIANTS = {
+    "x86_64-pc-windows-msvc": (
+        "ggml-cpu-x64.dll",
+        "ggml-cpu-sse42.dll",
+        "ggml-cpu-sandybridge.dll",
+        "ggml-cpu-haswell.dll",
+        "ggml-cpu-skylakex.dll",
+        "ggml-cpu-cannonlake.dll",
+        "ggml-cpu-cascadelake.dll",
+        "ggml-cpu-icelake.dll",
+        "ggml-cpu-alderlake.dll",
+    ),
+    "x86_64-unknown-linux-gnu": (
+        "libggml-cpu-x64.so",
+        "libggml-cpu-sse42.so",
+        "libggml-cpu-sandybridge.so",
+        "libggml-cpu-ivybridge.so",
+        "libggml-cpu-piledriver.so",
+        "libggml-cpu-haswell.so",
+        "libggml-cpu-skylakex.so",
+        "libggml-cpu-cannonlake.so",
+        "libggml-cpu-cascadelake.so",
+        "libggml-cpu-cooperlake.so",
+        "libggml-cpu-icelake.so",
+        "libggml-cpu-alderlake.so",
+        "libggml-cpu-sapphirerapids.so",
+        "libggml-cpu-zen4.so",
+    ),
+}
 RELEASE_BUILD_PRODUCTS = (
     ("into-markdown-onnxruntime", "onnxruntime-worker"),
     ("into-markdown-plugin-manager", "package_plugin"),
     ("license-check", "release-projection"),
-    ("into-markdown-official-provider", "into-md-ocr-provider"),
-    ("into-markdown-official-provider", "into-md-media-provider"),
+)
+PROVIDER_BUILD_PRODUCTS = (
+    ("into-md-ocr-provider", "ocr-runtime"),
+    ("into-md-media-provider", "media-runtime"),
 )
 WINDOWS_CORE_PREWARM_PRODUCT = ("into-markdown-cli", "into-md")
 CPU_POLICY = json.loads(
@@ -181,7 +212,15 @@ def portable_cpu_environment(target: str) -> dict[str, str]:
     if (
         not isinstance(environment, dict)
         or environment.get("GGML_NATIVE") != "OFF"
-        or any(not isinstance(key, str) or value != "OFF" for key, value in environment.items())
+        or any(
+            not isinstance(key, str)
+            or value != ("ON" if key == "GGML_CPU_ALL_VARIANTS" else "OFF")
+            for key, value in environment.items()
+        )
+        or (
+            target in GGML_CPU_VARIANTS
+            and environment.get("GGML_CPU_ALL_VARIANTS") != "ON"
+        )
     ):
         raise ReleaseError(f"native CPU policy is invalid for {target}")
     return dict(environment)
@@ -228,10 +267,20 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
     for package, binary in products:
         command.extend(["-p", package, "--bin", binary])
     run(command, cwd=ROOT, env=environment)
+    for binary, feature in PROVIDER_BUILD_PRODUCTS:
+        run(
+            [
+                "cargo", "build", "--release", "--locked", "-p",
+                "into-markdown-official-provider", "--bin", binary,
+                "--no-default-features", "--features", feature,
+            ],
+            cwd=ROOT,
+            env=environment,
+        )
     release_bin = output / "release"
     missing = [
         executable_name(binary, target)
-        for _, binary in products
+        for binary in [*(value for _, value in products), *(value for value, _ in PROVIDER_BUILD_PRODUCTS)]
         if not (release_bin / executable_name(binary, target)).is_file()
         or (release_bin / executable_name(binary, target)).is_symlink()
     ]
@@ -240,6 +289,42 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             f"release Cargo build omitted required products: {', '.join(missing)}"
         )
     return release_bin
+
+
+def stage_ggml_runtime(
+    build_root: pathlib.Path, target: str, destination: pathlib.Path
+) -> list[pathlib.Path]:
+    """Copy the exact x86 CPU dispatch closure produced by whisper-rs-sys."""
+    variants = GGML_CPU_VARIANTS.get(target)
+    if variants is None:
+        return []
+    candidates = [
+        path
+        for path in sorted((build_root / "release/build").glob("whisper-rs-sys-*/out"))
+        if (path / "bin" / variants[0]).is_file()
+    ]
+    if len(candidates) != 1:
+        raise ReleaseError(
+            f"GGML runtime output is absent or ambiguous for {target}: {candidates}"
+        )
+    root = candidates[0]
+    mapping = {name: root / "bin" / name for name in variants}
+    if target == "x86_64-pc-windows-msvc":
+        mapping.update({name: root / "bin" / name for name in ("whisper.dll", "ggml.dll", "ggml-base.dll")})
+    else:
+        mapping.update(
+            {
+                "libwhisper.so.1": root / "lib/libwhisper.so.1.8.3",
+                "libggml.so.0": root / "lib/libggml.so.0.9.5",
+                "libggml-base.so.0": root / "lib/libggml-base.so.0.9.5",
+            }
+        )
+    staged = []
+    for name, source in sorted(mapping.items()):
+        output = destination / name
+        copy_file(source, output)
+        staged.append(output)
+    return staged
 
 
 def build_embedded_core(
@@ -533,13 +618,15 @@ def package_plugins(
 
         speech = temporary / "speech"
         copy_file(release_bin / executable_name("into-md-media-provider", target), speech / f"bin/into-md-media-provider{suffix}", True)
+        ggml_runtime = stage_ggml_runtime(release_bin.parent, target, speech / "bin")
         copy_file(release_bin / executable_name("onnxruntime-worker", target), speech / f"bin/onnxruntime-worker{suffix}", True)
         extract_member(cache / "onnxruntime", target_config["onnxruntime"]["member"], speech / target_config["onnxruntime"]["destination"])
         ffmpeg_name = f"ffmpeg-{target}{suffix}"
         copy_file(ffmpeg / ffmpeg_name, speech / f"ffmpeg/ffmpeg{suffix}", True)
         copy_file(ffmpeg / f"ffmpeg-authority-{target}.json", speech / "ffmpeg/authority.json")
         authenticode_files(
-            [speech / f"ffmpeg/ffmpeg{suffix}"], windows_signing_thumbprint
+            [speech / f"ffmpeg/ffmpeg{suffix}", *ggml_runtime],
+            windows_signing_thumbprint,
         )
         if windows_signing_thumbprint is not None:
             refresh_ffmpeg_authority(
@@ -618,6 +705,28 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
             result.append(
                 material(path, output, "license-text", [component["id"]], ["Unlicense"], True)
             )
+            continue
+        if component["id"] == "cargo:whisper-rs-sys@0.15.0":
+            source = destination / "cargo/whisper-rs-sys-0.15.0-vendored.zip"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            create_archive(
+                ROOT / "third_party/whisper-rs-0.16.0/sys",
+                source,
+                {"archive": "zip"},
+                0,
+            )
+            result.append(
+                material(source, output, "upstream-source-archive", [component["id"]], [])
+            )
+            for name, license_source, spdx in (
+                ("whisper-rs-sys-Unlicense.txt", "third_party/whisper-rs-0.16.0/LICENSE", "Unlicense"),
+                ("whisper.cpp-MIT.txt", "third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE", "MIT"),
+            ):
+                path = destination / name
+                copy_file(ROOT / license_source, path)
+                result.append(
+                    material(path, output, "license-text", [component["id"]], [spdx], True)
+                )
             continue
         checksum = next(item["digest"] for item in component["integrity"] if item["subject"].startswith("crates.io archive"))
         archive_name = component["id"].removeprefix("cargo:").replace("@", "-") + ".crate"

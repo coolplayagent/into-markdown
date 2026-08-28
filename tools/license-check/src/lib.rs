@@ -744,6 +744,7 @@ struct WhisperRsPatchAuthority {
     upstream_repository: String,
     upstream_commit: String,
     crates_io_sha256: String,
+    whisper_rs_sys_crates_io_sha256: String,
     patch_scope: String,
     tree_digest_algorithm: String,
     tree_sha256: String,
@@ -1808,8 +1809,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "957ff9dcfc23a69d30976fac3455bae6741af83a6428289bbe6f23c40d2e64e6";
-    const TREE_SHA256: &str = "370d7e08d60df3467c3b1e32e1a8140ff1a6d542692414ff6780e442324d96e0";
+        "affa9144146fc0462c3c7c06ebda9310e86153d66d74e8db0a7608400987ec28";
+    const TREE_SHA256: &str = "e094daf91520d5712d80acb19627683d62b59bec389b85ff026c98966d152815";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
@@ -1838,8 +1839,10 @@ fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
         || authority.upstream_commit != "7558e1b72f54f2f22a53589afb77e65681834c36"
         || authority.crates_io_sha256
             != "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6"
+        || authority.whisper_rs_sys_crates_io_sha256
+            != "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
         || authority.patch_scope
-            != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3 exactly as upstream build.rs does"
+            != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0 and enable authenticated x86 CPU runtime dispatch"
         || authority.tree_digest_algorithm
             != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
         || authority.tree_sha256 != TREE_SHA256

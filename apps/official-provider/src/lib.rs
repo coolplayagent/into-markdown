@@ -2,21 +2,30 @@
 
 use futures::executor::block_on;
 use into_markdown::{
-    CancellationToken, ConversionError, DiarizationRequest, ExecutionContext, ExecutionOptions,
-    InstalledAsrConfig, InstalledDiarizationConfig, InstalledOcrConfig, OcrRequest, ResourceLimits,
-    TranscriptionRequest,
+    CancellationToken, ConversionError, ExecutionContext, ExecutionOptions, ResourceLimits,
 };
+#[cfg(feature = "media-runtime")]
+use into_markdown::{
+    DiarizationRequest, InstalledAsrConfig, InstalledDiarizationConfig, TranscriptionRequest,
+};
+#[cfg(feature = "ocr-runtime")]
+use into_markdown::{InstalledOcrConfig, OcrRequest};
+#[cfg(feature = "media-runtime")]
+use into_markdown_process_plugin::worker::WorkerEvents;
 use into_markdown_process_plugin::worker::{
-    WorkerError, WorkerEvents, WorkerRequest, serve_raw_with_isolated_stdout,
+    WorkerError, WorkerRequest, serve_raw_with_isolated_stdout,
 };
-use into_markdown_provider_plugin::{
-    DiarizationParameters, OcrCapabilityResponse, OcrParameters, ReadinessParameters,
-    TranscriptionParameters,
-};
+use into_markdown_provider_plugin::ReadinessParameters;
+#[cfg(feature = "media-runtime")]
+use into_markdown_provider_plugin::{DiarizationParameters, TranscriptionParameters};
+#[cfg(feature = "ocr-runtime")]
+use into_markdown_provider_plugin::{OcrCapabilityResponse, OcrParameters};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "ocr-runtime")]
 const OCR_PLUGIN_ID: &str = "official.ocr.ppocrv6";
+#[cfg(feature = "media-runtime")]
 const MEDIA_PLUGIN_ID: &str = "official.media.whisper";
 const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
@@ -25,6 +34,7 @@ const MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 /// # Errors
 ///
 /// Returns an I/O error when the authenticated worker protocol cannot be served.
+#[cfg(feature = "ocr-runtime")]
 pub fn serve_ocr() -> std::io::Result<()> {
     serve_raw_with_isolated_stdout(
         OCR_PLUGIN_ID,
@@ -88,7 +98,9 @@ pub fn serve_ocr() -> std::io::Result<()> {
 /// # Errors
 ///
 /// Returns an I/O error when the authenticated worker protocol cannot be served.
+#[cfg(feature = "media-runtime")]
 pub fn serve_media() -> std::io::Result<()> {
+    initialize_media_runtime()?;
     serve_raw_with_isolated_stdout(
         MEDIA_PLUGIN_ID,
         MAX_FRAME_BYTES,
@@ -104,6 +116,17 @@ pub fn serve_media() -> std::io::Result<()> {
     )
 }
 
+#[cfg(feature = "media-runtime")]
+fn initialize_media_runtime() -> std::io::Result<()> {
+    let executable = current_provider_executable()
+        .map_err(|_| std::io::Error::other("provider executable identity is invalid"))?;
+    let runtime_directory = executable
+        .parent()
+        .ok_or_else(|| std::io::Error::other("provider runtime directory is unavailable"))?;
+    into_markdown::initialize_cpu_runtime(runtime_directory)
+}
+
+#[cfg(feature = "media-runtime")]
 fn media_readiness(
     request: &WorkerRequest,
     cancellation: CancellationToken,
@@ -136,6 +159,7 @@ fn media_readiness(
     Ok("{\"ready\":true}".into())
 }
 
+#[cfg(feature = "media-runtime")]
 fn transcribe(
     request: &WorkerRequest,
     events: &WorkerEvents,
@@ -167,6 +191,7 @@ fn transcribe(
         .map_err(|_| WorkerError::new("invalidResult", "transcription result serialization failed"))
 }
 
+#[cfg(feature = "media-runtime")]
 fn diarize(
     request: &WorkerRequest,
     events: &WorkerEvents,
@@ -200,6 +225,7 @@ fn diarize(
         .map_err(|_| WorkerError::new("invalidResult", "diarization result serialization failed"))
 }
 
+#[cfg(feature = "ocr-runtime")]
 fn ocr_service(
     root: &Path,
     options: &into_markdown::ConversionOptions,
@@ -223,6 +249,7 @@ fn ocr_service(
     .map_err(|error| worker_error(&error))
 }
 
+#[cfg(feature = "media-runtime")]
 fn asr_service(
     root: &Path,
     options: &into_markdown::ConversionOptions,
@@ -245,6 +272,7 @@ fn asr_service(
     .map_err(|error| worker_error(&error))
 }
 
+#[cfg(feature = "media-runtime")]
 fn diarization_service(
     root: &Path,
     options: &into_markdown::ConversionOptions,
@@ -366,11 +394,12 @@ const fn worker_name() -> &'static str {
     if cfg!(windows) { "onnxruntime-worker.exe" } else { "onnxruntime-worker" }
 }
 
+#[cfg(feature = "media-runtime")]
 const fn ffmpeg_name() -> &'static str {
     if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "media-runtime"))]
 mod speech_tests {
     use super::*;
     use into_markdown_process_plugin::{

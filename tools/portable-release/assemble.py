@@ -30,6 +30,27 @@ CORE_ARCHIVES = {
 SPEECH_NAMES = {
     target: f"official.media.whisper-{target}.imp" for target in CORE_ARCHIVES
 }
+GGML_RUNTIME_FILES = {
+    "x86_64-pc-windows-msvc": {
+        *(f"bin/ggml-cpu-{name}.dll" for name in (
+            "x64", "sse42", "sandybridge", "haswell", "skylakex",
+            "cannonlake", "cascadelake", "icelake", "alderlake",
+        )),
+        "bin/ggml.dll",
+        "bin/ggml-base.dll",
+        "bin/whisper.dll",
+    },
+    "x86_64-unknown-linux-gnu": {
+        *(f"bin/libggml-cpu-{name}.so" for name in (
+            "x64", "sse42", "sandybridge", "ivybridge", "piledriver",
+            "haswell", "skylakex", "cannonlake", "cascadelake", "cooperlake",
+            "icelake", "alderlake", "sapphirerapids", "zen4",
+        )),
+        "bin/libggml.so.0",
+        "bin/libggml-base.so.0",
+        "bin/libwhisper.so.1",
+    },
+}
 FORBIDDEN_PLUGIN_PREFIXES = ("source/", "relink/", "licenses/")
 FORBIDDEN_PLUGIN_FILES = {
     "NOTICE",
@@ -502,6 +523,18 @@ def _validate_speech_manifest(
         )
     ):
         raise PortableReleaseError("speech provider runtime inventory differs from signed package")
+    expected_ggml = GGML_RUNTIME_FILES.get(target, set())
+    observed_ggml = {
+        path
+        for path in runtime_names
+        if pathlib.PurePosixPath(path).name.startswith(("ggml", "libggml", "whisper", "libwhisper"))
+        and pathlib.PurePosixPath(path).suffix in {".dll", ".so", ".0", ".1"}
+    }
+    if observed_ggml != expected_ggml:
+        raise PortableReleaseError("speech package GGML runtime inventory is invalid")
+    for path in expected_ggml:
+        if not binary_architecture(package.read(path), target):
+            raise PortableReleaseError(f"speech package GGML architecture is invalid: {path}")
     entrypoint = manifest["entrypoints"][target]
     if entrypoint not in runtime_by_path or runtime_by_path[entrypoint].get("executable") is not True:
         raise PortableReleaseError("speech provider entrypoint is absent or non-executable")

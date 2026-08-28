@@ -27,6 +27,7 @@ members = [
     "tools/license-check",
     "tools/installed-smoke",
     "third_party/whisper-rs-0.16.0",
+    "third_party/whisper-rs-0.16.0/sys",
 ]
 
 [workspace.package]

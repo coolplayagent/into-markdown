@@ -51,6 +51,7 @@ metal = [
 openblas = ["whisper-rs-sys/openblas"]
 openmp = ["whisper-rs-sys/openmp"]
 raw-api = []
+runtime-dispatch = ["whisper-rs-sys/runtime-dispatch"]
 test-with-tiny-model = []
 tracing_backend = []
 vulkan = [
@@ -69,3 +70,4 @@ optional = true
 
 [dependencies.whisper-rs-sys]
 version = "0.15"
+path = "sys"

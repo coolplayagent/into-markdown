@@ -47,7 +47,7 @@ pub fn installed_ocr_service(
 ///
 /// Returns the same bounded verification and runtime errors as
 /// [`installed_ocr_service`].
-#[cfg(feature = "official-provider-runtime")]
+#[cfg(feature = "ocr-provider-runtime")]
 pub fn installed_ocr_service_in_read_only_sandbox(
     config: &InstalledOcrConfig,
     options: &ConversionOptions,
@@ -65,14 +65,14 @@ fn installed_ocr_service_inner(
     context.checkpoint()?;
     into_markdown_ocr::PpOcrImageEngine::validate_service_limits(&options.limits, context)?;
     let manager = Arc::new(if read_only_sandbox {
-        #[cfg(feature = "official-provider-runtime")]
+        #[cfg(feature = "ocr-provider-runtime")]
         {
             into_markdown_ocr::ModelManager::embedded_authenticated_read_only_snapshot(
                 config.writable_model_root.clone(),
                 config.bundled_model_root.clone(),
             )?
         }
-        #[cfg(not(feature = "official-provider-runtime"))]
+        #[cfg(not(feature = "ocr-provider-runtime"))]
         {
             return Err(ConversionError::ComponentUnavailable {
                 component: config.model_bundle.clone(),
@@ -101,14 +101,14 @@ fn installed_ocr_service_inner(
         },
     })?;
     let library = if read_only_sandbox {
-        #[cfg(feature = "official-provider-runtime")]
+        #[cfg(feature = "ocr-provider-runtime")]
         {
             into_markdown_onnxruntime::RuntimeLibrary::load_authenticated_read_only_snapshot(
                 &config.runtime_trusted_root,
                 &config.runtime_library,
             )
         }
-        #[cfg(not(feature = "official-provider-runtime"))]
+        #[cfg(not(feature = "ocr-provider-runtime"))]
         {
             unreachable!("read-only sandbox assembly is feature-gated")
         }
@@ -125,14 +125,14 @@ fn installed_ocr_service_inner(
     let runtime_version = library.version().to_owned();
     let library = Arc::new(library);
     let factory = if read_only_sandbox {
-        #[cfg(feature = "official-provider-runtime")]
+        #[cfg(feature = "ocr-provider-runtime")]
         {
             into_markdown_onnxruntime::OrtSessionFactory::new_authenticated_read_only_snapshot(
                 library,
                 config.worker_executable.clone(),
             )
         }
-        #[cfg(not(feature = "official-provider-runtime"))]
+        #[cfg(not(feature = "ocr-provider-runtime"))]
         {
             unreachable!("read-only sandbox assembly is feature-gated")
         }
