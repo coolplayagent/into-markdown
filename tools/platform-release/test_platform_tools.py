@@ -20,6 +20,7 @@ from audit import (
     Audit,
     AuditFailure,
     clr_il_only,
+    requires_x86_64_extension_level,
     resolve_release_packages,
     run,
     safe_zip_extract,
@@ -202,6 +203,23 @@ class PlatformToolTests(unittest.TestCase):
         self.assertTrue(clr_il_only(header))
         self.assertFalse(clr_il_only(header.replace("0 [       0]", "2000 [      80]")))
         self.assertFalse(clr_il_only("native PE"))
+
+    def test_linux_native_audit_rejects_raised_x86_64_isa_levels(self) -> None:
+        self.assertFalse(
+            requires_x86_64_extension_level(
+                "Properties: x86 ISA needed: x86-64-baseline\n"
+            )
+        )
+        self.assertTrue(
+            requires_x86_64_extension_level(
+                "Properties: x86 ISA needed: x86-64-baseline, x86-64-v4\n"
+            )
+        )
+        self.assertFalse(
+            requires_x86_64_extension_level(
+                "Properties: x86 ISA used: x86-64-v4\n"
+            )
+        )
 
     def test_zip_extractor_rejects_parent_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as name:

@@ -227,6 +227,14 @@ def clr_il_only(output: str) -> bool:
     )
 
 
+def requires_x86_64_extension_level(notes: str) -> bool:
+    """Return true when ELF declares an ISA requirement above x86-64 baseline."""
+    needed = "\n".join(
+        line for line in notes.splitlines() if "x86 ISA needed:" in line
+    )
+    return re.search(r"\bx86-64-v[234]\b", needed, re.IGNORECASE) is not None
+
+
 def audit_tree(root: pathlib.Path, audit: Audit, linux: bool) -> None:
     audit.require(root, "regular-root", root.is_dir() and not root.is_symlink(), "root must be a real directory")
     for path in sorted(root.rglob("*")):
@@ -319,6 +327,14 @@ def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None
         if paths:
             allowed = {"/lib64/ld-linux-x86-64.so.2", "/lib/ld-linux-aarch64.so.1"}
             audit.require(relative, "elf-interpreter", paths[0] in allowed, paths[0])
+        if expected_machine == "Advanced Micro Devices X86-64":
+            notes = command([readelf, "-nW", str(binary)])
+            audit.require(
+                relative,
+                "x86-64-isa-baseline",
+                not requires_x86_64_extension_level(notes),
+                "ELF must not require x86-64-v2/v3/v4",
+            )
 
 
 def audit_windows(

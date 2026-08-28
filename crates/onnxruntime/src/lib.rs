@@ -1482,6 +1482,23 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn authenticated_snapshot_accepts_canonical_verbatim_windows_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("runtime");
+        fs::create_dir(&root).unwrap();
+        let library = root.join("onnxruntime.dll");
+        fs::write(&library, b"fixture").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let canonical_library = library.canonicalize().unwrap();
+        assert!(canonical_root.to_string_lossy().starts_with(r"\\?\"));
+        let (opened, identity) =
+            open_explicit_authenticated_snapshot(&canonical_root, &canonical_library).unwrap();
+        assert_eq!(opened.metadata().unwrap().len(), 7);
+        assert_eq!(identity, canonical_library);
+    }
+
     #[test]
     fn dependency_authority_accepts_only_platform_system_names() {
         assert!(dependencies_are_system_only(

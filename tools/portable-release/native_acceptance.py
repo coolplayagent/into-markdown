@@ -24,6 +24,9 @@ CORE_ARCHIVES = {
     "aarch64-apple-darwin": ("into-md-macos-arm64.zip", "into-md", "Mach-O", "arm64"),
 }
 MAX_OUTPUT_BYTES = 64 * 1024
+LEGACY_OFFICE_FIXTURES = (
+    pathlib.Path(__file__).resolve().parents[1] / "macos-release" / "fixtures"
+)
 
 
 class AcceptanceError(RuntimeError):
@@ -141,6 +144,22 @@ def run_case(
     )
 
 
+def assert_runtime_absent(
+    cache: pathlib.Path,
+    home: pathlib.Path,
+    temporary: pathlib.Path,
+    detail: str,
+) -> None:
+    runtime_roots = [
+        cache / "into-markdown" / "runtime",
+        home / ".cache" / "into-markdown" / "runtime",
+        home / "Library" / "Caches" / "into-markdown" / "runtime",
+    ]
+    fallback = list(temporary.glob("into-markdown-runtime-*"))
+    if any(path.exists() for path in runtime_roots) or fallback:
+        raise AcceptanceError(f"{detail} materialized native runtime")
+
+
 def run_e2e(
     target: str, data: bytes, member: str, artifact_sha: str, expected_version: str
 ) -> dict:
@@ -190,16 +209,43 @@ def run_e2e(
             environment,
         )
         cases = [help_case, version_case, text_case]
-        if not result.is_file() or "portable release acceptance" not in result.read_text(encoding="utf-8"):
+        if not result.is_file() or "portable release acceptance" not in result.read_text(
+            encoding="utf-8"
+        ):
             raise AcceptanceError("plain-text conversion output is missing or invalid")
-        runtime_roots = [
-            cache / "into-markdown" / "runtime",
-            home / ".cache" / "into-markdown" / "runtime",
-            home / "Library" / "Caches" / "into-markdown" / "runtime",
-        ]
-        fallback = list(temporary.glob("into-markdown-runtime-*"))
-        if any(path.exists() for path in runtime_roots) or fallback:
-            raise AcceptanceError("help, version, or plain text conversion materialized native runtime")
+        assert_runtime_absent(cache, home, temporary, "help, version, or plain text conversion")
+        for extension in ("doc", "ppt", "xls"):
+            fixture = LEGACY_OFFICE_FIXTURES / f"normal.{extension}"
+            if not fixture.is_file():
+                raise AcceptanceError(f"legacy Office fixture is unavailable: {fixture.name}")
+            legacy_result = work / f"normal-{extension}.md"
+            legacy_case, _ = run_case(
+                f"legacy-office-{extension}",
+                binary,
+                [
+                    str(fixture),
+                    "-o",
+                    str(legacy_result),
+                    "--conflict",
+                    "error",
+                    "--no-config",
+                    "--progress",
+                    "never",
+                ],
+                work,
+                environment,
+            )
+            cases.append(legacy_case)
+            if not legacy_result.is_file() or not legacy_result.read_bytes():
+                raise AcceptanceError(
+                    f"legacy Office {extension.upper()} output is missing or empty"
+                )
+            assert_runtime_absent(
+                cache,
+                home,
+                temporary,
+                f"default legacy Office {extension.upper()} conversion",
+            )
         return {
             "schemaVersion": 1,
             "target": target,

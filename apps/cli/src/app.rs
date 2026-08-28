@@ -4118,6 +4118,7 @@ fn invocation_capabilities(
     plans: &[WorkPlan],
     explicit_format: Option<InputFormat>,
     extension_hint: Option<&str>,
+    options: &ConversionOptions,
 ) -> crate::services::InvocationCapabilities {
     let hinted = explicit_format.or_else(|| extension_hint.and_then(InputFormat::from_extension));
     let mut formats = Vec::new();
@@ -4163,13 +4164,22 @@ fn invocation_capabilities(
     };
     let media =
         |format| matches!(format, InputFormat::Audio | InputFormat::Video | InputFormat::YouTube);
+    let legacy_office =
+        |format| matches!(format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls);
+    let effective_ocr_policy = match options.ai.vision_ocr {
+        AiMode::Only => OcrPolicy::Always,
+        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
+            OcrPolicy::Auto
+        }
+        _ => options.ocr.policy,
+    };
     crate::services::InvocationCapabilities {
-        ocr: formats.iter().copied().any(visual),
+        ocr: formats.iter().copied().any(|format| {
+            visual(format) && !(effective_ocr_policy == OcrPolicy::Auto && legacy_office(format))
+        }),
         transcription: formats.iter().copied().any(media),
         diarization: formats.iter().copied().any(media),
-        legacy_office: formats
-            .iter()
-            .any(|format| matches!(format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls)),
+        legacy_office: formats.iter().copied().any(legacy_office),
     }
 }
 
@@ -4225,8 +4235,12 @@ fn run_conversion(
         ..into_markdown::ExecutionOptions::default()
     };
     let explicit_format = arguments.format.as_deref().map(parse_format).transpose()?;
-    let capability_needs =
-        invocation_capabilities(&plans, explicit_format, arguments.extension.as_deref());
+    let capability_needs = invocation_capabilities(
+        &plans,
+        explicit_format,
+        arguments.extension.as_deref(),
+        &loaded.options,
+    );
     let services = crate::services::assemble(&loaded, &execution, &context.cwd, capability_needs)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
@@ -6883,19 +6897,30 @@ mod tests {
             output: None,
             output_root: None,
         };
-        let office = invocation_capabilities(&[plan("report.xls")], None, None);
+        let mut options = ConversionOptions::default();
+        let office = invocation_capabilities(&[plan("report.xls")], None, None, &options);
         assert!(office.legacy_office);
-        assert!(office.ocr);
+        assert!(!office.ocr);
         assert!(!office.transcription);
         assert!(!office.diarization);
 
-        let media = invocation_capabilities(&[plan("meeting.webm")], None, None);
+        options.ocr.policy = OcrPolicy::Always;
+        let office_with_explicit_ocr =
+            invocation_capabilities(&[plan("slides.ppt")], None, None, &options);
+        assert!(office_with_explicit_ocr.legacy_office);
+        assert!(office_with_explicit_ocr.ocr);
+
+        options = ConversionOptions::default();
+        let image = invocation_capabilities(&[plan("scan.png")], None, None, &options);
+        assert!(image.ocr);
+
+        let media = invocation_capabilities(&[plan("meeting.webm")], None, None, &options);
         assert!(media.transcription);
         assert!(media.diarization);
         assert!(!media.legacy_office);
         assert!(!media.ocr);
 
-        let unknown = invocation_capabilities(&[plan("opaque")], None, None);
+        let unknown = invocation_capabilities(&[plan("opaque")], None, None, &options);
         assert!(unknown.ocr && unknown.transcription && unknown.diarization);
         assert!(unknown.legacy_office);
     }

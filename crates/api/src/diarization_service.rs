@@ -5,6 +5,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+fn select_snapshot_operation<T, E>(
+    read_only_sandbox: bool,
+    authenticated: impl FnOnce() -> Result<T, E>,
+    ordinary: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    if read_only_sandbox { authenticated() } else { ordinary() }
+}
+
 /// Explicit verified paths required for speaker diarization.
 #[derive(Debug, Clone)]
 pub struct InstalledDiarizationConfig {
@@ -110,23 +118,9 @@ fn installed_diarization_service_inner(
         "{}@vad-sha256:{}+speaker-sha256:{}",
         config.model_bundle, vad.sha256, embedding.sha256
     );
-    let library = into_markdown_onnxruntime::RuntimeLibrary::load(
-        &config.runtime_trusted_root,
-        &config.runtime_library,
-    )
-    .map_err(|error| ConversionError::ComponentUnavailable {
-        component: "onnxruntime".into(),
-        detail: format!("installed ONNX Runtime is unavailable: {error}"),
-    })?;
+    let library = load_diarization_runtime(config, read_only_sandbox)?;
     let runtime_version = library.version().to_owned();
-    let factory = into_markdown_onnxruntime::OrtSessionFactory::new(
-        Arc::new(library),
-        config.worker_executable.clone(),
-    )
-    .map_err(|error| ConversionError::ComponentUnavailable {
-        component: "onnxruntime-worker".into(),
-        detail: format!("installed ONNX worker is unavailable: {error}"),
-    })?;
+    let factory = diarization_session_factory(config, library, read_only_sandbox)?;
     let resolver = into_markdown_asr::DiarizationModelResolver::new(Arc::clone(&manager), context)?;
     let runtime = into_markdown_ocr::OnnxRuntime::new(
         Arc::new(resolver),
@@ -166,10 +160,74 @@ fn installed_diarization_service_inner(
     )))
 }
 
+fn load_diarization_runtime(
+    config: &InstalledDiarizationConfig,
+    read_only_sandbox: bool,
+) -> Result<into_markdown_onnxruntime::RuntimeLibrary, ConversionError> {
+    select_snapshot_operation(
+        read_only_sandbox,
+        || {
+            into_markdown_onnxruntime::RuntimeLibrary::load_authenticated_read_only_snapshot(
+                &config.runtime_trusted_root,
+                &config.runtime_library,
+            )
+        },
+        || {
+            into_markdown_onnxruntime::RuntimeLibrary::load(
+                &config.runtime_trusted_root,
+                &config.runtime_library,
+            )
+        },
+    )
+    .map_err(|error| ConversionError::ComponentUnavailable {
+        component: "onnxruntime".into(),
+        detail: format!("installed ONNX Runtime is unavailable: {error}"),
+    })
+}
+
+fn diarization_session_factory(
+    config: &InstalledDiarizationConfig,
+    library: into_markdown_onnxruntime::RuntimeLibrary,
+    read_only_sandbox: bool,
+) -> Result<into_markdown_onnxruntime::OrtSessionFactory, ConversionError> {
+    let library = Arc::new(library);
+    select_snapshot_operation(
+        read_only_sandbox,
+        || {
+            into_markdown_onnxruntime::OrtSessionFactory::new_authenticated_read_only_snapshot(
+                Arc::clone(&library),
+                config.worker_executable.clone(),
+            )
+        },
+        || {
+            into_markdown_onnxruntime::OrtSessionFactory::new(
+                Arc::clone(&library),
+                config.worker_executable.clone(),
+            )
+        },
+    )
+    .map_err(|error| ConversionError::ComponentUnavailable {
+        component: "onnxruntime-worker".into(),
+        detail: format!("installed ONNX worker is unavailable: {error}"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{ErrorCode, ExecutionOptions, ResourceLimits};
+
+    #[test]
+    fn read_only_sandbox_selects_authenticated_native_snapshot_operations() {
+        assert_eq!(
+            select_snapshot_operation(true, || Ok::<_, ()>("authenticated"), || Ok("ordinary")),
+            Ok("authenticated")
+        );
+        assert_eq!(
+            select_snapshot_operation(false, || Ok::<_, ()>("authenticated"), || Ok("ordinary")),
+            Ok("ordinary")
+        );
+    }
 
     #[test]
     fn missing_bundle_fails_before_native_runtime_lookup() {

@@ -203,6 +203,27 @@ class PlatformReleaseTests(unittest.TestCase):
                 ],
             )
 
+    def test_release_build_disables_native_ggml_cpu_tuning(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            output = pathlib.Path(name)
+            environments = []
+
+            def fake_run(arguments, **kwargs):
+                command = [str(value) for value in arguments]
+                if command[:2] == ["cargo", "build"]:
+                    environments.append(kwargs["env"])
+                    release_bin = output / "release"
+                    release_bin.mkdir()
+                    for _, binary in RELEASE_BUILD_PRODUCTS:
+                        (release_bin / binary).touch()
+                return ""
+
+            with mock.patch.object(release_module, "run", side_effect=fake_run):
+                release_module.build("x86_64-unknown-linux-gnu", output)
+            self.assertEqual(len(environments), 1)
+            self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
+            self.assertIn("target-cpu=x86-64", environments[0]["RUSTFLAGS"])
+
     def test_release_build_rejects_a_missing_helper_product(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             output = pathlib.Path(name)
@@ -225,8 +246,11 @@ class PlatformReleaseTests(unittest.TestCase):
             root = pathlib.Path(name)
             commands = []
 
-            def fake_run(arguments, **_kwargs):
+            environments = []
+
+            def fake_run(arguments, **kwargs):
                 commands.append([str(value) for value in arguments])
+                environments.append(kwargs["env"])
                 return ""
 
             with mock.patch.object(release_module, "run", side_effect=fake_run):
@@ -245,6 +269,8 @@ class PlatformReleaseTests(unittest.TestCase):
             self.assertIn("into-md", commands[0])
             feature = commands[0].index("--features")
             self.assertEqual(commands[0][feature + 1], "embedded-runtime")
+            self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
+            self.assertIn("target-cpu=x86-64", environments[0]["RUSTFLAGS"])
 
     def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
         source = (ROOT / "tools/platform-release/release.py").read_text(

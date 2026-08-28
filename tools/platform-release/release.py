@@ -163,7 +163,16 @@ def refresh_ffmpeg_authority(authority_path: pathlib.Path, executable: pathlib.P
 
 def build(target: str, output: pathlib.Path) -> pathlib.Path:
     environment = os.environ.copy()
-    environment.update({"CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(output)})
+    environment.update(
+        {
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_TARGET_DIR": str(output),
+            # whisper.cpp otherwise enables GGML_NATIVE and bakes the release
+            # runner's optional ISA extensions into the provider.  The Rust
+            # target-cpu baseline below does not apply to this CMake subtree.
+            "GGML_NATIVE": "OFF",
+        }
+    )
     rustflags = ["-C", "strip=debuginfo"]
     target_cpu = {
         "x86_64-unknown-linux-gnu": "x86-64",
@@ -224,6 +233,9 @@ def build_embedded_core(
             "CARGO_TARGET_DIR": str(output),
             "INTO_MD_EMBEDDED_PDFIUM_ROOT": str(pdfium_root.resolve()),
             "INTO_MD_EMBEDDED_OCR_ROOT": str(ocr_root.resolve()),
+            # Keep every Cargo/CMake invocation in the release authority on
+            # the same portable CPU policy, including clean rebuilds.
+            "GGML_NATIVE": "OFF",
         }
     )
     target_cpu = {

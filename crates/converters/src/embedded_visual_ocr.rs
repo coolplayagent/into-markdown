@@ -198,7 +198,7 @@ fn plan_enrichment(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<EnrichmentPlan, ConversionError> {
-    if !ocr_enabled(options)
+    if !embedded_visual_ocr_enabled(input_format, options)
         || input_format == InputFormat::Image
         || !eligible_container(input_format)
     {
@@ -738,7 +738,7 @@ async fn enrich(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    if !ocr_enabled(options)
+    if !embedded_visual_ocr_enabled(input_format, options)
         || input_format == InputFormat::Image
         || !eligible_container(input_format)
     {
@@ -964,6 +964,12 @@ async fn enrich(
 
 fn ocr_enabled(options: &ConversionOptions) -> bool {
     effective_ocr_policy(options) != OcrPolicy::Off
+}
+
+fn embedded_visual_ocr_enabled(input_format: InputFormat, options: &ConversionOptions) -> bool {
+    ocr_enabled(options)
+        && !(effective_ocr_policy(options) == OcrPolicy::Auto
+            && matches!(input_format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls))
 }
 
 fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
@@ -2400,6 +2406,36 @@ mod tests {
             assert_eq!(after.assets, expected_assets);
             assert_eq!(after.diagnostics, expected_diagnostics);
         }
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn legacy_office_auto_does_not_plan_or_run_embedded_visual_ocr() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Auto;
+
+        for format in [InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls] {
+            let before = output();
+            let expected_document = before.document.clone();
+            let expected_assets = before.assets.clone();
+            let expected_diagnostics = before.diagnostics.clone();
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            assert_eq!(
+                plan_enrichment(&before, format, &options, &services, &context).unwrap(),
+                EnrichmentPlan::Skip,
+                "{format:?}"
+            );
+            let after = block_on(enrich(before, format, &options, &services, &context))
+                .unwrap_or_else(|error| panic!("{format:?}: {error}"));
+            assert_eq!(after.document, expected_document, "{format:?}");
+            assert_eq!(after.assets, expected_assets, "{format:?}");
+            assert_eq!(after.diagnostics, expected_diagnostics, "{format:?}");
+        }
+
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
     }
 
