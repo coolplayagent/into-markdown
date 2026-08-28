@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
 import re
 import sys
@@ -26,6 +28,19 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_cargo_runtime_authority_binds_current_workspace_manifests(self) -> None:
+        authority_path = ROOT / "third_party/licenses/cargo-normal-runtime.json"
+        value = json.loads(authority_path.read_text(encoding="utf-8"))
+
+        def canonical_digest(path: pathlib.Path) -> str:
+            contents = path.read_bytes().replace(b"\r\n", b"\n")
+            self.assertNotIn(b"\r", contents)
+            return hashlib.sha256(contents).hexdigest()
+
+        self.assertEqual(value["cargo_lock_sha256"], canonical_digest(ROOT / "Cargo.lock"))
+        for relative, expected in value["workspace_manifest_sha256"].items():
+            self.assertEqual(expected, canonical_digest(ROOT / relative), relative)
+
     def test_release_version_matches_workspace_and_bazel_module(self) -> None:
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(VERSION, workspace["workspace"]["package"]["version"])
