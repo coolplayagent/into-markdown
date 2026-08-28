@@ -29,6 +29,7 @@ from platform_acceptance import (
     PLUGINS,
     assert_states,
     capability_map,
+    fixture_conversion_arguments,
     repairable_payload_files,
     resolve_package,
     tree_hash,
@@ -234,6 +235,18 @@ class PlatformToolTests(unittest.TestCase):
     def test_capability_json_contract_is_indexed_by_id(self) -> None:
         value = capability_map('{"capabilities":[{"id":"ocr","status":"ready"}]}')
         self.assertEqual(value["ocr"]["status"], "ready")
+
+    def test_real_fixture_commands_have_explicit_isolated_outputs(self) -> None:
+        source = pathlib.Path("state/fixture.png")
+        output = pathlib.Path("state/outputs/fixture.md")
+        arguments = fixture_conversion_arguments(
+            source, output, ["--ocr", "always"]
+        )
+        self.assertEqual(arguments[0], str(source))
+        self.assertEqual(arguments[1:5], ["--output", str(output), "--conflict", "error"])
+        self.assertEqual(arguments[-4:], ["--ocr", "always", "--emit", "result-json"])
+        with self.assertRaisesRegex(ValueError, "different paths"):
+            fixture_conversion_arguments(source, source, ["--ocr", "always"])
 
     def test_core_only_acceptance_requires_ready_ocr_and_absent_speech(self) -> None:
         self.assertEqual(BUILTIN_CAPABILITIES, {"ocr": "official.ocr.ppocrv6"})

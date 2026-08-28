@@ -43,8 +43,13 @@ py_test(
     data = [
         "//:Cargo.toml",
         "//:MODULE.bazel",
+        "//:.github/workflows/macos-arm64-release.yml",
         "//:.github/workflows/native-release-gates.yml",
         "//:.github/workflows/platform-modular-release.yml",
+        "Install.cmd",
+        "Install.ps1",
+        "Uninstall.cmd",
+        "Uninstall.ps1",
         "//tools/installed-smoke:rust_consumer_source",
     ],
     main = "test_release.py",

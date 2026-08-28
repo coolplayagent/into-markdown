@@ -45,6 +45,16 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("cargo test --workspace --all-targets", gates)
         self.assertIn("cargo clippy --workspace", gates)
         self.assertIn("bazel --output_user_root", gates)
+        self.assertNotIn("RUST_TEST_THREADS=1 //...", gates)
+        for target in (
+            "//tools/platform-release:release_test",
+            "//tools/platform-release:platform_tools_test",
+            "//tools/platform-release:installer_test",
+            "//tools/installed-smoke:installed_smoke_test",
+        ):
+            self.assertIn(target, gates)
+        self.assertIn("timeout-minutes: 20", gates)
+        self.assertNotIn("plugin_manager_process_fixture", gates)
         self.assertIn("run: cargo fetch --locked", gates)
         self.assertIn("~/.cargo/registry", gates)
         self.assertIn("repository-cache: true", gates)
