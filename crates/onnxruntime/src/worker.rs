@@ -434,6 +434,10 @@ fn spawn_worker(
             .arg(limits.physical_memory.to_string())
             .current_dir(working_directory)
             .env_clear()
+            // ONNX Runtime 1.29 enables POSIX telemetry unless this documented opt-out is
+            // explicit. The isolated worker must never inspect host identifiers or attempt
+            // telemetry initialization; keep the otherwise-empty environment deterministic.
+            .env("ORT_DISABLE_TELEMETRY", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -508,6 +512,7 @@ fn spawn_worker_windows(
         .arg(physical_memory.to_string())
         .current_dir(working_directory)
         .env_clear()
+        .env("ORT_DISABLE_TELEMETRY", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

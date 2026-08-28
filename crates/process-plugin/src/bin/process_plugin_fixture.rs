@@ -105,6 +105,20 @@ fn main() -> std::io::Result<()> {
                 });
                 Ok(result(if usable { "private-temp-ready" } else { "private-temp-invalid" }))
             }
+            "system-topology" => {
+                #[cfg(target_os = "linux")]
+                let readable = std::fs::read_to_string("/proc/cpuinfo")
+                    .is_ok_and(|contents| !contents.is_empty())
+                    && std::fs::read_to_string("/sys/devices/system/cpu/possible")
+                        .is_ok_and(|contents| !contents.trim().is_empty());
+                #[cfg(not(target_os = "linux"))]
+                let readable = true;
+                Ok(result(if readable {
+                    "system-topology-ready"
+                } else {
+                    "system-topology-denied"
+                }))
+            }
             "child" => {
                 let executable = std::env::current_exe()
                     .map_err(|_| WorkerError::new("childPrepare", "child helper is unavailable"))?;

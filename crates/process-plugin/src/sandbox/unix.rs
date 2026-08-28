@@ -188,7 +188,18 @@ mod linux {
             for root in read_only_roots {
                 add_path(&ruleset, root, READ)?;
             }
-            for path in ["/lib", "/lib64", "/usr/lib", "/usr/lib64", "/etc/ld.so.cache"] {
+            // Native inference libraries inspect only these kernel-exported CPU topology
+            // records when selecting a portable execution path. Keep the authority exact:
+            // granting all of /proc or /sys would expose unrelated host/process metadata.
+            for path in [
+                "/lib",
+                "/lib64",
+                "/usr/lib",
+                "/usr/lib64",
+                "/etc/ld.so.cache",
+                "/proc/cpuinfo",
+                "/sys/devices/system/cpu",
+            ] {
                 let path = Path::new(path);
                 if path.exists() {
                     let access = if path.is_dir() { READ } else { READ_FILE };
