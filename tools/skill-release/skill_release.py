@@ -1,4 +1,4 @@
-"""Validate, materialize, and package the platform-neutral Into Markdown skill."""
+"""Validate and package the self-contained Into Markdown skill."""
 
 from __future__ import annotations
 
@@ -6,29 +6,57 @@ import hashlib
 import pathlib
 import shutil
 import stat
+import struct
 import sys
 import zipfile
+from dataclasses import dataclass
+from typing import Mapping
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SKILL_NAME = "into-markdown"
 SKILL_SOURCE = ROOT / ".agents/skills" / SKILL_NAME
+# Kept for release-tool compatibility while Core packages stop embedding the skill.
 CORE_RELATIVE = pathlib.Path("share/into-markdown/skills") / SKILL_NAME
 FIXED_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
-ALLOWED_FILES = (
+CANONICAL_FILES = (
     pathlib.PurePosixPath("LICENSE"),
     pathlib.PurePosixPath("SKILL.md"),
     pathlib.PurePosixPath("agents/openai.yaml"),
     pathlib.PurePosixPath("references/cli-workflows.md"),
 )
-ALLOWED_DIRECTORIES = (
+CANONICAL_DIRECTORIES = (
     pathlib.PurePosixPath("agents"),
     pathlib.PurePosixPath("references"),
+)
+# Backward-compatible names for consumers of the canonical instruction tree.
+ALLOWED_FILES = CANONICAL_FILES
+ALLOWED_DIRECTORIES = CANONICAL_DIRECTORIES
+
+
+@dataclass(frozen=True)
+class AssetSpec:
+    relative: pathlib.PurePosixPath
+    format_name: str
+    machine: int
+    mode: int
+
+
+ASSET_SPECS = (
+    AssetSpec(pathlib.PurePosixPath("assets/windows-x86_64/into-md.exe"), "PE", 0x8664, 0o644),
+    AssetSpec(pathlib.PurePosixPath("assets/linux-x86_64/into-md"), "ELF", 62, 0o755),
+    AssetSpec(pathlib.PurePosixPath("assets/linux-arm64/into-md"), "ELF", 183, 0o755),
+)
+ASSET_DIRECTORIES = (
+    pathlib.PurePosixPath("assets"),
+    pathlib.PurePosixPath("assets/linux-arm64"),
+    pathlib.PurePosixPath("assets/linux-x86_64"),
+    pathlib.PurePosixPath("assets/windows-x86_64"),
 )
 
 
 class SkillReleaseError(RuntimeError):
-    """The canonical skill or a release copy violated its fixed contract."""
+    """The canonical skill, bundled Core, or archive violated the fixed contract."""
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -37,6 +65,19 @@ def sha256(path: pathlib.Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def core_inputs(
+    windows_x86_64_core: pathlib.Path,
+    linux_x86_64_core: pathlib.Path,
+    linux_arm64_core: pathlib.Path,
+) -> dict[pathlib.PurePosixPath, pathlib.Path]:
+    """Bind the three required platform inputs to their immutable package paths."""
+    return {
+        ASSET_SPECS[0].relative: windows_x86_64_core,
+        ASSET_SPECS[1].relative: linux_x86_64_core,
+        ASSET_SPECS[2].relative: linux_arm64_core,
+    }
 
 
 def validate(source: pathlib.Path = SKILL_SOURCE) -> tuple[pathlib.Path, ...]:
@@ -58,11 +99,11 @@ def validate(source: pathlib.Path = SKILL_SOURCE) -> tuple[pathlib.Path, ...]:
             files.append(relative)
         else:
             raise SkillReleaseError(f"skill source contains an unsupported file: {relative}")
-    if tuple(files) != ALLOWED_FILES or tuple(directories) != ALLOWED_DIRECTORIES:
+    if tuple(files) != CANONICAL_FILES or tuple(directories) != CANONICAL_DIRECTORIES:
         raise SkillReleaseError("skill source does not contain the exact reviewed file set")
 
     texts = {}
-    for relative in ALLOWED_FILES:
+    for relative in CANONICAL_FILES:
         try:
             texts[relative.as_posix()] = (source / relative).read_text(encoding="utf-8")
         except UnicodeDecodeError as error:
@@ -73,7 +114,7 @@ def validate(source: pathlib.Path = SKILL_SOURCE) -> tuple[pathlib.Path, ...]:
     _validate_openai_yaml(texts["agents/openai.yaml"])
     if (source / "LICENSE").read_bytes() != (ROOT / "LICENSE").read_bytes():
         raise SkillReleaseError("skill LICENSE differs from the project license")
-    return tuple(source / relative for relative in ALLOWED_FILES)
+    return tuple(source / relative for relative in CANONICAL_FILES)
 
 
 def _validate_skill_markdown(text: str) -> None:
@@ -101,7 +142,7 @@ def _validate_skill_markdown(text: str) -> None:
         "standard input",
         "directories",
         "remote sources",
-        "into-md",
+        "bundled into-md",
     ]
     negative = [
         "do not use",
@@ -113,8 +154,16 @@ def _validate_skill_markdown(text: str) -> None:
     ]
     if not all(fragment in description for fragment in positive + negative):
         raise SkillReleaseError("SKILL.md description does not preserve its routing boundaries")
-    if "references/cli-workflows.md" not in text:
-        raise SkillReleaseError("SKILL.md does not route conditional workflows to its reference")
+    required_body = [
+        "references/cli-workflows.md",
+        "assets/windows-x86_64/into-md.exe",
+        "assets/linux-x86_64/into-md",
+        "assets/linux-arm64/into-md",
+        "Do not search `PATH`",
+        "this host is unsupported",
+    ]
+    if not all(fragment in text for fragment in required_body):
+        raise SkillReleaseError("SKILL.md does not preserve bundled executable routing")
 
 
 def _validate_openai_yaml(text: str) -> None:
@@ -128,10 +177,58 @@ def _validate_openai_yaml(text: str) -> None:
     if not required <= lines or not text.startswith("interface:\n") or "\npolicy:\n" not in text:
         raise SkillReleaseError("agents/openai.yaml is missing reviewed interface or policy fields")
     if "dependencies:" in text:
-        raise SkillReleaseError("the instruction-only skill must not declare tool dependencies")
+        raise SkillReleaseError("the bundled skill must not declare external tool dependencies")
+
+
+def _validate_core_path(path: pathlib.Path, spec: AssetSpec) -> pathlib.Path:
+    if path.is_symlink():
+        raise SkillReleaseError(f"{spec.relative} input is a symbolic link")
+    try:
+        metadata = path.stat()
+    except OSError as error:
+        raise SkillReleaseError(f"{spec.relative} input is not a readable regular file") from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SkillReleaseError(f"{spec.relative} input is not a readable regular file")
+    try:
+        with path.open("rb") as binary:
+            header = binary.read(4096)
+    except OSError as error:
+        raise SkillReleaseError(f"{spec.relative} input is not a readable regular file") from error
+    _validate_binary_header(header, metadata.st_size, spec)
+    return path
+
+
+def _validate_binary_header(header: bytes, size: int, spec: AssetSpec) -> None:
+    if spec.format_name == "PE":
+        if size < 64 or len(header) < 64 or header[:2] != b"MZ":
+            raise SkillReleaseError(f"{spec.relative} is not a PE executable")
+        pe_offset = struct.unpack_from("<I", header, 0x3C)[0]
+        if pe_offset > 4096 - 24 or pe_offset + 24 > size or header[pe_offset : pe_offset + 4] != b"PE\0\0":
+            raise SkillReleaseError(f"{spec.relative} has an invalid PE header")
+        machine = struct.unpack_from("<H", header, pe_offset + 4)[0]
+        if machine != spec.machine:
+            raise SkillReleaseError(f"{spec.relative} has the wrong PE architecture")
+        return
+
+    if size < 64 or len(header) < 64 or header[:4] != b"\x7fELF":
+        raise SkillReleaseError(f"{spec.relative} is not an ELF executable")
+    if header[4:7] != b"\x02\x01\x01":
+        raise SkillReleaseError(f"{spec.relative} is not a 64-bit little-endian ELF executable")
+    elf_type, machine = struct.unpack_from("<HH", header, 16)
+    if elf_type not in (2, 3):
+        raise SkillReleaseError(f"{spec.relative} is not an ELF executable or PIE")
+    if machine != spec.machine:
+        raise SkillReleaseError(f"{spec.relative} has the wrong ELF architecture")
+
+
+def _validated_cores(cores: Mapping[pathlib.PurePosixPath, pathlib.Path]) -> dict[pathlib.PurePosixPath, pathlib.Path]:
+    if set(cores) != {spec.relative for spec in ASSET_SPECS}:
+        raise SkillReleaseError("exactly three reviewed Core inputs are required")
+    return {spec.relative: _validate_core_path(pathlib.Path(cores[spec.relative]), spec) for spec in ASSET_SPECS}
 
 
 def materialize(destination: pathlib.Path, source: pathlib.Path = SKILL_SOURCE) -> pathlib.Path:
+    """Copy only canonical instructions; release archives add platform Core assets."""
     files = validate(source)
     if destination.exists() or destination.is_symlink():
         raise SkillReleaseError("skill release destination already exists")
@@ -170,80 +267,125 @@ def validate_materialized(destination: pathlib.Path, source: pathlib.Path = SKIL
         raise SkillReleaseError("materialized skill differs from the canonical source")
 
 
-def create_archive(destination: pathlib.Path, source: pathlib.Path = SKILL_SOURCE) -> pathlib.Path:
+def create_archive(
+    destination: pathlib.Path,
+    cores: Mapping[pathlib.PurePosixPath, pathlib.Path],
+    source: pathlib.Path = SKILL_SOURCE,
+) -> pathlib.Path:
     files = validate(source)
-    if destination.exists() or destination.is_symlink():
-        raise SkillReleaseError("skill archive destination already exists")
+    validated_cores = _validated_cores(cores)
+    sidecar = destination.with_name(destination.name + ".sha256")
+    if destination.exists() or destination.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+        raise SkillReleaseError("skill archive destination or forbidden checksum sidecar already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        archive.comment = b""
         _write_directory(archive, f"{SKILL_NAME}/")
-        entries = [(relative.as_posix(), None) for relative in ALLOWED_DIRECTORIES]
-        entries.extend(
-            (path.relative_to(source.resolve()).as_posix(), path)
-            for path in files
-        )
-        for relative, path in sorted(entries, key=lambda entry: entry[0]):
+        entries: list[tuple[str, pathlib.Path | None, int]] = [
+            *((relative.as_posix(), None, 0o755) for relative in CANONICAL_DIRECTORIES + ASSET_DIRECTORIES),
+            *((path.relative_to(source.resolve()).as_posix(), path, 0o644) for path in files),
+            *((spec.relative.as_posix(), validated_cores[spec.relative], spec.mode) for spec in ASSET_SPECS),
+        ]
+        for relative, path, mode in sorted(entries, key=lambda entry: entry[0]):
             if path is None:
                 _write_directory(archive, f"{SKILL_NAME}/{relative}/")
             else:
-                info = zipfile.ZipInfo(f"{SKILL_NAME}/{relative}", FIXED_TIMESTAMP)
-                info.create_system = 3
-                info.external_attr = (stat.S_IFREG | 0o644) << 16
-                archive.writestr(
-                    info,
-                    path.read_bytes(),
-                    compress_type=zipfile.ZIP_DEFLATED,
-                    compresslevel=9,
-                )
-    checksum = destination.with_name(destination.name + ".sha256")
-    checksum.write_text(f"{sha256(destination)}  {destination.name}\n", encoding="ascii")
-    verify_release(destination, source)
+                _write_file(archive, f"{SKILL_NAME}/{relative}", path, mode)
+    verify_release(destination, source, expected_cores=validated_cores)
     return destination
 
 
 def _write_directory(archive: zipfile.ZipFile, name: str) -> None:
     info = zipfile.ZipInfo(name, FIXED_TIMESTAMP)
     info.create_system = 3
+    info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = ((stat.S_IFDIR | 0o755) << 16) | 0x10
-    archive.writestr(info, b"")
+    archive.writestr(info, b"", compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
 
 
-def verify_archive(archive_path: pathlib.Path, source: pathlib.Path = SKILL_SOURCE) -> None:
-    expected_files = {
+def _write_file(archive: zipfile.ZipFile, name: str, path: pathlib.Path, mode: int) -> None:
+    info = zipfile.ZipInfo(name, FIXED_TIMESTAMP)
+    info.create_system = 3
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = (stat.S_IFREG | mode) << 16
+    archive.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+
+
+def _expected_archive_entries(source: pathlib.Path) -> tuple[list[str], dict[str, bytes], dict[str, AssetSpec]]:
+    canonical = {
         f"{SKILL_NAME}/{path.relative_to(source.resolve()).as_posix()}": path.read_bytes()
         for path in validate(source)
     }
-    expected_directories = {
+    assets = {f"{SKILL_NAME}/{spec.relative.as_posix()}": spec for spec in ASSET_SPECS}
+    directories = {
         f"{SKILL_NAME}/",
-        *(f"{SKILL_NAME}/{relative.as_posix()}/" for relative in ALLOWED_DIRECTORIES),
+        *(f"{SKILL_NAME}/{relative.as_posix()}/" for relative in CANONICAL_DIRECTORIES + ASSET_DIRECTORIES),
     }
+    names = [f"{SKILL_NAME}/", *sorted((directories - {f"{SKILL_NAME}/"}) | set(canonical) | set(assets))]
+    return names, canonical, assets
+
+
+def verify_archive(
+    archive_path: pathlib.Path,
+    source: pathlib.Path = SKILL_SOURCE,
+    expected_cores: Mapping[pathlib.PurePosixPath, pathlib.Path] | None = None,
+) -> None:
+    expected_names, canonical, assets = _expected_archive_entries(source)
+    expected_hashes = None
+    if expected_cores is not None:
+        expected_hashes = {relative: sha256(path) for relative, path in _validated_cores(expected_cores).items()}
     try:
         with zipfile.ZipFile(archive_path) as archive:
             infos = archive.infolist()
             names = [info.filename for info in infos]
-            if len(names) != len(set(names)) or set(names) != set(expected_files) | expected_directories:
-                raise SkillReleaseError("skill archive does not contain the exact reviewed entries")
+            if names != expected_names or len(names) != len(set(names)):
+                raise SkillReleaseError("skill archive does not contain the exact reviewed entries in sorted order")
+            if archive.comment:
+                raise SkillReleaseError("skill archive metadata is not deterministic")
             for info in infos:
-                if info.date_time != FIXED_TIMESTAMP or info.flag_bits & 0x1:
+                if (
+                    info.date_time != FIXED_TIMESTAMP
+                    or info.create_system != 3
+                    or info.flag_bits & 0x1
+                    or info.comment
+                    or info.extra
+                    or info.compress_type != zipfile.ZIP_DEFLATED
+                ):
                     raise SkillReleaseError("skill archive metadata is not deterministic")
                 mode = (info.external_attr >> 16) & 0o177777
-                if info.filename in expected_directories:
+                if info.is_dir():
                     if mode != stat.S_IFDIR | 0o755 or archive.read(info):
                         raise SkillReleaseError("skill archive directory metadata is invalid")
-                elif mode != stat.S_IFREG | 0o644 or archive.read(info) != expected_files[info.filename]:
-                    raise SkillReleaseError("skill archive file metadata or bytes are invalid")
-    except zipfile.BadZipFile as error:
+                    continue
+                if info.filename in canonical:
+                    if mode != stat.S_IFREG | 0o644 or archive.read(info) != canonical[info.filename]:
+                        raise SkillReleaseError("skill archive instruction metadata or bytes are invalid")
+                    continue
+                spec = assets[info.filename]
+                if mode != stat.S_IFREG | spec.mode:
+                    raise SkillReleaseError(f"{spec.relative} archive permissions are invalid")
+                with archive.open(info) as binary:
+                    header = binary.read(4096)
+                _validate_binary_header(header, info.file_size, spec)
+                if expected_hashes is not None:
+                    digest = hashlib.sha256()
+                    with archive.open(info) as binary:
+                        while chunk := binary.read(1024 * 1024):
+                            digest.update(chunk)
+                    if digest.hexdigest() != expected_hashes[spec.relative]:
+                        raise SkillReleaseError(f"{spec.relative} bytes differ from the supplied Core")
+    except (OSError, zipfile.BadZipFile, RuntimeError) as error:
+        if isinstance(error, SkillReleaseError):
+            raise
         raise SkillReleaseError("skill archive is not a readable ZIP") from error
 
 
-def checksum_sidecar_matches(archive_path: pathlib.Path) -> bool:
+def verify_release(
+    archive_path: pathlib.Path,
+    source: pathlib.Path = SKILL_SOURCE,
+    expected_cores: Mapping[pathlib.PurePosixPath, pathlib.Path] | None = None,
+) -> None:
+    verify_archive(archive_path, source, expected_cores)
     sidecar = archive_path.with_name(archive_path.name + ".sha256")
-    return sidecar.is_file() and sidecar.read_text(encoding="ascii") == (
-        f"{sha256(archive_path)}  {archive_path.name}\n"
-    )
-
-
-def verify_release(archive_path: pathlib.Path, source: pathlib.Path = SKILL_SOURCE) -> None:
-    verify_archive(archive_path, source)
-    if not checksum_sidecar_matches(archive_path):
-        raise SkillReleaseError("skill archive checksum sidecar is missing or invalid")
+    if sidecar.exists() or sidecar.is_symlink():
+        raise SkillReleaseError("skill release must not have an external checksum sidecar")

@@ -330,13 +330,13 @@ pub struct SetupArgs {
 /// Optional component preparation operations.
 #[derive(Debug, Subcommand)]
 pub enum SetupCommand {
-    /// Install and verify the self-contained official local OCR plugin.
+    /// Verify the OCR runtime embedded in Core.
     Ocr {
-        /// Allow development transport without TLS certificate validation.
-        #[arg(long)]
+        /// Retained for command compatibility; embedded OCR never uses the network.
+        #[arg(long, hide = true)]
         insecure: bool,
-        /// Permit pinned HTTPS hosts that resolve through a private local network route.
-        #[arg(long)]
+        /// Retained for command compatibility; embedded OCR never uses the network.
+        #[arg(long, hide = true)]
         allow_private_network: bool,
     },
     /// Install and verify the self-contained official local media plugin.

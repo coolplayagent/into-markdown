@@ -8,6 +8,7 @@ license.workspace = true
 
 [features]
 default = []
+embedded-runtime = []
 metal = ["into-markdown/metal"]
 plugin-manager-fault-injection = ["into-markdown-plugin-manager/fault-injection"]
 
@@ -23,6 +24,7 @@ clap.workspace = true
 clap_complete.workspace = true
 directories.workspace = true
 futures.workspace = true
+fd-lock.workspace = true
 getrandom.workspace = true
 globset.workspace = true
 into-markdown = { path = "../../crates/api" }
@@ -39,6 +41,10 @@ toml.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 url.workspace = true
+zip.workspace = true
+
+[build-dependencies]
+sha2.workspace = true
 zip.workspace = true
 
 [target.'cfg(unix)'.dependencies]

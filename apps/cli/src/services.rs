@@ -376,6 +376,9 @@ impl WebMediaServiceCache {
 /// Verify construction of the effective OCR route without downloading models
 /// or issuing a Provider request.
 pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig, cwd: &Path) -> Result<(), ConversionError> {
+    if crate::embedded_runtime::enabled() {
+        crate::embedded_runtime::verify_embedded_ocr_runtime(&loaded.options)?;
+    }
     let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
     assemble_ocr(loaded, &context, cwd).map(drop)
 }
@@ -757,6 +760,13 @@ fn assemble_ocr(
     let mut errors = Vec::new();
     for source in eligible {
         let built = match source {
+            CapabilitySourceRef::Plugin { plugin_id, capability_id }
+                if crate::embedded_runtime::enabled()
+                    && plugin_id == "official.ocr.ppocrv6"
+                    && capability_id == "ocr" =>
+            {
+                crate::embedded_runtime::embedded_ocr_engine(&loaded.options)
+            }
             CapabilitySourceRef::Plugin { plugin_id, capability_id } => {
                 let configured = single_plugin_route(plugin_id, capability_id);
                 resolve_process_capability(

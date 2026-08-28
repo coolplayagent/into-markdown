@@ -7,7 +7,9 @@ use into_markdown_core::{
     OcrRecognition, OcrRequest, OcrResult, Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 use into_markdown_plugin_manager::PreparedProcessPlugin;
-use into_markdown_process_plugin::{PluginError, PluginErrorCode, PluginRequest, RuntimePolicy};
+use into_markdown_process_plugin::{
+    PluginError, PluginErrorCode, PluginRequest, ProcessPlugin, RuntimePolicy,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,10 +40,28 @@ fn process_address_space_limit(
 
 /// Authenticated process runtime bound to one self-contained installed capability.
 pub struct ProcessCapability {
-    process: PreparedProcessPlugin,
+    process: CapabilityProcess,
     binding: ProviderBinding,
     kind: CapabilityKind,
     resources: ResourceEnvelope,
+}
+
+enum CapabilityProcess {
+    Installed(PreparedProcessPlugin),
+    Embedded(ProcessPlugin),
+}
+
+impl CapabilityProcess {
+    fn execute_raw(
+        &self,
+        request: PluginRequest<'_>,
+        context: &ExecutionContext,
+    ) -> Result<into_markdown_process_plugin::RawPluginExecution, PluginError> {
+        match self {
+            Self::Installed(process) => process.execute_raw(request, context),
+            Self::Embedded(process) => process.execute_raw(request, context),
+        }
+    }
 }
 
 impl std::fmt::Debug for ProcessCapability {
@@ -135,7 +155,40 @@ impl ProcessCapability {
             return Err(unavailable(&binding.provider_id, "provider identity changed"));
         }
         Ok(Self {
-            process,
+            process: CapabilityProcess::Installed(process),
+            binding,
+            kind: capability.kind,
+            resources: capability.resources.clone(),
+        })
+    }
+
+    /// Bind an application-embedded, fully authenticated process runtime to a
+    /// capability descriptor while retaining the normal provider process
+    /// boundary and sandbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unavailable-component error when the binding is absent or has changed.
+    pub fn new_embedded(
+        process: ProcessPlugin,
+        manifest: &PluginManifest,
+        binding: ProviderBinding,
+    ) -> Result<Self, ConversionError> {
+        if binding.plugin_id != manifest.id {
+            return Err(unavailable(&binding.provider_id, "embedded provider binding changed"));
+        }
+        let capability = manifest
+            .capabilities
+            .iter()
+            .find(|candidate| candidate.id == binding.capability_id)
+            .ok_or_else(|| {
+                unavailable(&binding.provider_id, "capability is absent from manifest")
+            })?;
+        if capability.provider_id != binding.provider_id {
+            return Err(unavailable(&binding.provider_id, "provider identity changed"));
+        }
+        Ok(Self {
+            process: CapabilityProcess::Embedded(process),
             binding,
             kind: capability.kind,
             resources: capability.resources.clone(),

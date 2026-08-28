@@ -92,8 +92,62 @@ def build(target: pathlib.Path) -> None:
     # release-projection verifies the complete lockfile with offline Cargo
     # metadata, including packages that are conditional on other platforms.
     run(["cargo", "fetch", "--locked"], cwd=ROOT, env=environment)
-    run(["cargo", "build", "-j2", "--release", "--locked", "-p", "into-markdown-cli", "--bin", "into-md", "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker", "-p", "into-markdown-plugin-manager", "--bin", "package_plugin", "-p", "installed-smoke", "--bin", "installed-smoke", "-p", "installed-smoke", "--bin", "archive-check", "-p", "license-check", "--bin", "release-projection"], cwd=ROOT, env=environment)
-    run(["cargo", "build", "-j2", "--release", "--locked", "--features", "metal", "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider", "--bin", "into-md-media-provider"], cwd=ROOT, env=environment)
+    run(["cargo", "build", "--release", "--locked", "-p", "into-markdown-onnxruntime", "--bin", "onnxruntime-worker", "-p", "into-markdown-plugin-manager", "--bin", "package_plugin", "-p", "license-check", "--bin", "release-projection"], cwd=ROOT, env=environment)
+    run(["cargo", "build", "--release", "--locked", "--features", "metal", "-p", "into-markdown-official-provider", "--bin", "into-md-ocr-provider", "--bin", "into-md-media-provider"], cwd=ROOT, env=environment)
+
+
+def build_embedded_core(
+    target: pathlib.Path,
+    pdfium_root: pathlib.Path,
+    ocr_root: pathlib.Path,
+) -> pathlib.Path:
+    """Build the final macOS CLI with target-native PDF and OCR payloads embedded."""
+    environment = os.environ.copy()
+    cargo_home = pathlib.Path(
+        environment.get("CARGO_HOME", pathlib.Path.home() / ".cargo")
+    ).resolve()
+    rustup_home = pathlib.Path(
+        environment.get("RUSTUP_HOME", pathlib.Path.home() / ".rustup")
+    ).resolve()
+    sysroot = pathlib.Path(run(["rustc", "--print", "sysroot"]).strip()).resolve()
+    remaps = [
+        (ROOT, "/usr/src/into-markdown"),
+        (target, "/usr/src/into-markdown-target"),
+        (cargo_home, "/usr/src/cargo-home"),
+        (rustup_home, "/usr/src/rustup-home"),
+        (sysroot, "/usr/src/rust-sysroot"),
+    ]
+    environment.update(
+        {
+            "CARGO_INCREMENTAL": "0",
+            "MACOSX_DEPLOYMENT_TARGET": authority()["minimumMacos"],
+            "CARGO_TARGET_DIR": str(target),
+            "INTO_MD_EMBEDDED_PDFIUM_ROOT": str(pdfium_root.resolve()),
+            "INTO_MD_EMBEDDED_OCR_ROOT": str(ocr_root.resolve()),
+            "RUSTFLAGS": " ".join(
+                f"--remap-path-prefix={source}={destination}" for source, destination in remaps
+            )
+            + " -C strip=debuginfo "
+            + f"-C link-arg=-mmacosx-version-min={authority()['minimumMacos']}",
+        }
+    )
+    run(
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "into-markdown-cli",
+            "--bin",
+            "into-md",
+            "--features",
+            "embedded-runtime",
+        ],
+        cwd=ROOT,
+        env=environment,
+    )
+    return target / "release/into-md"
 
 
 def validate_ffmpeg_artifacts(root: pathlib.Path) -> None:
@@ -165,15 +219,17 @@ def runtime_inventory(root: pathlib.Path) -> list[dict]:
 
 def write_plugin_declarations(
     runtime: pathlib.Path,
+    evidence: pathlib.Path | None,
     plugin_id: str,
     artifact: str,
     components: list[str],
     licenses: list[tuple[pathlib.Path, str]],
     projection_tool: pathlib.Path,
 ) -> None:
-    copy_file(ROOT / "NOTICE", runtime / "NOTICE", 0o644)
+    declaration_root = runtime if evidence is None else evidence / plugin_id
+    copy_file(ROOT / "NOTICE", declaration_root / "NOTICE", 0o644)
     for source, name in licenses:
-        copy_file(source, runtime / "licenses" / name, 0o644)
+        copy_file(source, declaration_root / "licenses" / name, 0o644)
     request = runtime.parent / f"{plugin_id}-release-request.json"
     write_json(
         request,
@@ -189,7 +245,7 @@ def write_plugin_declarations(
     inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
     for key in ["notice", "third_party_notices", "sbom", "sources"]:
         item = inputs[key]
-        destination = runtime / item["path"]
+        destination = declaration_root / item["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(item["contents"], encoding="utf-8")
 
@@ -219,11 +275,10 @@ def build_provider_package(packager: pathlib.Path, runtime: pathlib.Path, manife
     with zipfile.ZipFile(output) as package:
         package_manifest = json.loads(package.read("plugin.json"))
     signature = package_manifest["signature"]
-    output.with_name(output.name + ".sha256").write_text(f"{sha256(output)}  {output.name}\n", encoding="ascii")
     return signature["keyId"], signature["publicKeySha256"]
 
 
-def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, ffmpeg_artifacts: pathlib.Path, signing_key: pathlib.Path, codesign_identity: str | None) -> tuple[dict[str, dict], tuple[str, str]]:
+def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, ffmpeg_artifacts: pathlib.Path, signing_key: pathlib.Path, codesign_identity: str | None, evidence: pathlib.Path | None = None, embedded_ocr: pathlib.Path | None = None) -> tuple[dict[str, dict], tuple[str, str]]:
     if packages.exists():
         raise ReleaseError("plugin output directory already exists")
     if not signing_key.is_file() or signing_key.is_symlink():
@@ -250,10 +305,17 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
             [ocr / "bin/into-md-ocr-provider", ocr / "bin/onnxruntime-worker"],
             codesign_identity,
         )
-        write_plugin_declarations(ocr, "official.ocr.ppocrv6", "ocr-plugin", OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
+        write_plugin_declarations(ocr, evidence, "official.ocr.ppocrv6", "ocr-plugin", OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
         ocr_manifest = provider_manifest("official.ocr.ppocrv6", "bin/into-md-ocr-provider", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(805306368, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
         ocr_output = packages / "official.ocr.ppocrv6.imp"
         signer = build_provider_package(packager, ocr, ocr_manifest, signing_key, ocr_output)
+        if embedded_ocr is not None:
+            if embedded_ocr.exists() or embedded_ocr.is_symlink():
+                raise ReleaseError("embedded OCR output already exists")
+            shutil.copytree(ocr, embedded_ocr, copy_function=shutil.copyfile)
+            for path in regular_files(embedded_ocr):
+                relative = path.relative_to(embedded_ocr).as_posix()
+                path.chmod(0o755 if relative.startswith("bin/") else 0o644)
         records["official.ocr.ppocrv6"] = {"sha256": sha256(ocr_output), "file": ocr_output.name}
 
         speech = temporary / "speech"
@@ -278,9 +340,10 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
         )
         if codesign_identity is not None:
             refresh_ffmpeg_authority(speech / "ffmpeg/authority.json", speech / "ffmpeg/ffmpeg")
-        write_plugin_declarations(speech, "official.media.whisper", "media-plugin", SPEECH_COMPONENTS, [(ffmpeg_artifacts / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")], projection_tool)
-        copy_file(cache / "ffmpeg-source", speech / "source/ffmpeg-8.1.2.tar.xz", 0o644)
-        copy_file(ffmpeg_artifacts / "ffmpeg-relink-aarch64-apple-darwin.tar", speech / "relink/ffmpeg-relink-aarch64-apple-darwin.tar", 0o644)
+        write_plugin_declarations(speech, evidence, "official.media.whisper", "media-plugin", SPEECH_COMPONENTS, [(ffmpeg_artifacts / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")], projection_tool)
+        evidence_root = speech if evidence is None else evidence / "official.media.whisper"
+        copy_file(cache / "ffmpeg-source", evidence_root / "source/ffmpeg-8.1.2.tar.xz", 0o644)
+        copy_file(ffmpeg_artifacts / "ffmpeg-relink-aarch64-apple-darwin.tar", evidence_root / "relink/ffmpeg-relink-aarch64-apple-darwin.tar", 0o644)
         media_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
         speech_manifest = provider_manifest("official.media.whisper", "bin/into-md-media-provider", speech, [
             {"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media_types, "resources": resources(SPEECH_TRANSCRIPTION_MEMORY_BYTES, 4294967296, 7200000)},
@@ -480,6 +543,7 @@ def main() -> None:
     parser.add_argument("--plugins-output", required=True, type=pathlib.Path)
     parser.add_argument("--plugin-base-url", required=True)
     parser.add_argument("--plugin-signing-key", required=True, type=pathlib.Path)
+    parser.add_argument("--evidence-output", type=pathlib.Path)
     parser.add_argument(
         "--codesign-identity",
         help="Developer ID Application identity; use '-' only for local release-gate testing",
@@ -505,7 +569,7 @@ def main() -> None:
         },
     )
     release_bin = arguments.build_root.resolve() / "release"
-    records, signer = package_official_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.codesign_identity)
+    records, signer = package_official_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.codesign_identity, arguments.evidence_output.resolve() if arguments.evidence_output else None)
     stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, arguments.plugins_output.resolve(), records, signer, arguments.plugin_base_url, arguments.codesign_identity)
     create_archive(stage, arguments.archive.resolve(), authority()["sourceDateEpoch"])
     archive = arguments.archive.resolve()

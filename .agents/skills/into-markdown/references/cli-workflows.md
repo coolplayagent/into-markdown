@@ -4,10 +4,10 @@ Use the host shell's normal argument quoting. Keep paths explicit, especially wh
 
 ## Preflight and artifact choice
 
-Confirm the installed executable before touching outputs:
+Confirm the platform-selected bundled executable before touching outputs. In the examples, `BUNDLED_INTO_MD` means its absolute path; never resolve it through `PATH`:
 
 ```sh
-into-md version --json
+"$BUNDLED_INTO_MD" version --json
 ```
 
 Use these output forms:
@@ -22,7 +22,7 @@ Use these output forms:
 Convert one file without overwriting an existing destination:
 
 ```sh
-into-md "/absolute/input.docx" \
+"$BUNDLED_INTO_MD" "/absolute/input.docx" \
   -o "/absolute/output.md" \
   --conflict error \
   --log-format json
@@ -31,14 +31,14 @@ into-md "/absolute/input.docx" \
 When stdout is the requested result, keep resources self-contained:
 
 ```sh
-into-md "/absolute/input.docx" --asset-mode embed --log-format json
+"$BUNDLED_INTO_MD" "/absolute/input.docx" --asset-mode embed --log-format json
 ```
 
 For stdin, supply an authoritative format when detection cannot derive it from a filename:
 
 ```sh
 printf '%s\n' 'source text' | \
-  into-md - --format text --asset-mode embed \
+  "$BUNDLED_INTO_MD" - --format text --asset-mode embed \
   -o "/absolute/stdin.md" --conflict error --log-format json
 ```
 
@@ -49,14 +49,14 @@ Do not combine stdin with other inputs.
 Multiple inputs or a directory require `--output-dir`. Preflight without writing, then run with a report:
 
 ```sh
-into-md "/absolute/documents" \
+"$BUNDLED_INTO_MD" "/absolute/documents" \
   --recursive \
   --output-dir "/absolute/markdown" \
   --conflict error \
   --dry-run \
   --log-format json
 
-into-md "/absolute/documents" \
+"$BUNDLED_INTO_MD" "/absolute/documents" \
   --recursive \
   --output-dir "/absolute/markdown" \
   --conflict error \
@@ -71,7 +71,7 @@ Afterward, parse the report's `schemaVersion` and every item status. A partial-f
 Create a self-contained Bundle:
 
 ```sh
-into-md "/absolute/report.pdf" \
+"$BUNDLED_INTO_MD" "/absolute/report.pdf" \
   --emit bundle \
   -o "/absolute/report.mdpkg.zip" \
   --conflict error \
@@ -81,7 +81,7 @@ into-md "/absolute/report.pdf" \
 For downstream automation, request result JSON and verify `schemaVersion`, non-empty `markdown`, diagnostics, and provenance rather than scraping terminal text:
 
 ```sh
-into-md "/absolute/report.pdf" \
+"$BUNDLED_INTO_MD" "/absolute/report.pdf" \
   --emit result-json \
   -o "/absolute/report.result.json" \
   --conflict error \
@@ -93,21 +93,21 @@ into-md "/absolute/report.pdf" \
 OCR defaults to `auto`. Use `always` only when the user requests OCR or the source is known to be scanned:
 
 ```sh
-into-md "/absolute/scan.pdf" \
+"$BUNDLED_INTO_MD" "/absolute/scan.pdf" \
   --ocr always \
   -o "/absolute/scan.md" \
   --conflict error \
   --log-format json
 ```
 
-Language hints may be repeated with `--ocr-language <BCP47>`. If the selected OCR capability is unavailable, inspect `into-md capabilities show ocr --json` and `into-md doctor --json`; report the capability state without installing anything.
+Language hints may be repeated with `--ocr-language <BCP47>`. OCR is built into Core. If it is unavailable, inspect `"$BUNDLED_INTO_MD" capabilities show ocr --json` and `"$BUNDLED_INTO_MD" doctor --json`; report the capability state without trying to install or repair internal runtime payloads.
 
 ## Transcription and diarization
 
 Transcribe a complete local recording after capture or import:
 
 ```sh
-into-md "/absolute/meeting.webm" \
+"$BUNDLED_INTO_MD" "/absolute/meeting.webm" \
   --ai audio-transcription=only \
   -o "/absolute/meeting.md" \
   --conflict error \
@@ -117,7 +117,7 @@ into-md "/absolute/meeting.webm" \
 Add diarization only when speaker separation is requested:
 
 ```sh
-into-md "/absolute/meeting.webm" \
+"$BUNDLED_INTO_MD" "/absolute/meeting.webm" \
   --ai audio-transcription=only \
   --diarize \
   --expected-speakers 2 \
@@ -128,14 +128,14 @@ into-md "/absolute/meeting.webm" \
 
 Omit `--expected-speakers` when the count is unknown. Use `--asr-language` only with a reliable language hint. Do not describe this as realtime transcription, and never validate media with renamed extensions, silence, random bytes, or mock transcripts.
 
-If transcription or diarization is unavailable, inspect `into-md capabilities show transcription --json`, `into-md capabilities show diarization --json`, and `into-md doctor --json`. Keep this skill to read-only capability checks; `setup` and plugin-management commands belong to a separately requested product-management workflow.
+If transcription or diarization is unavailable, inspect the bundled executable with `capabilities show transcription --json`, `capabilities show diarization --json`, and `doctor --json`. Keep this skill to read-only capability checks; `setup` and plugin-management commands belong to a separately requested product-management workflow.
 
 ## Remote sources and providers
 
 Remote input must be part of the user's request. Authorize only its host:
 
 ```sh
-into-md "https://documents.example/report.pdf" \
+"$BUNDLED_INTO_MD" "https://documents.example/report.pdf" \
   --allow-network \
   --allow-host documents.example \
   -o "/absolute/report.md" \

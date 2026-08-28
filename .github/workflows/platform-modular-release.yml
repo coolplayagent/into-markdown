@@ -1,207 +1,130 @@
-name: Linux and Windows modular release
+name: Into Markdown release
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: GitHub draft release tag that will contain every target's Core and optional speech .imp
+        description: Release tag, for example 0.0.3
         required: true
+        default: 0.0.3
         type: string
       signing_mode:
-        description: External publisher signing policy; unsigned remains installable but triggers OS trust warnings
+        description: Optional operating-system publisher signatures
         required: true
         default: unsigned
         type: choice
-        options:
-          - unsigned
-          - signed
+        options: [unsigned, signed]
+
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  agent-skill:
-    uses: ./.github/workflows/agent-skill-release.yml
-
-  native-gates:
-    needs: agent-skill
+  build:
+    name: Build ${{ matrix.label }}
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_x86_64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_arm64
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            container: ''
-            bazel_config: windows_x86_64
-    uses: ./.github/workflows/native-release-gates.yml
-    with:
-      runner: ${{ matrix.runner }}
-      target: ${{ matrix.target }}
-      container: ${{ matrix.container }}
-      bazel_config: ${{ matrix.bazel_config }}
-
-  native-release:
-    needs: agent-skill
-    environment: release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            archive: into-md-linux-x86_64-core.tar.gz
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_x86_64
-          - runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            archive: into-md-linux-arm64-core.tar.gz
-            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
-            bazel_config: linux_arm64
-          - runner: windows-2025
-            target: x86_64-pc-windows-msvc
-            archive: into-md-windows-x86_64-core.zip
-            container: ''
-            bazel_config: windows_x86_64
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
-    timeout-minutes: 240
+    environment: release
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            runner: ubuntu-24.04
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            target: x86_64-unknown-linux-gnu
+          - label: Linux ARM64
+            runner: ubuntu-24.04-arm
+            container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
+            target: aarch64-unknown-linux-gnu
+          - label: Windows x86_64
+            runner: windows-2025
+            container: ''
+            target: x86_64-pc-windows-msvc
+          - label: macOS Apple Silicon
+            runner: macos-14
+            container: ''
+            target: aarch64-apple-darwin
     steps:
-      - name: Bootstrap fixed Linux build container
+      - name: Bootstrap fixed Linux container
         if: runner.os == 'Linux'
         run: |
-          dnf install --assumeyes binutils clang-libs cmake curl diffutils file findutils gcc gcc-c++ git gnupg2 gzip jq make patch perl pkgconf-pkg-config python3.11 python3.11-pip tar unzip which xz zip
+          dnf install --assumeyes binutils clang-libs cmake curl file gcc gcc-c++ git gnupg2 gzip jq make openssl patch perl pkgconf-pkg-config python3.11 tar which xz
           if [ "$(uname -m)" = x86_64 ]; then
             dnf --enablerepo=powertools install --assumeyes nasm
-            nasm -v
           fi
-          case "$(uname -m)" in
-            x86_64)
-              bazelisk_asset=bazelisk-linux-amd64
-              bazelisk_sha256=e1508323f347ad1465a887bc5d2bfb91cffc232d11e8e997b623227c6b32fb76
-              ;;
-            aarch64)
-              bazelisk_asset=bazelisk-linux-arm64
-              bazelisk_sha256=bb608519a440d45d10304eb684a73a2b6bb7699c5b0e5434361661b25f113a5d
-              ;;
-            *)
-              echo "unsupported Linux release architecture: $(uname -m)" >&2
-              exit 1
-              ;;
-          esac
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            --output /usr/local/bin/bazelisk \
-            "https://github.com/bazelbuild/bazelisk/releases/download/v1.27.0/$bazelisk_asset"
-          echo "$bazelisk_sha256  /usr/local/bin/bazelisk" | sha256sum --check
-          chmod 0755 /usr/local/bin/bazelisk
-          ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
           ln -sf /usr/bin/python3.11 /usr/local/bin/python
           ln -sf /usr/bin/python3.11 /usr/local/bin/python3
           libclang_path="$(rpm -ql clang-libs | grep -E '/libclang\.so(\.[0-9]+)*$' | head -n 1)"
           test -f "$libclang_path"
           echo "LIBCLANG_PATH=$(dirname "$libclang_path")" >> "$GITHUB_ENV"
-          python --version
-          python -c 'import sys; assert sys.version_info[:2] == (3, 11)'
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
-          python -c 'import os; assert tuple(map(int, os.uname().release.split("-")[0].split(".")[:2])) >= (5, 15)'
       - uses: actions/checkout@v4
-      - name: Bind fixed Linux checkout ownership
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Bind Linux checkout ownership
         if: runner.os == 'Linux'
-        run: |
-          git config --global --unset-all safe.directory || true
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          test "$(git rev-parse --show-toplevel)" = "$GITHUB_WORKSPACE"
-      - name: Validate immutable release URL authority
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Validate release identity
         shell: bash
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           python - <<'PY'
-          import os, re
+          import os, pathlib, re, tomllib
           tag = os.environ["RELEASE_TAG"]
           if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tag):
               raise SystemExit("release tag must be a bounded URL-safe Git ref component")
+          version = tomllib.loads(pathlib.Path("Cargo.toml").read_text(encoding="utf-8"))["workspace"]["package"]["version"]
+          if tag.removeprefix("v") != version:
+              raise SystemExit(f"release tag {tag!r} does not match workspace version {version!r}")
           PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - uses: actions/cache/restore@v4
-        id: native-target-cache
+          targets: ${{ matrix.target }}
+      - uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/build
-          key: native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('crates/**/*.rs', 'tools/**/*.rs', 'third_party/onnxruntime/manifest.json') }}
-          restore-keys: |
-            native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
-            native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-      - uses: actions/setup-node@v4
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: release-cargo-registry-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache@v4
+        if: inputs.signing_mode == 'unsigned'
         with:
-          node-version: 24.13.0
-      - uses: bazel-contrib/setup-bazel@0.15.0
+          path: ${{ runner.temp }}/release-work/build
+          key: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
+          restore-keys: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
         with:
-          bazelisk-cache: true
-          disk-cache: platform-release-${{ matrix.bazel_config }}
-          repository-cache: true
-      - name: Activate fixed pnpm toolchain
-        run: |
-          corepack enable
-          corepack pnpm --version
-      - uses: msys2/setup-msys2@v2
-        if: runner.os == 'Windows'
-        with:
-          install: make diffutils xz curl gnupg jq file binutils python coreutils perl
+          path: ffmpeg-audit-output
+          key: release-ffmpeg-lgpl-v1-${{ matrix.target }}-${{ hashFiles('tools/ffmpeg-build-audit.sh', 'third_party/ffmpeg/**') }}
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
           toolset: 14.44.35207
           sdk: 10.0.26100.0
-      - name: Bind CMake to the activated Windows toolchain
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: make diffutils xz curl gnupg jq file binutils python coreutils perl openssl
+      - name: Install macOS native audit tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install gnupg jq openssl@3
+          echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
+      - name: Bind CMake to MSVC
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          "CMAKE_GENERATOR=NMake Makefiles" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build and audit FFmpeg on Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          FFMPEG_AUDIT_NETWORK: "1"
-          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
-          FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
-        run: ./tools/ffmpeg-build-audit.sh
-      - name: Build and audit FFmpeg on Windows
-        if: runner.os == 'Windows'
-        shell: msys2 {0}
-        env:
-          FFMPEG_AUDIT_NETWORK: "1"
-          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
-          FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
-        run: ./tools/ffmpeg-build-audit.sh
-      - name: Decode protected plugin signing key
-        if: runner.os == 'Linux'
-        env:
-          PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
-        run: |
-          umask 077
-          test -n "$PLUGIN_SIGNING_KEY_BASE64"
-          install -d -m 700 "${{ runner.temp }}"
-          printf '%s' "$PLUGIN_SIGNING_KEY_BASE64" | base64 --decode > "${{ runner.temp }}/plugin-key.pk8"
-      - name: Decode protected plugin signing key on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          PLUGIN_SIGNING_KEY_BASE64: ${{ secrets.PLUGIN_SIGNING_KEY_BASE64 }}
-        run: |
-          if (-not $env:PLUGIN_SIGNING_KEY_BASE64) { throw "plugin signing key is absent" }
-          [IO.File]::WriteAllBytes("${{ runner.temp }}\plugin-key.pk8", [Convert]::FromBase64String($env:PLUGIN_SIGNING_KEY_BASE64))
-      - name: Import protected Windows signing material
+        run: '"CMAKE_GENERATOR=NMake Makefiles" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+      - name: Import Windows publisher certificate
         if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
         shell: pwsh
         env:
@@ -212,438 +135,216 @@ jobs:
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\release-signing.pfx", [Convert]::FromBase64String($env:WINDOWS_SIGNING_PFX_BASE64))
           $password = ConvertTo-SecureString $env:WINDOWS_SIGNING_PFX_PASSWORD -AsPlainText -Force
           $certificate = Import-PfxCertificate -FilePath "$env:RUNNER_TEMP\release-signing.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          if (-not $certificate -or -not $certificate.Thumbprint) { throw "release certificate import failed" }
+          if (-not $certificate.Thumbprint) { throw "release certificate import failed" }
           "WINDOWS_SIGNING_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Build native Rust release binaries
-        run: >-
-          python tools/platform-release/release.py
-          --target ${{ matrix.target }}
-          --build-root "${{ runner.temp }}/build"
-          --build-only
-      - uses: actions/cache/save@v4
-        if: steps.native-target-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/build
-          key: ${{ steps.native-target-cache.outputs.cache-primary-key }}
-      - name: Prepare Cargo plugin lifecycle fixture on Linux
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ matrix.target }}"
-          echo "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD/target/${{ matrix.target }}/debug/plugin_manager_process_fixture" >> "$GITHUB_ENV"
-      - name: Prepare Cargo plugin lifecycle fixture on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cargo build --locked -p into-markdown-plugin-manager --bin plugin_manager_process_fixture --target "${{ matrix.target }}"
-          "INTO_MD_PLUGIN_PROCESS_FIXTURE=$PWD\target\${{ matrix.target }}\debug\plugin_manager_process_fixture.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Authenticode-sign project executables
-        if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
-        shell: pwsh
-        run: |
-          $names = @("into-md.exe", "installed-smoke.exe", "archive-check.exe", "into-md-installer.exe", "into-md-ocr-provider.exe", "into-md-media-provider.exe", "onnxruntime-worker.exe")
-          foreach ($name in $names) {
-            & signtool.exe sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /sha1 $env:WINDOWS_SIGNING_THUMBPRINT "$env:RUNNER_TEMP\build\release\$name"
-            if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed for $name" }
-            & signtool.exe verify /pa /all "$env:RUNNER_TEMP\build\release\$name"
-            if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed for $name" }
-          }
-      - name: Assemble deterministic Core and plugin packages twice
-        run: |
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-a" --plugins-output "${{ runner.temp }}/plugins-a" --archive "${{ runner.temp }}/${{ matrix.archive }}.a"
-          python tools/platform-release/release.py --target ${{ matrix.target }} --build-root "${{ runner.temp }}/build" --skip-build --cache "${{ runner.temp }}/cache" --ffmpeg-artifacts ffmpeg-audit-output --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8" --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}" --output "${{ runner.temp }}/core-b" --plugins-output "${{ runner.temp }}/plugins-b" --archive "${{ runner.temp }}/${{ matrix.archive }}.b"
-      - name: Verify deterministic bytes
-        if: runner.os == 'Linux'
-        run: |
-          cmp "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}.b"
-          for package in official.ocr.ppocrv6 official.media.whisper; do cmp "${{ runner.temp }}/plugins-a/$package.imp" "${{ runner.temp }}/plugins-b/$package.imp"; done
-          mv "${{ runner.temp }}/${{ matrix.archive }}.a" "${{ runner.temp }}/${{ matrix.archive }}"
-          sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | sed 's/\.a$//' > "${{ runner.temp }}/${{ matrix.archive }}.sha256"
-      - name: Verify deterministic bytes
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if ((Get-FileHash "${{ runner.temp }}\${{ matrix.archive }}.a").Hash -ne (Get-FileHash "${{ runner.temp }}\${{ matrix.archive }}.b").Hash) { throw "Core ZIP is not deterministic" }
-          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper")) {
-            if ((Get-FileHash "${{ runner.temp }}\plugins-a\$package.imp").Hash -ne (Get-FileHash "${{ runner.temp }}\plugins-b\$package.imp").Hash) { throw "$package is not deterministic" }
-          }
-          Remove-Item "${{ runner.temp }}\core-a", "${{ runner.temp }}\core-b", "${{ runner.temp }}\plugins-a", "${{ runner.temp }}\plugins-b" -Recurse -Force
-          Remove-Item "${{ runner.temp }}\${{ matrix.archive }}.a", "${{ runner.temp }}\${{ matrix.archive }}.a.sha256", "${{ runner.temp }}\${{ matrix.archive }}.b", "${{ runner.temp }}\${{ matrix.archive }}.b.sha256" -Force
-      - name: Assemble Authenticode release artifacts
-        if: runner.os == 'Windows' && inputs.signing_mode == 'signed'
-        shell: pwsh
-        run: >-
-          python tools/platform-release/release.py
-          --target ${{ matrix.target }}
-          --build-root "${{ runner.temp }}/build"
-          --skip-build
-          --cache "${{ runner.temp }}/cache"
-          --ffmpeg-artifacts ffmpeg-audit-output
-          --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8"
-          --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}"
-          --output "${{ runner.temp }}/core-final"
-          --plugins-output "${{ runner.temp }}/plugins-a"
-          --archive "${{ runner.temp }}/${{ matrix.archive }}"
-          --windows-signing-thumbprint $env:WINDOWS_SIGNING_THUMBPRINT
-      - name: Assemble unsigned Windows release artifacts
-        if: runner.os == 'Windows' && inputs.signing_mode == 'unsigned'
-        shell: pwsh
-        run: >-
-          python tools/platform-release/release.py
-          --target ${{ matrix.target }}
-          --build-root "${{ runner.temp }}/build"
-          --skip-build
-          --cache "${{ runner.temp }}/cache"
-          --ffmpeg-artifacts ffmpeg-audit-output
-          --plugin-signing-key "${{ runner.temp }}/plugin-key.pk8"
-          --plugin-base-url "https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}"
-          --output "${{ runner.temp }}/core-final"
-          --plugins-output "${{ runner.temp }}/plugins-a"
-          --archive "${{ runner.temp }}/${{ matrix.archive }}"
-      - name: Clean-install and verify all capabilities
-        if: runner.os == 'Linux'
+      - name: Import Apple publisher credentials
+        if: runner.os == 'macOS' && inputs.signing_mode == 'signed'
         env:
-          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}/clean-user-data
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          RELEASE_KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
         run: |
-          mkdir -m 700 "$INTO_MARKDOWN_USER_DATA_HOME"
-          mkdir -p "$HOME/.agents/skills/existing-skill"
-          printf '%s\n' 'preserve user-owned skill' > "$HOME/.agents/skills/existing-skill/SENTINEL"
-          cp -R "$HOME/.agents/skills" "${{ runner.temp }}/agent-skills-before"
-          mkdir "${{ runner.temp }}/distribution"
-          tar -xzf "${{ runner.temp }}/${{ matrix.archive }}" -C "${{ runner.temp }}/distribution"
-          "${{ runner.temp }}/distribution/bin/archive-check" "${{ runner.temp }}/distribution"
-          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}/distribution" --plugins "${{ runner.temp }}/plugins-a" --report "${{ runner.temp }}/platform-audit.json"
-          installed=$("${{ runner.temp }}/distribution/install" "${{ runner.temp }}/install" "${{ runner.temp }}/bin" | tail -1)
-          repeated=$("${{ runner.temp }}/distribution/install" "${{ runner.temp }}/install" "${{ runner.temp }}/bin" | tail -1)
-          test "$installed" = "$repeated"
-          diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
-          diff -ru ".agents/skills/into-markdown" "$installed/share/into-markdown/skills/into-markdown"
-          signer_id=$(jq -r .signingKeyId "$installed/share/into-markdown/plugins/official-publisher.json")
-          signer_sha=$(jq -r .signingKeySha256 "$installed/share/into-markdown/plugins/official-publisher.json")
-          for package in official.ocr.ppocrv6 official.media.whisper; do
-            sha=$(sha256sum "${{ runner.temp }}/plugins-a/$package.imp" | awk '{print $1}')
-            "$installed/bin/into-md" plugins install "${{ runner.temp }}/plugins-a/$package.imp" --sha256 "$sha" --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global
-            "$installed/bin/into-md" plugins verify "$package" --scope global
+          test -n "$APPLE_CERTIFICATE_P12_BASE64" && test -n "$APPLE_CERTIFICATE_PASSWORD"
+          test -n "$APPLE_NOTARY_KEY_BASE64" && test -n "$RELEASE_KEYCHAIN_PASSWORD"
+          test -n "$APPLE_CODESIGN_IDENTITY"
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary-key.p8"
+          security create-keychain -p "$RELEASE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db"
+          security unlock-keychain -p "$RELEASE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$RUNNER_TEMP/release.keychain-db" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$RELEASE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db"
+          security list-keychains -d user -s "$RUNNER_TEMP/release.keychain-db"
+          echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
+      - name: Build audited LGPL FFmpeg runtime
+        if: runner.os != 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          FFMPEG_AUDIT_NETWORK: '1'
+          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
+          FFMPEG_AUDIT_PRODUCTION_SMOKE: '1'
+        run: ./tools/ffmpeg-build-audit.sh
+      - name: Build audited LGPL FFmpeg runtime on Windows
+        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        env:
+          FFMPEG_AUDIT_NETWORK: '1'
+          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
+          FFMPEG_AUDIT_PRODUCTION_SMOKE: '1'
+        run: ./tools/ffmpeg-build-audit.sh
+      - name: Generate ephemeral plugin integrity key
+        if: runner.os != 'Windows'
+        run: openssl genpkey -algorithm ED25519 -outform DER -out "$RUNNER_TEMP/plugin-integrity-key.pk8"
+      - name: Generate ephemeral plugin integrity key on Windows
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: openssl genpkey -algorithm ED25519 -outform DER -out "$RUNNER_TEMP/plugin-integrity-key.pk8"
+      - name: Build and verify compact Core and speech once
+        shell: bash
+        env:
+          PLUGIN_BASE_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-output"
+          signing=()
+          if [ "${{ matrix.target }}" = x86_64-pc-windows-msvc ] && [ "${{ inputs.signing_mode }}" = signed ]; then
+            signing=(--windows-signing-thumbprint "$WINDOWS_SIGNING_THUMBPRINT")
+          elif [ "${{ matrix.target }}" = aarch64-apple-darwin ]; then
+            identity=-
+            if [ "${{ inputs.signing_mode }}" = signed ]; then
+              identity="$APPLE_CODESIGN_IDENTITY"
+            fi
+            signing=(--codesign-identity "$identity")
+          fi
+          python tools/portable-release/assemble.py build \
+            --target "${{ matrix.target }}" \
+            --output "$RUNNER_TEMP/release-output" \
+            --work-root "$RUNNER_TEMP/release-work" \
+            --ffmpeg-artifacts "$GITHUB_WORKSPACE/ffmpeg-audit-output" \
+            --plugin-signing-key "$RUNNER_TEMP/plugin-integrity-key.pk8" \
+            --plugin-base-url "$PLUGIN_BASE_URL" \
+            "${signing[@]}"
+          python tools/portable-release/assemble.py verify \
+            --target "${{ matrix.target }}" \
+            --output "$RUNNER_TEMP/release-output"
+          python tools/portable-release/native_acceptance.py \
+            --target "${{ matrix.target }}" \
+            --output "$RUNNER_TEMP/release-output" \
+            --expected-version "${{ inputs.release_tag }}"
+      - name: Sign and notarize final macOS downloads
+        if: runner.os == 'macOS' && inputs.signing_mode == 'signed'
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          core="$RUNNER_TEMP/release-output/release/into-md-macos-arm64.zip"
+          speech="$RUNNER_TEMP/release-output/release/official.media.whisper-${{ matrix.target }}.imp"
+          cp "$speech" "$RUNNER_TEMP/macos-speech-notary.zip"
+          for archive in "$core" "$RUNNER_TEMP/macos-speech-notary.zip"; do
+            xcrun notarytool submit "$archive" --key "$RUNNER_TEMP/notary-key.p8" \
+              --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
           done
-          "$installed/bin/into-md" capabilities list --json | jq -e '[.capabilities[] | select(.status == "ready")] | length == 3'
-          mkdir "${{ runner.temp }}/smoke-core"
-          archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
-          if ! "$installed/bin/installed-smoke" \
-            --install-root "$installed" \
-            --into-md "$installed/bin/into-md" \
-            --rust-library "$installed/lib/into-markdown-rust" \
-            --manifest "$installed/archive-manifest.json" \
-            --fixtures "$installed/share/into-markdown/smoke/fixtures" \
-            --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" \
-            --temp-root "${{ runner.temp }}/smoke-core" \
-            --report "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json" \
-            --archive-sha256 "$archive_sha" \
-            --cargo "$(rustup which cargo)" \
-            --rustc "$(rustup which rustc)" \
-            --pdfium-library "$installed/lib/pdfium/libpdfium.so" \
-            --timeout-seconds 90; then
-            jq -r '.cases[] | select(.status == "failed") | .detail' "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"
-            cat "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"
-            exit 1
-          fi
-          "${{ runner.temp }}/distribution/uninstall" "${{ runner.temp }}/install" "${{ runner.temp }}/bin"
-          diff -ru "${{ runner.temp }}/agent-skills-before" "$HOME/.agents/skills"
-      - name: Clean-install and verify all capabilities
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}\clean-user-data
-        run: |
-          New-Item -ItemType Directory -Path $env:INTO_MARKDOWN_USER_DATA_HOME | Out-Null
-          $identity = "$env:USERDOMAIN\$env:USERNAME"
-          & "$env:SystemRoot\System32\icacls.exe" $env:INTO_MARKDOWN_USER_DATA_HOME /inheritance:r /grant:r "${identity}:(OI)(CI)F" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "cannot protect isolated user-data directory" }
-          $env:INTO_MARKDOWN_USER_DATA_HOME = "\\?\$((Resolve-Path $env:INTO_MARKDOWN_USER_DATA_HOME).Path)"
-          $agentSkills = "$HOME\.agents\skills"
-          New-Item -ItemType Directory -Force "$agentSkills\existing-skill" | Out-Null
-          Set-Content -NoNewline "$agentSkills\existing-skill\SENTINEL" "preserve user-owned skill"
-          function Get-AgentSkillTree([string]$Root) {
-            Get-ChildItem $Root -Force -Recurse | Sort-Object FullName | ForEach-Object {
-              $relative = $_.FullName.Substring($Root.Length)
-              if ($_.PSIsContainer) {
-                "$relative|directory"
-              } else {
-                "$relative|file|$((Get-FileHash -Algorithm SHA256 $_.FullName).Hash)"
-              }
-            }
-          }
-          $agentSkillsBefore = @(Get-AgentSkillTree $agentSkills)
-          Expand-Archive -LiteralPath "${{ runner.temp }}\${{ matrix.archive }}" -DestinationPath "${{ runner.temp }}\distribution"
-          & "${{ runner.temp }}\distribution\bin\archive-check.exe" "${{ runner.temp }}\distribution"
-          python tools/platform-release/audit.py --target "${{ matrix.target }}" --core-root "${{ runner.temp }}\distribution" --plugins "${{ runner.temp }}\plugins-a" --report "${{ runner.temp }}\platform-audit.json" --windows-signing-mode "${{ inputs.signing_mode }}"
-          & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
-          & "${{ runner.temp }}\distribution\Install.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
-          if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core installer modified the Agent Skills directory" }
-          $installed = Get-ChildItem "${{ runner.temp }}\install\versions" | Select-Object -First 1 -ExpandProperty FullName
-          $canonical = Get-ChildItem ".agents\skills\into-markdown" -File -Recurse | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName.Substring((Resolve-Path ".agents\skills\into-markdown").Path.Length); Hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash } }
-          $embedded = Get-ChildItem "$installed\share\into-markdown\skills\into-markdown" -File -Recurse | ForEach-Object { [PSCustomObject]@{ Path = $_.FullName.Substring((Resolve-Path "$installed\share\into-markdown\skills\into-markdown").Path.Length); Hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash } }
-          if (Compare-Object $canonical $embedded -Property Path, Hash) { throw "embedded Agent Skill differs from canonical source" }
-          $catalog = Get-Content "$installed\share\into-markdown\plugins\official-publisher.json" | ConvertFrom-Json
-          foreach ($package in @("official.ocr.ppocrv6", "official.media.whisper")) {
-            $path = "${{ runner.temp }}\plugins-a\$package.imp"
-            $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
-            & "$installed\bin\into-md.exe" plugins install $path --sha256 $sha --signing-key-id $catalog.signingKeyId --signing-key-sha256 $catalog.signingKeySha256 --scope global
-            & "$installed\bin\into-md.exe" plugins verify $package --scope global
-          }
-          $ready = (& "$installed\bin\into-md.exe" capabilities list --json | ConvertFrom-Json).capabilities | Where-Object status -eq "ready"
-          if ($ready.Count -ne 3) { throw "not all published capabilities are ready" }
-          New-Item -ItemType Directory "${{ runner.temp }}\smoke-core" | Out-Null
-          $archiveSha = (Get-FileHash -Algorithm SHA256 "${{ runner.temp }}\${{ matrix.archive }}").Hash.ToLowerInvariant()
-          & "$installed\bin\installed-smoke.exe" `
-            --install-root "$installed" `
-            --into-md "$installed\bin\into-md.exe" `
-            --rust-library "$installed\lib\into-markdown-rust" `
-            --manifest "$installed\archive-manifest.json" `
-            --fixtures "$installed\share\into-markdown\smoke\fixtures" `
-            --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" `
-            --temp-root "${{ runner.temp }}\smoke-core" `
-            --report "${{ runner.temp }}\into-md-${{ matrix.target }}-core-smoke.json" `
-            --archive-sha256 "$archiveSha" `
-            --cargo "$(rustup which cargo)" `
-            --rustc "$(rustup which rustc)" `
-            --pdfium-library "$installed\lib\pdfium\pdfium.dll" `
-            --timeout-seconds 90
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content "${{ runner.temp }}\into-md-${{ matrix.target }}-core-smoke.json" -Raw
-            throw "installed Core smoke failed"
-          }
-          & "${{ runner.temp }}\distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\install" -CommandDirectory "${{ runner.temp }}\bin"
-          if (Compare-Object $agentSkillsBefore @(Get-AgentSkillTree $agentSkills)) { throw "Core uninstaller modified the Agent Skills directory" }
-      - name: Run installed Core smoke and platform acceptance
-        if: runner.os == 'Linux'
-        shell: bash
-        env:
-          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}/accept-user-data
-        run: |
-          mkdir -m 700 "$INTO_MARKDOWN_USER_DATA_HOME"
-          distribution="${{ runner.temp }}/distribution"
-          installed=$("$distribution/install" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin" | tail -1)
-          mkdir "${{ runner.temp }}/installed-smoke-state"
-          archive_sha=$(sha256sum "${{ runner.temp }}/${{ matrix.archive }}" | awk '{print $1}')
-          if ! "$installed/bin/installed-smoke" --install-root "$installed" --into-md "$installed/bin/into-md" --rust-library "$installed/lib/into-markdown-rust" --manifest "$installed/archive-manifest.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --temp-root "${{ runner.temp }}/installed-smoke-state" --report "${{ runner.temp }}/installed-smoke.json" --archive-sha256 "$archive_sha" --cargo "$(rustup which cargo)" --rustc "$(rustup which rustc)" --pdfium-library "$installed/lib/pdfium/libpdfium.so" --timeout-seconds 90; then
-            jq -r '.cases[] | select(.status == "failed") | .detail' "${{ runner.temp }}/installed-smoke.json"
-            cat "${{ runner.temp }}/installed-smoke.json"
-            exit 1
-          fi
-          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root "$installed" --into-md "$installed/bin/into-md" --plugins "${{ runner.temp }}/plugins-a" --publisher "$installed/share/into-markdown/plugins/official-publisher.json" --fixtures "$installed/share/into-markdown/smoke/fixtures" --audio-fixture "$GITHUB_WORKSPACE/fixtures/asr-quality/source/en-clear.wav" --work-root "${{ runner.temp }}/platform-acceptance-state" --archive-sha256 "$archive_sha" --platform-audit "${{ runner.temp }}/platform-audit.json" --report "${{ runner.temp }}/platform-acceptance.json" --timeout-seconds 900
-          "$distribution/uninstall" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin"
-      - name: Run installed Core smoke and platform acceptance on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}\accept-user-data
-        run: |
-          New-Item -ItemType Directory -Path $env:INTO_MARKDOWN_USER_DATA_HOME | Out-Null
-          $userDataIdentity = "$env:USERDOMAIN\$env:USERNAME"
-          & "$env:SystemRoot\System32\icacls.exe" $env:INTO_MARKDOWN_USER_DATA_HOME /inheritance:r /grant:r "${userDataIdentity}:(OI)(CI)F" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "cannot protect acceptance user-data directory" }
-          $env:INTO_MARKDOWN_USER_DATA_HOME = "\\?\$((Resolve-Path $env:INTO_MARKDOWN_USER_DATA_HOME).Path)"
-          $distribution = "${{ runner.temp }}\distribution"
-          & "$distribution\Install.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
-          $identity = (Get-Content "${{ runner.temp }}\accept-install\current.txt" -Raw).Trim()
-          $installed = "${{ runner.temp }}\accept-install\versions\$identity"
-          New-Item -ItemType Directory "${{ runner.temp }}\installed-smoke-state" | Out-Null
-          $archiveSha = (Get-FileHash -Algorithm SHA256 "${{ runner.temp }}\${{ matrix.archive }}").Hash.ToLowerInvariant()
-          & "$installed\bin\installed-smoke.exe" --install-root $installed --into-md "$installed\bin\into-md.exe" --rust-library "$installed\lib\into-markdown-rust" --manifest "$installed\archive-manifest.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" --temp-root "${{ runner.temp }}\installed-smoke-state" --report "${{ runner.temp }}\installed-smoke.json" --archive-sha256 $archiveSha --cargo (rustup which cargo) --rustc (rustup which rustc) --pdfium-library "$installed\lib\pdfium\pdfium.dll" --timeout-seconds 90
-          if ($LASTEXITCODE -ne 0) {
-            Get-Content "${{ runner.temp }}\installed-smoke.json" -Raw
-            throw "installed Core smoke failed"
-          }
-          python tools/platform-release/platform_acceptance.py --target "${{ matrix.target }}" --install-root $installed --into-md "$installed\bin\into-md.exe" --plugins "${{ runner.temp }}\plugins-a" --publisher "$installed\share\into-markdown\plugins\official-publisher.json" --fixtures "$installed\share\into-markdown\smoke\fixtures" --audio-fixture "$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav" --work-root "${{ runner.temp }}\platform-acceptance-state" --archive-sha256 $archiveSha --platform-audit "${{ runner.temp }}\platform-audit.json" --report "${{ runner.temp }}\platform-acceptance.json" --timeout-seconds 900
-          if ($LASTEXITCODE -ne 0) { throw "installed platform acceptance failed" }
-          & "$distribution\Uninstall.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
-      - name: Sign Linux release artifacts
-        if: runner.os == 'Linux' && inputs.signing_mode == 'signed'
-        env:
-          RELEASE_GPG_PRIVATE_KEY_BASE64: ${{ secrets.RELEASE_GPG_PRIVATE_KEY_BASE64 }}
-          RELEASE_GPG_KEY_FINGERPRINT: ${{ secrets.RELEASE_GPG_KEY_FINGERPRINT }}
-        run: |
-          test -n "$RELEASE_GPG_PRIVATE_KEY_BASE64" && test -n "$RELEASE_GPG_KEY_FINGERPRINT"
-          export GNUPGHOME="${{ runner.temp }}/release-gnupg"
-          mkdir -m 700 "$GNUPGHOME"
-          printf '%s' "$RELEASE_GPG_PRIVATE_KEY_BASE64" | base64 --decode | gpg --batch --import
-          test "$(gpg --batch --with-colons --fingerprint "$RELEASE_GPG_KEY_FINGERPRINT" | awk -F: '$1 == "fpr" {print $10; exit}')" = "$RELEASE_GPG_KEY_FINGERPRINT"
-          for artifact in "${{ runner.temp }}/${{ matrix.archive }}" "${{ runner.temp }}/plugins-a/"*.imp; do gpg --batch --local-user "$RELEASE_GPG_KEY_FINGERPRINT" --detach-sign --armor "$artifact"; done
-      - name: Record external signing policy
-        run: >-
-          python tools/release-signing-policy.py
-          --target ${{ matrix.target }}
-          --mode ${{ inputs.signing_mode }}
-          --source-revision "${{ github.sha }}"
-          --output "${{ runner.temp }}/${{ matrix.target }}-signing-policy.json"
-      - name: Materialize target-qualified public plugin assets
-        run: >-
-          python tools/publish_release_assets.py
-          --source "${{ runner.temp }}/plugins-a"
-          --output "${{ runner.temp }}/published-plugins"
-          --target "${{ matrix.target }}"
-      - name: Generate release SBOMs
-        shell: bash
-        run: |
-          set -eu
-          metadata_plugins="${{ runner.temp }}/metadata-plugins"
-          mkdir "$metadata_plugins"
-          cp "${{ runner.temp }}/plugins-a/official.ocr.ppocrv6.imp" "$metadata_plugins/"
-          cp "${{ runner.temp }}/published-plugins/official.media.whisper-${{ matrix.target }}.imp" \
-            "$metadata_plugins/"
-          python tools/release-metadata.py \
-            --projection-tool "${{ runner.temp }}/build/release/release-projection${{ runner.os == 'Windows' && '.exe' || '' }}" \
-            --target ${{ matrix.target }} \
-            --source-revision "${{ github.sha }}" \
-            --core-artifact "${{ runner.temp }}/${{ matrix.archive }}" \
-            --core-root "${{ runner.temp }}/distribution" \
-            --plugins "$metadata_plugins" \
-            --output "${{ runner.temp }}/release-metadata"
-      - name: Validate SPDX with pinned official tooling
-        run: |
-          python -m pip download --no-deps --only-binary=:all: spdx-tools==0.8.3 --dest "${{ runner.temp }}"
-          python -c "import hashlib,pathlib; p=pathlib.Path(r'${{ runner.temp }}')/'spdx_tools-0.8.3-py3-none-any.whl'; assert hashlib.sha256(p.read_bytes()).hexdigest() == '638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a'"
-          python -m pip install "${{ runner.temp }}/spdx_tools-0.8.3-py3-none-any.whl"
-          python -c "import pathlib,subprocess; [subprocess.run(['pyspdxtools','-i',str(p)],check=True) for p in pathlib.Path(r'${{ runner.temp }}/release-metadata').glob('*.spdx.json')]"
-      - name: Stage portable modular release artifact
-        run: >-
-          python tools/stage_release_artifact.py
-          --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
-          --plugins "${{ runner.temp }}/published-plugins"
-          --metadata "${{ runner.temp }}/release-metadata"
-          --platform-audit "${{ runner.temp }}/platform-audit.json"
-          --installed-smoke "${{ runner.temp }}/installed-smoke.json"
-          --platform-acceptance "${{ runner.temp }}/platform-acceptance.json"
-          --signing-policy "${{ runner.temp }}/${{ matrix.target }}-signing-policy.json"
-          --output release-upload
-          ${{ inputs.signing_mode == 'signed' && '--require-core-signature' || '' }}
       - uses: actions/upload-artifact@v4
         with:
-          name: modular-${{ matrix.target }}
-          path: release-upload
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-output
           if-no-files-found: error
-      - name: Remove Windows signing credentials
+          retention-days: 7
+      - name: Remove Windows credentials
         if: always() && runner.os == 'Windows'
         shell: pwsh
         run: |
-          if ($env:WINDOWS_SIGNING_THUMBPRINT) {
-            Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_SIGNING_THUMBPRINT" -Force -ErrorAction SilentlyContinue
-          }
+          if ($env:WINDOWS_SIGNING_THUMBPRINT) { Remove-Item "Cert:\CurrentUser\My\$env:WINDOWS_SIGNING_THUMBPRINT" -Force -ErrorAction SilentlyContinue }
           Remove-Item "$env:RUNNER_TEMP\release-signing.pfx" -Force -ErrorAction SilentlyContinue
-          Remove-Item "${{ runner.temp }}\plugin-key.pk8" -Force -ErrorAction SilentlyContinue
+      - name: Remove Apple credentials
+        if: always() && runner.os == 'macOS' && inputs.signing_mode == 'signed'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-key.p8"
+      - name: Remove ephemeral plugin integrity key
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/plugin-integrity-key.pk8"
 
-  publish-draft:
-    needs: [native-gates, native-release]
+  publish:
+    name: Publish 10 clear downloads
+    needs: build
     runs-on: ubuntu-24.04
     environment: release
+    timeout-minutes: 5
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: modular-*
-          path: ${{ runner.temp }}/release-artifacts
-      - name: Publish user downloads and one release evidence bundle
+          pattern: release-*
+          path: ${{ runner.temp }}/targets
+      - name: Build one cross-platform Agent Skill
+        run: |
+          mkdir -p "$RUNNER_TEMP/publish" "$RUNNER_TEMP/evidence" "$RUNNER_TEMP/skill-input/windows" "$RUNNER_TEMP/skill-input/linux-x86_64" "$RUNNER_TEMP/skill-input/linux-arm64"
+          python -m zipfile -e "$RUNNER_TEMP/targets/release-x86_64-pc-windows-msvc/release/into-md-windows-x86_64.zip" "$RUNNER_TEMP/skill-input/windows"
+          python -m zipfile -e "$RUNNER_TEMP/targets/release-x86_64-unknown-linux-gnu/release/into-md-linux-x86_64.zip" "$RUNNER_TEMP/skill-input/linux-x86_64"
+          python -m zipfile -e "$RUNNER_TEMP/targets/release-aarch64-unknown-linux-gnu/release/into-md-linux-arm64.zip" "$RUNNER_TEMP/skill-input/linux-arm64"
+          python tools/skill-release/skill_release_main.py build \
+            --windows-x86-64-core "$RUNNER_TEMP/skill-input/windows/into-md.exe" \
+            --linux-x86-64-core "$RUNNER_TEMP/skill-input/linux-x86_64/into-md" \
+            --linux-arm64-core "$RUNNER_TEMP/skill-input/linux-arm64/into-md" \
+            --archive "$RUNNER_TEMP/publish/into-markdown-skill.zip"
+          python tools/skill-release/skill_release_main.py verify --archive "$RUNNER_TEMP/publish/into-markdown-skill.zip"
+      - name: Collect four Core and four speech downloads
+        run: |
+          for directory in "$RUNNER_TEMP"/targets/release-*; do
+            cp "$directory"/release/into-md-*.zip "$RUNNER_TEMP/publish/"
+            cp "$directory"/release/official.media.whisper-*.imp "$RUNNER_TEMP/publish/"
+            cp -R "$directory"/evidence/* "$RUNNER_TEMP/evidence/"
+          done
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f -name 'into-md-*.zip' | wc -l)" -eq 4
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f -name 'official.media.whisper-*.imp' | wc -l)" -eq 4
+          test -f "$RUNNER_TEMP/publish/into-markdown-skill.zip"
+      - name: Build one audit download
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+          publish = pathlib.Path(os.environ["RUNNER_TEMP"]) / "publish"
+          evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "evidence"
+          def digest(path):
+              value = hashlib.sha256()
+              with path.open("rb") as source:
+                  for block in iter(lambda: source.read(1024 * 1024), b""):
+                      value.update(block)
+              return value.hexdigest()
+          files = []
+          for path in sorted(publish.iterdir(), key=lambda item: item.name):
+              if path.is_file():
+                  files.append({
+                      "name": path.name,
+                      "bytes": path.stat().st_size,
+                      "sha256": digest(path),
+                  })
+          if len(files) != 9:
+              raise SystemExit(f"expected nine public products before audit, found {len(files)}")
+          (evidence / "release-set.json").write_text(
+              json.dumps({"schemaVersion": 1, "files": files}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          python tools/release_evidence.py \
+            --source "$RUNNER_TEMP/evidence" \
+            --output "$RUNNER_TEMP/publish/into-markdown-${{ inputs.release_tag }}-audit.zip" \
+            --source-revision "${{ github.sha }}"
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 10
+      - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           SIGNING_MODE: ${{ inputs.signing_mode }}
         run: |
-          set -eu
-          publish="$RUNNER_TEMP/publish"
-          evidence="$RUNNER_TEMP/evidence"
-          mkdir "$publish"
-          mkdir "$evidence"
-          for directory in "$RUNNER_TEMP"/release-artifacts/modular-*; do
-            target=${directory##*/modular-}
-            core=
-            for candidate in "$directory"/into-md-*-core.tar.gz "$directory"/into-md-*-core.zip; do
-              if [ -f "$candidate" ]; then
-                test -z "$core"
-                core=$candidate
-              fi
-            done
-            test -n "$core"
-            cp "$core" "$publish/"
-            cp "$core.sha256" "$evidence/"
-            if [ -f "$core.asc" ]; then
-              cp "$core.asc" "$evidence/"
-            fi
-            speech_count=0
-            for plugin in "$directory"/published-plugins/official.media.whisper-*.imp; do
-              test -f "$plugin"
-              cp "$plugin" "$publish/"
-              cp "$plugin.sha256" "$evidence/"
-              if [ -f "$plugin.asc" ]; then
-                cp "$plugin.asc" "$evidence/"
-              fi
-              speech_count=$((speech_count + 1))
-            done
-            test "$speech_count" -eq 1
-            test ! -e "$directory/published-plugins/official.ocr.ppocrv6-$target.imp"
-            for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
-              cp "$directory/$report" "$evidence/$target-$report"
-            done
-            cp "$directory/$target-signing-policy.json" "$evidence/"
-            for document in "$directory"/release-metadata/*; do
-              cp "$document" "$evidence/${document##*/}"
-            done
-          done
           if [ "$SIGNING_MODE" = unsigned ]; then
             title="Into Markdown $RELEASE_TAG [UNSIGNED]"
-            trust_note="This unsigned build may show an operating-system trust warning."
+            trust_note="These builds are installable but may show an operating-system trust warning."
           else
             title="Into Markdown $RELEASE_TAG"
-            trust_note="External publisher signatures are enabled."
+            trust_note="Operating-system publisher signatures are enabled."
           fi
           notes=$(cat <<EOF
-          Download exactly one Core package for your computer:
-          - Windows x86_64: into-md-windows-x86_64-core.zip
-          - macOS Apple Silicon: into-md-macos-arm64-core.dmg
-          - Linux x86_64: into-md-linux-x86_64-core.tar.gz
-          - Linux ARM64: into-md-linux-arm64-core.tar.gz
+          Download one Core file for your computer and run it directly:
+          - Windows x86_64: into-md-windows-x86_64.zip
+          - macOS Apple Silicon: into-md-macos-arm64.zip
+          - Linux x86_64: into-md-linux-x86_64.zip
+          - Linux ARM64: into-md-linux-arm64.zip
 
-          OCR is built into Core and is ready after installation. Speech transcription is optional; only then download the official.media.whisper .imp with the same platform suffix. The single release-evidence ZIP contains checksums and audit reports and is not needed by ordinary users. $trust_note
+          OCR is already included in Core. Speech is optional; download the matching official.media.whisper .imp only if needed. Agent users download into-markdown-skill.zip. The audit ZIP is for auditors. GitHub provides source archives automatically. $trust_note
           EOF
           )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           else
-            gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
-              --title "$title" --notes "$notes"
+            gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" --title "$title" --notes "$notes"
           fi
           gh release edit "$RELEASE_TAG" --target "${{ github.sha }}" --title "$title" --notes "$notes"
-          test "$(find "$publish" -type f | wc -l)" -eq 6
-          gh release upload "$RELEASE_TAG" "$publish"/* --clobber
-          evidence_name="into-markdown-$RELEASE_TAG-release-evidence.zip"
           for old_asset in $(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'); do
-            case "$old_asset" in
-              into-md-linux-x86_64-core.tar.gz|into-md-linux-arm64-core.tar.gz|\
-              into-md-windows-x86_64-core.zip|into-md-macos-arm64-core.dmg|\
-              official.media.whisper-x86_64-unknown-linux-gnu.imp|\
-              official.media.whisper-aarch64-unknown-linux-gnu.imp|\
-              official.media.whisper-x86_64-pc-windows-msvc.imp|\
-              official.media.whisper-aarch64-apple-darwin.imp|"$evidence_name")
-                ;;
-              *)
-                gh release delete-asset "$RELEASE_TAG" "$old_asset" --yes
-                ;;
-            esac
+            gh release delete-asset "$RELEASE_TAG" "$old_asset" --yes
           done
-          for attempt in 1 2 3; do
-            existing="$RUNNER_TEMP/existing-evidence"
-            rm -rf "$existing"
-            mkdir "$existing"
-            existing_argument=
-            if gh release download "$RELEASE_TAG" --pattern "$evidence_name" --dir "$existing" 2>/dev/null; then
-              existing_argument="--existing $existing/$evidence_name"
-            fi
-            python tools/release_evidence.py \
-              --source "$evidence" \
-              --output "$RUNNER_TEMP/$evidence_name" \
-              --source-revision "${{ github.sha }}" \
-              $existing_argument
-            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$evidence_name" --clobber
-            sleep $((attempt * 2))
-          done
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/publish"/*

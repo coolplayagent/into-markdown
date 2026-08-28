@@ -365,6 +365,11 @@ pub(crate) fn prepare_official_capability(
 ) -> Result<LoadedConfig, CliError> {
     match command {
         SetupCommand::Ocr { insecure: _, allow_private_network: _ } => {
+            if crate::embedded_runtime::enabled() {
+                crate::services::verify_ocr_runtime(loaded, &context.cwd)?;
+                writeln!(context.stdout, "OCR is built into into-md and is ready")?;
+                return Ok(loaded.clone());
+            }
             ensure_official_plugin("official.ocr.ppocrv6", global, loaded, catalog, context)?;
             let refreshed = reload_after_setup(global, context)?;
             crate::services::verify_ocr_runtime(&refreshed, &context.cwd)?;
@@ -865,6 +870,10 @@ pub(crate) fn inspect_capabilities(
         if inspected.contains_key(plugin_id) {
             continue;
         }
+        if plugin_id == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+            inspected.insert(plugin_id, PluginInspection::BuiltIn);
+            continue;
+        }
         let configured = loaded.effective.plugins.get(plugin_id);
         let result = match configured {
             Some(plugin) if !plugin.enabled => PluginInspection::Disabled,
@@ -887,10 +896,19 @@ pub(crate) fn inspect_capabilities(
 }
 
 pub(crate) fn checking_capability_views(loaded: &LoadedConfig) -> Vec<CapabilityView> {
-    let inspected = ["official.ocr.ppocrv6", "official.media.whisper"]
-        .into_iter()
-        .map(|id| (id, PluginInspection::Checking))
-        .collect();
+    let inspected = [
+        (
+            "official.ocr.ppocrv6",
+            if crate::embedded_runtime::enabled() {
+                PluginInspection::BuiltIn
+            } else {
+                PluginInspection::Checking
+            },
+        ),
+        ("official.media.whisper", PluginInspection::Checking),
+    ]
+    .into_iter()
+    .collect();
     capability_views_from_inspections(loaded, &inspected).unwrap_or_default()
 }
 
@@ -935,6 +953,7 @@ fn capability_views_from_inspections(
             let local = format!("plugin:{plugin_id}/{plugin_capability}");
             let inspection = &inspected[plugin_id];
             let (local_status, version) = match inspection {
+                PluginInspection::BuiltIn => ("ready", Some(env!("CARGO_PKG_VERSION").to_owned())),
                 PluginInspection::Ready(installed) => ("ready", Some(installed.version.clone())),
                 PluginInspection::Disabled => ("disabled", None),
                 PluginInspection::Invalid(code) if code == "componentUnavailable" => {
@@ -964,6 +983,7 @@ fn capability_views_from_inspections(
                 .and_then(|(provider_id, _)| loaded.effective.providers.get(provider_id))
                 .is_some_and(|provider| std::env::var_os(&provider.api_key_env).is_some());
             let status = match current_source.as_str() {
+                "off" if local_ready => "disabled",
                 "off" => "not-installed",
                 value if value.starts_with("plugin:") && local_ready => "ready",
                 value if value.starts_with("plugin:") => local_status,
@@ -988,6 +1008,7 @@ fn capability_views_from_inspections(
 }
 
 enum PluginInspection {
+    BuiltIn,
     Ready(into_markdown_plugin_manager::InstalledPlugin),
     Disabled,
     Invalid(String),
@@ -1423,6 +1444,19 @@ pub(crate) struct OfficialPackageAuthority {
 fn installed_official_plugin_catalog(
     required_for: Option<&str>,
 ) -> Result<Option<(PathBuf, OfficialPluginCatalog)>, CliError> {
+    if let Some(bytes) =
+        crate::embedded_runtime::official_publisher_catalog().map_err(CliError::component)?
+    {
+        let catalog: OfficialPluginCatalog = serde_json::from_slice(&bytes)
+            .map_err(|_| CliError::component("embedded official plugin catalog is invalid"))?;
+        if !matches!(catalog.schema_version, 1 | 2) {
+            return Err(CliError::component(
+                "embedded official plugin catalog schema is unsupported",
+            ));
+        }
+        config::validate_sha256(&catalog.signing_key_sha256)?;
+        return Ok(Some((PathBuf::new(), catalog)));
+    }
     let executable = std::env::current_exe()
         .and_then(|path| path.canonicalize())
         .map_err(|_| CliError::component("installed executable path is unavailable"))?;

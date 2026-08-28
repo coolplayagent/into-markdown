@@ -32,43 +32,46 @@ class PlatformReleaseTests(unittest.TestCase):
         module = (ROOT / "MODULE.bazel").read_text(encoding="utf-8")
         self.assertRegex(module, rf'(?s)module\(.*?version = "{re.escape(VERSION)}"')
 
-    def test_expensive_native_gates_run_in_parallel_with_release_acceptance(self) -> None:
-        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+    def test_pull_requests_expose_exactly_four_bounded_checks(self) -> None:
+        workflow = (ROOT / ".github/workflows/pr-fast-gate.yml").read_text(
             encoding="utf-8"
         )
-        gates = (ROOT / ".github/workflows/native-release-gates.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("native-gates:", workflow)
-        self.assertIn("needs: [native-gates, native-release]", workflow)
-        self.assertNotIn("cargo test --workspace --all-targets", workflow)
-        self.assertNotIn("cargo test --workspace --all-targets", gates)
-        self.assertIn("cargo clippy --workspace", gates)
-        self.assertIn("bazel --output_user_root", gates)
-        self.assertNotIn("RUST_TEST_THREADS=1 //...", gates)
-        for target in (
-            "//tools/platform-release:release_test",
-            "//tools/platform-release:platform_tools_test",
-            "//tools/platform-release:installer_test",
-            "//tools/installed-smoke:installed_smoke_test",
-        ):
-            self.assertIn(target, gates)
-        self.assertIn("timeout-minutes: 20", gates)
-        self.assertNotIn("plugin_manager_process_fixture", gates)
-        self.assertIn("run: cargo fetch --locked", gates)
-        self.assertIn("~/.cargo/registry", gates)
-        self.assertIn("repository-cache: true", gates)
-        self.assertIn("disk-cache: release-gates-${{ inputs.bazel_config }}", gates)
+        checks = re.findall(r"(?m)^  [a-z][a-z0-9-]*:\n    name:", workflow)
+        self.assertEqual(len(checks), 4)
+        timeouts = [int(value) for value in re.findall(r"timeout-minutes: (\d+)", workflow)]
+        self.assertEqual(len(timeouts), len(checks))
+        self.assertTrue(all(value <= 20 for value in timeouts))
 
-    def test_windows_core_smoke_uses_installed_pdfium_destination(self) -> None:
+    def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn(r'--pdfium-library "$installed\bin\pdfium.dll"', workflow)
-        self.assertGreaterEqual(
-            workflow.count(r'--pdfium-library "$installed\lib\pdfium\pdfium.dll"'),
-            2,
+        self.assertEqual(workflow.count("workflow_dispatch:"), 1)
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "aarch64-apple-darwin",
+        ]:
+            self.assertEqual(workflow.count(f"target: {target}"), 1)
+        self.assertIn("tools/portable-release/assemble.py build", workflow)
+        self.assertNotIn("bazel ", workflow)
+        self.assertNotIn("tools/platform-release/release.py", workflow)
+        for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
+            self.assertNotIn(forbidden, workflow)
+
+    def test_embedded_core_is_verified_without_an_installer_or_launcher(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
         )
+        self.assertIn("tools/portable-release/assemble.py verify", workflow)
+        self.assertIn("tools/portable-release/native_acceptance.py", workflow)
+        self.assertIn("native-audit.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
+        self.assertIn("e2e.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
+        self.assertNotIn("portable-launcher", workflow)
+        self.assertNotIn("portable-pack", workflow)
+        self.assertNotIn("Install.ps1", workflow)
+        self.assertNotIn("Uninstall.ps1", workflow)
 
     def test_windows_core_archive_contains_clickable_install_entries(self) -> None:
         source = (ROOT / "tools/platform-release/release.py").read_text(
@@ -102,10 +105,10 @@ class PlatformReleaseTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("path: ${{ runner.temp }}/build", workflow)
+        self.assertIn("${{ runner.temp }}/release-work/build", workflow)
         self.assertIn(
-            "key: native-release-rust-1.97.1-${{ runner.os }}-"
-            "${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}",
+            "key: release-cargo-only-v1-${{ matrix.target }}-"
+            "${{ hashFiles('Cargo.lock') }}",
             workflow,
         )
 
@@ -122,66 +125,40 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
 
-    def test_linux_release_bootstrap_installs_hash_pinned_bazelisk(self) -> None:
+    def test_linux_release_does_not_bootstrap_a_second_build_system(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("bazelbuild/bazelisk/releases/download/v1.27.0", workflow)
-        self.assertIn("bazelisk-linux-amd64", workflow)
-        self.assertIn("bazelisk-linux-arm64", workflow)
-        self.assertIn(
-            "e1508323f347ad1465a887bc5d2bfb91cffc232d11e8e997b623227c6b32fb76",
-            workflow,
-        )
-        self.assertIn(
-            "bb608519a440d45d10304eb684a73a2b6bb7699c5b0e5434361661b25f113a5d",
-            workflow,
-        )
-        self.assertIn("sha256sum --check", workflow)
-        self.assertIn("ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel", workflow)
+        self.assertNotIn("bazelisk", workflow.lower())
+        self.assertNotIn("setup-bazel", workflow)
+        self.assertNotIn("pnpm", workflow.lower())
 
-    def test_plugin_key_uses_the_same_authoritative_temp_path_as_packaging(self) -> None:
+    def test_unsigned_is_default_and_uses_an_ephemeral_integrity_key(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        key_path = "${{ runner.temp }}/plugin-key.pk8"
-        windows_key_path = r"${{ runner.temp }}\plugin-key.pk8"
-        self.assertIn('install -d -m 700 "${{ runner.temp }}"', workflow)
-        self.assertGreaterEqual(workflow.count(key_path), 3)
-        self.assertIn(windows_key_path, workflow)
-        self.assertNotIn("$RUNNER_TEMP/plugin-key.pk8", workflow)
-        self.assertNotIn(r"$env:RUNNER_TEMP\plugin-key.pk8", workflow)
+        self.assertRegex(workflow, r"signing_mode:\n(?s:.*?)default: unsigned")
+        self.assertNotIn("PLUGIN_SIGNING_KEY_BASE64", workflow)
+        self.assertIn("openssl genpkey -algorithm ED25519", workflow)
+        self.assertIn('--plugin-signing-key "$RUNNER_TEMP/plugin-integrity-key.pk8"', workflow)
+        self.assertIn('rm -f "$RUNNER_TEMP/plugin-integrity-key.pk8"', workflow)
 
-    def test_runtime_fixtures_use_shell_native_workspace_authorities(self) -> None:
+    def test_release_does_not_run_slow_source_tree_or_lifecycle_fixtures(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        fixture = "fixtures/asr-quality/source/en-clear.wav"
-        self.assertEqual(workflow.count(f"$GITHUB_WORKSPACE/{fixture}"), 3)
-        self.assertEqual(
-            workflow.count(r"$env:GITHUB_WORKSPACE\fixtures\asr-quality\source\en-clear.wav"),
-            3,
-        )
-        self.assertNotIn("${{ github.workspace }}/fixtures/asr-quality", workflow)
-        self.assertNotIn(r"${{ github.workspace }}\fixtures\asr-quality", workflow)
+        self.assertNotIn("fixtures/asr-quality", workflow)
+        self.assertNotIn("plugin_manager_process_fixture", workflow)
+        self.assertNotIn("capabilities list", workflow)
 
-    def test_installed_smoke_failures_print_the_machine_report(self) -> None:
+    def test_release_has_no_double_assembly_or_installed_lifecycle(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(workflow.count('cat "${{ runner.temp }}/installed-smoke.json"'), 1)
-        self.assertEqual(
-            workflow.count('Get-Content "${{ runner.temp }}\\installed-smoke.json" -Raw'),
-            1,
-        )
-        self.assertIn(
-            'cat "${{ runner.temp }}/into-md-${{ matrix.target }}-core-smoke.json"',
-            workflow,
-        )
-        self.assertIn(
-            'Get-Content "${{ runner.temp }}\\into-md-${{ matrix.target }}-core-smoke.json" -Raw',
-            workflow,
-        )
+        self.assertNotIn("core-a", workflow)
+        self.assertNotIn("core-b", workflow)
+        self.assertNotIn("plugins install", workflow)
+        self.assertNotIn("plugins verify", workflow)
 
     def test_windows_cmake_uses_the_activated_pinned_msvc_toolchain(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -213,34 +190,34 @@ class PlatformReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "filename"):
             published_plugin_file("nested/package.imp", "x86_64-pc-windows-msvc")
 
-    def test_release_metadata_receives_bundled_ocr_and_public_speech(self) -> None:
-        workflows = [
-            (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
-                encoding="utf-8"
-            ),
-            (ROOT / ".github/workflows/macos-arm64-release.yml").read_text(
-                encoding="utf-8"
-            ),
-        ]
-        for workflow in workflows:
-            self.assertIn('metadata_plugins=', workflow)
-            self.assertIn('official.ocr.ppocrv6.imp" "$metadata_plugins/', workflow)
-            self.assertIn('official.media.whisper-', workflow)
-            self.assertIn('--plugins "$metadata_plugins"', workflow)
+    def test_release_core_bundles_ocr_and_only_speech_remains_optional(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("tools/portable-release/assemble.py build", workflow)
+        self.assertIn("official.media.whisper-${{ matrix.target }}.imp", workflow)
+        self.assertNotIn("official.ocr.ppocrv6-${{ matrix.target }}.imp", workflow)
+        self.assertIn("OCR is already included in Core", workflow)
 
-    def test_release_page_exposes_only_four_core_four_speech_and_one_evidence(self) -> None:
-        platform = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+    def test_release_page_exposes_four_core_four_speech_skill_and_evidence(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        macos = (ROOT / ".github/workflows/macos-arm64-release.yml").read_text(
-            encoding="utf-8"
-        )
-        for workflow in [platform, macos]:
-            self.assertIn("release-evidence.zip", workflow)
-            self.assertNotIn('gh release upload "$RELEASE_TAG" "$evidence"', workflow)
-            self.assertNotIn('gh release upload "$RELEASE_TAG" *.sha256', workflow)
-        self.assertIn('test "$(find "$publish" -type f | wc -l)" -eq 6', platform)
-        self.assertIn('test "$(find "$publish" -type f | wc -l)" -eq 2', macos)
+        for name in [
+            "into-md-linux-x86_64.zip",
+            "into-md-linux-arm64.zip",
+            "into-md-windows-x86_64.zip",
+            "into-md-macos-arm64.zip",
+            "into-markdown-skill.zip",
+            "-audit.zip",
+        ]:
+            self.assertIn(name, workflow)
+        self.assertIn("official.media.whisper-${{ matrix.target }}.imp", workflow)
+        self.assertIn('test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 10', workflow)
+        self.assertIn('expected nine public products before audit', workflow)
+        self.assertIn('evidence / "release-set.json"', workflow)
+        self.assertEqual(workflow.count('gh release upload "$RELEASE_TAG"'), 1)
+        self.assertIn("GitHub provides source archives automatically", workflow)
 
     def test_release_projection_excludes_non_distributed_source_records(self) -> None:
         manifest = {

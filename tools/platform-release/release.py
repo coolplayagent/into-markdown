@@ -185,13 +185,8 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
         [
             "cargo",
             "build",
-            "-j2",
             "--release",
             "--locked",
-            "-p",
-            "into-markdown-cli",
-            "--bin",
-            "into-md",
             "-p",
             "into-markdown-onnxruntime",
             "--bin",
@@ -200,14 +195,6 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
             "into-markdown-plugin-manager",
             "--bin",
             "package_plugin",
-            "-p",
-            "installed-smoke",
-            "--bin",
-            "installed-smoke",
-            "-p",
-            "installed-smoke",
-            "--bin",
-            "archive-check",
             "-p",
             "license-check",
             "--bin",
@@ -220,7 +207,6 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
         [
             "cargo",
             "build",
-            "-j2",
             "--release",
             "--locked",
             "-p",
@@ -233,37 +219,53 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
         cwd=ROOT,
         env=environment,
     )
-    installer = output / "release" / executable_name("into-md-installer", target)
-    installer_command = [
-            "rustc",
-            "--edition=2024",
-            "-C",
-            "opt-level=3",
-            "-C",
-            "strip=debuginfo",
-            "-C",
-            f"target-cpu={target_cpu}",
-    ]
-    if target == "x86_64-pc-windows-msvc":
-        installer_command.extend(
-            [
-                "-C",
-                "debuginfo=0",
-                "-C",
-                "link-arg=/Brepro",
-                "-C",
-                "link-arg=/DEBUG:NONE",
-            ]
-        )
-    installer_command.extend(
-        [
-            ROOT / "tools/platform-release/installer.rs",
-            "-o",
-            installer,
-        ]
-    )
-    run(installer_command, cwd=ROOT, env=environment)
     return output / "release"
+
+
+def build_embedded_core(
+    target: str,
+    output: pathlib.Path,
+    pdfium_root: pathlib.Path,
+    ocr_root: pathlib.Path,
+) -> pathlib.Path:
+    """Build the final CLI once with target-native PDF and OCR payloads embedded."""
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_TARGET_DIR": str(output),
+            "INTO_MD_EMBEDDED_PDFIUM_ROOT": str(pdfium_root.resolve()),
+            "INTO_MD_EMBEDDED_OCR_ROOT": str(ocr_root.resolve()),
+        }
+    )
+    target_cpu = {
+        "x86_64-unknown-linux-gnu": "x86-64",
+        "aarch64-unknown-linux-gnu": "generic",
+        "x86_64-pc-windows-msvc": "x86-64",
+    }[target]
+    rustflags = ["-C", "strip=debuginfo", "-C", f"target-cpu={target_cpu}"]
+    if target == "x86_64-pc-windows-msvc":
+        rustflags.extend(
+            ["-C", "debuginfo=0", "-C", "link-arg=/Brepro", "-C", "link-arg=/DEBUG:NONE"]
+        )
+    environment["RUSTFLAGS"] = " ".join(rustflags)
+    run(
+        [
+            "cargo",
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "into-markdown-cli",
+            "--bin",
+            "into-md",
+            "--features",
+            "embedded-runtime",
+        ],
+        cwd=ROOT,
+        env=environment,
+    )
+    return output / "release" / executable_name("into-md", target)
 
 
 def downloads_for(target_config: dict) -> dict[str, dict]:
@@ -336,6 +338,7 @@ def runtime_inventory(root: pathlib.Path) -> list[dict]:
 
 def write_plugin_declarations(
     runtime: pathlib.Path,
+    evidence: pathlib.Path | None,
     plugin_id: str,
     artifact: str,
     target: str,
@@ -343,9 +346,10 @@ def write_plugin_declarations(
     licenses: list[tuple[pathlib.Path, str]],
     projection_tool: pathlib.Path,
 ) -> None:
-    copy_file(ROOT / "NOTICE", runtime / "NOTICE")
+    declaration_root = runtime if evidence is None else evidence / plugin_id
+    copy_file(ROOT / "NOTICE", declaration_root / "NOTICE")
     for source, name in licenses:
-        copy_file(source, runtime / "licenses" / name)
+        copy_file(source, declaration_root / "licenses" / name)
     request = runtime.parent / f"{plugin_id}-release-request.json"
     write_json(
         request,
@@ -361,7 +365,7 @@ def write_plugin_declarations(
     inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
     for key in ["notice", "third_party_notices", "sbom", "sources"]:
         item = inputs[key]
-        destination = runtime / item["path"]
+        destination = declaration_root / item["path"]
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(item["contents"], encoding="utf-8", newline="\n")
 
@@ -433,9 +437,6 @@ def build_provider_package(
     with zipfile.ZipFile(output) as package:
         package_manifest = json.loads(package.read("plugin.json"))
     signature = package_manifest["signature"]
-    output.with_name(output.name + ".sha256").write_text(
-        f"{sha256(output)}  {output.name}\n", encoding="ascii"
-    )
     return signature["keyId"], signature["publicKeySha256"]
 
 
@@ -471,6 +472,8 @@ def package_plugins(
     target: str,
     target_config: dict,
     windows_signing_thumbprint: str | None,
+    evidence: pathlib.Path | None = None,
+    embedded_ocr: pathlib.Path | None = None,
 ) -> tuple[dict[str, dict], tuple[str, str]]:
     if packages.exists():
         raise ReleaseError("plugin output directory already exists")
@@ -492,10 +495,17 @@ def package_plugins(
         copy_file(cache / "ocr-dictionary", models / "pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt")
         install_state(models, "pp-ocrv6-tiny-detector-onnx")
         install_state(models, "pp-ocrv6-tiny-recognizer-onnx")
-        write_plugin_declarations(ocr, "official.ocr.ppocrv6", "ocr-plugin", target, OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
+        write_plugin_declarations(ocr, evidence, "official.ocr.ppocrv6", "ocr-plugin", target, OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
         ocr_manifest = provider_manifest("official.ocr.ppocrv6", target, f"bin/into-md-ocr-provider{suffix}", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(805306368, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
         output = packages / "official.ocr.ppocrv6.imp"
         signer = build_provider_package(packager, ocr, ocr_manifest, target, signing_key, output)
+        if embedded_ocr is not None:
+            if embedded_ocr.exists() or embedded_ocr.is_symlink():
+                raise ReleaseError("embedded OCR output already exists")
+            shutil.copytree(ocr, embedded_ocr, copy_function=shutil.copyfile)
+            for path in regular_files(embedded_ocr):
+                relative = path.relative_to(embedded_ocr).as_posix()
+                path.chmod(0o755 if relative.startswith("bin/") else 0o644)
         records[ocr_manifest["id"]] = {"file": output.name, "sha256": sha256(output)}
 
         speech = temporary / "speech"
@@ -519,9 +529,10 @@ def package_plugins(
         copy_file(cache / "3dspeaker", models / "silero-vad-3dspeaker-eres2net/3dspeaker_eres2net_base.onnx")
         install_state(models, "whisper-small-multilingual")
         install_state(models, "silero-vad-3dspeaker-eres2net")
-        write_plugin_declarations(speech, "official.media.whisper", "media-plugin", target, SPEECH_COMPONENTS, [(ffmpeg / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")], projection_tool)
-        copy_file(cache / "ffmpeg-source", speech / "source/ffmpeg-8.1.2.tar.xz")
-        copy_file(ffmpeg / f"ffmpeg-relink-{target}.tar", speech / f"relink/ffmpeg-relink-{target}.tar")
+        write_plugin_declarations(speech, evidence, "official.media.whisper", "media-plugin", target, SPEECH_COMPONENTS, [(ffmpeg / "COPYING.LGPLv2.1", "ffmpeg-LGPL-2.1.txt"), (ROOT / "third_party/licenses/whisper-model-MIT.txt", "whisper-model-MIT.txt"), (ROOT / "third_party/licenses/silero-vad-MIT.txt", "silero-vad-MIT.txt"), (ROOT / "LICENSE", "3dspeaker-Apache-2.0.txt")], projection_tool)
+        evidence_root = speech if evidence is None else evidence / "official.media.whisper"
+        copy_file(cache / "ffmpeg-source", evidence_root / "source/ffmpeg-8.1.2.tar.xz")
+        copy_file(ffmpeg / f"ffmpeg-relink-{target}.tar", evidence_root / f"relink/ffmpeg-relink-{target}.tar")
         media = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/webm", "audio/flac", "audio/ogg", "video/mp4", "video/webm", "video/quicktime", "video/x-matroska"]
         speech_manifest = provider_manifest("official.media.whisper", target, f"bin/into-md-media-provider{suffix}", speech, [{"id": "transcription", "kind": "transcription", "providerId": "builtin.asr.whisper-small", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(SPEECH_TRANSCRIPTION_MEMORY_BYTES, 4294967296, 7200000)}, {"id": "diarization", "kind": "diarization", "providerId": "builtin.diarization.silero-3dspeaker", "languages": ["multilingual"], "mediaTypes": media, "resources": resources(536870912, 4294967296, 7200000)}], ["Apache-2.0", "LGPL-2.1-or-later", "MIT"])
         output = packages / "official.media.whisper.imp"
@@ -708,6 +719,7 @@ def main() -> None:
     parser.add_argument("--plugins-output", type=pathlib.Path)
     parser.add_argument("--plugin-base-url")
     parser.add_argument("--plugin-signing-key", type=pathlib.Path)
+    parser.add_argument("--evidence-output", type=pathlib.Path)
     parser.add_argument("--windows-signing-thumbprint")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--build-only", action="store_true")
@@ -729,7 +741,7 @@ def main() -> None:
     if not arguments.skip_build:
         release_bin = build(arguments.target, arguments.build_root.resolve())
     acquire(arguments.cache.resolve(), downloads_for(config))
-    records, signer = package_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.target, config, arguments.windows_signing_thumbprint)
+    records, signer = package_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.target, config, arguments.windows_signing_thumbprint, arguments.evidence_output.resolve() if arguments.evidence_output else None)
     stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, arguments.plugins_output.resolve(), records, signer, arguments.plugin_base_url, arguments.target, config, arguments.windows_signing_thumbprint)
     create_archive(stage, arguments.archive.resolve(), config, authority()["sourceDateEpoch"])
     arguments.archive.with_name(arguments.archive.name + ".sha256").write_text(f"{sha256(arguments.archive)}  {arguments.archive.name}\n", encoding="ascii")

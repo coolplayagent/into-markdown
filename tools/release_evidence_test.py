@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 from __future__ import annotations
 
 import json
@@ -12,100 +11,60 @@ from tools.release_evidence import build_bundle
 
 
 REVISION = "a" * 40
-OTHER_REVISION = "b" * 40
-
-
-def write_target(source: pathlib.Path, target: str, revision: str, marker: str) -> None:
-    (source / f"{target}-installed-smoke.json").write_text(
-        json.dumps({"marker": marker}), encoding="utf-8"
-    )
-    (source / f"into-markdown-{target}-release-set.json").write_text(
-        json.dumps({"source_revision": revision}), encoding="utf-8"
-    )
-    (source / f"into-markdown-{target}-release-set.spdx.json").write_text(
-        json.dumps({"name": marker}), encoding="utf-8"
-    )
-    (source / f"into-md-{target}-core.tar.gz.asc").write_text(
-        f"signature-{marker}\n", encoding="ascii"
-    )
-    core_names = {
-        "x86_64-unknown-linux-gnu": "into-md-linux-x86_64-core.tar.gz",
-        "aarch64-apple-darwin": "into-md-macos-arm64-core.dmg",
-    }
-    (source / f"{core_names[target]}.sha256").write_text(
-        f"{'0' * 64}  {core_names[target]}\n", encoding="ascii"
-    )
-    (source / f"official.media.whisper-{target}.imp.sha256").write_text(
-        f"{'1' * 64}  official.media.whisper-{target}.imp\n", encoding="ascii"
-    )
 
 
 class ReleaseEvidenceTests(unittest.TestCase):
-    def test_merges_targets_deterministically_and_writes_digest(self) -> None:
+    def test_recurses_deduplicates_and_is_deterministic(self):
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
-            linux = root / "linux"
-            linux.mkdir()
-            write_target(linux, "x86_64-unknown-linux-gnu", REVISION, "linux")
+            source = root / "source"
+            (source / "windows/core").mkdir(parents=True)
+            (source / "linux/core").mkdir(parents=True)
+            (source / "windows/core/SOURCES.json").write_bytes(b"shared")
+            (source / "linux/core/SOURCES.json").write_bytes(b"shared")
+            (source / "linux/core/platform-audit.json").write_bytes(b"linux")
             first = root / "first.zip"
-            build_bundle(linux, first, REVISION)
+            second = root / "second.zip"
 
-            macos = root / "macos"
-            macos.mkdir()
-            write_target(macos, "aarch64-apple-darwin", REVISION, "macos")
-            merged = root / "merged.zip"
-            build_bundle(macos, merged, REVISION, first)
-            repeated = root / "repeated.zip"
-            build_bundle(macos, repeated, REVISION, first)
+            build_bundle(source, first, REVISION)
+            build_bundle(source, second, REVISION)
 
-            self.assertEqual(merged.read_bytes(), repeated.read_bytes())
-            with zipfile.ZipFile(merged) as bundle:
-                self.assertEqual(len(bundle.namelist()), 12)
-                self.assertEqual(bundle.namelist(), sorted(bundle.namelist()))
-            sidecar = pathlib.Path(f"{merged}.sha256").read_text(encoding="ascii")
-            self.assertTrue(sidecar.endswith("  merged.zip\n"))
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with zipfile.ZipFile(first) as bundle:
+                names = bundle.namelist()
+                self.assertEqual(names, sorted(names))
+                self.assertEqual(
+                    len([name for name in names if name.startswith("objects/")]), 2
+                )
+                manifest = json.loads(bundle.read("manifest.json"))
+            shared = next(item for item in manifest["objects"] if item["bytes"] == 6)
+            self.assertEqual(len(shared["sourcePaths"]), 2)
+            self.assertEqual(manifest["sourceRevision"], REVISION)
 
-    def test_discards_existing_archive_from_another_revision(self) -> None:
-        with tempfile.TemporaryDirectory() as name:
-            root = pathlib.Path(name)
-            old = root / "old"
-            old.mkdir()
-            write_target(old, "x86_64-unknown-linux-gnu", OTHER_REVISION, "old")
-            old_bundle = root / "old.zip"
-            build_bundle(old, old_bundle, OTHER_REVISION)
-
-            current = root / "current"
-            current.mkdir()
-            write_target(current, "aarch64-apple-darwin", REVISION, "current")
-            output = root / "output.zip"
-            build_bundle(current, output, REVISION, old_bundle)
-
-            with zipfile.ZipFile(output) as bundle:
-                self.assertEqual(len(bundle.namelist()), 6)
-                self.assertFalse(any("linux" in item for item in bundle.namelist()))
-
-    def test_rejects_unexpected_names_and_disagreeing_bytes(self) -> None:
+    def test_rejects_signing_material_and_existing_output(self):
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             source = root / "source"
             source.mkdir()
-            (source / "secret.txt").write_text("no", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "unexpected"):
+            (source / "plugin-key.pk8").write_bytes(b"secret")
+            with self.assertRaisesRegex(RuntimeError, "signing material"):
                 build_bundle(source, root / "bad.zip", REVISION)
 
-            source.joinpath("secret.txt").unlink()
-            (source / "secret.sha256").write_text("no", encoding="utf-8")
-            with self.assertRaisesRegex(RuntimeError, "unexpected"):
-                build_bundle(source, root / "bad-checksum.zip", REVISION)
-            source.joinpath("secret.sha256").unlink()
-            write_target(source, "aarch64-apple-darwin", REVISION, "first")
-            first = root / "first.zip"
-            build_bundle(source, first, REVISION)
-            (source / "aarch64-apple-darwin-installed-smoke.json").write_text(
-                json.dumps({"marker": "changed"}), encoding="utf-8"
-            )
-            with self.assertRaisesRegex(RuntimeError, "disagree"):
-                build_bundle(source, root / "changed.zip", REVISION, first)
+            (source / "plugin-key.pk8").unlink()
+            (source / "report.json").write_text("{}", encoding="utf-8")
+            output = root / "output.zip"
+            build_bundle(source, output, REVISION)
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                build_bundle(source, output, REVISION)
+
+    def test_incremental_merge_is_rejected(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            source = root / "source"
+            source.mkdir()
+            (source / "report.json").write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "aggregate all targets"):
+                build_bundle(source, root / "output.zip", REVISION, root / "old.zip")
 
 
 if __name__ == "__main__":
