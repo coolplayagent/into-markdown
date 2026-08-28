@@ -20,6 +20,7 @@ from audit import (
     Audit,
     AuditFailure,
     clr_il_only,
+    ggml_cpu_init_uses_nonbaseline_x86,
     requires_x86_64_extension_level,
     resolve_release_packages,
     run,
@@ -220,6 +221,24 @@ class PlatformToolTests(unittest.TestCase):
                 "Properties: x86 ISA used: x86-64-v4\n"
             )
         )
+
+    def test_linux_native_audit_rejects_unnoted_ggml_native_instructions(self) -> None:
+        baseline = """
+0000000000001000 <ggml_cpu_init>:
+    1000: 0f 10 00              movups xmm0,XMMWORD PTR [rax]
+    1003: 66 0f ef c0           pxor   xmm0,xmm0
+"""
+        avx = """
+0000000000001000 <ggml_cpu_init>:
+    1000: c5 f8 57 c0           vxorps xmm0,xmm0,xmm0
+"""
+        evex = """
+0000000000001000 <ggml_cpu_init>:
+    1000: 62 e1 6e 08 58 44 24 03 vaddss xmm16,xmm2,DWORD PTR [rsp+0xc]
+"""
+        self.assertFalse(ggml_cpu_init_uses_nonbaseline_x86(baseline))
+        self.assertTrue(ggml_cpu_init_uses_nonbaseline_x86(avx))
+        self.assertTrue(ggml_cpu_init_uses_nonbaseline_x86(evex))
 
     def test_zip_extractor_rejects_parent_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as name:

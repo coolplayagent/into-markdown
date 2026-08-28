@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "cmakeEnvironment": {
+        "GGML_NATIVE": "OFF",
+        "GGML_SSE42": "OFF",
+        "GGML_AVX": "OFF",
+        "GGML_AVX2": "OFF",
+        "GGML_AVX_VNNI": "OFF",
+        "GGML_FMA": "OFF",
+        "GGML_F16C": "OFF",
+        "GGML_BMI2": "OFF",
+        "GGML_AVX512": "OFF",
+        "GGML_AVX512_VBMI": "OFF",
+        "GGML_AVX512_VNNI": "OFF",
+        "GGML_AVX512_BF16": "OFF",
+        "GGML_AMX_TILE": "OFF",
+        "GGML_AMX_INT8": "OFF",
+        "GGML_AMX_BF16": "OFF"
+      }
+    },
+    "aarch64-unknown-linux-gnu": {
+      "cmakeEnvironment": {
+        "GGML_NATIVE": "OFF"
+      }
+    },
+    "x86_64-pc-windows-msvc": {
+      "cmakeEnvironment": {
+        "GGML_NATIVE": "OFF",
+        "GGML_SSE42": "OFF",
+        "GGML_AVX": "OFF",
+        "GGML_AVX2": "OFF",
+        "GGML_AVX_VNNI": "OFF",
+        "GGML_FMA": "OFF",
+        "GGML_F16C": "OFF",
+        "GGML_BMI2": "OFF",
+        "GGML_AVX512": "OFF",
+        "GGML_AVX512_VBMI": "OFF",
+        "GGML_AVX512_VNNI": "OFF",
+        "GGML_AVX512_BF16": "OFF",
+        "GGML_AMX_TILE": "OFF",
+        "GGML_AMX_INT8": "OFF",
+        "GGML_AMX_BF16": "OFF"
+      }
+    }
+  }
+}
