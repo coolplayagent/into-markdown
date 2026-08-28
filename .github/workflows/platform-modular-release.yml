@@ -66,6 +66,7 @@ jobs:
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        if: runner.os != 'Linux'
         with:
           python-version: '3.13'
       - name: Bind Linux checkout ownership
