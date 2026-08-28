@@ -13,6 +13,12 @@ PR 不编译 `media-runtime`、完整 CLI 或 whisper.cpp CPU 变体，也不运
 继续构建完整 Core、OCR 与语音 provider，执行原生审计和真实 E2E；独立的手动/定时门禁
 继续运行完整 process-plugin、OCR 方向矩阵和 Cargo/Bazel 兼容性测试。
 
+正式发布固定为四个平台构建检查加一个聚合检查。每个平台检查的硬超时为 10 分钟，聚合
+检查为 5 分钟；构建从仓库的 `runtime-assets` Release 下载固定摘要、已审计的 FFmpeg
+运行时，不在发布任务中重新编译 FFmpeg。每个平台的 Job Summary 和机器可读报告分别记录
+FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E、发布件上传和缓存上传
+耗时，用于直接定位超过预算的阶段。
+
 四平台 Cargo/Bazel 全矩阵、WASI、语义质量、Web 安全压力和工具链拒绝矩阵仍保留为可手动
 触发的独立 workflow；Linux、Windows 与 macOS 正式发布 workflow 会在受保护的 main/tag
 上执行真实原生构建、审计和成品 smoke。快速门禁用于尽早给出可操作错误，不能替代正式

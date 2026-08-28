@@ -39,7 +39,9 @@ jobs:
             ~/.cargo/git/db
             target
           key: pr-fast-v2-linux-x86-64-${{ hashFiles('Cargo.lock') }}
-          restore-keys: pr-fast-v2-linux-x86-64-
+          restore-keys: |
+            pr-fast-v2-linux-x86-64-
+            pr-fast-linux-x86-64-${{ hashFiles('Cargo.lock') }}
       - name: Test shared Rust and release contracts once
         run: |
           cargo fmt --all -- --check
@@ -78,7 +80,9 @@ jobs:
             ~/.cargo/git/db
             target
           key: pr-fast-v2-linux-arm64-${{ hashFiles('Cargo.lock') }}
-          restore-keys: pr-fast-v2-linux-arm64-
+          restore-keys: |
+            pr-fast-v2-linux-arm64-
+            pr-fast-linux-arm64-${{ hashFiles('Cargo.lock') }}
       - name: Compile the native process boundary and validate release authority
         run: |
           cargo check --locked -p into-markdown-process-plugin --lib -j2
@@ -103,7 +107,9 @@ jobs:
             ~/.cargo/git/db
             target
           key: pr-fast-v2-windows-x86-64-${{ hashFiles('Cargo.lock') }}
-          restore-keys: pr-fast-v2-windows-x86-64-
+          restore-keys: |
+            pr-fast-v2-windows-x86-64-
+            pr-fast-windows-x86-64-${{ hashFiles('Cargo.lock') }}
       - name: Compile the native process boundary and validate release authority
         run: |
           cargo check --locked -p into-markdown-process-plugin --lib -j2
@@ -125,7 +131,9 @@ jobs:
             ~/.cargo/git/db
             target
           key: pr-fast-v2-macos-arm64-${{ hashFiles('Cargo.lock') }}
-          restore-keys: pr-fast-v2-macos-arm64-
+          restore-keys: |
+            pr-fast-v2-macos-arm64-
+            pr-fast-macos-arm64-${{ hashFiles('Cargo.lock') }}
       - name: Compile the native process boundary and validate release authority
         run: |
           cargo check --locked -p into-markdown-process-plugin --lib -j2

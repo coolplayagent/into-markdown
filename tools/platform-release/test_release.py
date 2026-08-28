@@ -133,12 +133,25 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("-p into-markdown-cli --bin into-md", workflow)
         self.assertNotIn("--test runtime", workflow)
         self.assertEqual(workflow.count("-p into-markdown-process-plugin --lib"), 4)
+        for scope in [
+            "linux-x86-64",
+            "linux-arm64",
+            "windows-x86-64",
+            "macos-arm64",
+        ]:
+            self.assertIn(
+                f"pr-fast-{scope}-${{{{ hashFiles('Cargo.lock') }}}}", workflow
+            )
 
     def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
         self.assertEqual(workflow.count("workflow_dispatch:"), 1)
+        self.assertEqual(
+            re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\n    name:", workflow),
+            ["build", "publish"],
+        )
         for target in [
             "x86_64-unknown-linux-gnu",
             "aarch64-unknown-linux-gnu",
@@ -152,10 +165,11 @@ class PlatformReleaseTests(unittest.TestCase):
         for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
             self.assertNotIn(forbidden, workflow)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
-        self.assertEqual(workflow.count("timeout_minutes: 30"), 4)
-        self.assertNotIn("timeout_minutes: 35", workflow)
+        self.assertEqual(workflow.count("timeout_minutes: 10"), 4)
+        self.assertNotIn("timeout_minutes: 30", workflow)
+        self.assertEqual(workflow.count("    timeout-minutes: 5"), 1)
         windows = workflow.index("target: x86_64-pc-windows-msvc")
-        self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
+        self.assertIn("timeout_minutes: 10", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
 
     def test_release_build_only_validates_without_mutating_github_release(self) -> None:
