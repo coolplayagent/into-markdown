@@ -1,50 +1,7 @@
 name: Semantic layout quality
 
 on:
-  pull_request:
-    paths:
-      - "crates/core/**"
-      - "crates/api/**"
-      - "crates/converters/**"
-      - "crates/layout-quality/**"
-      - "crates/ocr/**"
-      - "crates/onnxruntime/**"
-      - "crates/render-markdown/**"
-      - "fixtures/**"
-      - "fuzz/legacy-office/**"
-      - "tools/macos-release/fixtures/**"
-      - "tools/legacy-office-performance.py"
-      - "models/**"
-      - "third_party/onnxruntime/**"
-      - "third_party/pdfium/**"
-      - "docs/architecture.md"
-      - "docs/semantic-layout-quality.md"
-      - "docs/testing.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - ".github/workflows/semantic-layout-quality.yml"
-  push:
-    branches: [main]
-    paths:
-      - "crates/core/**"
-      - "crates/api/**"
-      - "crates/converters/**"
-      - "crates/layout-quality/**"
-      - "crates/ocr/**"
-      - "crates/onnxruntime/**"
-      - "crates/render-markdown/**"
-      - "fixtures/**"
-      - "fuzz/legacy-office/**"
-      - "tools/macos-release/fixtures/**"
-      - "tools/legacy-office-performance.py"
-      - "models/**"
-      - "third_party/onnxruntime/**"
-      - "third_party/pdfium/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/semantic-layout-quality.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

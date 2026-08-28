@@ -7,6 +7,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import tomllib
 import unittest
 import zipfile
 
@@ -17,6 +18,7 @@ from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
     SPEECH_COMPONENTS,
+    VERSION,
     create_archive,
     distributed_source_ids,
     published_plugin_file,
@@ -24,6 +26,12 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_release_version_matches_workspace_and_bazel_module(self) -> None:
+        workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(VERSION, workspace["workspace"]["package"]["version"])
+        module = (ROOT / "MODULE.bazel").read_text(encoding="utf-8")
+        self.assertRegex(module, rf'(?s)module\(.*?version = "{re.escape(VERSION)}"')
+
     def test_expensive_native_gates_run_in_parallel_with_release_acceptance(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"

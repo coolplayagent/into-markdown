@@ -9,6 +9,7 @@ import pathlib
 import shutil
 import sys
 import tempfile
+import tomllib
 import zipfile
 
 from acquire import acquire, extract_tar
@@ -31,7 +32,9 @@ from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
 from skill_release import materialize as materialize_agent_skill  # noqa: E402
 
 TARGET = "aarch64-apple-darwin"
-VERSION = "0.0.0"
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"][
+    "package"
+]["version"]
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv6-tiny-recognizer-character-table", "ppocrv6-tiny-recognizer-onnx-model"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]

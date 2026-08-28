@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import zipfile
 
 
@@ -40,6 +41,12 @@ PLUGIN_RUNTIME_COMPONENTS = {
     ),
 }
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def project_version() -> str:
+    return tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"][
+        "package"
+    ]["version"]
 
 
 def plugin_artifact_kind(filename: str, target: str) -> str:
@@ -497,7 +504,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--projection-tool", required=True, type=pathlib.Path)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--version", default="0.0.0")
+    parser.add_argument("--version", default=project_version())
     parser.add_argument("--source-revision", required=True)
     parser.add_argument("--core-artifact", required=True, type=pathlib.Path)
     parser.add_argument("--core-root", required=True, type=pathlib.Path)

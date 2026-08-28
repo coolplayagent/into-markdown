@@ -23,6 +23,7 @@ py_binary(
         "authority.json",
         "install",
         "uninstall",
+        "//:Cargo.toml",
     ],
     deps = [
         ":library",

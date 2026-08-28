@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import queue
+import re
 import shutil
 import signal
 import socket
@@ -30,6 +31,7 @@ PLUGINS = {
     "official.media.whisper": ("transcription", "diarization"),
 }
 PLUGIN_MANAGER_AUTHORITY_FILES = frozenset({"plugin.json", ".installed.json", ".package.zip"})
+TARGET = re.compile(r"[a-z0-9_]+(?:-[a-z0-9_]+)+")
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -636,6 +638,23 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_package(plugins_root: pathlib.Path, plugin: str, target: str) -> pathlib.Path:
+    if not TARGET.fullmatch(target):
+        raise RuntimeError("platform acceptance target is not a bounded filename component")
+    candidates = [
+        plugins_root / f"{plugin}.imp",
+        plugins_root / f"{plugin}-{target}.imp",
+    ]
+    present = [path for path in candidates if path.exists()]
+    if len(present) != 1:
+        names = ", ".join(path.name for path in candidates)
+        raise RuntimeError(f"expected exactly one plugin package from: {names}")
+    package = present[0]
+    if not package.is_file() or package.is_symlink():
+        raise RuntimeError(f"plugin package is not a safe regular file: {package.name}")
+    return package.resolve(strict=True)
+
+
 def main() -> int:
     arguments = parse_arguments()
     install_root = arguments.install_root.resolve(strict=True)
@@ -647,7 +666,9 @@ def main() -> int:
     platform_audit = json.loads(arguments.platform_audit.read_text(encoding="utf-8"))
     if len(arguments.archive_sha256) != 64 or any(character not in "0123456789abcdef" for character in arguments.archive_sha256):
         raise SystemExit("archive SHA-256 must be 64 lowercase hexadecimal characters")
-    packages = {plugin: (plugins_root / f"{plugin}.imp").resolve(strict=True) for plugin in PLUGINS}
+    packages = {
+        plugin: resolve_package(plugins_root, plugin, arguments.target) for plugin in PLUGINS
+    }
     work = private_directory(arguments.work_root)
     runner = Runner(executable, work, arguments.timeout_seconds)
     before = tree_hash(install_root)

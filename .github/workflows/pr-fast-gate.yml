@@ -1,0 +1,128 @@
+name: PR fast gate
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-fast-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux-core:
+    name: Linux core and release authority
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr-fast-linux-core-${{ hashFiles('Cargo.lock') }}
+      - name: Check formatting, release metadata, and locked authority
+        run: |
+          cargo fmt --all -- --check
+          cargo fetch --locked
+          cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j2
+          python -m unittest \
+            tools.publish_release_assets_test \
+            tools.release_metadata_test \
+            tools.release_signing_policy_test \
+            tools.stage_release_artifact_test
+          python tools/macos-release/fixtures/generate.py --check
+      - name: Run portable Core, OCR, layout, and process regressions
+        run: |
+          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2
+          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
+
+  windows-install:
+    name: Windows installer and process smoke
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr-fast-windows-${{ hashFiles('Cargo.lock') }}
+      - name: Run Windows installer transactions and process sandbox
+        run: |
+          python tools/platform-release/test_platform_tools.py
+          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
+
+  macos-install:
+    name: macOS installer and process smoke
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr-fast-macos-${{ hashFiles('Cargo.lock') }}
+      - name: Run macOS installer transactions and process sandbox
+        run: |
+          python -m unittest discover -s tools/macos-release -p '*test.py'
+          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
+
+  web-and-docs:
+    name: Web browser and documentation smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: pr-fast-web-${{ hashFiles('Cargo.lock') }}
+      - name: Install locked browser dependencies
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm --filter @into-markdown/console exec playwright install --with-deps chromium
+      - name: Build once and run browser plus documentation contracts
+        run: |
+          cargo build --locked -p into-markdown-cli --bin into-md -j2
+          corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
+          INTO_MD_CLI="$GITHUB_WORKSPACE/target/debug/into-md" \
+            corepack pnpm --filter @into-markdown/console exec playwright test \
+            tests/web-security.e2e.spec.ts --workers=1 --reporter=line
+          python tools/docs-check/docs_check.py --into-md "$GITHUB_WORKSPACE/target/debug/into-md"

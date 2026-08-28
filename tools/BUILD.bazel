@@ -8,6 +8,7 @@ py_test(
     ],
     data = [
         "//:.bazelversion",
+        "//:Cargo.toml",
         "//:package.json",
         "//:pnpm-lock.yaml",
         "//:rust-toolchain.toml",
@@ -17,6 +18,15 @@ py_test(
         "//tools/platform-release:authority.json",
     ],
     main = "release_metadata_test.py",
+)
+
+py_test(
+    name = "stage_release_artifact_test",
+    srcs = [
+        "stage_release_artifact.py",
+        "stage_release_artifact_test.py",
+    ],
+    main = "stage_release_artifact_test.py",
 )
 
 py_test(
