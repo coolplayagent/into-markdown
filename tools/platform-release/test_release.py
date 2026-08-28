@@ -129,6 +129,10 @@ class PlatformReleaseTests(unittest.TestCase):
         timeouts = [int(value) for value in re.findall(r"timeout-minutes: (\d+)", workflow)]
         self.assertEqual(len(timeouts), len(checks))
         self.assertTrue(all(value <= 5 for value in timeouts))
+        self.assertNotIn("--features media-runtime", workflow)
+        self.assertNotIn("-p into-markdown-cli --bin into-md", workflow)
+        self.assertNotIn("--test runtime", workflow)
+        self.assertEqual(workflow.count("-p into-markdown-process-plugin --lib"), 4)
 
     def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
