@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: GitHub draft release tag that will contain every target's Core and two .imp files
+        description: GitHub draft release tag that will contain every target's Core and optional speech .imp
         required: true
         type: string
       signing_mode:
@@ -473,15 +473,22 @@ jobs:
           --output "${{ runner.temp }}/published-plugins"
           --target "${{ matrix.target }}"
       - name: Generate release SBOMs
-        run: >-
-          python tools/release-metadata.py
-          --projection-tool "${{ runner.temp }}/build/release/release-projection${{ runner.os == 'Windows' && '.exe' || '' }}"
-          --target ${{ matrix.target }}
-          --source-revision "${{ github.sha }}"
-          --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
-          --core-root "${{ runner.temp }}/distribution"
-          --plugins "${{ runner.temp }}/published-plugins"
-          --output "${{ runner.temp }}/release-metadata"
+        shell: bash
+        run: |
+          set -eu
+          metadata_plugins="${{ runner.temp }}/metadata-plugins"
+          mkdir "$metadata_plugins"
+          cp "${{ runner.temp }}/plugins-a/official.ocr.ppocrv6.imp" "$metadata_plugins/"
+          cp "${{ runner.temp }}/published-plugins/official.media.whisper-${{ matrix.target }}.imp" \
+            "$metadata_plugins/"
+          python tools/release-metadata.py \
+            --projection-tool "${{ runner.temp }}/build/release/release-projection${{ runner.os == 'Windows' && '.exe' || '' }}" \
+            --target ${{ matrix.target }} \
+            --source-revision "${{ github.sha }}" \
+            --core-artifact "${{ runner.temp }}/${{ matrix.archive }}" \
+            --core-root "${{ runner.temp }}/distribution" \
+            --plugins "$metadata_plugins" \
+            --output "${{ runner.temp }}/release-metadata"
       - name: Validate SPDX with pinned official tooling
         run: |
           python -m pip download --no-deps --only-binary=:all: spdx-tools==0.8.3 --dest "${{ runner.temp }}"
@@ -527,7 +534,7 @@ jobs:
         with:
           pattern: modular-*
           path: ${{ runner.temp }}/release-artifacts
-      - name: Prepare flat target-qualified release assets
+      - name: Publish user downloads and one release evidence bundle
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -535,26 +542,61 @@ jobs:
         run: |
           set -eu
           publish="$RUNNER_TEMP/publish"
+          evidence="$RUNNER_TEMP/evidence"
           mkdir "$publish"
+          mkdir "$evidence"
           for directory in "$RUNNER_TEMP"/release-artifacts/modular-*; do
             target=${directory##*/modular-}
-            cp "$directory"/into-md-* "$publish"/
-            cp "$directory"/published-plugins/* "$publish"/
-            for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
-              cp "$directory/$report" "$publish/$target-$report"
+            core=
+            for candidate in "$directory"/into-md-*-core.tar.gz "$directory"/into-md-*-core.zip; do
+              if [ -f "$candidate" ]; then
+                test -z "$core"
+                core=$candidate
+              fi
             done
-            cp "$directory/$target-signing-policy.json" "$publish/"
+            test -n "$core"
+            cp "$core" "$publish/"
+            cp "$core.sha256" "$evidence/"
+            if [ -f "$core.asc" ]; then
+              cp "$core.asc" "$evidence/"
+            fi
+            speech_count=0
+            for plugin in "$directory"/published-plugins/official.media.whisper-*.imp; do
+              test -f "$plugin"
+              cp "$plugin" "$publish/"
+              cp "$plugin.sha256" "$evidence/"
+              if [ -f "$plugin.asc" ]; then
+                cp "$plugin.asc" "$evidence/"
+              fi
+              speech_count=$((speech_count + 1))
+            done
+            test "$speech_count" -eq 1
+            test ! -e "$directory/published-plugins/official.ocr.ppocrv6-$target.imp"
+            for report in platform-audit.json installed-smoke.json platform-acceptance.json; do
+              cp "$directory/$report" "$evidence/$target-$report"
+            done
+            cp "$directory/$target-signing-policy.json" "$evidence/"
             for document in "$directory"/release-metadata/*; do
-              cp "$document" "$publish/${document##*/}"
+              cp "$document" "$evidence/${document##*/}"
             done
           done
           if [ "$SIGNING_MODE" = unsigned ]; then
             title="Into Markdown $RELEASE_TAG [UNSIGNED]"
-            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
+            trust_note="This unsigned build may show an operating-system trust warning."
           else
             title="Into Markdown $RELEASE_TAG"
-            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
+            trust_note="External publisher signatures are enabled."
           fi
+          notes=$(cat <<EOF
+          Download exactly one Core package for your computer:
+          - Windows x86_64: into-md-windows-x86_64-core.zip
+          - macOS Apple Silicon: into-md-macos-arm64-core.dmg
+          - Linux x86_64: into-md-linux-x86_64-core.tar.gz
+          - Linux ARM64: into-md-linux-arm64-core.tar.gz
+
+          OCR is built into Core and is ready after installation. Speech transcription is optional; only then download the official.media.whisper .imp with the same platform suffix. The single release-evidence ZIP contains checksums and audit reports and is not needed by ordinary users. $trust_note
+          EOF
+          )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           else
@@ -562,4 +604,36 @@ jobs:
               --title "$title" --notes "$notes"
           fi
           gh release edit "$RELEASE_TAG" --target "${{ github.sha }}" --title "$title" --notes "$notes"
+          test "$(find "$publish" -type f | wc -l)" -eq 6
           gh release upload "$RELEASE_TAG" "$publish"/* --clobber
+          evidence_name="into-markdown-$RELEASE_TAG-release-evidence.zip"
+          for old_asset in $(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'); do
+            case "$old_asset" in
+              into-md-linux-x86_64-core.tar.gz|into-md-linux-arm64-core.tar.gz|\
+              into-md-windows-x86_64-core.zip|into-md-macos-arm64-core.dmg|\
+              official.media.whisper-x86_64-unknown-linux-gnu.imp|\
+              official.media.whisper-aarch64-unknown-linux-gnu.imp|\
+              official.media.whisper-x86_64-pc-windows-msvc.imp|\
+              official.media.whisper-aarch64-apple-darwin.imp|"$evidence_name")
+                ;;
+              *)
+                gh release delete-asset "$RELEASE_TAG" "$old_asset" --yes
+                ;;
+            esac
+          done
+          for attempt in 1 2 3; do
+            existing="$RUNNER_TEMP/existing-evidence"
+            rm -rf "$existing"
+            mkdir "$existing"
+            existing_argument=
+            if gh release download "$RELEASE_TAG" --pattern "$evidence_name" --dir "$existing" 2>/dev/null; then
+              existing_argument="--existing $existing/$evidence_name"
+            fi
+            python tools/release_evidence.py \
+              --source "$evidence" \
+              --output "$RUNNER_TEMP/$evidence_name" \
+              --source-revision "${{ github.sha }}" \
+              $existing_argument
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$evidence_name" --clobber
+            sleep $((attempt * 2))
+          done

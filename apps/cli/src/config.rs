@@ -1040,8 +1040,16 @@ pub fn global_config_path() -> Result<PathBuf, CliError> {
             into_markdown_process_plugin::verify_windows_plugin_store_path(&requested)
                 .map_err(|error| CliError::config(error.to_string()))?;
             let canonical = fs::canonicalize(&requested)?;
-            if canonical != requested
-                || user_data_directory_identity(&requested)? != identity
+            // Windows canonicalization normally adds the verbatim `\\?\`
+            // prefix. Comparing its spelling with the user's absolute path
+            // rejects a safe directory even though both handles identify the
+            // same object. Reparse and DACL checks above plus the FileId checks
+            // below are the security authority on Windows.
+            #[cfg(unix)]
+            if canonical != requested {
+                return Err(CliError::config("user-data anchor must be canonical"));
+            }
+            if user_data_directory_identity(&requested)? != identity
                 || user_data_directory_identity(&canonical)? != identity
             {
                 return Err(CliError::config("user-data anchor must be canonical"));

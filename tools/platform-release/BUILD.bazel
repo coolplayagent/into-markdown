@@ -67,7 +67,9 @@ py_test(
         "test_platform_tools.py",
     ],
     data = [
+        "Install.cmd",
         "Install.ps1",
+        "Uninstall.cmd",
         "Uninstall.ps1",
         "installer.rs",
         "installer_test_program.rs",

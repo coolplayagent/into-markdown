@@ -28,6 +28,12 @@ class InstallerAttackTest(unittest.TestCase):
             f"test \"$(cat \"$1/archive-manifest.json\")\" = '{manifest.strip()}' || exit 1\n"
         )
         checker.chmod(0o755)
+        into_md = distribution / "bin/into-md"
+        into_md.write_text(
+            "#!/bin/sh\n"
+            "test \"$1\" = setup && test \"$2\" = ocr\n"
+        )
+        into_md.chmod(0o755)
         installer = distribution / "install"
         installer.write_bytes((ROOT / "install").read_bytes())
         installer.chmod(0o755)

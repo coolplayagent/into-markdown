@@ -19,7 +19,10 @@ export interface CapabilityCheck {
   stage: "queued" | "package" | "runtime" | "models" | "cancelling" | "completed";
   progress: number; code?: string; detail?: string; elapsedMs?: number;
 }
-export interface StagedPluginPackage { schemaVersion: 1; source: string; filename: string; byteLen: number }
+export interface StagedPluginPackage {
+  schemaVersion: 1; source: string; filename: string; byteLen: number; sha256: string;
+  officialPluginId?: string; signingKeyId?: string; signingKeySha256?: string;
+}
 export interface ProviderAdmin { name: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; providerType?: string; baseUrl?: string; model?: string; models: Record<string, string>; apiKeyEnv?: string; environmentSet?: boolean; capabilities: string[]; timeoutMs?: number; allowedHosts: string[]; allowPrivateNetwork: boolean; default: boolean; effective: boolean; shadowedBy?: "effective" }
 export interface PluginAdmin { id: string; scope: "global" | "project" | "effective"; actionScope?: "global" | "project"; packageScope?: "global" | "project"; source?: string; sha256?: string; protocol?: string; enabled?: boolean; effective: boolean; shadowedBy?: "effective"; verification?: string; version?: string; signingKeyId?: string; signingKeySha256?: string; target?: string }
 export interface DoctorAdmin { id: string; status: string; detail: string }
@@ -430,7 +433,11 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
       const headers = auth(); headers["Content-Type"] = "application/octet-stream"; headers["X-Into-Md-Plugin-Filename-B64"] = base64UrlUtf8(file.name);
       const value = await jsonRequest("/api/admin/plugin-package", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }, 4096);
       if (!isObject(value) || value.schemaVersion !== 1 || !safeText(value.source, 4096) || !safeText(value.filename, 255)
-        || !Number.isSafeInteger(value.byteLen) || Number(value.byteLen) <= 0) throw new ApiError("invalidResponse");
+        || !Number.isSafeInteger(value.byteLen) || Number(value.byteLen) <= 0 || typeof value.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.sha256)
+        || value.officialPluginId !== undefined && !safeText(value.officialPluginId, 128)
+        || value.signingKeyId !== undefined && !safeText(value.signingKeyId, 256)
+        || value.signingKeySha256 !== undefined && (typeof value.signingKeySha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.signingKeySha256))
+        || [value.officialPluginId, value.signingKeyId, value.signingKeySha256].filter((item) => item !== undefined).length % 3 !== 0) throw new ApiError("invalidResponse");
       return value as unknown as StagedPluginPackage;
     },
     async admin(signal, section) { const query = section ? `?section=${encodeURIComponent(section)}` : ""; return parseAdminSnapshot(await jsonRequest(`/api/admin${query}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, MAX_RESPONSE_BYTES)); },

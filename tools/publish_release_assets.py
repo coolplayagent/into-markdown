@@ -10,7 +10,9 @@ import re
 import shutil
 
 
-PLUGIN_IDS = ("official.ocr.ppocrv6", "official.media.whisper")
+# OCR ships inside Core and is installed automatically. Speech remains the
+# only user-downloadable capability package.
+PLUGIN_IDS = ("official.media.whisper",)
 TARGET = re.compile(r"[a-z0-9_]+(?:-[a-z0-9_]+)+")
 
 

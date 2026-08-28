@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: GitHub draft release tag that will contain the Core and two target-qualified .imp files
+        description: GitHub draft release tag that will contain Core and the optional speech .imp
         required: true
         type: string
       signing_mode:
@@ -212,6 +212,11 @@ jobs:
             --source "$RUNNER_TEMP/plugins-final" \
             --output "$RUNNER_TEMP/published-plugins" \
             --target aarch64-apple-darwin
+          metadata_plugins="$RUNNER_TEMP/metadata-plugins"
+          mkdir "$metadata_plugins"
+          cp "$RUNNER_TEMP/plugins-final/official.ocr.ppocrv6.imp" "$metadata_plugins/"
+          cp "$RUNNER_TEMP/published-plugins/official.media.whisper-aarch64-apple-darwin.imp" \
+            "$metadata_plugins/"
           hdiutil attach -readonly -nobrowse -mountpoint "$mount" \
             "$RUNNER_TEMP/into-md-macos-arm64-core.dmg"
           trap 'hdiutil detach "$mount"' EXIT
@@ -222,7 +227,7 @@ jobs:
             --source-revision "${{ github.sha }}" \
             --core-artifact "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" \
             --core-root "$mount" \
-            --plugins "$RUNNER_TEMP/published-plugins" \
+            --plugins "$metadata_plugins" \
             --output "$metadata"
           hdiutil detach "$mount"
           trap - EXIT
@@ -298,7 +303,7 @@ jobs:
             ${{ runner.temp }}/release-metadata/*
             ${{ runner.temp }}/aarch64-apple-darwin-signing-policy.json
           if-no-files-found: error
-      - name: Add final macOS assets to the protected draft release
+      - name: Publish macOS user downloads and merge release evidence
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -306,31 +311,83 @@ jobs:
         run: |
           set -eu
           publish="$RUNNER_TEMP/publish"
+          evidence="$RUNNER_TEMP/evidence"
           mkdir "$publish"
+          mkdir "$evidence"
           cp "$RUNNER_TEMP/into-md-macos-arm64-core.dmg" "$publish/"
-          cp "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256" "$publish/"
-          cp "$RUNNER_TEMP/published-plugins"/* "$publish"/
+          cp "$RUNNER_TEMP/into-md-macos-arm64-core.dmg.sha256" "$evidence/"
+          speech="$RUNNER_TEMP/published-plugins/official.media.whisper-aarch64-apple-darwin.imp"
+          test -f "$speech"
+          test -f "$speech.sha256"
+          test ! -e "$RUNNER_TEMP/published-plugins/official.ocr.ppocrv6-aarch64-apple-darwin.imp"
+          cp "$speech" "$publish/"
+          cp "$speech.sha256" "$evidence/"
+          if [ -f "$speech.asc" ]; then
+            cp "$speech.asc" "$evidence/"
+          fi
           cp "$RUNNER_TEMP/into-md-macos-arm64-core-smoke.json" \
-            "$publish/aarch64-apple-darwin-installed-smoke.json"
-          cp "$RUNNER_TEMP/aarch64-apple-darwin-signing-policy.json" "$publish/"
+            "$evidence/aarch64-apple-darwin-installed-smoke.json"
+          cp "$RUNNER_TEMP/aarch64-apple-darwin-signing-policy.json" "$evidence/"
           for document in "$RUNNER_TEMP"/release-metadata/*; do
-            cp "$document" "$publish/${document##*/}"
+            cp "$document" "$evidence/${document##*/}"
           done
           if [ "$SIGNING_MODE" = unsigned ]; then
             title="Into Markdown $RELEASE_TAG [UNSIGNED]"
-            notes="Core plus target-specific OCR and speech plugins. UNSIGNED distribution: verify every SHA-256 sidecar before installing. Windows may show Unknown publisher or SmartScreen warnings; macOS may require Open Anyway or quarantine removal after digest verification. Plugin packages retain internal Ed25519 manifest signatures. Draft until Linux, Windows, and macOS release gates all pass."
+            trust_note="This unsigned build may show an operating-system trust warning."
           else
             title="Into Markdown $RELEASE_TAG"
-            notes="Core plus target-specific OCR and speech plugins. External publisher signatures are enabled. Draft until Linux, Windows, and macOS release gates all pass."
+            trust_note="External publisher signatures are enabled."
           fi
+          notes=$(cat <<EOF
+          Download exactly one Core package for your computer:
+          - Windows x86_64: into-md-windows-x86_64-core.zip
+          - macOS Apple Silicon: into-md-macos-arm64-core.dmg
+          - Linux x86_64: into-md-linux-x86_64-core.tar.gz
+          - Linux ARM64: into-md-linux-arm64-core.tar.gz
+
+          OCR is built into Core and is ready after installation. Speech transcription is optional; only then download the official.media.whisper .imp with the same platform suffix. The single release-evidence ZIP contains checksums and audit reports and is not needed by ordinary users. $trust_note
+          EOF
+          )
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           else
             gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
               --title "$title" --notes "$notes"
           fi
-          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
+          gh release edit "$RELEASE_TAG" --target "${{ github.sha }}" --title "$title" --notes "$notes"
+          test "$(find "$publish" -type f | wc -l)" -eq 2
           gh release upload "$RELEASE_TAG" "$publish"/* --clobber
+          evidence_name="into-markdown-$RELEASE_TAG-release-evidence.zip"
+          for old_asset in $(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'); do
+            case "$old_asset" in
+              into-md-linux-x86_64-core.tar.gz|into-md-linux-arm64-core.tar.gz|\
+              into-md-windows-x86_64-core.zip|into-md-macos-arm64-core.dmg|\
+              official.media.whisper-x86_64-unknown-linux-gnu.imp|\
+              official.media.whisper-aarch64-unknown-linux-gnu.imp|\
+              official.media.whisper-x86_64-pc-windows-msvc.imp|\
+              official.media.whisper-aarch64-apple-darwin.imp|"$evidence_name")
+                ;;
+              *)
+                gh release delete-asset "$RELEASE_TAG" "$old_asset" --yes
+                ;;
+            esac
+          done
+          for attempt in 1 2 3; do
+            existing="$RUNNER_TEMP/existing-evidence"
+            rm -rf "$existing"
+            mkdir "$existing"
+            existing_argument=
+            if gh release download "$RELEASE_TAG" --pattern "$evidence_name" --dir "$existing" 2>/dev/null; then
+              existing_argument="--existing $existing/$evidence_name"
+            fi
+            python3 tools/release_evidence.py \
+              --source "$evidence" \
+              --output "$RUNNER_TEMP/$evidence_name" \
+              --source-revision "${{ github.sha }}" \
+              $existing_argument
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/$evidence_name" --clobber
+            sleep $((attempt * 2))
+          done
       - name: Remove release credentials
         if: always()
         run: |

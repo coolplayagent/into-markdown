@@ -3,9 +3,39 @@ param(
   [string]$CommandDirectory = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 )
 $ErrorActionPreference = "Stop"
+$securityModule = Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
+if (-not (Test-Path -LiteralPath $securityModule -PathType Leaf)) {
+  throw "installEnvironmentUnsupported: Windows PowerShell security module is unavailable"
+}
+Import-Module -Name $securityModule -ErrorAction Stop
+
+function Test-FullyQualifiedPath([string]$Path) {
+  if ([String]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) { return $false }
+  # PowerShell 5.1 targets .NET Framework, where IsPathFullyQualified does not
+  # exist. Reject the two rooted-but-drive-relative Windows forms explicitly.
+  if ($Path -match '^[A-Za-z]:[^\\/]' -or ($Path.StartsWith('\') -and -not $Path.StartsWith('\\'))) {
+    return $false
+  }
+  try { [void][IO.Path]::GetFullPath($Path) } catch { return $false }
+  return $true
+}
+
+function Get-Sha256Hex([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  try {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+      return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+      $algorithm.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
 
 function Resolve-AbsoluteNormalized([string]$Path, [string]$Label) {
-  if (-not [IO.Path]::IsPathFullyQualified($Path)) { throw "installPathUnsafe: $Label must be absolute" }
+  if (-not (Test-FullyQualifiedPath $Path)) { throw "installPathUnsafe: $Label must be absolute" }
   if (-not [StringComparer]::Ordinal.Equals($Path, $Path.Normalize([Text.NormalizationForm]::FormC))) {
     throw "installPathUnsafe: $Label must use normalized Unicode"
   }
@@ -87,6 +117,14 @@ if (Get-ChildItem -LiteralPath $distribution -Recurse -Force | Where-Object { $_
 }
 & "$distribution\bin\archive-check.exe" $distribution
 if ($LASTEXITCODE -ne 0) { throw "installIntegrityFailed: distribution integrity check failed" }
-$manifestHash = (Get-FileHash -Algorithm SHA256 "$distribution\archive-manifest.json").Hash.ToLowerInvariant()
-& "$distribution\bin\into-md-installer.exe" install $distribution $Prefix $CommandDirectory $manifestHash
+$manifestHash = Get-Sha256Hex "$distribution\archive-manifest.json"
+& "$distribution\bin\into-md-installer.exe" install $distribution $Prefix $CommandDirectory $manifestHash | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "installFailed: native installation transaction failed" }
+$identity = (Get-Content -LiteralPath (Join-Path $Prefix "current.txt") -Raw).Trim()
+if ($identity -notmatch '^[0-9a-f]{64}$') { throw "installAuthorityInvalid: installed version authority is invalid" }
+$installed = Join-Path $Prefix "versions\$identity"
+& (Join-Path $installed "bin\into-md.exe") --quiet setup ocr | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "installFailed: built-in OCR could not be initialized; rerun Install.cmd to repair" }
+Write-Output "Into Markdown installed successfully. Built-in OCR is ready."
+Write-Output "Open a new terminal and run: into-md --help"
+Write-Output "Installed location: $Prefix"

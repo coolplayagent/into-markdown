@@ -1413,6 +1413,70 @@ struct OfficialPluginRecord {
     sha256: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct OfficialPackageAuthority {
+    pub plugin_id: String,
+    pub signing_key_id: String,
+    pub signing_key_sha256: String,
+}
+
+fn installed_official_plugin_catalog(
+    required_for: Option<&str>,
+) -> Result<Option<(PathBuf, OfficialPluginCatalog)>, CliError> {
+    let executable = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .map_err(|_| CliError::component("installed executable path is unavailable"))?;
+    let distribution = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| CliError::component("installed distribution root is unavailable"))?;
+    let plugin_root = distribution.join("share/into-markdown/plugins");
+    let catalog_path = plugin_root.join("official-publisher.json");
+    let metadata = match fs::symlink_metadata(&catalog_path) {
+        Ok(metadata) => metadata,
+        Err(_) if required_for.is_none() => return Ok(None),
+        Err(_) => {
+            return Err(CliError::component(format!(
+                "official plugin catalog is unavailable for {}",
+                required_for.unwrap_or("requested package")
+            )));
+        }
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
+        return Err(CliError::component("official plugin catalog is invalid"));
+    }
+    let bytes = fs::read(&catalog_path).map_err(CliError::from)?;
+    let catalog: OfficialPluginCatalog = serde_json::from_slice(&bytes)
+        .map_err(|_| CliError::component("official plugin catalog is invalid"))?;
+    if !matches!(catalog.schema_version, 1 | 2) {
+        return Err(CliError::component("official plugin catalog schema is unsupported"));
+    }
+    config::validate_sha256(&catalog.signing_key_sha256)?;
+    Ok(Some((plugin_root, catalog)))
+}
+
+pub(crate) fn official_package_authority_for_sha256(
+    sha256: &str,
+) -> Result<Option<OfficialPackageAuthority>, CliError> {
+    config::validate_sha256(sha256)?;
+    let Some((_, catalog)) = installed_official_plugin_catalog(None)? else {
+        return Ok(None);
+    };
+    let mut matched = catalog.packages.iter().filter(|(_, package)| package.sha256 == sha256);
+    let Some((plugin_id, package)) = matched.next() else {
+        return Ok(None);
+    };
+    if matched.next().is_some() {
+        return Err(CliError::component("official plugin catalog contains a duplicate digest"));
+    }
+    config::validate_sha256(&package.sha256)?;
+    Ok(Some(OfficialPackageAuthority {
+        plugin_id: plugin_id.clone(),
+        signing_key_id: catalog.signing_key_id,
+        signing_key_sha256: catalog.signing_key_sha256,
+    }))
+}
+
 fn ensure_official_plugin(
     id: &str,
     global: &crate::args::GlobalArgs,
@@ -1425,28 +1489,10 @@ fn ensure_official_plugin(
     {
         return Ok(());
     }
-    let executable = std::env::current_exe()
-        .and_then(|path| path.canonicalize())
-        .map_err(|_| CliError::component("installed executable path is unavailable"))?;
-    let distribution = executable
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| CliError::component("installed distribution root is unavailable"))?;
-    let plugin_root = distribution.join("share/into-markdown/plugins");
-    let catalog_path = plugin_root.join("official-publisher.json");
-    let metadata = fs::symlink_metadata(&catalog_path).map_err(|_| {
-        CliError::component(format!("official plugin catalog is unavailable for {id}"))
-    })?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
-        return Err(CliError::component("official plugin catalog is invalid"));
-    }
-    let catalog_bytes = fs::read(&catalog_path).map_err(CliError::from)?;
-    let official: OfficialPluginCatalog = serde_json::from_slice(&catalog_bytes)
-        .map_err(|_| CliError::component("official plugin catalog is invalid"))?;
-    if !matches!(official.schema_version, 1 | 2) {
-        return Err(CliError::component("official plugin catalog schema is unsupported"));
-    }
-    config::validate_sha256(&official.signing_key_sha256)?;
+    let (plugin_root, official) =
+        installed_official_plugin_catalog(Some(id))?.ok_or_else(|| {
+            CliError::component(format!("official plugin catalog is unavailable for {id}"))
+        })?;
     let package = official
         .packages
         .get(id)

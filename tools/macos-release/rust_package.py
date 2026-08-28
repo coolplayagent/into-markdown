@@ -5,11 +5,27 @@ from __future__ import annotations
 import json
 import pathlib
 import shutil
+import stat
+import tempfile
+import zipfile
 
 from common import ROOT, ReleaseError, run
 
 
 def materialize(destination: pathlib.Path) -> None:
+    """Write the complete offline Rust facade as one reproducible ZIP file."""
+    if destination.suffix != ".zip":
+        raise ReleaseError("Rust facade destination must be a .zip file")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise ReleaseError("Rust facade archive already exists")
+    with tempfile.TemporaryDirectory(prefix="into-md-rust-facade-", dir=destination.parent) as name:
+        source = pathlib.Path(name) / "facade"
+        _materialize_tree(source)
+        _write_reproducible_zip(source, destination)
+
+
+def _materialize_tree(destination: pathlib.Path) -> None:
     metadata = json.loads(run(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
@@ -82,6 +98,26 @@ def materialize(destination: pathlib.Path) -> None:
         cwd=destination,
     )
     run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"], cwd=destination)
+
+
+def _write_reproducible_zip(source: pathlib.Path, destination: pathlib.Path) -> None:
+    # Store entries rather than deflating them here. The outer distribution archive
+    # performs compression, while ZIP_STORED avoids zlib-version-dependent bytes on
+    # Windows, Linux, and macOS.
+    with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_STORED) as archive:
+        for path in sorted(source.rglob("*"), key=lambda item: item.relative_to(source).as_posix()):
+            metadata = path.lstat()
+            if path.is_symlink() or not path.is_file():
+                if path.is_dir():
+                    continue
+                raise ReleaseError(f"Rust facade contains a non-regular entry: {path}")
+            relative = path.relative_to(source).as_posix()
+            entry = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.create_system = 3
+            entry.compress_type = zipfile.ZIP_STORED
+            entry.external_attr = (stat.S_IFREG | 0o644) << 16
+            entry.flag_bits |= 0x800
+            archive.writestr(entry, path.read_bytes())
 
 
 def local_package_path(source: pathlib.Path) -> pathlib.Path:

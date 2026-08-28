@@ -327,15 +327,12 @@ pub fn aggregate_release_set(request_json: &str) -> Result<ReleaseSetMetadata, V
     let Some(mut request) = request else { return Err(sorted(errors)) };
     validate_header(request.schema_version, &request.target, &mut errors);
     validate_source_revision(&request.source_revision, &mut errors);
-    let expected = BTreeSet::from([
-        ReleaseArtifact::Core,
-        ReleaseArtifact::OcrPlugin,
-        ReleaseArtifact::MediaPlugin,
-    ]);
+    let expected = BTreeSet::from([ReleaseArtifact::Core, ReleaseArtifact::MediaPlugin]);
     let actual: BTreeSet<_> = request.artifacts.iter().map(|item| item.artifact).collect();
     if actual != expected || request.artifacts.len() != expected.len() {
         errors.push(
-            "release set must contain Core and each complete capability plugin once".to_owned(),
+            "release set must contain Core with built-in OCR and the optional media plugin once"
+                .to_owned(),
         );
     }
     if request.version.trim().is_empty() {
@@ -404,7 +401,7 @@ fn validate_artifact_files(
                 file.path
             ));
         }
-        if file.bytes == 0 && !allowed_empty_vendor_source(file) {
+        if file.bytes == 0 {
             errors.push(format!("artifact member {} has an empty size", file.path));
         }
         for owner in file.component_id.iter().chain(file.embedded_components.iter()) {
@@ -419,47 +416,6 @@ fn validate_artifact_files(
     }
     for component in selected.difference(&owners) {
         errors.push(format!("artifact component {component} owns no member"));
-    }
-}
-
-fn allowed_empty_vendor_source(file: &ArchiveFile) -> bool {
-    file.kind == ArchiveFileKind::Project
-        && file.component_id.is_none()
-        && file.embedded_components.is_empty()
-        && file.path.starts_with("lib/into-markdown-rust/vendor/")
-        && file.path.len() > "lib/into-markdown-rust/vendor/".len()
-}
-
-#[cfg(test)]
-mod empty_vendor_source_tests {
-    use super::{ArchiveFile, ArchiveFileKind, allowed_empty_vendor_source};
-
-    fn file(path: &str, kind: ArchiveFileKind) -> ArchiveFile {
-        ArchiveFile {
-            path: path.into(),
-            bytes: 0,
-            sha1: Some("0".repeat(40)),
-            sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
-            kind,
-            component_id: None,
-            embedded_components: vec![],
-        }
-    }
-
-    #[test]
-    fn only_project_files_inside_the_offline_vendor_tree_may_be_empty() {
-        assert!(allowed_empty_vendor_source(&file(
-            "lib/into-markdown-rust/vendor/vcpkg-0.2.15/test-data/empty.dll",
-            ArchiveFileKind::Project,
-        )));
-        assert!(!allowed_empty_vendor_source(&file(
-            "lib/into-markdown-rust/Cargo.toml",
-            ArchiveFileKind::Project,
-        )));
-        assert!(!allowed_empty_vendor_source(&file(
-            "lib/into-markdown-rust/vendor/vcpkg-0.2.15/test-data/empty.dll",
-            ArchiveFileKind::Component,
-        )));
     }
 }
 
@@ -651,14 +607,30 @@ fn load_authorities(
                 read(repository.join("third_party/licenses/cargo-normal-runtime.json"), errors);
             let npm_inventory =
                 read(repository.join("third_party/licenses/npm-inventory.json"), errors);
-            inventory.components.extend(rust::load(
-                repository,
-                &cargo_lock,
-                &rust_approvals,
-                &cargo_normal_runtime,
-                artifact.cargo_root(),
-                errors,
-            ));
+            let rust_components = if artifact == ReleaseArtifact::Core {
+                // Core contains the exact signed OCR provider package. Load
+                // both roots through one reviewed authority pass so the outer
+                // SBOM accounts for the nested executable without repeating
+                // Cargo metadata work.
+                rust::load_for_roots(
+                    repository,
+                    &cargo_lock,
+                    &rust_approvals,
+                    &cargo_normal_runtime,
+                    &[ReleaseArtifact::Core.cargo_root(), ReleaseArtifact::OcrPlugin.cargo_root()],
+                    errors,
+                )
+            } else {
+                rust::load(
+                    repository,
+                    &cargo_lock,
+                    &rust_approvals,
+                    &cargo_normal_runtime,
+                    artifact.cargo_root(),
+                    errors,
+                )
+            };
+            inventory.components.extend(rust_components);
             if artifact == ReleaseArtifact::Core {
                 inventory.components.extend(npm::load(&npm_inventory, errors));
             }
@@ -952,12 +924,15 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
                     | "bin/onnxruntime-worker"
                     | "bin/onnxruntime-worker.exe"
                     | "share/into-markdown/plugins/official-publisher.json"
+                    | "share/into-markdown/plugins/packages/official.ocr.ppocrv6.imp"
+                    | "Install.cmd"
                     | "Install.ps1"
+                    | "Uninstall.cmd"
                     | "Uninstall.ps1"
                     | "install"
                     | "uninstall"
             ) || agent_skill_path(&file.path)
-                || file.path.starts_with("lib/into-markdown-rust/")
+                || file.path == "lib/into-markdown-rust.zip"
                 || (file.path.starts_with("bin/models/")
                     && file.path.ends_with("/install-state.json"))
                 || file.path.starts_with("share/into-markdown/smoke/fixtures/")

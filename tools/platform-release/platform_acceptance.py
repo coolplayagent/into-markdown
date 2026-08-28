@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
-import itertools
 import json
 import os
 import pathlib
@@ -26,10 +25,8 @@ from dataclasses import dataclass
 from typing import Any
 
 
-PLUGINS = {
-    "official.ocr.ppocrv6": ("ocr",),
-    "official.media.whisper": ("transcription", "diarization"),
-}
+BUILTIN_CAPABILITIES = {"ocr": "official.ocr.ppocrv6"}
+PLUGINS = {"official.media.whisper": ("transcription", "diarization")}
 PLUGIN_MANAGER_AUTHORITY_FILES = frozenset({"plugin.json", ".installed.json", ".package.zip"})
 TARGET = re.compile(r"[a-z0-9_]+(?:-[a-z0-9_]+)+")
 
@@ -434,14 +431,16 @@ class WebSession:
             body=json.dumps(authorized).encode(), content_type="application/json",
         )
 
-    def stage(self, name: str, package: pathlib.Path) -> str:
+    def stage(self, name: str, package: pathlib.Path) -> dict[str, Any]:
         filename = base64.urlsafe_b64encode(package.name.encode()).decode().rstrip("=")
         staged = self.request(
             name, "/api/admin/plugin-package", method="POST", body=package.read_bytes(),
             content_type="application/octet-stream",
             headers={"X-Into-Md-Plugin-Filename-B64": filename},
         )
-        return str(staged["source"])
+        if not isinstance(staged, dict):
+            raise RuntimeError(f"{name}: Web staging did not return package metadata")
+        return staged
 
     def close(self) -> None:
         started = time.monotonic()
@@ -471,18 +470,42 @@ def web_lifecycle(
         index = web.request("web-production-index", "/")
         if not isinstance(index, str) or "<script" not in index or "/assets/" not in index:
             raise RuntimeError("installed Web root is not the production application bundle")
+        core_only = web.request("web-core-only-capabilities", "/api/admin")
+        core_capabilities = {
+            item.get("id"): item for item in core_only.get("capabilities", [])
+        }
+        if core_capabilities.get("ocr", {}).get("status") != "ready":
+            raise RuntimeError("installed Web bundle does not expose Core OCR as ready")
+        if any(
+            core_capabilities.get(capability, {}).get("status") == "ready"
+            for capability in ("transcription", "diarization")
+        ):
+            raise RuntimeError("fresh installed Web state unexpectedly enables speech")
         for plugin, package in packages.items():
             def install_action(label: str) -> None:
-                source = web.stage(f"{label}-stage", package)
+                staged = web.stage(f"{label}-stage", package)
+                if staged.get("officialPluginId") != plugin:
+                    raise RuntimeError(
+                        f"{label}: Web staging did not recognize the selected official package"
+                    )
+                if staged.get("sha256") != sha256(package):
+                    raise RuntimeError(f"{label}: Web staging returned the wrong package digest")
+                if (
+                    staged.get("signingKeyId") != publisher["signingKeyId"]
+                    or staged.get("signingKeySha256") != publisher["signingKeySha256"]
+                ):
+                    raise RuntimeError(
+                        f"{label}: Web staging did not derive the installed official publisher"
+                    )
                 web.dangerous_action(label, {
                     "schemaVersion": 1,
                     "action": "plugin.install",
                     "scope": "global",
                     "target": plugin,
-                    "source": source,
-                    "sha256": sha256(package),
-                    "signingKeyId": publisher["signingKeyId"],
-                    "signingKeySha256": publisher["signingKeySha256"],
+                    "source": staged["source"],
+                    "sha256": staged["sha256"],
+                    "signingKeyId": staged["signingKeyId"],
+                    "signingKeySha256": staged["signingKeySha256"],
                 })
 
             install_action(f"web-install-{plugin}")
@@ -529,6 +552,11 @@ def web_lifecycle(
             refreshed = web.request(f"web-refresh-after-remove-{plugin}", "/api/admin")
             if any(item.get("id") == plugin for item in refreshed.get("plugins", [])):
                 raise RuntimeError(f"Web status still exposes removed plugin {plugin}")
+            refreshed_capabilities = {
+                item.get("id"): item for item in refreshed.get("capabilities", [])
+            }
+            if refreshed_capabilities.get("ocr", {}).get("status") != "ready":
+                raise RuntimeError("speech lifecycle changed built-in Web OCR readiness")
     finally:
         web.close()
 
@@ -609,6 +637,18 @@ def assert_states(runner: Runner, state: pathlib.Path, selected: set[str], label
     output = runner.call(label, state, ["capabilities", "list", "--json"])
     capabilities = capability_map(output.stdout)
     text = json.dumps(capabilities, sort_keys=True)
+    for capability, provider in BUILTIN_CAPABILITIES.items():
+        if capability not in capabilities:
+            raise RuntimeError(f"{label}: built-in capability {capability!r} absent")
+        if capabilities[capability].get("status") != "ready":
+            raise RuntimeError(
+                f"{label}: built-in {capability} status was "
+                f"{capabilities[capability].get('status')!r} (expected ready from Core)"
+            )
+        if provider not in text:
+            raise RuntimeError(
+                f"{label}: built-in {capability} does not identify its official provider"
+            )
     for plugin, ids in PLUGINS.items():
         for capability in ids:
             if capability not in capabilities:
@@ -619,6 +659,12 @@ def assert_states(runner: Runner, state: pathlib.Path, selected: set[str], label
             if plugin not in selected and plugin not in text and "setup" not in text:
                 raise RuntimeError(f"{label}: missing capability lacks its exact install entry")
     return capabilities
+
+
+def initialize_core_state(runner: Runner, state: pathlib.Path, label: str) -> None:
+    """Mirror the Core installer bootstrap in each intentionally isolated user state."""
+    runner.call(f"{label}-builtin-ocr", state, ["setup", "ocr"])
+    assert_states(runner, state, set(), f"{label}-builtin-capabilities")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -677,24 +723,29 @@ def main() -> int:
     error = None
     try:
         runner.call("core-version", private_directory(work / "core-state"), ["--version"])
+        core_ocr_state = private_directory(work / "core-ocr")
+        initialize_core_state(runner, core_ocr_state, "core-only")
+        core_ocr_fixture = core_ocr_state / "ocr-english-clear-1.png"
+        shutil.copyfile(fixtures / "ocr" / "ocr-english-clear-1.png", core_ocr_fixture)
+        runner.call(
+            "real-ocr-core-only",
+            core_ocr_state,
+            [str(core_ocr_fixture), "--ocr", "always", "--emit", "result-json"],
+        )
         plugin_names = list(PLUGINS)
         for mask in range(1 << len(plugin_names)):
             selected = {plugin for index, plugin in enumerate(plugin_names) if mask & (1 << index)}
             state = private_directory(work / f"combination-{mask}")
+            initialize_core_state(runner, state, f"combination-{mask}-core")
             for plugin in plugin_names:
                 if plugin in selected:
                     install(runner, state, packages[plugin], publisher, f"combination-{mask}-install-{plugin}")
                     runner.call(f"combination-{mask}-verify-{plugin}", state, ["plugins", "verify", plugin, "--scope", "global", "--json"])
             statuses = assert_states(runner, state, selected, f"combination-{mask}-statuses")
             matrix.append({"kind": "combination", "selected": sorted(selected), "statuses": statuses, "passed": True})
-        for index, order in enumerate(itertools.permutations(plugin_names)):
-            state = private_directory(work / f"order-{index}")
-            for plugin in order:
-                install(runner, state, packages[plugin], publisher, f"order-{index}-install-{plugin}")
-                assert_states(runner, state, set(order[: order.index(plugin) + 1]), f"order-{index}-after-{plugin}")
-            matrix.append({"kind": "order", "order": list(order), "passed": True})
 
         lifecycle = private_directory(work / "lifecycle")
+        initialize_core_state(runner, lifecycle, "lifecycle-core")
         for plugin in plugin_names:
             unchanged = tree_hash(install_root)
             installed_plugin = install(runner, lifecycle, packages[plugin], publisher, f"lifecycle-install-{plugin}")
@@ -736,6 +787,7 @@ def main() -> int:
         runner.running_snapshot(lifecycle, speech_fixture, "official.media.whisper")
 
         web_state = private_directory(work / "web-lifecycle")
+        initialize_core_state(runner, web_state, "web-core")
         web_lifecycle(runner, web_state, packages, publisher)
 
         faults = private_directory(work / "faults")

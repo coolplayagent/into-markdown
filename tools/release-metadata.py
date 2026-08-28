@@ -20,6 +20,10 @@ ARTIFACTS = {
     "official.ocr.ppocrv6.imp": "ocr-plugin",
     "official.media.whisper.imp": "media-plugin",
 }
+EXTERNAL_ARTIFACTS = {"official.media.whisper.imp": "media-plugin"}
+BUNDLED_OCR_PATH = pathlib.PurePosixPath(
+    "share/into-markdown/plugins/packages/official.ocr.ppocrv6.imp"
+)
 OCR_MODEL_COMPONENTS = {
     "ppocrv6-tiny-detector-onnx-model",
     "ppocrv6-tiny-recognizer-character-table",
@@ -97,6 +101,8 @@ def run_projection(tool: pathlib.Path, operation: str, value: dict) -> dict:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     if process.returncode != 0:
         raise RuntimeError(process.stderr.strip() or f"release-projection {operation} failed")
@@ -156,6 +162,8 @@ def build_tool_executions(target: str) -> list[dict]:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
         output = "\n".join((process.stdout, process.stderr))
@@ -447,6 +455,46 @@ def validate_projection_ownership(projection: dict) -> None:
     )
 
 
+def fold_bundled_ocr_into_core(core: dict, ocr: dict) -> None:
+    if ocr.get("artifact") != "ocr-plugin":
+        raise RuntimeError("bundled Core capability is not the official OCR artifact")
+    matches = [
+        item for item in core["files"] if item["path"] == BUNDLED_OCR_PATH.as_posix()
+    ]
+    if len(matches) != 1:
+        raise RuntimeError("Core projection does not contain exactly one bundled OCR package")
+    package = matches[0]
+    if package["bytes"] != ocr["bytes"] or package["sha256"] != ocr["sha256"]:
+        raise RuntimeError("Core bundled OCR package differs from verified plugin bytes")
+    package["embedded_components"] = sorted(set(ocr["components"]))
+    core["components"] = sorted(set(core["components"]) | set(ocr["components"]))
+
+
+def resolve_plugin_artifacts(
+    plugins: pathlib.Path, target: str
+) -> dict[str, pathlib.Path]:
+    entries = list(plugins.glob("*.imp"))
+    if any(not artifact.is_file() or artifact.is_symlink() for artifact in entries):
+        raise RuntimeError("release plugin directory contains an unsafe IMP package")
+    resolved: dict[str, pathlib.Path] = {}
+    for name in ARTIFACTS:
+        stem = pathlib.PurePosixPath(name).stem
+        candidates = [plugins / name, plugins / f"{stem}-{target}.imp"]
+        present = [
+            artifact
+            for artifact in candidates
+            if artifact.is_file() and not artifact.is_symlink()
+        ]
+        if len(present) != 1:
+            raise RuntimeError(f"release plugin must have one authorized filename: {name}")
+        resolved[name] = present[0]
+    expected = {artifact.resolve() for artifact in resolved.values()}
+    actual = {artifact.resolve() for artifact in entries}
+    if actual != expected:
+        raise RuntimeError("release plugin directory contains an unauthorized IMP package")
+    return resolved
+
+
 def generate(
     projection_tool: pathlib.Path,
     target: str,
@@ -457,17 +505,21 @@ def generate(
     plugins: pathlib.Path,
     output: pathlib.Path,
 ) -> None:
-    projections = [
-        core_projection(target, version, source_revision, core_artifact, core_root)
-    ]
-    for name in ARTIFACTS:
-        stem = pathlib.PurePosixPath(name).stem
-        candidates = [plugins / name, plugins / f"{stem}-{target}.imp"]
-        present = [artifact for artifact in candidates if artifact.is_file()]
-        if len(present) != 1:
-            raise RuntimeError(f"release plugin must have one authorized filename: {name}")
-        artifact = present[0]
-        projections.append(plugin_projection(target, version, source_revision, artifact))
+    core = core_projection(target, version, source_revision, core_artifact, core_root)
+    artifacts = resolve_plugin_artifacts(plugins, target)
+    bundled_path = core_root.joinpath(*BUNDLED_OCR_PATH.parts)
+    if not bundled_path.is_file() or bundled_path.is_symlink():
+        raise RuntimeError("Core does not contain a safe bundled OCR package")
+    built_ocr = artifacts["official.ocr.ppocrv6.imp"]
+    if sha256(bundled_path) != sha256(built_ocr):
+        raise RuntimeError("Core bundled OCR package differs from the release build output")
+    ocr = plugin_projection(target, version, source_revision, bundled_path)
+    fold_bundled_ocr_into_core(core, ocr)
+    projections = [core]
+    for name in EXTERNAL_ARTIFACTS:
+        projections.append(
+            plugin_projection(target, version, source_revision, artifacts[name])
+        )
     executions = build_tool_executions(target)
     for projection in projections:
         projection["build_tools"] = executions

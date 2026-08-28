@@ -94,25 +94,21 @@ fn standard_spdx_sources_finalization_and_release_set_are_deterministic() {
             .all(|tool| tool["executables"].as_array().is_some_and(|items| items.len() == 1))
     }));
 
-    let artifacts = [
-        ("core", "core.tar.gz"),
-        ("ocr-plugin", "official.ocr.ppocrv6.imp"),
-        ("media-plugin", "official.media.whisper.imp"),
-    ]
-    .into_iter()
-    .map(|(artifact, file_name)| {
-        serde_json::json!({
-            "artifact": artifact,
-            "file_name": file_name,
-            "bytes": 1,
-            "sha256": "b".repeat(64),
-            "components": [format!("component-{artifact}")],
-            "sbom_sha256": "c".repeat(64),
-            "sources_sha256": "d".repeat(64),
-            "notices_sha256": "e".repeat(64),
+    let artifacts = [("core", "core.tar.gz"), ("media-plugin", "official.media.whisper.imp")]
+        .into_iter()
+        .map(|(artifact, file_name)| {
+            serde_json::json!({
+                "artifact": artifact,
+                "file_name": file_name,
+                "bytes": 1,
+                "sha256": "b".repeat(64),
+                "components": [format!("component-{artifact}")],
+                "sbom_sha256": "c".repeat(64),
+                "sources_sha256": "d".repeat(64),
+                "notices_sha256": "e".repeat(64),
+            })
         })
-    })
-    .collect::<Vec<_>>();
+        .collect::<Vec<_>>();
     let aggregate = aggregate_release_set(
         &serde_json::json!({
             "schema_version": 1,
@@ -127,8 +123,8 @@ fn standard_spdx_sources_finalization_and_release_set_are_deterministic() {
     let manifest: serde_json::Value =
         serde_json::from_str(&aggregate.release_set.contents).unwrap();
     assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
-    assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 3);
-    assert_eq!(manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 2);
+    assert_eq!(manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -193,7 +189,7 @@ fn finalization_and_aggregation_reject_orphans_and_profile_drift() {
         .to_string(),
     )
     .unwrap_err();
-    assert!(errors.iter().any(|error| error.contains("Core and each complete capability")));
+    assert!(errors.iter().any(|error| error.contains("Core with built-in OCR")));
 }
 
 #[test]
@@ -281,10 +277,10 @@ fn four_release_set_fixtures_preserve_exact_profile_difference() {
             serde_json::from_str(&generated.release_set.contents).unwrap();
         assert_eq!(generated.target, target);
         assert_eq!(manifest["profiles"]["core"].as_array().unwrap().len(), 1);
-        assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 3);
+        assert_eq!(manifest["profiles"]["complete-offline"].as_array().unwrap().len(), 2);
         assert_eq!(
             manifest["complete_offline_minus_core"]["artifacts"].as_array().unwrap().len(),
-            2
+            1
         );
     }
 }
@@ -909,7 +905,7 @@ fn smoke_and_rust_project_paths_are_narrowly_scoped() {
     let mut projection = minimal_projection("aarch64-apple-darwin");
     projection.files.extend([
         ArchiveFile {
-            path: "lib/into-markdown-rust/Cargo.toml".into(),
+            path: "lib/into-markdown-rust.zip".into(),
             bytes: 1,
             sha1: None,
             sha256: "a".repeat(64),

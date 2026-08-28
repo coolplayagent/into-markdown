@@ -228,15 +228,22 @@ function CapabilityInstallDialog({ api, item, busy, locale, act, onClose }: { ap
     stagingInFlight.current = true; setStaging(true);
     try {
       const staged = await api.stagePluginPackage(file);
-      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope: "project", target: item.id, source: staged.source }, { dangerous: true, success: c.capabilityInstallSuccess });
+      const expectedPlugin = item.id === "ocr" ? "official.ocr.ppocrv6" : "official.media.whisper";
+      if (staged.officialPluginId !== expectedPlugin || !staged.signingKeyId || !staged.signingKeySha256) {
+        setLocalError(locale === "zh-CN" ? "所选文件不是这项能力对应的官方插件包。请从 Into Markdown Release 下载后重试。" : "This is not the official package for this capability. Download it from the Into Markdown release and try again.");
+        return;
+      }
+      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope: "global", target: item.id, source: staged.source, sha256: staged.sha256, signingKeyId: staged.signingKeyId, signingKeySha256: staged.signingKeySha256 }, { dangerous: true, success: c.capabilityInstallSuccess });
       if (ok) onClose(); else setLocalError(locale === "zh-CN" ? "插件未能安装，请检查插件包后重试。" : "The plugin could not be installed. Check the package and try again.");
     } catch (reason) { setLocalError(friendlyError(errorCode(reason), locale)); }
     finally { stagingInFlight.current = false; setStaging(false); }
   };
   const installOfficial = async () => {
-    const ok = await act({ schemaVersion: 1, action: "capability.install", target: item.id }, { dangerous: true, network: true, success: c.capabilityInstallSuccess });
-    if (ok) onClose(); else setLocalError(locale === "zh-CN" ? "官方插件未能安装，请检查网络后重试。" : "The official plugin could not be installed. Check the network and try again.");
+    const builtIn = item.id === "ocr";
+    const ok = await act({ schemaVersion: 1, action: "capability.install", target: item.id }, { dangerous: true, network: !builtIn, success: c.capabilityInstallSuccess });
+    if (ok) onClose(); else setLocalError(builtIn ? (locale === "zh-CN" ? "内置 OCR 未能修复，请重新运行 Core 安装程序。" : "Built-in OCR could not be repaired. Run the Core installer again.") : (locale === "zh-CN" ? "官方插件未能安装，请检查网络后重试。" : "The official plugin could not be installed. Check the network and try again."));
   };
+  if (item.id === "ocr") return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !staging) onClose(); }}><article ref={dialogRef} className="setup-dialog admin-dialog capability-install-dialog" role="dialog" aria-modal="true" aria-labelledby="capability-install-ocr"><div className="drawer-heading"><h2 id="capability-install-ocr">{locale === "zh-CN" ? "修复内置 OCR" : "Repair built-in OCR"}</h2><button className="icon-button neutral" disabled={staging} type="button" aria-label={c.cancel} onClick={onClose}><X size={19} /></button></div><section className="install-choice"><div><h3>{locale === "zh-CN" ? "OCR 已包含在 Core 中" : "OCR is included with Core"}</h3><p>{locale === "zh-CN" ? "修复会使用本机 Core 自带的官方包，不需要下载或选择 .imp 文件。" : "Repair uses the official package included with Core. No download or .imp selection is needed."}</p></div><div className="plugin-install-status">{localError ? <p className="capability-feedback error" role="alert">{localError}</p> : null}</div><button type="button" disabled={busy || staging} onClick={() => void installOfficial()}>{c.repair}</button></section></article></div>;
   return <div className="sheet-backdrop modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !staging) onClose(); }}><article ref={dialogRef} className="setup-dialog admin-dialog capability-install-dialog" role="dialog" aria-modal="true" aria-busy={staging} aria-labelledby={`capability-install-${item.id}`}><div className="drawer-heading"><h2 id={`capability-install-${item.id}`}>{c.chooseInstallMethod}</h2><button className="icon-button neutral" disabled={staging} type="button" aria-label={c.cancel} onClick={onClose}><X size={19} /></button></div><section className="install-choice"><div><h3>{c.installFromComputer}</h3><p>{c.localPackageHint}</p></div><input className="plugin-file-input" disabled={staging} aria-label={c.installFromComputer} type="file" accept=".imp,application/octet-stream" onChange={(event) => { setFile(event.target.files?.[0] ?? null); setLocalError(""); }} /><div className="plugin-install-status">{staging ? <p className="capability-feedback progress" role="status">{locale === "zh-CN" ? "正在读取并验证插件包…" : "Reading and verifying the plugin package…"}</p> : localError ? <p className="capability-feedback error" role="alert">{localError}</p> : null}</div><button type="button" disabled={busy || staging || !file} onClick={() => void installLocal()}>{staging ? locale === "zh-CN" ? "正在安装…" : "Installing…" : c.installSelectedPackage}</button></section><div className="dialog-divider"><span>{locale === "zh-CN" ? "或者" : "or"}</span></div><section className="install-choice online"><div><h3>{c.installOfficialOnline}</h3><p>{c.networkRequired}</p></div><button className="secondary" type="button" disabled={busy || staging} onClick={() => void installOfficial()}><Download size={17} />{c.installOfficialOnline}</button></section></article></div>;
 }
 
@@ -313,9 +320,11 @@ function PluginsSection({ api, snapshot, busy, locale, act, feedback }: SectionP
     if (stagingInFlight.current) return;
     stagingInFlight.current = true; setLocalError(""); setStaging(true);
     try {
-      const packageSource = file ? (api.stagePluginPackage ? (await api.stagePluginPackage(file)).source : "") : source;
+      const staged = file && api.stagePluginPackage ? await api.stagePluginPackage(file) : null;
+      const packageSource = staged?.source ?? (file ? "" : source);
       if (!packageSource) { setLocalError(locale === "zh-CN" ? "当前服务不支持从浏览器上传插件包，请使用 HTTPS 地址。" : "This service cannot upload a plugin package from the browser. Use an HTTPS URL instead."); return; }
-      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope, source: packageSource }, { dangerous: true, network: /^https:\/\//i.test(packageSource), success: c.pluginInstallSuccess });
+      const official = staged?.officialPluginId && staged.signingKeyId && staged.signingKeySha256;
+      const ok = await act({ schemaVersion: 1, action: "plugin.install", scope: official ? "global" : scope, source: packageSource, ...(official ? { sha256: staged.sha256, signingKeyId: staged.signingKeyId, signingKeySha256: staged.signingKeySha256 } : {}) }, { dangerous: true, network: /^https:\/\//i.test(packageSource), success: c.pluginInstallSuccess });
       if (ok) { closeInstaller(); setFile(null); setSource(""); }
     } catch (reason) { setLocalError(friendlyError(errorCode(reason), locale)); }
     finally { stagingInFlight.current = false; setStaging(false); }

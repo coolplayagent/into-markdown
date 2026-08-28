@@ -1011,32 +1011,7 @@ fn receive_until(
             ));
         }
         match frames.recv_timeout(Duration::from_millis(5)) {
-            Ok(Ok(frame)) => return Ok(frame),
-            Ok(Err(error)) => {
-                let detail = error.to_string();
-                // A completed frame read is stronger evidence than a child-exit
-                // or resource-sampling race. Preserve the protocol/frame
-                // classification even when the provider exits immediately
-                // after emitting invalid data or briefly crosses its high-water
-                // mark while the terminal frame is being consumed.
-                let code = if detail.contains("stream ended before frame") {
-                    PluginErrorCode::Crashed
-                } else if detail.contains("exceeds limit") {
-                    PluginErrorCode::FrameTooLarge
-                } else {
-                    PluginErrorCode::Protocol
-                };
-                let stable_detail = if detail.contains("stream ended before frame") {
-                    "plugin protocol stream ended"
-                } else if detail.contains("truncated frame") {
-                    "plugin protocol frame was truncated"
-                } else if detail.contains("exceeds limit") {
-                    "plugin protocol frame exceeds its limit"
-                } else {
-                    "plugin emitted invalid protocol data"
-                };
-                return Err(PluginError::new(code, stable_detail));
-            }
+            Ok(frame) => return classify_received_frame(frame),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(PluginError::new(
                     PluginErrorCode::Crashed,
@@ -1055,6 +1030,16 @@ fn receive_until(
                     .map_err(|()| PluginError::new(PluginErrorCode::Crashed, "plugin wait failed"))?
                     .is_some()
                 {
+                    // Process exit and the protocol-reader thread are observed
+                    // independently. The provider may have already written a
+                    // complete buffered frame before exiting, while the reader
+                    // has not enqueued it yet. Give the closed pipe a bounded
+                    // drain window so protocol evidence wins that race. The
+                    // bound also prevents a descendant that inherited stdout
+                    // from holding this path open indefinitely.
+                    if let Ok(frame) = frames.recv_timeout(Duration::from_millis(250)) {
+                        return classify_received_frame(frame);
+                    }
                     return Err(PluginError::new(
                         PluginErrorCode::Crashed,
                         "plugin exited before terminal response",
@@ -1063,6 +1048,34 @@ fn receive_until(
             }
         }
     }
+}
+
+fn classify_received_frame(
+    frame: std::io::Result<PluginMessage>,
+) -> Result<PluginMessage, PluginError> {
+    frame.map_err(|error| {
+        let detail = error.to_string();
+        // A completed frame read is stronger evidence than a child-exit or
+        // resource-sampling race. Preserve the protocol/frame classification
+        // even when the provider exits immediately after emitting invalid data.
+        let code = if detail.contains("stream ended before frame") {
+            PluginErrorCode::Crashed
+        } else if detail.contains("exceeds limit") {
+            PluginErrorCode::FrameTooLarge
+        } else {
+            PluginErrorCode::Protocol
+        };
+        let stable_detail = if detail.contains("stream ended before frame") {
+            "plugin protocol stream ended"
+        } else if detail.contains("truncated frame") {
+            "plugin protocol frame was truncated"
+        } else if detail.contains("exceeds limit") {
+            "plugin protocol frame exceeds its limit"
+        } else {
+            "plugin emitted invalid protocol data"
+        };
+        PluginError::new(code, stable_detail)
+    })
 }
 
 fn finish_error<T>(

@@ -10,6 +10,8 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+from types import SimpleNamespace
+from unittest import mock
 
 
 SCRIPT = pathlib.Path(__file__).with_name("release-metadata.py")
@@ -21,7 +23,7 @@ SPEC.loader.exec_module(release_metadata)
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_default_release_metadata_version_is_the_first_public_release(self) -> None:
-        self.assertEqual(release_metadata.project_version(), "0.0.1")
+        self.assertEqual(release_metadata.project_version(), "0.0.2")
 
     def test_linux_cxx_execution_uses_a_portable_projection_identity(self) -> None:
         self.assertEqual(release_metadata.build_tool_execution_name("c++"), "cxx")
@@ -42,6 +44,16 @@ class ReleaseMetadataTests(unittest.TestCase):
             output = pathlib.Path(name)
             release_metadata.write_generated(output, metadata)
             self.assertEqual((output / "artifact.spdx.json").read_bytes(), encoded)
+
+    def test_projection_subprocess_always_decodes_utf8(self) -> None:
+        completed = SimpleNamespace(returncode=0, stdout='{"status":"ok"}', stderr="")
+        with mock.patch.object(release_metadata.subprocess, "run", return_value=completed) as run:
+            result = release_metadata.run_projection(
+                pathlib.Path("release-projection"), "finalize", {"名称": "发布"}
+            )
+        self.assertEqual(result, {"status": "ok"})
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
 
     def test_build_tool_integrity_digests_match_every_authority_subject(self) -> None:
         repository = SCRIPT.parent.parent
@@ -271,6 +283,63 @@ class ReleaseMetadataTests(unittest.TestCase):
             "ocr-plugin .*unowned components.*models/unexpected/detector.onnx",
         ):
             release_metadata.validate_projection_ownership(projection)
+
+    def test_bundled_ocr_is_owned_by_core_instead_of_a_release_plugin(self) -> None:
+        package_path = release_metadata.BUNDLED_OCR_PATH.as_posix()
+        core = {
+            "artifact": "core",
+            "components": ["pdfium", "cargo:core@1.0.0"],
+            "files": [
+                {
+                    "path": package_path,
+                    "bytes": 7,
+                    "sha256": "a" * 64,
+                    "kind": "project",
+                }
+            ],
+        }
+        ocr = {
+            "artifact": "ocr-plugin",
+            "components": ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model"],
+            "bytes": 7,
+            "sha256": "a" * 64,
+        }
+        release_metadata.fold_bundled_ocr_into_core(core, ocr)
+        self.assertEqual(
+            set(core["components"]),
+            {
+                "pdfium",
+                "cargo:core@1.0.0",
+                "onnxruntime-cpu",
+                "ppocrv6-tiny-detector-onnx-model",
+            },
+        )
+        self.assertEqual(
+            set(core["files"][0]["embedded_components"]), set(ocr["components"])
+        )
+        self.assertEqual(
+            release_metadata.EXTERNAL_ARTIFACTS,
+            {"official.media.whisper.imp": "media-plugin"},
+        )
+
+        core["files"][0]["sha256"] = "b" * 64
+        with self.assertRaisesRegex(RuntimeError, "differs from verified"):
+            release_metadata.fold_bundled_ocr_into_core(core, ocr)
+
+    def test_release_metadata_rejects_extra_imp_packages(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            (root / "official.ocr.ppocrv6.imp").write_bytes(b"ocr")
+            (root / "official.media.whisper.imp").write_bytes(b"speech")
+            selected = release_metadata.resolve_plugin_artifacts(
+                root, "x86_64-pc-windows-msvc"
+            )
+            self.assertEqual(set(selected), set(release_metadata.ARTIFACTS))
+            (root / "unexpected.imp").write_bytes(b"unexpected")
+            with self.assertRaisesRegex(RuntimeError, "unauthorized IMP"):
+                release_metadata.resolve_plugin_artifacts(
+                    root, "x86_64-pc-windows-msvc"
+                )
 
     def test_plugin_projection_rejects_duplicate_zip_members(self) -> None:
         with tempfile.TemporaryDirectory() as name:

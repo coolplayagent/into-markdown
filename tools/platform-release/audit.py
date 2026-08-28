@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit an assembled Linux or Windows Core and its two signed IMP packages."""
+"""Audit an assembled Linux or Windows Core and its official capability packages."""
 
 from __future__ import annotations
 
@@ -32,6 +32,11 @@ PROJECT_WINDOWS_BINARIES = re.compile(
 GLIBC = re.compile(r"GLIBC_(\d+)\.(\d+)")
 RPATH = re.compile(r"\((?:RPATH|RUNPATH)\).*?\[(.*?)\]")
 NEEDED = re.compile(r"\(NEEDED\).*?\[(.*?)\]")
+BUNDLED_OCR = pathlib.PurePosixPath(
+    "share/into-markdown/plugins/packages/official.ocr.ppocrv6.imp"
+)
+OFFICIAL_OCR = "official.ocr.ppocrv6"
+OFFICIAL_SPEECH = "official.media.whisper"
 
 
 class AuditFailure(RuntimeError):
@@ -92,6 +97,108 @@ def safe_zip_extract(package: pathlib.Path, destination: pathlib.Path, audit: Au
                     shutil.copyfileobj(source, output)
 
 
+def require_package_identity(
+    package: pathlib.Path, plugin_id: str, target: str, audit: Audit
+) -> None:
+    try:
+        with zipfile.ZipFile(package) as archive:
+            names = archive.namelist()
+            if names.count("plugin.json") != 1:
+                raise ValueError("plugin.json must occur exactly once")
+            manifest = json.loads(archive.read("plugin.json"))
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as error:
+        audit.require(package.name, "plugin-manifest", False, str(error))
+        return
+    identity_matches = (
+        manifest.get("id") == plugin_id
+        and manifest.get("supportedTargets") == [target]
+        and set(manifest.get("entrypoints", {})) == {target}
+    )
+    audit.require(
+        package.name,
+        "plugin-identity",
+        identity_matches,
+        f"expected {plugin_id} for {target}",
+    )
+
+
+def resolve_release_packages(
+    target: str, core_root: pathlib.Path, plugins: pathlib.Path, audit: Audit
+) -> tuple[pathlib.Path, pathlib.Path]:
+    bundled = core_root.joinpath(*BUNDLED_OCR.parts)
+    audit.require(
+        bundled,
+        "bundled-ocr-package",
+        bundled.is_file() and not bundled.is_symlink(),
+        "Core must contain one safe official OCR package",
+    )
+    catalog_path = core_root / "share/into-markdown/plugins/official-publisher.json"
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        audit.require(catalog_path, "official-catalog", False, str(error))
+        raise AssertionError("unreachable") from error
+    records = catalog.get("packages", {})
+    ocr = records.get(OFFICIAL_OCR, {}) if isinstance(records, dict) else {}
+    speech = records.get(OFFICIAL_SPEECH, {}) if isinstance(records, dict) else {}
+    signing_key_sha256 = catalog.get("signingKeySha256", "")
+    audit.require(
+        catalog_path,
+        "bundled-ocr-authority",
+        catalog.get("schemaVersion") == 2
+        and set(records) == {OFFICIAL_OCR, OFFICIAL_SPEECH}
+        and isinstance(catalog.get("signingKeyId"), str)
+        and bool(catalog.get("signingKeyId"))
+        and re.fullmatch(r"[0-9a-f]{64}", signing_key_sha256) is not None
+        and ocr.get("file") == BUNDLED_OCR.name
+        and ocr.get("sha256") == sha256(bundled)
+        and "url" not in ocr,
+        "catalog must bind the bundled OCR filename and digest",
+    )
+
+    packages = sorted(plugins.glob("*.imp"))
+    candidates = {
+        plugin_id: [
+            plugins / f"{plugin_id}.imp",
+            plugins / f"{plugin_id}-{target}.imp",
+        ]
+        for plugin_id in (OFFICIAL_OCR, OFFICIAL_SPEECH)
+    }
+    selected = {
+        plugin_id: [item for item in values if item.is_file() and not item.is_symlink()]
+        for plugin_id, values in candidates.items()
+    }
+    selected_paths = [item for values in selected.values() for item in values]
+    audit.require(
+        plugins,
+        "release-package-build-set",
+        all(len(values) == 1 for values in selected.values())
+        and {item.resolve() for item in packages}
+        == {item.resolve() for item in selected_paths},
+        "build output must contain exactly one bundled OCR source and one external speech IMP; "
+        f"found {[item.name for item in packages]}",
+    )
+    built_ocr = selected[OFFICIAL_OCR][0]
+    external = selected[OFFICIAL_SPEECH][0]
+    audit.require(
+        bundled,
+        "bundled-ocr-build-binding",
+        sha256(bundled) == sha256(built_ocr),
+        "Core bundled OCR bytes must equal the audited release build output",
+    )
+    audit.require(
+        catalog_path,
+        "speech-package-authority",
+        speech.get("sha256") == sha256(external)
+        and isinstance(speech.get("url"), str)
+        and speech["url"].startswith("https://"),
+        "catalog must bind the external speech package digest and URL",
+    )
+    require_package_identity(bundled, OFFICIAL_OCR, target, audit)
+    require_package_identity(external, OFFICIAL_SPEECH, target, audit)
+    return bundled, external
+
+
 def command(arguments: list[str]) -> str:
     process = subprocess.run(arguments, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     if process.returncode:
@@ -107,10 +214,6 @@ def candidates(root: pathlib.Path, magic: bytes) -> list[pathlib.Path]:
                 if source.read(len(magic)) == magic:
                     result.append(path)
     return result
-
-
-def distributed_source_fixture(relative: pathlib.Path) -> bool:
-    return relative.parts[:3] == ("lib", "into-markdown-rust", "vendor")
 
 
 def clr_il_only(output: str) -> bool:
@@ -132,6 +235,62 @@ def audit_tree(root: pathlib.Path, audit: Audit, linux: bool) -> None:
         if linux:
             mode = stat.S_IMODE(path.lstat().st_mode)
             audit.require(relative, "safe-mode", mode & 0o6022 == 0, f"mode {mode:o} must not be setuid/setgid or group/world-writable")
+
+
+def audit_rust_facade(root: pathlib.Path, audit: Audit) -> None:
+    package = root / "lib/into-markdown-rust.zip"
+    audit.require(
+        package.relative_to(root),
+        "rust-facade-archive",
+        package.is_file() and not package.is_symlink(),
+        "Core must contain one regular offline Rust facade archive",
+    )
+    try:
+        with zipfile.ZipFile(package) as archive:
+            entries = archive.infolist()
+            names = [entry.filename for entry in entries]
+            folded = [name.casefold() for name in names]
+            safe = all(
+                name
+                and "\\" not in name
+                and not pathlib.PurePosixPath(name).is_absolute()
+                and all(part not in {"", ".", ".."} for part in name.split("/"))
+                and not entry.is_dir()
+                and stat.S_IFMT(entry.external_attr >> 16) in {0, stat.S_IFREG}
+                for name, entry in zip(names, entries, strict=True)
+            )
+            deterministic = (
+                names == sorted(names)
+                and len(folded) == len(set(folded))
+                and all(entry.date_time == (1980, 1, 1, 0, 0, 0) for entry in entries)
+                and all(entry.compress_type == zipfile.ZIP_STORED for entry in entries)
+            )
+            complete = (
+                names.count("Cargo.toml") == 1
+                and names.count("Cargo.lock") == 1
+                and any(name.startswith("vendor/") for name in names)
+            )
+    except (OSError, zipfile.BadZipFile) as error:
+        audit.require(package.relative_to(root), "rust-facade-readable", False, str(error))
+        return
+    audit.require(
+        package.relative_to(root),
+        "rust-facade-safe-members",
+        safe,
+        "members must be unique regular files with safe portable paths",
+    )
+    audit.require(
+        package.relative_to(root),
+        "rust-facade-deterministic",
+        deterministic,
+        "members must use sorted names, fixed timestamps, and stored bytes",
+    )
+    audit.require(
+        package.relative_to(root),
+        "rust-facade-offline-complete",
+        complete,
+        "archive must contain Cargo.toml, Cargo.lock, and vendor content",
+    )
 
 
 def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None:
@@ -174,16 +333,7 @@ def audit_windows(
     audit.require("signtool", "tool-present", True, str(signtool))
     binaries = []
     for binary in candidates(root, b"MZ"):
-        relative = binary.relative_to(root)
-        if distributed_source_fixture(relative):
-            audit.record(
-                relative,
-                "non-runtime-source-fixture",
-                True,
-                "preserved upstream Rust source fixture; excluded from installed PE runtime",
-            )
-        else:
-            binaries.append(binary)
+        binaries.append(binary)
     audit.require(root, "pe-present", bool(binaries), "no PE binary found")
     for binary in binaries:
         relative = binary.relative_to(root)
@@ -276,13 +426,20 @@ def run(
     audit = Audit(target)
     artifacts: list[dict[str, str]] = []
     roots: list[tuple[str, pathlib.Path]] = [("core", core_root)]
-    packages = sorted(plugins.glob("*.imp"))
-    audit.require(plugins, "plugin-count", len(packages) == 2, f"expected 2 IMP packages, found {len(packages)}")
     temporary = tempfile.TemporaryDirectory(prefix="into-md-platform-audit-")
     try:
         extracted = pathlib.Path(temporary.name)
-        for package in packages:
-            artifacts.append({"name": package.name, "sha256": sha256(package)})
+        bundled_ocr, external_speech = resolve_release_packages(
+            target, core_root, plugins, audit
+        )
+        audit_rust_facade(core_root, audit)
+        for disposition, package in (
+            ("bundled-core-capability", bundled_ocr),
+            ("external-plugin", external_speech),
+        ):
+            artifacts.append(
+                {"name": package.name, "sha256": sha256(package), "disposition": disposition}
+            )
             destination = extracted / package.stem
             destination.mkdir()
             safe_zip_extract(package, destination, audit)

@@ -154,7 +154,7 @@ test("known administration failures explain the next action without a generic in
 test("plugin picker uploads the selected package through the authenticated staging endpoint", async () => {
   const window = install("/admin/plugins");
   const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
-  const response = { schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: "本地 OCR.imp", byteLen: 3 };
+  const response = { schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: "本地 OCR.imp", byteLen: 3, sha256: "a".repeat(64) };
   const client = createApiClient(token, async (input, init) => {
     calls.push([input, init]);
     return new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } });
@@ -194,11 +194,11 @@ test("administration pages are accessible, responsive, recoverable and require o
   await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
   const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
   assert.equal(installButton.disabled, false); installButton.click();
-  await waitFor(() => window.document.body.textContent.includes("Choose how to install"));
+  await waitFor(() => window.document.body.textContent.includes("Repair built-in OCR"));
   assert.equal(actions.length, 0);
-  const onlineButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install the official plugin online")!;
-  onlineButton.click(); onlineButton.click(); await waitFor(() => actions.length === 1);
-  assert.equal(actions[0]!.authorizeNetwork, true);
+  const repairButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Repair")!;
+  repairButton.click(); repairButton.click(); await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.authorizeNetwork, false);
   assert.equal(actions[0]!.authorizeDangerous, true);
   assert.equal(window.document.body.textContent.includes("manifest"), false);
   assert.equal(window.document.body.textContent.includes("invocation capabilities"), false);
@@ -207,39 +207,67 @@ test("administration pages are accessible, responsive, recoverable and require o
   assert.equal(window.document.querySelector("main") !== null, true);
 });
 
-test("capability install chooser keeps local packages offline", async () => {
+test("built-in OCR repair uses the Core package without a file picker or network", async () => {
   const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
   const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
   const client = api(actions, missingOcr);
-  client.stagePluginPackage = async (file) => ({ schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: file.name, byteLen: file.size });
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
   await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
   const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
   [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
-  await waitFor(() => window.document.body.textContent.includes("Install a plugin from this computer"));
-  const fileInput = window.document.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "ocr.imp", { type: "application/octet-stream" })], configurable: true });
-  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
-  await waitFor(() => [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")?.disabled === false);
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")!.click();
+  await waitFor(() => window.document.body.textContent.includes("OCR is included with Core"));
+  const dialog = window.document.querySelector<HTMLElement>(".capability-install-dialog")!;
+  assert.equal(dialog.querySelector('input[type="file"]'), null);
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Repair")!.click();
   await waitFor(() => actions.length === 1);
-  assert.equal(actions[0]!.action, "plugin.install");
+  assert.equal(actions[0]!.action, "capability.install");
   assert.equal(actions[0]!.target, "ocr");
-  assert.equal(actions[0]!.source, "/private/plugin-staging/upload.imp");
   assert.equal(actions[0]!.authorizeDangerous, true);
+  assert.equal(actions[0]!.authorizeNetwork, false);
+});
+
+test("speech install chooser derives official trust and keeps package errors beside the picker", async () => {
+  const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
+  const missingSpeech: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => ["transcription", "diarization"].includes(item.id) ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", version: undefined, localVersion: undefined } : item) };
+  const client = api(actions, missingSpeech);
+  client.stagePluginPackage = async (file) => ({ schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: file.name, byteLen: file.size, sha256: "a".repeat(64), officialPluginId: "official.ocr.ppocrv6", signingKeyId: "official-test", signingKeySha256: "b".repeat(64) });
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
+  await waitFor(() => window.document.body.textContent.includes("Turn audio and video into timestamped transcripts"));
+  const speechCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Speech transcription"))!;
+  [...speechCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
+  await waitFor(() => window.document.querySelector(".capability-install-dialog") !== null);
+  const dialog = window.document.querySelector<HTMLElement>(".capability-install-dialog")!;
+  const fileInput = dialog.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(fileInput, "files", { value: [new window.File(["imp"], "official.media.whisper.imp", { type: "application/octet-stream" })], configurable: true });
+  fileInput.dispatchEvent(new window.Event("change", { bubbles: true }));
+  await waitFor(() => [...dialog.querySelectorAll("button")].some((button) => button.textContent === "Install selected plugin" && !button.disabled));
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")!.click();
+  await waitFor(() => dialog.querySelector(".plugin-install-status [role=alert]")?.textContent?.includes("not the official package for this capability") === true);
+  assert.equal(window.document.querySelector(".capability-install-dialog"), dialog);
+  assert.equal(dialog.querySelectorAll(".plugin-install-status [role=alert]").length, 1);
+  assert.equal(actions.length, 0);
+
+  client.stagePluginPackage = async (file) => ({ schemaVersion: 1, source: "/private/plugin-staging/upload.imp", filename: file.name, byteLen: file.size, sha256: "c".repeat(64), officialPluginId: "official.media.whisper", signingKeyId: "official-test", signingKeySha256: "d".repeat(64) });
+  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Install selected plugin")!.click();
+  await waitFor(() => actions.length === 1);
+  assert.equal(actions[0]!.target, "transcription");
+  assert.equal(actions[0]!.scope, "global");
+  assert.equal(actions[0]!.sha256, "c".repeat(64));
+  assert.equal(actions[0]!.signingKeyId, "official-test");
+  assert.equal(actions[0]!.signingKeySha256, "d".repeat(64));
   assert.equal(actions[0]!.authorizeNetwork, false);
 });
 
 test("capability install chooser locks before staging a large local package", async () => {
   const window = install("/admin/capabilities"); const actions: AdminAction[] = []; let stageCalls = 0;
-  let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number }) => void;
-  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
-  const client = api(actions, missingOcr);
+  let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number; sha256: string; officialPluginId?: string; signingKeyId?: string; signingKeySha256?: string }) => void;
+  const missingSpeech: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => ["transcription", "diarization"].includes(item.id) ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", version: undefined, localVersion: undefined } : item) };
+  const client = api(actions, missingSpeech);
   client.stagePluginPackage = async () => { stageCalls += 1; return new Promise((resolve) => { resolveStage = resolve; }); };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
-  await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
-  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
-  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
+  await waitFor(() => window.document.body.textContent.includes("Turn audio and video into timestamped transcripts"));
+  const speechCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Speech transcription"))!;
+  [...speechCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
   await waitFor(() => window.document.body.textContent.includes("Install a plugin from this computer"));
   const dialog = window.document.querySelector<HTMLElement>(".capability-install-dialog")!;
   const fileInput = dialog.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -252,14 +280,14 @@ test("capability install chooser locks before staging a large local package", as
   assert.equal(installButton.disabled, true);
   assert.equal(dialog.querySelectorAll(".plugin-install-status").length, 1);
   assert.equal(dialog.getAttribute("aria-busy"), "true");
-  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3 });
+  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3, sha256: "a".repeat(64), officialPluginId: "official.media.whisper", signingKeyId: "official-test", signingKeySha256: "b".repeat(64) });
   await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, false);
 });
 
 test("local plugin installation locks its stable action slot before a large package is staged", async () => {
   const window = install("/admin/plugins"); const actions: AdminAction[] = [];
-  const client = api(actions); let stageCalls = 0; let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number }) => void;
+  const client = api(actions); let stageCalls = 0; let resolveStage!: (value: { schemaVersion: 1; source: string; filename: string; byteLen: number; sha256: string }) => void;
   client.stagePluginPackage = async () => { stageCalls += 1; return new Promise((resolve) => { resolveStage = resolve; }); };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
   await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);
@@ -275,7 +303,7 @@ test("local plugin installation locks its stable action slot before a large pack
   await waitFor(() => stageCalls === 1 && installer.textContent?.includes("Reading and verifying the plugin package") === true);
   assert.equal(installButton.disabled, true);
   assert.equal(installer.querySelectorAll(".plugin-install-status").length, 1);
-  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3 });
+  resolveStage({ schemaVersion: 1, source: "/private/plugin-staging/large.imp", filename: "large.imp", byteLen: 3, sha256: "a".repeat(64) });
   await waitFor(() => actions.length === 1);
   assert.equal(actions[0]!.authorizeNetwork, false);
   await waitFor(() => window.document.querySelector(".source-manager-feedback")?.textContent === "Extension installed");
@@ -285,7 +313,7 @@ test("local plugin installation locks its stable action slot before a large pack
 test("local plugin installation reports backend rejection inside the unchanged installer", async () => {
   const window = install("/admin/plugins");
   const client = api();
-  client.stagePluginPackage = async () => ({ schemaVersion: 1, source: "/private/plugin-staging/bad.imp", filename: "bad.imp", byteLen: 3 });
+  client.stagePluginPackage = async () => ({ schemaVersion: 1, source: "/private/plugin-staging/bad.imp", filename: "bad.imp", byteLen: 3, sha256: "a".repeat(64) });
   client.adminAction = async () => { throw new ApiError("signature"); };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
   await waitFor(() => window.document.querySelector('[role="dialog"]')?.textContent?.includes("Local extensions") === true);

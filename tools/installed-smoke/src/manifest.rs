@@ -64,8 +64,8 @@ pub(crate) fn verify_install(request: &ValidatedRequest) -> Result<ArchiveProjec
         }
     }
     let binary = relative(request, &request.into_md)?;
-    let rust_manifest = relative(request, &request.rust_library.join("Cargo.toml"))?;
-    for required in [binary, rust_manifest] {
+    let rust_archive = relative(request, &request.rust_library)?;
+    for required in [binary, rust_archive] {
         if !paths.contains(required.as_str()) {
             return Err("archive manifest does not bind a requested installed artifact".into());
         }
@@ -186,21 +186,18 @@ mod tests {
     fn mutation_and_unmanifested_installed_files_fail_closed() {
         let temporary = tempfile::tempdir().unwrap();
         let install = temporary.path().join("install");
-        let rust = install.join("lib/into-markdown-rust");
+        let rust = install.join("lib/into-markdown-rust.zip");
         let fixtures = install.join("share/into-markdown/smoke/fixtures/text");
-        fs::create_dir_all(rust.join("vendor/example")).unwrap();
+        fs::create_dir_all(rust.parent().unwrap()).unwrap();
         fs::create_dir_all(&fixtures).unwrap();
         fs::create_dir_all(install.join("bin")).unwrap();
         fs::write(install.join("bin/into-md"), b"binary").unwrap();
-        fs::write(rust.join("Cargo.toml"), b"[package]\nname='fixture'\nversion='0.0.0'\n")
-            .unwrap();
-        fs::write(rust.join("vendor/example/checksum"), b"vendor").unwrap();
+        fs::write(&rust, b"fixture archive").unwrap();
         fs::write(fixtures.join("normal.txt"), b"fixture").unwrap();
         fs::write(install.join("core-catalog.json"), b"catalog").unwrap();
         let paths = [
             ("bin/into-md", ArchiveFileKind::Project),
-            ("lib/into-markdown-rust/Cargo.toml", ArchiveFileKind::Project),
-            ("lib/into-markdown-rust/vendor/example/checksum", ArchiveFileKind::Project),
+            ("lib/into-markdown-rust.zip", ArchiveFileKind::Project),
             ("share/into-markdown/smoke/fixtures/text/normal.txt", ArchiveFileKind::Project),
             ("core-catalog.json", ArchiveFileKind::Generated),
         ];
@@ -256,7 +253,7 @@ mod tests {
         fs::write(install.join("bin/into-md"), b"mutated").unwrap();
         assert!(verify_install(&request).unwrap_err().contains("metadata disagrees"));
         fs::write(install.join("bin/into-md"), b"binary").unwrap();
-        fs::write(rust.join("developer-target-cache"), b"forbidden").unwrap();
+        fs::write(install.join("lib/developer-target-cache"), b"forbidden").unwrap();
         assert!(verify_install(&request).unwrap_err().contains("absent from archive manifest"));
     }
 
