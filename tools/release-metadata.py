@@ -74,6 +74,13 @@ def sha1(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def build_tool_execution_name(command: str) -> str:
+    # Release projection identities deliberately use a conservative portable
+    # alphabet. Keep the observed executable command exact while recording the
+    # conventional, safe C++ compiler identity used by release metadata.
+    return "cxx" if command == "c++" else command
+
+
 def run_projection(tool: pathlib.Path, operation: str, value: dict) -> dict:
     with tempfile.TemporaryDirectory(prefix="into-md-release-metadata-") as name:
         request = pathlib.Path(name) / "request.json"
@@ -151,7 +158,7 @@ def build_tool_executions(target: str) -> list[dict]:
         result.append(
             {
                 "authority_id": authority_id,
-                "name": command,
+                "name": build_tool_execution_name(command),
                 "version": version,
                 "bytes": executable.stat().st_size,
                 "sha256": sha256(executable),

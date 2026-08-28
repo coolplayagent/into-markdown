@@ -20,6 +20,10 @@ SPEC.loader.exec_module(release_metadata)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_linux_cxx_execution_uses_a_portable_projection_identity(self) -> None:
+        self.assertEqual(release_metadata.build_tool_execution_name("c++"), "cxx")
+        self.assertEqual(release_metadata.build_tool_execution_name("cc"), "cc")
+
     def test_generated_metadata_preserves_declared_utf8_bytes(self) -> None:
         contents = "line one\nline two\n"
         encoded = contents.encode("utf-8")
