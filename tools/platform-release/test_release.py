@@ -323,6 +323,21 @@ class PlatformReleaseTests(unittest.TestCase):
         for backend in ("rpc", "cuda", "vulkan", "blas"):
             self.assertNotIn(f'ggml_backend_load_best("{backend}"', cpu_loader)
 
+    def test_runtime_dispatch_pins_shared_library_install_directory(self) -> None:
+        source = (
+            ROOT / "third_party/whisper-rs-0.16.0/sys/build.rs"
+        ).read_text(encoding="utf-8")
+        install_dir = 'config.define("CMAKE_INSTALL_LIBDIR", "lib")'
+        self.assertEqual(source.count(install_dir), 1)
+        self.assertGreater(
+            source.index(install_dir),
+            source.index("for (key, value) in env::vars()"),
+        )
+        self.assertLess(
+            source.index(install_dir),
+            source.index('if cfg!(not(feature = "openmp"))'),
+        )
+
     def test_stage_ggml_runtime_requires_and_copies_exact_windows_closure(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
