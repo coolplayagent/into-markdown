@@ -29,7 +29,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     environment: release
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      INTO_MD_RELEASE_STREAM_LOGS: '1'
     strategy:
       fail-fast: false
       matrix:

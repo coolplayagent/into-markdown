@@ -92,6 +92,8 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("tools/platform-release/release.py", workflow)
         for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
             self.assertNotIn(forbidden, workflow)
+        self.assertIn("timeout-minutes: 30", workflow)
+        self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
 
     def test_embedded_core_is_verified_without_an_installer_or_launcher(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
