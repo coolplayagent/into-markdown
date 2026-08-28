@@ -34,6 +34,7 @@ py_library(
     deps = [
         "//tools/macos-release:library",
         "//tools/skill-release:library",
+        "//tools:release_subprocess",
     ],
 )
 
@@ -64,6 +65,16 @@ py_library(
         "platform_acceptance.py",
     ],
     imports = ["."],
+    deps = ["//tools:release_subprocess"],
+)
+
+py_test(
+    name = "common_test",
+    srcs = ["common_test.py"],
+    deps = [
+        ":platform_tools_library",
+        "//tools:release_subprocess",
+    ],
 )
 
 py_test(

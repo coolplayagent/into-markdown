@@ -14,6 +14,7 @@ py_library(
         "//tools/macos-release:__pkg__",
         "//tools/platform-release:__pkg__",
     ],
+    deps = ["//tools:release_subprocess"],
 )
 
 py_binary(
@@ -41,6 +42,16 @@ py_test(
     name = "audit_test",
     srcs = ["audit_test.py"],
     deps = [":library"],
+)
+
+py_test(
+    name = "common_test",
+    srcs = ["common_test.py"],
+    data = ["release.py"],
+    deps = [
+        ":library",
+        "//tools:release_subprocess",
+    ],
 )
 
 py_test(

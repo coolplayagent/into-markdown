@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pathlib
 import unittest
 
 from common import ReleaseError, run
@@ -12,11 +11,6 @@ class CommonTests(unittest.TestCase):
         self.assertIs(run, release_subprocess.run)
         self.assertIs(ReleaseError, release_subprocess.ReleaseError)
 
-    def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
-        source = pathlib.Path(__file__).with_name("release.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('run(["cargo", "fetch", "--locked"]', source)
 
 if __name__ == "__main__":
     unittest.main()
