@@ -62,7 +62,20 @@ jobs:
         run: |
           dnf install --assumeyes binutils clang-libs cmake curl file gcc gcc-c++ git gnupg2 gzip jq make openssl patch perl pkgconf-pkg-config python3.11 tar which xz
           if [ "$(uname -m)" = x86_64 ]; then
-            dnf --enablerepo=powertools install --assumeyes nasm
+            dnf --enablerepo=powertools install --assumeyes gcc-toolset-15-gcc gcc-toolset-15-gcc-c++ nasm
+            toolset_bin=/opt/rh/gcc-toolset-15/root/usr/bin
+            test -x "$toolset_bin/gcc"
+            test -x "$toolset_bin/g++"
+            test "$("$toolset_bin/gcc" -dumpversion | cut -d. -f1)" = 15
+            c_probe="$(mktemp)"
+            cxx_probe="$(mktemp)"
+            trap 'rm -f "$c_probe" "$cxx_probe"' EXIT
+            printf 'int into_md_cpu_variant_probe(void) { return 0; }\n' |
+              "$toolset_bin/gcc" -x c -c -o "$c_probe" -mavxvnni -mavx512vnni -mavx512bf16 -mamx-tile -mamx-int8 -
+            printf 'int into_md_cpu_variant_probe() { return 0; }\n' |
+              "$toolset_bin/g++" -x c++ -c -o "$cxx_probe" -mavxvnni -mavx512vnni -mavx512bf16 -mamx-tile -mamx-int8 -
+            echo "CC=$toolset_bin/gcc" >> "$GITHUB_ENV"
+            echo "CXX=$toolset_bin/g++" >> "$GITHUB_ENV"
           fi
           ln -sf /usr/bin/python3.11 /usr/local/bin/python
           ln -sf /usr/bin/python3.11 /usr/local/bin/python3

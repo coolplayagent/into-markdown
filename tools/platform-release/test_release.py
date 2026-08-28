@@ -407,6 +407,22 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
 
+    def test_linux_x86_release_binds_a_compiler_for_every_ggml_variant(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        baseline = authority()["targets"]["x86_64-unknown-linux-gnu"][
+            "buildBaseline"
+        ]
+        self.assertEqual(baseline["nativeCompiler"], "gcc-toolset-15")
+        self.assertIn("gcc-toolset-15-gcc gcc-toolset-15-gcc-c++", workflow)
+        self.assertIn("/opt/rh/gcc-toolset-15/root/usr/bin", workflow)
+        self.assertIn('echo "CC=$toolset_bin/gcc"', workflow)
+        self.assertIn('echo "CXX=$toolset_bin/g++"', workflow)
+        self.assertIn("-mavxvnni", workflow)
+        self.assertIn("-mamx-int8", workflow)
+        self.assertNotIn("GGML_CPU_ALL_VARIANTS=OFF", workflow)
+
     def test_release_cargo_cache_is_bound_to_native_cpu_policy(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
