@@ -1,0 +1,78 @@
+name: Native Core PR gate
+description: Compile and run the complete native Core test authority with main-branch caching.
+
+inputs:
+  platform_label:
+    description: Human-readable platform label used in the timing summary.
+    required: true
+  cache_scope:
+    description: Stable platform identity used in the Rust cache key.
+    required: true
+  cache_sha:
+    description: Current main commit used as the reusable build baseline.
+    required: true
+  run_portable:
+    description: Whether to run the Windows portable archive authority.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Start gate wall clock
+      shell: bash
+      run: date +%s > "$RUNNER_TEMP/pr-fast-start"
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: 1.97.1
+    - name: Restore main Rust build baseline
+      id: rust-cache
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ env.CARGO_TARGET_DIR }}
+        key: pr-fast-v2-${{ inputs.cache_scope }}-${{ hashFiles('Cargo.lock') }}-${{ inputs.cache_sha }}
+        restore-keys: pr-fast-v2-${{ inputs.cache_scope }}-${{ hashFiles('Cargo.lock') }}-
+    - name: Compile the native Core tests once
+      shell: bash
+      run: |
+        python tools/ci/run_timed.py --stage "Native Rust test compile" --output "$TIMINGS_FILE" -- \
+          cargo test --locked -p into-markdown-cli --bin into-md --no-run
+    - name: Run the complete native Core tests
+      shell: bash
+      run: |
+        python tools/ci/run_timed.py --stage "Native Rust test execution" --output "$TIMINGS_FILE" -- \
+          cargo test --locked -p into-markdown-cli --bin into-md
+    - name: Test the portable archive authority
+      if: inputs.run_portable == 'true'
+      shell: bash
+      run: |
+        python tools/ci/run_timed.py --stage "Portable archive contracts" --output "$TIMINGS_FILE" -- \
+          python tools/portable-release/test_assemble.py
+    - name: Save main Rust build baseline
+      if: github.event_name == 'push' && steps.rust-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.CARGO_TARGET_DIR }}
+        key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+    - name: Publish gate timing summary
+      if: always()
+      shell: bash
+      env:
+        PLATFORM_LABEL: ${{ inputs.platform_label }}
+      run: |
+        start="$(cat "$RUNNER_TEMP/pr-fast-start")"
+        total="$(($(date +%s) - start))"
+        {
+          printf '### %s PR gate timing\n\n' "$PLATFORM_LABEL"
+          echo '| Stage | Seconds |'
+          echo '| --- | ---: |'
+          if [ -f "$TIMINGS_FILE" ]; then
+            while IFS=$'\t' read -r stage seconds; do printf '| %s | %s |\n' "$stage" "$seconds"; done < "$TIMINGS_FILE"
+          fi
+          printf '| **Measured wall clock** | **%s** |\n' "$total"
+          echo
+          echo 'Rust baseline cache hit: `${{ steps.rust-cache.outputs.cache-hit }}`.'
+        } >> "$GITHUB_STEP_SUMMARY"

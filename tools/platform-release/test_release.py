@@ -128,10 +128,7 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(len(checks), 4)
         timeouts = [int(value) for value in re.findall(r"timeout-minutes: (\d+)", workflow)]
         self.assertEqual(len(timeouts), len(checks))
-        # Windows may use a one-time 30 minute ceiling while a cold native
-        # media-runtime cache is populated; the steady-state gate is tightened
-        # separately once fixed runtime assets are available.
-        self.assertTrue(all(value <= 30 for value in timeouts))
+        self.assertTrue(all(value <= 5 for value in timeouts))
 
     def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -156,6 +153,27 @@ class PlatformReleaseTests(unittest.TestCase):
         windows = workflow.index("target: x86_64-pc-windows-msvc")
         self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
+
+    def test_release_build_only_validates_without_mutating_github_release(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertRegex(
+            workflow,
+            r"build_only:\n(?s:.*?)default: false\n\s+type: boolean",
+        )
+        self.assertIn("if: ${{ inputs.build_only }}", workflow)
+        self.assertEqual(workflow.count("if: ${{ !inputs.build_only }}"), 1)
+        mutation_step = workflow.index("- name: Create or update draft release")
+        guard = workflow.index("if: ${{ !inputs.build_only }}", mutation_step)
+        self.assertLess(guard, workflow.index("gh release view", mutation_step))
+        for command in [
+            "gh release create",
+            "gh release edit",
+            "gh release delete-asset",
+            "gh release upload",
+        ]:
+            self.assertGreater(workflow.index(command), guard)
 
     def test_embedded_core_is_verified_without_an_installer_or_launcher(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -215,6 +233,85 @@ class PlatformReleaseTests(unittest.TestCase):
             "'tools/macos-release/authority.json') }}",
             workflow,
         )
+
+    def test_product_release_acquires_reviewed_ffmpeg_without_source_build(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("tools/ffmpeg_runtime.py acquire", workflow)
+        self.assertIn('third_party/ffmpeg/runtime-assets.json', (
+            ROOT / "tools/ffmpeg_runtime.py"
+        ).read_text(encoding="utf-8"))
+        self.assertNotIn("tools/ffmpeg-build-audit.sh", workflow)
+        self.assertNotIn("release-ffmpeg-lgpl", workflow)
+        audit = (ROOT / ".github/workflows/ffmpeg-artifact-audit.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("tools/ffmpeg-build-audit.sh", audit)
+        self.assertIn("tools/ffmpeg_runtime.py package", audit)
+        self.assertIn("ffmpeg-runtime-candidate-${{ matrix.target }}", audit)
+
+    def test_release_records_actionable_phase_timings(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        for phase in [
+            "ffmpeg-acquire",
+            "helper-provider-build",
+            "final-core-link",
+            "native-e2e",
+            "artifact-upload",
+            "cache-upload",
+        ]:
+            self.assertIn(phase, workflow if phase not in {
+                "helper-provider-build", "final-core-link"
+            } else (ROOT / "tools/portable-release/assemble.py").read_text(encoding="utf-8"))
+        self.assertIn("$GITHUB_STEP_SUMMARY", workflow)
+        self.assertIn("timing-${{ matrix.target }}", workflow)
+
+    def test_ffmpeg_runtime_asset_authority_is_exact_and_repository_owned(self) -> None:
+        value = json.loads(
+            (ROOT / "third_party/ffmpeg/runtime-assets.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(value["schemaVersion"], 1)
+        self.assertEqual(value["releaseTag"], "runtime-assets")
+        self.assertEqual(value["ffmpegVersion"], "8.1.2")
+        self.assertRegex(value["sourceRevision"], r"^[0-9a-f]{40}$")
+        self.assertEqual(
+            value["sourceSha256"],
+            "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+        )
+        self.assertEqual(
+            set(value["targets"]),
+            {
+                "aarch64-apple-darwin",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-pc-windows-msvc",
+                "x86_64-unknown-linux-gnu",
+            },
+        )
+        for target, record in value["targets"].items():
+            self.assertEqual(
+                record["url"],
+                "https://github.com/coolplayagent/into-markdown/releases/download/"
+                f"runtime-assets/ffmpeg-lgpl-8.1.2-{target}.zip",
+            )
+            self.assertGreater(record["bytes"], 0)
+            self.assertRegex(record["sha256"], r"^[0-9a-f]{64}$")
+            suffix = ".exe" if target == "x86_64-pc-windows-msvc" else ""
+            self.assertEqual(
+                set(record["members"]),
+                {
+                    "COPYING.LGPLv2.1",
+                    f"ffmpeg-{target}{suffix}",
+                    f"ffmpeg-authority-{target}.json",
+                    f"ffmpeg-inventory-{target}.json",
+                    f"ffmpeg-relink-{target}.tar",
+                },
+            )
+            for member in record["members"].values():
+                self.assertGreater(member["bytes"], 0)
+                self.assertRegex(member["sha256"], r"^[0-9a-f]{64}$")
 
     def test_release_build_compiles_exact_helper_products_once(self) -> None:
         with tempfile.TemporaryDirectory() as name:

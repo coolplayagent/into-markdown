@@ -15,6 +15,7 @@ import shutil
 import stat
 import struct
 import sys
+import time
 import zipfile
 
 
@@ -51,6 +52,9 @@ GGML_RUNTIME_FILES = {
         "bin/libwhisper.so.1",
     },
 }
+if str(ROOT / "tools") not in sys.path:
+    sys.path.insert(0, str(ROOT / "tools"))
+from release_timing import record as record_timing  # noqa: E402
 FORBIDDEN_PLUGIN_PREFIXES = ("source/", "relink/", "licenses/")
 FORBIDDEN_PLUGIN_FILES = {
     "NOTICE",
@@ -157,13 +161,27 @@ def build_and_acquire(
     config: dict,
     build_root: pathlib.Path,
     cache: pathlib.Path,
+    timings: pathlib.Path | None = None,
 ) -> pathlib.Path:
     """Compile release tools while independently acquiring hash-pinned inputs."""
     downloads = release.downloads_for(config)
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=2, thread_name_prefix="into-md-release"
     ) as executor:
-        build_future = executor.submit(release.build, target, build_root)
+        def timed_build():
+            started = time.monotonic_ns()
+            try:
+                return release.build(target, build_root)
+            finally:
+                if timings is not None:
+                    record_timing(
+                        timings,
+                        target,
+                        "helper-provider-build",
+                        (time.monotonic_ns() - started) // 1_000_000,
+                    )
+
+        build_future = executor.submit(timed_build)
         acquire_future = executor.submit(release.acquire, cache, downloads)
         futures = (build_future, acquire_future)
         try:
@@ -184,7 +202,9 @@ def build_platform(arguments: argparse.Namespace) -> None:
     release.validate_ffmpeg(arguments.ffmpeg_artifacts, target)
     build_root = arguments.work_root / "build"
     cache = arguments.work_root / "cache"
-    release_bin = build_and_acquire(release, target, config, build_root, cache)
+    release_bin = build_and_acquire(
+        release, target, config, build_root, cache, arguments.timings
+    )
     evidence = arguments.output / "evidence" / target
     ocr = arguments.work_root / "embedded-ocr"
     packages = arguments.work_root / "plugins"
@@ -207,7 +227,17 @@ def build_platform(arguments: argparse.Namespace) -> None:
         config["pdfium"]["member"],
         pdfium / config["pdfium"]["destination"],
     )
-    core = release.build_embedded_core(target, build_root, pdfium, ocr)
+    started = time.monotonic_ns()
+    try:
+        core = release.build_embedded_core(target, build_root, pdfium, ocr)
+    finally:
+        if arguments.timings is not None:
+            record_timing(
+                arguments.timings,
+                target,
+                "final-core-link",
+                (time.monotonic_ns() - started) // 1_000_000,
+            )
     release.authenticode_files([core], arguments.windows_signing_thumbprint)
     archive_name, member = CORE_ARCHIVES[target]
     archive = arguments.output / "release" / archive_name
@@ -229,7 +259,17 @@ def build_macos(arguments: argparse.Namespace) -> None:
     release.check_host()
     release.validate_ffmpeg_artifacts(arguments.ffmpeg_artifacts)
     build_root = arguments.work_root / "build"
-    release.build(build_root)
+    started = time.monotonic_ns()
+    try:
+        release.build(build_root)
+    finally:
+        if arguments.timings is not None:
+            record_timing(
+                arguments.timings,
+                arguments.target,
+                "helper-provider-build",
+                (time.monotonic_ns() - started) // 1_000_000,
+            )
     cache = arguments.work_root / "cache"
     release.acquire(
         cache,
@@ -266,7 +306,17 @@ def build_macos(arguments: argparse.Namespace) -> None:
         pdfium / "lib/pdfium",
         {"lib/libpdfium.dylib": "libpdfium.dylib"},
     )
-    core = release.build_embedded_core(build_root, pdfium, ocr)
+    started = time.monotonic_ns()
+    try:
+        core = release.build_embedded_core(build_root, pdfium, ocr)
+    finally:
+        if arguments.timings is not None:
+            record_timing(
+                arguments.timings,
+                target,
+                "final-core-link",
+                (time.monotonic_ns() - started) // 1_000_000,
+            )
     release.codesign_files([core], arguments.codesign_identity)
     archive_name, member = CORE_ARCHIVES[target]
     archive = arguments.output / "release" / archive_name
@@ -599,6 +649,7 @@ def parse() -> argparse.Namespace:
     parser.add_argument("--plugin-base-url")
     parser.add_argument("--windows-signing-thumbprint")
     parser.add_argument("--codesign-identity")
+    parser.add_argument("--timings", type=pathlib.Path)
     arguments = parser.parse_args()
     if arguments.command == "build" and any(
         value is None

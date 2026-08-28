@@ -2,9 +2,11 @@ name: PR fast gate
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 concurrency:
-  group: pr-fast-${{ github.event.pull_request.number }}
+  group: pr-fast-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -14,9 +16,16 @@ jobs:
   linux-x86-64:
     name: Linux x86_64, shared tests, and Web
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.ci/pr-fast-target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      TIMINGS_FILE: ${{ github.workspace }}/.ci/pr-fast-linux-x86-64.tsv
     steps:
       - uses: actions/checkout@v4
+      - name: Start gate wall clock
+        run: date +%s > "${RUNNER_TEMP}/pr-fast-start"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
@@ -26,94 +35,121 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
-      - uses: actions/cache@v4
+      - name: Restore main Rust build baseline
+        id: rust-cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-            target
-          key: pr-fast-linux-x86-64-${{ hashFiles('Cargo.lock') }}
-      - name: Check shared Rust and release contracts
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: pr-fast-v2-linux-x86-64-${{ hashFiles('Cargo.lock') }}-${{ github.event.pull_request.base.sha || github.sha }}
+          restore-keys: pr-fast-v2-linux-x86-64-${{ hashFiles('Cargo.lock') }}-
+      - name: Check Rust formatting
+        run: python tools/ci/run_timed.py --stage "Rust format" --output "$TIMINGS_FILE" -- cargo fmt --all -- --check
+      - name: Compile shared Rust test harnesses once
         run: |
-          cargo fmt --all -- --check
-          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
-          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2
-          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
-          python -m unittest \
-            tools.platform-release.test_release \
-            tools.portable-release.test_assemble \
-            tools.portable-release.test_native_acceptance \
-            tools.release_evidence_test \
-            tools.release_metadata_test \
-            tools.skill-release.test_skill_release
+          python tools/ci/run_timed.py --stage "Rust test compile" --output "$TIMINGS_FILE" -- \
+            bash -euo pipefail -c 'cargo test --locked --no-run --message-format=json -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr -p into-markdown-process-plugin --lib > "$RUNNER_TEMP/shared-lib-tests.jsonl" && cargo test --locked --no-run --message-format=json -p into-markdown-process-plugin --test runtime > "$RUNNER_TEMP/process-runtime-test.jsonl"'
+      - name: Run complete shared Rust tests concurrently by package
+        run: |
+          python tools/ci/run_timed.py --stage "Rust test execution" --output "$TIMINGS_FILE" -- \
+            python tools/ci/run_compiled_rust_tests.py \
+              "$RUNNER_TEMP/shared-lib-tests.jsonl" \
+              "$RUNNER_TEMP/process-runtime-test.jsonl" \
+              --expect-target into_markdown_core \
+              --expect-target into_markdown_layout_quality \
+              --expect-target into_markdown_ocr \
+              --expect-target into_markdown_process_plugin \
+              --expect-target runtime \
+              --serial-package into-markdown-process-plugin
+      - name: Check release and Skill contracts
+        run: |
+          python tools/ci/run_timed.py --stage "Release contracts" --output "$TIMINGS_FILE" -- \
+            python -m unittest \
+              tools.ci.test_run_compiled_rust_tests \
+              tools.platform-release.test_release \
+              tools.portable-release.test_assemble \
+              tools.portable-release.test_native_acceptance \
+              tools.test_ffmpeg_runtime \
+              tools.test_release_timing \
+              tools.release_evidence_test \
+              tools.release_metadata_test \
+              tools.skill-release.test_skill_release
       - name: Build the checked production Web bundle without Bazel
         run: |
-          corepack enable
-          corepack pnpm install --frozen-lockfile
-          node web/console/tests/typecheck.mjs
-          node web/console/build.mjs "${{ runner.temp }}/web-dist" --verify web/console/dist
+          python tools/ci/run_timed.py --stage "Web install, typecheck, and build" --output "$TIMINGS_FILE" -- \
+            bash -euo pipefail -c 'corepack enable && corepack pnpm install --frozen-lockfile && node web/console/tests/typecheck.mjs && node web/console/build.mjs "$RUNNER_TEMP/web-dist" --verify web/console/dist'
+      - name: Save main Rust build baseline
+        if: github.event_name == 'push' && steps.rust-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
+      - name: Publish gate timing summary
+        if: always()
+        shell: bash
+        run: |
+          start="$(cat "$RUNNER_TEMP/pr-fast-start")"
+          total="$(($(date +%s) - start))"
+          {
+            echo '### Linux x86_64 PR gate timing'
+            echo
+            echo '| Stage | Seconds |'
+            echo '| --- | ---: |'
+            if [ -f "$TIMINGS_FILE" ]; then
+              while IFS=$'\t' read -r stage seconds; do printf '| %s | %s |\n' "$stage" "$seconds"; done < "$TIMINGS_FILE"
+            fi
+            printf '| **Measured wall clock** | **%s** |\n' "$total"
+            echo
+            echo 'Rust baseline cache hit: `${{ steps.rust-cache.outputs.cache-hit }}`.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   linux-arm64:
     name: Linux ARM64 Core
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 15
+    timeout-minutes: 5
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.ci/pr-fast-target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      TIMINGS_FILE: ${{ github.workspace }}/.ci/pr-fast-native.tsv
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/native-pr-gate
         with:
-          toolchain: 1.97.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-            target
-          key: pr-fast-linux-arm64-${{ hashFiles('Cargo.lock') }}
-      - name: Compile and test the native Core path
-        run: cargo test --locked -p into-markdown-cli --bin into-md -j2
+          platform_label: Linux ARM64
+          cache_scope: linux-arm64
+          cache_sha: ${{ github.event.pull_request.base.sha || github.sha }}
 
   windows-x86-64:
     name: Windows x86_64 Core
     runs-on: windows-2025
-    # A cold Windows runner must populate the native media-runtime cache once.
-    # The post-release gate split keeps steady-state PRs below five minutes.
-    timeout-minutes: 30
+    timeout-minutes: 5
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.ci/pr-fast-target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      TIMINGS_FILE: ${{ github.workspace }}/.ci/pr-fast-native.tsv
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/native-pr-gate
         with:
-          toolchain: 1.97.1
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-            target
-          key: pr-fast-windows-x86-64-${{ hashFiles('Cargo.lock') }}
-      - name: Test the native Core and portable archive authority
-        run: |
-          cargo test --locked -p into-markdown-cli --bin into-md -j2
-          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
-          python tools/portable-release/test_assemble.py
+          platform_label: Windows x86_64
+          cache_scope: windows-x86-64
+          cache_sha: ${{ github.event.pull_request.base.sha || github.sha }}
+          run_portable: 'true'
 
   macos-arm64:
     name: macOS ARM64 Core
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 5
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/.ci/pr-fast-target
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      TIMINGS_FILE: ${{ github.workspace }}/.ci/pr-fast-native.tsv
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/native-pr-gate
         with:
-          toolchain: 1.97.1
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git/db
-            target
-          key: pr-fast-macos-arm64-${{ hashFiles('Cargo.lock') }}
-      - name: Test the native Core path
-        run: cargo test --locked -p into-markdown-cli --bin into-md -j2
+          platform_label: macOS ARM64
+          cache_scope: macos-arm64
+          cache_sha: ${{ github.event.pull_request.base.sha || github.sha }}

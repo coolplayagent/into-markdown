@@ -8,6 +8,11 @@ on:
         required: true
         default: 0.0.3
         type: string
+      build_only:
+        description: Build and aggregate all targets without creating or changing a GitHub Release
+        required: true
+        default: false
+        type: boolean
       signing_mode:
         description: Optional operating-system publisher signatures
         required: true
@@ -109,13 +114,15 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: ${{ matrix.target }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cargo-cache
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git/db
           key: release-cargo-registry-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: build-cache
         if: inputs.signing_mode == 'unsigned'
         with:
           path: ${{ runner.temp }}/release-work/build
@@ -123,17 +130,13 @@ jobs:
           # declare them as Cargo rerun inputs. Put the explicit CPU policy
           # ahead of the source hash so no target cache built under a different
           # native-ISA policy can be restored.
-          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
+          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'third_party/whisper-rs-sys/**', 'tools/**/*.rs', 'Cargo.toml') }}
           restore-keys: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: native-cache
         with:
           path: ${{ runner.temp }}/release-work/cache
           key: release-native-inputs-v1-${{ matrix.target }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/macos-release/authority.json') }}
-      - uses: actions/cache@v4
-        id: ffmpeg-cache
-        with:
-          path: ffmpeg-audit-output
-          key: release-ffmpeg-lgpl-v1-${{ matrix.target }}-${{ hashFiles('tools/ffmpeg-build-audit.sh', 'third_party/ffmpeg/**') }}
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
@@ -142,11 +145,11 @@ jobs:
       - uses: msys2/setup-msys2@v2
         if: runner.os == 'Windows'
         with:
-          install: make diffutils xz curl gnupg jq file binutils python coreutils perl openssl
+          install: openssl
       - name: Install macOS native audit tools
         if: runner.os == 'macOS'
         run: |
-          brew install gnupg jq openssl@3
+          brew install openssl@3
           echo "$(brew --prefix openssl@3)/bin" >> "$GITHUB_PATH"
       - name: Bind CMake to MSVC
         if: runner.os == 'Windows'
@@ -185,22 +188,16 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$RELEASE_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/release.keychain-db"
           security list-keychains -d user -s "$RUNNER_TEMP/release.keychain-db"
           echo "APPLE_CODESIGN_IDENTITY=$APPLE_CODESIGN_IDENTITY" >> "$GITHUB_ENV"
-      - name: Build audited LGPL FFmpeg runtime
-        if: runner.os != 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
+      - name: Acquire pinned audited FFmpeg runtime
         shell: bash
-        env:
-          FFMPEG_AUDIT_NETWORK: '1'
-          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
-          FFMPEG_AUDIT_PRODUCTION_SMOKE: '1'
-        run: ./tools/ffmpeg-build-audit.sh
-      - name: Build audited LGPL FFmpeg runtime on Windows
-        if: runner.os == 'Windows' && steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        shell: msys2 {0}
-        env:
-          FFMPEG_AUDIT_NETWORK: '1'
-          FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
-          FFMPEG_AUDIT_PRODUCTION_SMOKE: '1'
-        run: ./tools/ffmpeg-build-audit.sh
+        run: |
+          python tools/release_timing.py run \
+            --report "$RUNNER_TEMP/release-timings.json" \
+            --target "${{ matrix.target }}" \
+            --phase ffmpeg-acquire -- \
+            python tools/ffmpeg_runtime.py acquire \
+              --target "${{ matrix.target }}" \
+              --output "$RUNNER_TEMP/ffmpeg-audit-output"
       - name: Generate ephemeral plugin integrity key
         if: runner.os != 'Windows'
         run: openssl genpkey -algorithm ED25519 -outform DER -out "$RUNNER_TEMP/plugin-integrity-key.pk8"
@@ -237,17 +234,24 @@ jobs:
             --target "${{ matrix.target }}" \
             --output "$RUNNER_TEMP/release-output" \
             --work-root "$RUNNER_TEMP/release-work" \
-            --ffmpeg-artifacts "$GITHUB_WORKSPACE/ffmpeg-audit-output" \
+            --ffmpeg-artifacts "$RUNNER_TEMP/ffmpeg-audit-output" \
             --plugin-signing-key "$RUNNER_TEMP/plugin-integrity-key.pk8" \
             --plugin-base-url "$PLUGIN_BASE_URL" \
+            --timings "$RUNNER_TEMP/release-timings.json" \
             "${signing[@]}"
           python tools/portable-release/assemble.py verify \
             --target "${{ matrix.target }}" \
             --output "$RUNNER_TEMP/release-output"
-          python tools/portable-release/native_acceptance.py \
+          python tools/release_timing.py run \
+            --report "$RUNNER_TEMP/release-timings.json" \
             --target "${{ matrix.target }}" \
-            --output "$RUNNER_TEMP/release-output" \
-            --expected-version "${{ inputs.release_tag }}"
+            --phase native-e2e -- \
+            python tools/portable-release/native_acceptance.py \
+              --target "${{ matrix.target }}" \
+              --output "$RUNNER_TEMP/release-output" \
+              --expected-version "${{ inputs.release_tag }}"
+          cp "$RUNNER_TEMP/release-timings.json" \
+            "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}/release-timings.json"
       - name: Sign and notarize final macOS downloads
         if: runner.os == 'macOS' && inputs.signing_mode == 'signed'
         env:
@@ -262,12 +266,64 @@ jobs:
             xcrun notarytool submit "$archive" --key "$RUNNER_TEMP/notary-key.p8" \
               --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
           done
+      - name: Start artifact upload timing
+        run: python tools/release_timing.py mark --marker "$RUNNER_TEMP/artifact-upload.started"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
           path: ${{ runner.temp }}/release-output
           if-no-files-found: error
           retention-days: 7
+      - name: Record artifact upload timing
+        run: |
+          python tools/release_timing.py finish \
+            --report "$RUNNER_TEMP/release-timings.json" \
+            --target "${{ matrix.target }}" \
+            --phase artifact-upload \
+            --marker "$RUNNER_TEMP/artifact-upload.started"
+      - name: Start cache upload timing
+        if: always()
+        run: python tools/release_timing.py mark --marker "$RUNNER_TEMP/cache-upload.started"
+      - uses: actions/cache/save@v4
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+          key: release-cargo-registry-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/cache/save@v4
+        if: inputs.signing_mode == 'unsigned' && steps.build-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/release-work/build
+          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'third_party/whisper-rs-sys/**', 'tools/**/*.rs', 'Cargo.toml') }}
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/release-work/cache
+          key: release-native-inputs-v1-${{ matrix.target }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/macos-release/authority.json') }}
+      - name: Record cache upload timing and publish summary
+        if: always()
+        run: |
+          python tools/release_timing.py finish \
+            --report "$RUNNER_TEMP/release-timings.json" \
+            --target "${{ matrix.target }}" \
+            --phase cache-upload \
+            --marker "$RUNNER_TEMP/cache-upload.started"
+          python tools/release_timing.py summary \
+            --report "$RUNNER_TEMP/release-timings.json" \
+            --target "${{ matrix.target }}" \
+            --output "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}"
+          cp "$RUNNER_TEMP/release-timings.json" \
+            "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}/release-timings.json"
+      - name: Upload machine-readable release timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-${{ matrix.target }}
+          path: ${{ runner.temp }}/release-timings.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Remove Windows credentials
         if: always() && runner.os == 'Windows'
         shell: pwsh
@@ -285,7 +341,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/plugin-integrity-key.pk8"
 
   publish:
-    name: Publish 10 clear downloads
+    name: Aggregate and validate 10 downloads
     needs: build
     runs-on: ubuntu-24.04
     environment: release
@@ -390,7 +446,17 @@ jobs:
                   f"extra={sorted(actual - expected)}"
               )
           PY
+      - name: Record build-only result
+        if: ${{ inputs.build_only }}
+        run: |
+          {
+            echo '### Build-only release validation'
+            echo
+            echo 'All four platform artifacts, the bundled Skill, and the audit archive were assembled and validated.'
+            echo 'No GitHub Release was created, edited, deleted, or uploaded.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Create or update draft release
+        if: ${{ !inputs.build_only }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
