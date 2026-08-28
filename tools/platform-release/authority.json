@@ -77,23 +77,20 @@
   },
   "sharedDownloads": {
     "ocr-detector": {
-      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
-      ],
+      "path": "third_party/runtime-assets/models/PP-OCRv6_tiny_det_onnx_infer.tar",
+      "source_url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
       "bytes": 1792000,
       "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d"
     },
     "ocr-recognizer": {
-      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
-      ],
+      "path": "third_party/runtime-assets/models/PP-OCRv6_tiny_rec_onnx_infer.tar",
+      "source_url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
       "bytes": 4526080,
       "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
     },
     "ocr-dictionary": {
-      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
+      "path": "third_party/runtime-assets/models/ppocrv6_tiny_dict.txt",
+      "source_url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
       "bytes": 27156,
       "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd"
     },
@@ -103,17 +100,20 @@
       "sha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
     },
     "whisper-small": {
-      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin",
+      "url": "https://github.com/coolplayagent/into-markdown/releases/download/runtime-assets/ggml-small.bin",
+      "source_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/c521a4b02f422512d734391fdf08bb08c0862f68/ggml-small.bin",
       "bytes": 487601967,
       "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
     },
     "silero-vad": {
-      "url": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
+      "path": "third_party/runtime-assets/models/silero_vad_half.onnx",
+      "source_url": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
       "bytes": 1280395,
       "sha256": "1e0b195ad4806595ef4466f419d16fca7e4afcfc6669b8c0b5f76ea87547c769"
     },
     "3dspeaker": {
-      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+      "path": "third_party/runtime-assets/models/3dspeaker_eres2net_base.onnx",
+      "source_url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
       "bytes": 39593761,
       "sha256": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
     }

@@ -9,11 +9,22 @@ py_library(
         "common.py",
         "rust_package.py",
     ],
+    data = [
+        "authority.json",
+        "//third_party/runtime-assets:models",
+    ],
     imports = ["."],
     visibility = [
         "//tools/macos-release:__pkg__",
         "//tools/platform-release:__pkg__",
     ],
+    deps = ["//tools:release_asset"],
+)
+
+py_test(
+    name = "acquire_test",
+    srcs = ["acquire_test.py"],
+    deps = [":library"],
 )
 
 py_binary(

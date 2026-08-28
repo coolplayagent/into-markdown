@@ -1,0 +1,14 @@
+filegroup(
+    name = "models",
+    srcs = [
+        "models/3dspeaker_eres2net_base.onnx",
+        "models/PP-OCRv6_tiny_det_onnx_infer.tar",
+        "models/PP-OCRv6_tiny_rec_onnx_infer.tar",
+        "models/ppocrv6_tiny_dict.txt",
+        "models/silero_vad_half.onnx",
+    ],
+    visibility = [
+        "//tools/macos-release:__pkg__",
+        "//tools/platform-release:__pkg__",
+    ],
+)

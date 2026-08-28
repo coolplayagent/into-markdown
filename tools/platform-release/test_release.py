@@ -97,10 +97,10 @@ class PlatformReleaseTests(unittest.TestCase):
         for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
             self.assertNotIn(forbidden, workflow)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
-        self.assertEqual(workflow.count("timeout_minutes: 30"), 3)
-        self.assertEqual(workflow.count("timeout_minutes: 35"), 1)
+        self.assertEqual(workflow.count("timeout_minutes: 30"), 4)
+        self.assertNotIn("timeout_minutes: 35", workflow)
         windows = workflow.index("target: x86_64-pc-windows-msvc")
-        self.assertIn("timeout_minutes: 35", workflow[windows : windows + 100])
+        self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
 
     def test_embedded_core_is_verified_without_an_installer_or_launcher(self) -> None:
@@ -349,8 +349,8 @@ class PlatformReleaseTests(unittest.TestCase):
         ]:
             self.assertIn(name, workflow)
         self.assertIn("official.media.whisper-${{ matrix.target }}.imp", workflow)
-        self.assertIn('test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 10', workflow)
-        self.assertIn('expected nine public products before audit', workflow)
+        self.assertIn('unexpected public product set before audit', workflow)
+        self.assertIn('unexpected final release set', workflow)
         self.assertIn('evidence / "release-set.json"', workflow)
         self.assertEqual(workflow.count('gh release upload "$RELEASE_TAG"'), 1)
         self.assertIn("GitHub provides source archives automatically", workflow)
@@ -408,7 +408,11 @@ class PlatformReleaseTests(unittest.TestCase):
                 if name == "pdfium":
                     self.assertGreater(download["bytes"], 0)
         for download in value["sharedDownloads"].values():
-            self.assertTrue(download["url"].startswith("https://"))
+            if "path" in download:
+                self.assertTrue(download["path"].startswith("third_party/runtime-assets/models/"))
+                self.assertTrue(download["source_url"].startswith("https://"))
+            else:
+                self.assertTrue(download["url"].startswith("https://github.com/coolplayagent/into-markdown/releases/download/" if "source_url" in download else "https://"))
             self.assertGreater(download["bytes"], 0)
             self.assertRegex(download["sha256"], r"^[0-9a-f]{64}$")
 
