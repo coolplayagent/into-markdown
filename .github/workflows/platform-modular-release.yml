@@ -181,6 +181,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: openssl genpkey -algorithm ED25519 -outform DER -out "$RUNNER_TEMP/plugin-integrity-key.pk8"
+      - name: Bind Cargo to the pinned MSVC linker
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir 'bin\Hostx64\x64\link.exe'
+          if (-not (Test-Path -LiteralPath $linker -PathType Leaf)) {
+            throw "Pinned MSVC linker is unavailable: $linker"
+          }
+          "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Build and verify compact Core and speech once
         shell: bash
         env:

@@ -167,6 +167,8 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("toolset: 14.44.35207", workflow)
         self.assertIn("sdk: 10.0.26100.0", workflow)
         self.assertIn("CMAKE_GENERATOR=NMake Makefiles", workflow)
+        self.assertIn("CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER", workflow)
+        self.assertIn("$env:VCToolsInstallDir", workflow)
 
     def test_command_failure_preserves_bounded_diagnostic_tail(self) -> None:
         script = (
