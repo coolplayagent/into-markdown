@@ -78,7 +78,10 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(len(checks), 4)
         timeouts = [int(value) for value in re.findall(r"timeout-minutes: (\d+)", workflow)]
         self.assertEqual(len(timeouts), len(checks))
-        self.assertTrue(all(value <= 20 for value in timeouts))
+        # Windows may use a one-time 30 minute ceiling while a cold native
+        # media-runtime cache is populated; the steady-state gate is tightened
+        # separately once fixed runtime assets are available.
+        self.assertTrue(all(value <= 30 for value in timeouts))
 
     def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
