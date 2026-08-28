@@ -73,6 +73,23 @@ class Result:
     detail: str
 
 
+def fixture_conversion_arguments(
+    source: pathlib.Path,
+    output: pathlib.Path,
+    capability_arguments: list[str],
+) -> list[str]:
+    """Build a deterministic fixture command with an isolated output authority."""
+    if source == output:
+        raise ValueError("fixture input and output must be different paths")
+    return [
+        str(source),
+        "--output", str(output),
+        "--conflict", "error",
+        *capability_arguments,
+        "--emit", "result-json",
+    ]
+
+
 class ProcessOwner:
     """Own a process group on Unix or a kill-on-close Job Object on Windows."""
 
@@ -258,8 +275,16 @@ class Runner:
             if os.name == "nt"
             else 0
         )
+        output_root = private_directory(state / "running-media-outputs")
         process = subprocess.Popen(
-            [str(self.executable), str(audio), "--ai", "audio-transcription=only", "--emit", "result-json"],
+            [
+                str(self.executable),
+                *fixture_conversion_arguments(
+                    audio,
+                    output_root / "immutable-snapshot.md",
+                    ["--ai", "audio-transcription=only"],
+                ),
+            ],
             cwd=self.work,
             env=self.environment(state),
             stdin=subprocess.DEVNULL,
@@ -290,7 +315,11 @@ class Runner:
         self.call(
             "running-media-new-task-disabled",
             state,
-            [str(audio), "--ai", "audio-transcription=only", "--emit", "result-json"],
+            fixture_conversion_arguments(
+                audio,
+                output_root / "disabled-new-task.md",
+                ["--ai", "audio-transcription=only"],
+            ),
             succeed=False,
         )
         self.call("running-media-enable", state, ["plugins", "enable", plugin, "--scope", "global"])
@@ -727,10 +756,15 @@ def main() -> int:
         initialize_core_state(runner, core_ocr_state, "core-only")
         core_ocr_fixture = core_ocr_state / "ocr-english-clear-1.png"
         shutil.copyfile(fixtures / "ocr" / "ocr-english-clear-1.png", core_ocr_fixture)
+        core_ocr_outputs = private_directory(core_ocr_state / "outputs")
         runner.call(
             "real-ocr-core-only",
             core_ocr_state,
-            [str(core_ocr_fixture), "--ocr", "always", "--emit", "result-json"],
+            fixture_conversion_arguments(
+                core_ocr_fixture,
+                core_ocr_outputs / "ocr-core-only.md",
+                ["--ocr", "always"],
+            ),
         )
         plugin_names = list(PLUGINS)
         for mask in range(1 << len(plugin_names)):
@@ -774,15 +808,24 @@ def main() -> int:
         speech_fixture = fixture_state / audio.name
         shutil.copyfile(fixtures / "ocr" / "ocr-english-clear-1.png", ocr_fixture)
         shutil.copyfile(audio, speech_fixture)
+        fixture_outputs = private_directory(fixture_state / "outputs")
         runner.call(
             "real-ocr-fixture",
             lifecycle,
-            [str(ocr_fixture), "--ocr", "always", "--emit", "result-json"],
+            fixture_conversion_arguments(
+                ocr_fixture,
+                fixture_outputs / "ocr-with-speech-installed.md",
+                ["--ocr", "always"],
+            ),
         )
         runner.call(
             "real-speech-fixture",
             lifecycle,
-            [str(speech_fixture), "--ai", "audio-transcription=only", "--emit", "result-json"],
+            fixture_conversion_arguments(
+                speech_fixture,
+                fixture_outputs / "speech-installed.md",
+                ["--ai", "audio-transcription=only"],
+            ),
         )
         runner.running_snapshot(lifecycle, speech_fixture, "official.media.whisper")
 
