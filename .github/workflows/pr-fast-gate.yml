@@ -106,6 +106,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
+      - uses: bazel-contrib/setup-bazel@0.15.0
       - uses: actions/cache@v4
         with:
           path: |
@@ -121,6 +122,7 @@ jobs:
       - name: Build once and run browser plus documentation contracts
         run: |
           cargo build --locked -p into-markdown-cli --bin into-md -j2
+          bazel build --lockfile_mode=error //web/console:assets //web/console:determinism_test --jobs=1
           corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
           INTO_MD_CLI="$GITHUB_WORKSPACE/target/debug/into-md" \
             corepack pnpm --filter @into-markdown/console exec playwright test \
