@@ -417,7 +417,10 @@ jobs:
       - name: Run installed Core smoke and platform acceptance
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}/accept-user-data
         run: |
+          mkdir -m 700 "$INTO_MARKDOWN_USER_DATA_HOME"
           distribution="${{ runner.temp }}/distribution"
           installed=$("$distribution/install" "${{ runner.temp }}/accept-install" "${{ runner.temp }}/accept-bin" | tail -1)
           mkdir "${{ runner.temp }}/installed-smoke-state"
@@ -432,7 +435,14 @@ jobs:
       - name: Run installed Core smoke and platform acceptance on Windows
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          INTO_MARKDOWN_USER_DATA_HOME: ${{ runner.temp }}\accept-user-data
         run: |
+          New-Item -ItemType Directory -Path $env:INTO_MARKDOWN_USER_DATA_HOME | Out-Null
+          $userDataIdentity = "$env:USERDOMAIN\$env:USERNAME"
+          & "$env:SystemRoot\System32\icacls.exe" $env:INTO_MARKDOWN_USER_DATA_HOME /inheritance:r /grant:r "${userDataIdentity}:(OI)(CI)F" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cannot protect acceptance user-data directory" }
+          $env:INTO_MARKDOWN_USER_DATA_HOME = "\\?\$((Resolve-Path $env:INTO_MARKDOWN_USER_DATA_HOME).Path)"
           $distribution = "${{ runner.temp }}\distribution"
           & "$distribution\Install.ps1" -Prefix "${{ runner.temp }}\accept-install" -CommandDirectory "${{ runner.temp }}\accept-bin"
           $identity = (Get-Content "${{ runner.temp }}\accept-install\current.txt" -Raw).Trim()
