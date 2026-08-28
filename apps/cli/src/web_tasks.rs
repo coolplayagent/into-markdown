@@ -421,6 +421,8 @@ struct Shared {
     #[cfg(test)]
     pre_acquire_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
     #[cfg(test)]
+    dequeue_transition_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
+    #[cfg(test)]
     pre_acquire_panic: AtomicUsize,
     #[cfg(test)]
     snapshot_failure: AtomicUsize,
@@ -1196,6 +1198,8 @@ impl WebTaskBackend {
             conversion_entries: AtomicUsize::new(0),
             #[cfg(test)]
             pre_acquire_gate: Mutex::new(None),
+            #[cfg(test)]
+            dequeue_transition_gate: Mutex::new(None),
             #[cfg(test)]
             pre_acquire_panic: AtomicUsize::new(0),
             #[cfg(test)]
@@ -2597,7 +2601,7 @@ impl Drop for ActiveWorker<'_> {
 fn run_job(shared: &Arc<Shared>, job: &Job) {
     let mut registered_waiter = RegisteredDiskWaiter { shared, ticket: job.admission_ticket };
     #[cfg(test)]
-    if let Some(gate) = { lock(&shared.pre_acquire_gate).clone() } {
+    if let Some(gate) = { lock(&shared.pre_acquire_gate).take() } {
         gate.wait();
     }
     #[cfg(test)]
@@ -2638,6 +2642,11 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
         return;
     };
     if record.status == TaskStatus::Pending {
+        #[cfg(test)]
+        if let Some(gate) = { lock(&shared.dequeue_transition_gate).clone() } {
+            gate.wait();
+            gate.wait();
+        }
         let transition = TaskTransition {
             expected: TaskStatus::Pending,
             next: TaskStatus::Running,
@@ -2646,7 +2655,18 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             artifacts: Vec::new(),
         };
         if !retry_dequeued_transition(shared, &job.id, &transition) {
-            stop_unhealthy(shared);
+            // Cancellation may win the Pending -> Running compare-and-swap
+            // after the worker read the Pending record. That is a valid
+            // terminal outcome, not evidence that persistence is unhealthy.
+            let cancellation_won = job.cancellation.is_cancelled()
+                && lock(&shared.task_store)
+                    .get(&job.id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|record| record.status == TaskStatus::Cancelled);
+            if !cancellation_won {
+                stop_unhealthy(shared);
+            }
             return;
         }
     }
@@ -6988,6 +7008,35 @@ mod tests {
                 other => panic!("invalid cancellation race outcome: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn cancellation_winning_dequeue_transition_does_not_stop_the_queue() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.dequeue_transition_gate) = Some(Arc::clone(&gate));
+
+        let mut upload = backend.begin_upload("cancel-at-dequeue.txt", None).unwrap();
+        upload.write_chunk(b"cancel after the worker reads Pending").unwrap();
+        let task = upload.finish().unwrap();
+
+        gate.wait();
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Cancelled);
+        *lock(&backend.owner.shared.dequeue_transition_gate) = None;
+        gate.wait();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while lock(&backend.owner.shared.queue).cancellations.contains_key(&task.id) {
+            assert!(Instant::now() < deadline, "cancelled worker did not settle");
+            std::thread::yield_now();
+        }
+        assert!(!lock(&backend.owner.shared.queue).stopped);
+
+        let mut successor = backend.begin_upload("successor.txt", None).unwrap();
+        successor.write_chunk(b"the queue remains usable").unwrap();
+        let successor = successor.finish().unwrap();
+        assert_eq!(wait_terminal(&backend, &successor.id).status, TaskStatus::Succeeded);
     }
 
     #[test]

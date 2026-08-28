@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.util
+import inspect
 import json
 import pathlib
 import re
@@ -68,6 +71,30 @@ class PlatformReleaseTests(unittest.TestCase):
             source = (ROOT / relative).read_text(encoding="utf-8")
             for marker in required:
                 self.assertIn(marker, source, f"{relative} lacks {marker}")
+
+    def test_macos_archive_calls_match_the_real_writer_signature(self) -> None:
+        archive_path = ROOT / "tools/macos-release/archive.py"
+        spec = importlib.util.spec_from_file_location("macos_release_archive", archive_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(
+            tuple(inspect.signature(module.create).parameters),
+            ("source", "destination", "epoch"),
+        )
+
+        release_path = ROOT / "tools/macos-release/release.py"
+        tree = ast.parse(release_path.read_text(encoding="utf-8"), release_path.as_posix())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "create_archive"
+        ]
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertTrue(all(len(call.args) == 3 and not call.keywords for call in calls))
 
     def test_web_release_spdx_binds_the_production_app(self) -> None:
         value = json.loads(
@@ -379,6 +406,22 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
+
+    def test_linux_x86_release_binds_a_compiler_for_every_ggml_variant(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        baseline = authority()["targets"]["x86_64-unknown-linux-gnu"][
+            "buildBaseline"
+        ]
+        self.assertEqual(baseline["nativeCompiler"], "gcc-toolset-15")
+        self.assertIn("gcc-toolset-15-gcc gcc-toolset-15-gcc-c++", workflow)
+        self.assertIn("/opt/rh/gcc-toolset-15/root/usr/bin", workflow)
+        self.assertIn('echo "CC=$toolset_bin/gcc"', workflow)
+        self.assertIn('echo "CXX=$toolset_bin/g++"', workflow)
+        self.assertIn("-mavxvnni", workflow)
+        self.assertIn("-mamx-int8", workflow)
+        self.assertNotIn("GGML_CPU_ALL_VARIANTS=OFF", workflow)
 
     def test_release_cargo_cache_is_bound_to_native_cpu_policy(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(

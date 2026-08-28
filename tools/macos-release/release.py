@@ -427,7 +427,6 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
             create_archive(
                 ROOT / "third_party/whisper-rs-0.16.0/sys",
                 source,
-                {"archive": "zip"},
                 0,
             )
             result.append(
