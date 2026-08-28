@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import hashlib
 import importlib.util
 import json
@@ -129,6 +130,31 @@ def stage_catalog(
     )
 
 
+def build_and_acquire(
+    release,
+    target: str,
+    config: dict,
+    build_root: pathlib.Path,
+    cache: pathlib.Path,
+) -> pathlib.Path:
+    """Compile release tools while independently acquiring hash-pinned inputs."""
+    downloads = release.downloads_for(config)
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="into-md-release"
+    ) as executor:
+        build_future = executor.submit(release.build, target, build_root)
+        acquire_future = executor.submit(release.acquire, cache, downloads)
+        futures = (build_future, acquire_future)
+        try:
+            for future in concurrent.futures.as_completed(futures):
+                future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return build_future.result()
+
+
 def build_platform(arguments: argparse.Namespace) -> None:
     release = load_release(PLATFORM_RELEASE, "into_markdown_platform_release")
     target = arguments.target
@@ -136,9 +162,8 @@ def build_platform(arguments: argparse.Namespace) -> None:
     release.check_host(target, config)
     release.validate_ffmpeg(arguments.ffmpeg_artifacts, target)
     build_root = arguments.work_root / "build"
-    release_bin = release.build(target, build_root)
     cache = arguments.work_root / "cache"
-    release.acquire(cache, release.downloads_for(config))
+    release_bin = build_and_acquire(release, target, config, build_root, cache)
     evidence = arguments.output / "evidence" / target
     ocr = arguments.work_root / "embedded-ocr"
     packages = arguments.work_root / "plugins"

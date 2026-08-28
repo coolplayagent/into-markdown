@@ -77,22 +77,35 @@ only by the accessibility test: its source package and CI/cache artifacts retain
 the upstream MPL file-level notices and source availability obligations, while
 none of its code enters the generated console assets.
 
-ONNX Runtime 1.29.0 archives and the PP-OCRv6 source archives are hash-pinned,
-manual inputs. They are not linked into or copied into normal build outputs.
-Their sources and declared licenses are recorded in their existing manifests.
-The audit and the local Bzlmod extension share
-`third_party/licenses/downloads.json`, so every managed artifact's URL and hash
-has one structured download source of truth.
+ONNX Runtime 1.29.0 archives remain hash-pinned release inputs and are not
+committed to the repository. The reviewed PP-OCRv6 tiny detector and recognizer
+ONNX archives and the fixed-commit recognizer character table are immutable
+inputs committed under `third_party/runtime-assets/models/`. They therefore
+appear in repository checkouts and GitHub's automatic source archives. Ordinary
+builds and tests may read these local files but never download replacements or
+copy them into ordinary test outputs. Release assembly verifies the committed
+bytes before extracting the exact ONNX members into Core's embedded OCR payload.
+PaddleOCR is published by the PaddlePaddle project under Apache-2.0; preserve
+the repository `LICENSE` and PaddleOCR/PaddlePaddle attribution with
+redistributed model bytes.
+The upstream source URLs, exact sizes, and SHA-256 values are recorded in the
+platform authorities and `third_party/licenses/downloads.json`.
 
-The self-contained speech capability plugin includes the exact reviewed meeting model bytes and
-is acquired only through the explicit `setup media` flow. Ordinary builds, tests, and conversions
-never download model files separately. Silero VAD v6.2.1 is MIT-licensed, Copyright (c)
-2020-present Silero Team, with the complete text preserved in
-`third_party/licenses/silero-vad-MIT.txt`. The 3D-Speaker ERes2Net model is
-Apache-2.0; the complete license text is the repository `LICENSE`. Both ONNX
-files are bound to exact HTTPS authorities, sizes, and SHA-256 values in
-`models/manifest.json` and `third_party/licenses/downloads.json`. The speech plugin projection also
-binds file ownership, license material, and SBOM integrity.
+The self-contained speech capability plugin includes the exact reviewed meeting
+model bytes. `silero_vad_half.onnx` and `3dspeaker_eres2net_base.onnx` are
+immutable inputs committed under `third_party/runtime-assets/models/`, so they
+also appear in repository checkouts and GitHub's automatic source archives.
+Ordinary builds, tests, and conversions read the repository copies when needed
+and never download replacements or copy them into ordinary test outputs.
+Silero VAD v6.2.1 is MIT-licensed, Copyright (c) 2020-present Silero Team, with
+the complete text preserved in `third_party/licenses/silero-vad-MIT.txt`.
+The ERes2Net model originates from the Apache-2.0 3D-Speaker project and is
+distributed as an ONNX asset by the Apache-2.0 sherpa-onnx project; preserve both
+project attributions and the complete Apache-2.0 text in the repository
+`LICENSE`. Both ONNX files are bound to their exact upstream HTTPS source URLs,
+sizes, and SHA-256 values in the platform authorities and
+`third_party/licenses/downloads.json`. The speech plugin projection also binds
+file ownership, license material, and SBOM integrity.
 
 PDFium `153.0.7999.0` (`chromium/7999`) is reviewed and hash-pinned for four
 platforms, but remains a manual input and is not in current release outputs. Its
@@ -108,11 +121,13 @@ Noto Sans CJK SC Regular is a hash-pinned, manual fixture-generator input under
 OFL-1.1. The complete license text is in `third_party/licenses/OFL-1.1.txt`.
 The font itself is not committed or included in release outputs; repository-authored
 text rendered into checked-in OCR PNG fixtures is distributed under Apache-2.0.
-The PP-OCRv6 tiny recognizer ONNX archive is separately hash-pinned under
-Apache-2.0 for an explicit OCR quality target and is likewise absent from ordinary
-build and release outputs. Their exact source, size, hash, and boundary are audited
-across `fixtures/manifest.json`, the inventory, and the dedicated
-`fixtures/downloads.json` authority.
+The checked-in PP-OCRv6 tiny recognizer ONNX archive is hash-pinned under
+Apache-2.0 and is also the explicit OCR quality input. It is present in source
+archives and is extracted only by the release/quality paths that request it; it
+is not copied into ordinary test outputs. Its exact source, size, hash, and
+boundary are audited across the platform authorities,
+`third_party/licenses/downloads.json`, `fixtures/manifest.json`, the inventory,
+and the dedicated `fixtures/downloads.json` authority.
 
 ## Release obligation
 

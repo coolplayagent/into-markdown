@@ -20,9 +20,6 @@
       "repository": "ppocrv6_tiny_recognizer_onnx_source",
       "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
-      ],
       "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29"
     },
     {
@@ -30,9 +27,6 @@
       "repository": "ppocrv6_tiny_detector_onnx_source",
       "downloaded_file_path": "PP-OCRv6_tiny_det_onnx_infer.tar",
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
-      ],
       "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d"
     },
     {
@@ -63,9 +57,6 @@
       "repository": "ppocrv6_tiny_detector_onnx_model",
       "downloaded_file_path": "inference.onnx",
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
-      ],
       "archive_sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
       "archive_size": 1792000,
       "archive_member": "PP-OCRv6_tiny_det_onnx_infer/inference.onnx",
@@ -77,9 +68,6 @@
       "repository": "ppocrv6_tiny_recognizer_onnx_model",
       "downloaded_file_path": "inference.onnx",
       "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-      "mirror_urls": [
-        "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
-      ],
       "archive_sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
       "archive_size": 4526080,
       "archive_member": "PP-OCRv6_tiny_rec_onnx_infer/inference.onnx",

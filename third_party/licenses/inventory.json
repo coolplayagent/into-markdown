@@ -98,7 +98,7 @@
       "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
       "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
       "license": "Apache-2.0",
-      "obligations": "If acquired, verify the official archive and exact ONNX/config members; preserve Apache-2.0, fixed-commit dictionary provenance, and exclude model bytes from release artifacts."
+      "obligations": "The exact official archive is committed at third_party/runtime-assets/models/PP-OCRv6_tiny_rec_onnx_infer.tar and is consequently present in repository source archives. Ordinary builds and tests must not download a replacement or copy it into ordinary test outputs. Release assembly verifies the archive digest and extracts only the reviewed ONNX/config members. Preserve PaddleOCR attribution, Apache-2.0, and fixed-commit dictionary provenance."
     },
     {
       "id": "ppocrv6-tiny-detector-onnx-source",
@@ -109,7 +109,7 @@
       "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
       "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
       "license": "Apache-2.0",
-      "obligations": "If acquired, verify the official archive and exact ONNX/config members; preserve Apache-2.0 and exclude model bytes from release artifacts."
+      "obligations": "The exact official archive is committed at third_party/runtime-assets/models/PP-OCRv6_tiny_det_onnx_infer.tar and is consequently present in repository source archives. Ordinary builds and tests must not download a replacement or copy it into ordinary test outputs. Release assembly verifies the archive digest and extracts only the reviewed ONNX/config members. Preserve PaddleOCR attribution and Apache-2.0."
     },
     {
       "id": "whisper-small-source",
@@ -131,7 +131,7 @@
       "version": "Silero VAD v6.2.1 / 3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
       "source": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
       "license": "MIT",
-      "obligations": "If acquired, verify the exact ONNX size and SHA-256, preserve third_party/licenses/silero-vad-MIT.txt, and never download it during ordinary builds or tests."
+      "obligations": "The exact ONNX file is committed at third_party/runtime-assets/models/silero_vad_half.onnx and is consequently present in repository source archives. Ordinary builds and tests must not download a replacement or copy it into ordinary test outputs. Preserve Copyright (c) 2020-present Silero Team and third_party/licenses/silero-vad-MIT.txt; release assembly verifies its exact size and SHA-256 before packaging."
     },
     {
       "id": "3dspeaker-eres2net-base-onnx-source",
@@ -142,7 +142,7 @@
       "version": "Silero VAD v6.2.1 / 3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
       "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
       "license": "Apache-2.0",
-      "obligations": "If acquired, verify the exact ONNX size and SHA-256, preserve the complete Apache-2.0 text in LICENSE plus 3D-Speaker and sherpa-onnx attribution, and never download it during ordinary builds or tests."
+      "obligations": "The exact ONNX file is committed at third_party/runtime-assets/models/3dspeaker_eres2net_base.onnx and is consequently present in repository source archives. Ordinary builds and tests must not download a replacement or copy it into ordinary test outputs. Preserve the complete Apache-2.0 text in LICENSE plus attribution to the upstream 3D-Speaker project and the sherpa-onnx binary distribution; release assembly verifies its exact size and SHA-256 before packaging."
     },
     {
       "id": "ppocrv6-tiny-recognizer-onnx-quality",
@@ -208,9 +208,9 @@
       "included_in_release": false,
       "release_eligible": true,
       "version": "Silero VAD v6.2.1",
-      "source": "https://github.com/snakers4/silero-vad/tree/v6.2.1",
+      "source": "https://raw.githubusercontent.com/snakers4/silero-vad/refs/tags/v6.2.1/src/silero_vad/data/silero_vad_half.onnx",
       "license": "MIT",
-      "obligations": "Full offline packages only. Preserve the Silero MIT license and bind silero_vad_half.onnx to the reviewed tag, exact size, SHA-256, and model authority."
+      "obligations": "The speech plugin packages the checked-in silero_vad_half.onnx. Preserve Copyright (c) 2020-present Silero Team and the Silero MIT license, and bind the distributed bytes to the reviewed v6.2.1 tag, exact size, SHA-256, and model authority."
     },
     {
       "id": "3dspeaker-eres2net-base-onnx-model",
@@ -219,9 +219,9 @@
       "included_in_release": false,
       "release_eligible": true,
       "version": "3D-Speaker ERes2Net base via sherpa-onnx speaker-recongition-models",
-      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
       "license": "Apache-2.0",
-      "obligations": "Full offline packages only. Preserve Apache-2.0 and the 3D-Speaker and sherpa-onnx attribution, and bind 3dspeaker_eres2net_base.onnx to its exact size, SHA-256, and model authority."
+      "obligations": "The speech plugin packages the checked-in 3dspeaker_eres2net_base.onnx. Preserve Apache-2.0 and attribution to the upstream 3D-Speaker project and the sherpa-onnx binary distribution, and bind the distributed bytes to the exact release asset URL, size, SHA-256, and model authority."
     },
     {
       "id": "ppocrv6-tiny-detector-onnx-model",
@@ -232,7 +232,7 @@
       "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
       "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
       "license": "Apache-2.0",
-      "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed detector ONNX bytes to the reviewed archive member, size, SHA-256, and platform-neutral model authority."
+      "obligations": "Core packages the detector ONNX extracted from the checked-in official archive. Preserve PaddleOCR Apache-2.0 attribution and bind the distributed detector bytes to the reviewed archive member, size, SHA-256, and platform-neutral model authority."
     },
     {
       "id": "ppocrv6-tiny-recognizer-onnx-model",
@@ -243,7 +243,7 @@
       "version": "PP-OCRv6 tiny / PaddleOCR 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
       "source": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
       "license": "Apache-2.0",
-      "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed ONNX bytes to the reviewed archive member, size, SHA-256, and platform-neutral model authority."
+      "obligations": "Core packages the recognizer ONNX extracted from the checked-in official archive. Preserve PaddleOCR Apache-2.0 attribution and bind the distributed recognizer bytes to the reviewed archive member, size, SHA-256, and platform-neutral model authority."
     },
     {
       "id": "ppocrv6-tiny-recognizer-character-table",
@@ -254,7 +254,7 @@
       "version": "PaddleOCR commit 2661c7c0ef5c613e8f93c6e93b2e052399f0f854",
       "source": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/2661c7c0ef5c613e8f93c6e93b2e052399f0f854/ppocr/utils/dict/ppocrv6_tiny_dict.txt",
       "license": "Apache-2.0",
-      "obligations": "Preserve PaddleOCR Apache-2.0 attribution and bind the distributed character table to its exact commit, size, SHA-256, and recognizer authority."
+      "obligations": "Core packages the checked-in recognizer character table. Preserve PaddleOCR Apache-2.0 attribution and bind the distributed character table to its exact upstream commit, source URL, size, SHA-256, and recognizer authority."
     },
     {
       "id": "wasmtime",

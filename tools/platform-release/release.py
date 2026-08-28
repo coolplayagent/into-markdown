@@ -52,6 +52,14 @@ SPEECH_COMPONENTS = [
     "3dspeaker-eres2net-base-onnx-model",
 ]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
+RELEASE_BUILD_PRODUCTS = (
+    ("into-markdown-onnxruntime", "onnxruntime-worker"),
+    ("into-markdown-plugin-manager", "package_plugin"),
+    ("license-check", "release-projection"),
+    ("into-markdown-official-provider", "into-md-ocr-provider"),
+    ("into-markdown-official-provider", "into-md-media-provider"),
+)
+WINDOWS_CORE_PREWARM_PRODUCT = ("into-markdown-cli", "into-md")
 FIXTURES = [
     "docx/normal.docx",
     "docx/corrupt.docx",
@@ -181,45 +189,25 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
     # complete lockfile, including dependencies for non-host targets. Seed that
     # immutable closure before compiling only the host release products.
     run(["cargo", "fetch", "--locked"], cwd=ROOT, env=environment)
-    run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "--locked",
-            "-p",
-            "into-markdown-onnxruntime",
-            "--bin",
-            "onnxruntime-worker",
-            "-p",
-            "into-markdown-plugin-manager",
-            "--bin",
-            "package_plugin",
-            "-p",
-            "license-check",
-            "--bin",
-            "release-projection",
-        ],
-        cwd=ROOT,
-        env=environment,
-    )
-    run(
-        [
-            "cargo",
-            "build",
-            "--release",
-            "--locked",
-            "-p",
-            "into-markdown-official-provider",
-            "--bin",
-            "into-md-ocr-provider",
-            "--bin",
-            "into-md-media-provider",
-        ],
-        cwd=ROOT,
-        env=environment,
-    )
-    return output / "release"
+    products = list(RELEASE_BUILD_PRODUCTS)
+    if target == "x86_64-pc-windows-msvc":
+        products.append(WINDOWS_CORE_PREWARM_PRODUCT)
+    command = ["cargo", "build", "--release", "--locked"]
+    for package, binary in products:
+        command.extend(["-p", package, "--bin", binary])
+    run(command, cwd=ROOT, env=environment)
+    release_bin = output / "release"
+    missing = [
+        executable_name(binary, target)
+        for _, binary in products
+        if not (release_bin / executable_name(binary, target)).is_file()
+        or (release_bin / executable_name(binary, target)).is_symlink()
+    ]
+    if missing:
+        raise ReleaseError(
+            f"release Cargo build omitted required products: {', '.join(missing)}"
+        )
+    return release_bin
 
 
 def build_embedded_core(

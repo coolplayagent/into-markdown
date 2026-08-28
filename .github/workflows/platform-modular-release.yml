@@ -29,7 +29,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     environment: release
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       INTO_MD_RELEASE_STREAM_LOGS: '1'
     strategy:
@@ -40,18 +40,22 @@ jobs:
             runner: ubuntu-24.04
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: x86_64-unknown-linux-gnu
+            timeout_minutes: 30
           - label: Linux ARM64
             runner: ubuntu-24.04-arm
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: aarch64-unknown-linux-gnu
+            timeout_minutes: 30
           - label: Windows x86_64
             runner: windows-2025
             container: ''
             target: x86_64-pc-windows-msvc
+            timeout_minutes: 30
           - label: macOS Apple Silicon
             runner: macos-14
             container: ''
             target: aarch64-apple-darwin
+            timeout_minutes: 30
     steps:
       - name: Bootstrap fixed Linux container
         if: runner.os == 'Linux'
@@ -104,6 +108,10 @@ jobs:
           path: ${{ runner.temp }}/release-work/build
           key: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
           restore-keys: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/release-work/cache
+          key: release-native-inputs-v1-${{ matrix.target }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/macos-release/authority.json') }}
       - uses: actions/cache@v4
         id: ffmpeg-cache
         with:
@@ -296,11 +304,30 @@ jobs:
           test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f -name 'official.media.whisper-*.imp' | wc -l)" -eq 4
           test -f "$RUNNER_TEMP/publish/into-markdown-skill.zip"
       - name: Build one audit download
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           python - <<'PY'
           import hashlib, json, os, pathlib
           publish = pathlib.Path(os.environ["RUNNER_TEMP"]) / "publish"
           evidence = pathlib.Path(os.environ["RUNNER_TEMP"]) / "evidence"
+          expected = {
+              "into-md-windows-x86_64.zip",
+              "into-md-linux-x86_64.zip",
+              "into-md-linux-arm64.zip",
+              "into-md-macos-arm64.zip",
+              "official.media.whisper-x86_64-pc-windows-msvc.imp",
+              "official.media.whisper-x86_64-unknown-linux-gnu.imp",
+              "official.media.whisper-aarch64-unknown-linux-gnu.imp",
+              "official.media.whisper-aarch64-apple-darwin.imp",
+              "into-markdown-skill.zip",
+          }
+          actual = {path.name for path in publish.iterdir() if path.is_file()}
+          if actual != expected:
+              raise SystemExit(
+                  f"unexpected public product set before audit: missing={sorted(expected - actual)}, "
+                  f"extra={sorted(actual - expected)}"
+              )
           def digest(path):
               value = hashlib.sha256()
               with path.open("rb") as source:
@@ -315,8 +342,6 @@ jobs:
                       "bytes": path.stat().st_size,
                       "sha256": digest(path),
                   })
-          if len(files) != 9:
-              raise SystemExit(f"expected nine public products before audit, found {len(files)}")
           (evidence / "release-set.json").write_text(
               json.dumps({"schemaVersion": 1, "files": files}, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
@@ -326,7 +351,28 @@ jobs:
             --source "$RUNNER_TEMP/evidence" \
             --output "$RUNNER_TEMP/publish/into-markdown-${{ inputs.release_tag }}-audit.zip" \
             --source-revision "${{ github.sha }}"
-          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 10
+          python - <<'PY'
+          import os, pathlib
+          publish = pathlib.Path(os.environ["RUNNER_TEMP"]) / "publish"
+          expected = {
+              "into-md-windows-x86_64.zip",
+              "into-md-linux-x86_64.zip",
+              "into-md-linux-arm64.zip",
+              "into-md-macos-arm64.zip",
+              "official.media.whisper-x86_64-pc-windows-msvc.imp",
+              "official.media.whisper-x86_64-unknown-linux-gnu.imp",
+              "official.media.whisper-aarch64-unknown-linux-gnu.imp",
+              "official.media.whisper-aarch64-apple-darwin.imp",
+              "into-markdown-skill.zip",
+              f"into-markdown-{os.environ['RELEASE_TAG']}-audit.zip",
+          }
+          actual = {path.name for path in publish.iterdir() if path.is_file()}
+          if actual != expected:
+              raise SystemExit(
+                  f"unexpected final release set: missing={sorted(expected - actual)}, "
+                  f"extra={sorted(actual - expected)}"
+              )
+          PY
       - name: Create or update draft release
         env:
           GH_TOKEN: ${{ github.token }}

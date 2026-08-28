@@ -6,12 +6,21 @@ import argparse
 import os
 import pathlib
 import shutil
+import sys
 import tarfile
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from common import ReleaseError, authority, sha256
+
+_TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(_TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_ROOT))
+
+from release_asset import ReleaseAssetError, validate_acquisition_item  # noqa: E402
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 ALLOWED_HOSTS = {
     "cdn-lfs-us-1.hf.co",
@@ -32,10 +41,25 @@ def acquire(cache: pathlib.Path, selected: set[str] | None = None) -> None:
     for item in authority()["downloads"]:
         if selected is not None and item["id"] not in selected:
             continue
-        destination = cache / item["id"]
+        identity = item["id"]
+        try:
+            local_asset = validate_acquisition_item(
+                identity, item, repository_root=ROOT
+            )
+        except ReleaseAssetError as error:
+            raise ReleaseError(str(error)) from error
+        destination = cache / identity
         if destination.is_file() and validate(destination, item):
             continue
         temporary = destination.with_suffix(".download")
+        temporary.unlink(missing_ok=True)
+        if local_asset is not None:
+            copy_local(local_asset, temporary)
+            if not validate(temporary, item):
+                temporary.unlink(missing_ok=True)
+                raise ReleaseError(f"{identity} local asset differs from authority")
+            os.replace(temporary, destination)
+            continue
         urls = [item["url"], *item.get("mirror_urls", [])]
         for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
             temporary.unlink(missing_ok=True)
@@ -73,6 +97,10 @@ def acquire(cache: pathlib.Path, selected: set[str] | None = None) -> None:
                 raise ReleaseError(f"{item['id']} download hash disagrees with authority")
             os.replace(temporary, destination)
             break
+
+
+def copy_local(source: pathlib.Path, temporary: pathlib.Path) -> None:
+    shutil.copyfile(source, temporary)
 
 
 def validate(path: pathlib.Path, item: dict) -> bool:

@@ -29,12 +29,35 @@ py_library(
     data = [
         "authority.json",
         "//:Cargo.toml",
+        "//third_party/runtime-assets:models",
     ],
     imports = ["."],
     deps = [
         "//tools/macos-release:library",
+        "//tools:release_asset",
         "//tools/skill-release:library",
     ],
+)
+
+py_library(
+    name = "acquire_library",
+    srcs = [
+        "acquire.py",
+        "common.py",
+    ],
+    data = [
+        "authority.json",
+        "//third_party/runtime-assets:models",
+    ],
+    imports = ["."],
+    deps = ["//tools:release_asset"],
+)
+
+py_test(
+    name = "acquire_test",
+    srcs = ["test_acquire.py"],
+    main = "test_acquire.py",
+    deps = [":acquire_library"],
 )
 
 py_test(
