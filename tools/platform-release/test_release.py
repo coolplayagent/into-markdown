@@ -46,6 +46,29 @@ class PlatformReleaseTests(unittest.TestCase):
         for relative, expected in value["workspace_manifest_sha256"].items():
             self.assertEqual(expected, canonical_digest(ROOT / relative), relative)
 
+        whisper_sys = tomllib.loads(
+            (ROOT / "third_party/whisper-rs-0.16.0/sys/Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )["package"]
+        self.assertEqual(whisper_sys["license"], "Unlicense")
+        self.assertFalse(whisper_sys["publish"])
+
+    def test_all_platforms_preserve_vendored_whisper_sys_source_and_licenses(self) -> None:
+        required = [
+            'component["id"] == "cargo:whisper-rs-sys@0.15.0"',
+            '"cargo/whisper-rs-sys-0.15.0-vendored.zip"',
+            '"whisper-rs-sys-Unlicense.txt"',
+            '"whisper.cpp-MIT.txt"',
+        ]
+        for relative in [
+            "tools/platform-release/release.py",
+            "tools/macos-release/release.py",
+        ]:
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            for marker in required:
+                self.assertIn(marker, source, f"{relative} lacks {marker}")
+
     def test_web_release_spdx_binds_the_production_app(self) -> None:
         value = json.loads(
             (ROOT / "third_party/licenses/npm-release.spdx.json").read_text(

@@ -41,6 +41,7 @@ description = "Rust bindings for whisper.cpp (FFI bindings)"
 documentation = "https://docs.rs/whisper-rs-sys"
 readme = false
 license = "Unlicense"
+publish = false
 repository = "https://codeberg.org/tazz4843/whisper-rs"
 
 [features]
