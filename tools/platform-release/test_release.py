@@ -41,6 +41,24 @@ class PlatformReleaseTests(unittest.TestCase):
         for relative, expected in value["workspace_manifest_sha256"].items():
             self.assertEqual(expected, canonical_digest(ROOT / relative), relative)
 
+    def test_web_release_spdx_binds_the_production_app(self) -> None:
+        value = json.loads(
+            (ROOT / "third_party/licenses/npm-release.spdx.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(len(value["files"]), 1)
+        entry = value["files"][0]
+        relative = entry["fileName"].removeprefix("./")
+        app = ROOT / relative
+        self.assertTrue(app.is_file(), relative)
+        expected = next(
+            item["checksumValue"]
+            for item in entry["checksums"]
+            if item["algorithm"] == "SHA256"
+        )
+        self.assertEqual(expected, hashlib.sha256(app.read_bytes()).hexdigest())
+
     def test_release_version_matches_workspace_and_bazel_module(self) -> None:
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(VERSION, workspace["workspace"]["package"]["version"])
