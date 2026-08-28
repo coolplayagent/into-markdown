@@ -254,7 +254,7 @@
     "//third_party/licenses:downloads.bzl%downloads": {
       "general": {
         "bzlTransitiveDigest": "t6QlQV7bpuIjUHpTKN3xhRus/pi+nYIXvdv9PB+Vr1c=",
-        "usagesDigest": "ns9olP6mb7WMUgTP+uc2zeQ2SZkpC2Neyf4PLIJViqs=",
+        "usagesDigest": "6uDVNRv8zQvD6ozqykxOu/mGuCHsw5fmuXCyk/4crLc=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
           "FILE:@@//third_party/licenses/downloads.json 8b3b5301ae0b22f0821931428dfabe32e95d4d3f35898b539f7f12141d2d2574",
@@ -943,7 +943,7 @@
     "@@rules_rust+//crate_universe:extensions.bzl%crate": {
       "general": {
         "bzlTransitiveDigest": "lHgk/Tqb1in9+GUwaa3F863uwS2eCxyXpaZNMMT6hOY=",
-        "usagesDigest": "LVIlGFb1uSHu4A+3dhrnp4pFUosdEepKwaP8Rmylghs=",
+        "usagesDigest": "2DeLNBk/UfHR1gxB4EP+LXZx9hTXeNX9X5DR1Ner/q4=",
         "recordedInputs": [
           "ENV:CARGO_BAZEL_DEBUG \\0",
           "ENV:CARGO_BAZEL_GENERATOR_SHA256 \\0",
@@ -965,8 +965,8 @@
           "REPO_MAPPING:rules_rust+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
-          "FILE:@@//Cargo.lock ea8f04c73feb9d7e2dbe4bafa63eee4c9ebe247d1f4dbbf590f2d05e756d1684",
-          "FILE:@@//Cargo.toml 1ca14594a163cd3f5613f464fe94e6332549f1b376b58e540733145c06dd891a",
+          "FILE:@@//Cargo.lock 91b36212fef6e23398ef31d6ddf409d974ed5548ce8aaef912b93a378ed2ff79",
+          "FILE:@@//Cargo.toml f1a8babfaf1243d9f70f9df34c1bc3b9cfa9f0fceae764716520fcf2b92389ca",
           "FILE:@@//apps/cli/Cargo.toml aaa68a1458ec9bb63b3abde07db79174dc3e0ac578c1c82767f7b0d322efff88",
           "FILE:@@//crates/api/Cargo.toml fe0a95f3c11da60ec76b75ec5f17e94bd10be2eed365100def297010f493cc9d",
           "FILE:@@//crates/ai/Cargo.toml adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
