@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 import pathlib
+import os
 import sys
+import tempfile
 import unittest
 
 from common import ReleaseError, run
 
 
 class CommonTests(unittest.TestCase):
+    def test_streaming_mode_preserves_captured_stdout(self) -> None:
+        previous = os.environ.get("INTO_MD_RELEASE_STREAM_LOGS")
+        os.environ["INTO_MD_RELEASE_STREAM_LOGS"] = "1"
+        try:
+            output = run(
+                [sys.executable, "-c", "print('machine-readable-result')"],
+                cwd=pathlib.Path(tempfile.gettempdir()),
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("INTO_MD_RELEASE_STREAM_LOGS", None)
+            else:
+                os.environ["INTO_MD_RELEASE_STREAM_LOGS"] = previous
+        self.assertEqual(output.strip(), "machine-readable-result")
+
     def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
         source = pathlib.Path(__file__).with_name("release.py").read_text(
             encoding="utf-8"
