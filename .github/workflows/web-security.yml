@@ -1,35 +1,7 @@
 name: Local Web security boundary
 
 on:
-  pull_request:
-    paths:
-      - "apps/cli/**"
-      - "web/console/**"
-      - "docs/ui.md"
-      - "docs/security.md"
-      - "docs/testing.md"
-      - "docs/web-security-threat-model.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/web-security.yml"
-  push:
-    branches: [main]
-    paths:
-      - "apps/cli/**"
-      - "web/console/**"
-      - "docs/ui.md"
-      - "docs/security.md"
-      - "docs/testing.md"
-      - "docs/web-security-threat-model.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/web-security.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

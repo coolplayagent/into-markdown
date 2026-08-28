@@ -1,27 +1,6 @@
 name: WASI runtime four-platform gate
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/wasi-runtime.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/core/**"
-      - "crates/plugin-wasi/**"
-      - "third_party/licenses/**"
-      - "third_party/wasmtime/**"
-      - "tools/license-check/**"
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/wasi-runtime.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/core/**"
-      - "crates/plugin-wasi/**"
-      - "third_party/licenses/**"
-      - "third_party/wasmtime/**"
-      - "tools/license-check/**"
   workflow_dispatch:
 
 permissions:

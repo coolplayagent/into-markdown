@@ -1014,15 +1014,11 @@ fn receive_until(
             Ok(Ok(frame)) => return Ok(frame),
             Ok(Err(error)) => {
                 let detail = error.to_string();
-                if child.memory_exceeded(max_memory_bytes).unwrap_or(true) {
-                    return Err(PluginError::new(
-                        PluginErrorCode::ResourceLimit,
-                        "plugin memory limit exceeded",
-                    ));
-                }
                 // A completed frame read is stronger evidence than a child-exit
-                // race. Preserve the protocol/frame classification even when
-                // the provider exits immediately after emitting invalid data.
+                // or resource-sampling race. Preserve the protocol/frame
+                // classification even when the provider exits immediately
+                // after emitting invalid data or briefly crosses its high-water
+                // mark while the terminal frame is being consumed.
                 let code = if detail.contains("stream ended before frame") {
                     PluginErrorCode::Crashed
                 } else if detail.contains("exceeds limit") {

@@ -488,19 +488,22 @@ jobs:
           python -c "import hashlib,pathlib; p=pathlib.Path(r'${{ runner.temp }}')/'spdx_tools-0.8.3-py3-none-any.whl'; assert hashlib.sha256(p.read_bytes()).hexdigest() == '638fd9bd8be61901316eb6d063574e16d5403a1870073ec4d9241426a997501a'"
           python -m pip install "${{ runner.temp }}/spdx_tools-0.8.3-py3-none-any.whl"
           python -c "import pathlib,subprocess; [subprocess.run(['pyspdxtools','-i',str(p)],check=True) for p in pathlib.Path(r'${{ runner.temp }}/release-metadata').glob('*.spdx.json')]"
+      - name: Stage portable modular release artifact
+        run: >-
+          python tools/stage_release_artifact.py
+          --core-artifact "${{ runner.temp }}/${{ matrix.archive }}"
+          --plugins "${{ runner.temp }}/published-plugins"
+          --metadata "${{ runner.temp }}/release-metadata"
+          --platform-audit "${{ runner.temp }}/platform-audit.json"
+          --installed-smoke "${{ runner.temp }}/installed-smoke.json"
+          --platform-acceptance "${{ runner.temp }}/platform-acceptance.json"
+          --signing-policy "${{ runner.temp }}/${{ matrix.target }}-signing-policy.json"
+          --output release-upload
+          ${{ inputs.signing_mode == 'signed' && '--require-core-signature' || '' }}
       - uses: actions/upload-artifact@v4
         with:
           name: modular-${{ matrix.target }}
-          path: |
-            ${{ runner.temp }}/${{ matrix.archive }}
-            ${{ runner.temp }}/${{ matrix.archive }}.sha256
-            ${{ runner.temp }}/${{ matrix.archive }}.asc
-            ${{ runner.temp }}/published-plugins/*
-            ${{ runner.temp }}/release-metadata/*
-            ${{ runner.temp }}/platform-audit.json
-            ${{ runner.temp }}/installed-smoke.json
-            ${{ runner.temp }}/platform-acceptance.json
-            ${{ runner.temp }}/${{ matrix.target }}-signing-policy.json
+          path: release-upload
           if-no-files-found: error
       - name: Remove Windows signing credentials
         if: always() && runner.os == 'Windows'
@@ -558,5 +561,5 @@ jobs:
             gh release create "$RELEASE_TAG" --draft --target "${{ github.sha }}" \
               --title "$title" --notes "$notes"
           fi
-          gh release edit "$RELEASE_TAG" --title "$title" --notes "$notes"
+          gh release edit "$RELEASE_TAG" --target "${{ github.sha }}" --title "$title" --notes "$notes"
           gh release upload "$RELEASE_TAG" "$publish"/* --clobber

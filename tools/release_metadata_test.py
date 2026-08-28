@@ -20,6 +20,9 @@ SPEC.loader.exec_module(release_metadata)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_default_release_metadata_version_is_the_first_public_release(self) -> None:
+        self.assertEqual(release_metadata.project_version(), "0.0.1")
+
     def test_linux_cxx_execution_uses_a_portable_projection_identity(self) -> None:
         self.assertEqual(release_metadata.build_tool_execution_name("c++"), "cxx")
         self.assertEqual(release_metadata.build_tool_execution_name("cc"), "cc")

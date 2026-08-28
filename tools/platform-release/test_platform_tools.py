@@ -23,12 +23,39 @@ from audit import (
     run,
     safe_zip_extract,
 )
-from platform_acceptance import capability_map, repairable_payload_files, tree_hash
+from platform_acceptance import (
+    capability_map,
+    repairable_payload_files,
+    resolve_package,
+    tree_hash,
+)
 
 WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 class PlatformToolTests(unittest.TestCase):
+    def test_acceptance_resolves_internal_or_public_plugin_name_without_ambiguity(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            internal = root / "official.ocr.ppocrv6.imp"
+            public = root / "official.ocr.ppocrv6-x86_64-pc-windows-msvc.imp"
+            internal.write_bytes(b"internal")
+            self.assertEqual(
+                resolve_package(root, "official.ocr.ppocrv6", "x86_64-pc-windows-msvc"),
+                internal.resolve(),
+            )
+            internal.unlink()
+            public.write_bytes(b"public")
+            self.assertEqual(
+                resolve_package(root, "official.ocr.ppocrv6", "x86_64-pc-windows-msvc"),
+                public.resolve(),
+            )
+            internal.write_bytes(b"ambiguous")
+            with self.assertRaisesRegex(RuntimeError, "exactly one"):
+                resolve_package(root, "official.ocr.ppocrv6", "x86_64-pc-windows-msvc")
+            with self.assertRaisesRegex(RuntimeError, "bounded"):
+                resolve_package(root, "official.ocr.ppocrv6", "../windows")
+
     def test_platform_audit_rejects_unknown_signing_mode_before_io(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported Windows signing mode"):
             run(

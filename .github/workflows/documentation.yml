@@ -1,11 +1,6 @@
 name: Documentation contract
 
 on:
-  pull_request:
-    paths: ["README*.md", "CONTRIBUTING*.md", "docs/**", "apps/cli/src/**", "crates/converters/src/core_catalog.rs", "tools/docs-check/**", ".github/workflows/documentation.yml"]
-  push:
-    branches: [main]
-    paths: ["README*.md", "CONTRIBUTING*.md", "docs/**", "apps/cli/src/**", "crates/converters/src/core_catalog.rs", "tools/docs-check/**", ".github/workflows/documentation.yml"]
   workflow_dispatch:
 
 permissions:

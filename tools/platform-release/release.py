@@ -12,6 +12,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import tomllib
 import zipfile
 
 from acquire import acquire
@@ -33,7 +34,9 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release
 from skill_release import CORE_RELATIVE as AGENT_SKILL_RELATIVE  # noqa: E402
 from skill_release import materialize as materialize_agent_skill  # noqa: E402
 
-VERSION = "0.0.0"
+VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"][
+    "package"
+]["version"]
 CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = [
     "onnxruntime-cpu",

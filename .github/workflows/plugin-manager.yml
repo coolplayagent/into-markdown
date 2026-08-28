@@ -1,34 +1,7 @@
 name: plugin-manager
 
 on:
-  pull_request:
-    paths:
-      - "crates/plugin-manager/**"
-      - "crates/http-transport/**"
-      - "crates/process-plugin/**"
-      - "crates/plugin-wasi/**"
-      - "apps/cli/**"
-      - "web/console/**"
-      - "docs/ui.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "third_party/licenses/**"
-      - "tools/license-check/**"
-      - ".github/workflows/plugin-manager.yml"
-  push:
-    paths:
-      - "crates/plugin-manager/**"
-      - "crates/http-transport/**"
-      - "crates/process-plugin/**"
-      - "crates/plugin-wasi/**"
-      - "apps/cli/**"
-      - "web/console/**"
-      - "docs/ui.md"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "third_party/licenses/**"
-      - "tools/license-check/**"
-      - ".github/workflows/plugin-manager.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

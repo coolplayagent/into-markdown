@@ -26,7 +26,10 @@ py_library(
         "common.py",
         "release.py",
     ],
-    data = ["authority.json"],
+    data = [
+        "authority.json",
+        "//:Cargo.toml",
+    ],
     imports = ["."],
     deps = [
         "//tools/macos-release:library",
@@ -38,6 +41,8 @@ py_test(
     name = "release_test",
     srcs = ["test_release.py"],
     data = [
+        "//:Cargo.toml",
+        "//:MODULE.bazel",
         "//:.github/workflows/native-release-gates.yml",
         "//:.github/workflows/platform-modular-release.yml",
         "//tools/installed-smoke:rust_consumer_source",

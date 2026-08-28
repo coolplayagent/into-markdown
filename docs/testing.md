@@ -1,5 +1,17 @@
 # 测试策略
 
+## PR 快速门禁与发布门禁
+
+普通 PR 固定只运行 `PR fast gate` 的四个并行检查：Linux Core/发布权威、Windows
+安装器/进程沙箱、macOS 安装器/进程沙箱，以及生产 Web/文档 smoke。每个检查有 15 分钟
+硬超时，目标墙钟为 10 分钟以内；同一 PR 的新提交会取消旧的快速门禁。PR 选择 Cargo
+作为 Rust 快速验证权威，不再在同一个提交中用 Cargo 与 Bazel 重复构建相同目标。
+
+四平台 Cargo/Bazel 全矩阵、WASI、语义质量、Web 安全压力和工具链拒绝矩阵仍保留为可手动
+触发的独立 workflow；Linux/Windows 与 macOS 正式发布 workflow 会在受保护的 main/tag
+上执行真实原生构建、安装、审计和 installed smoke。快速门禁用于尽早给出可操作错误，
+不能替代正式发布证据。
+
 ## 可执行文档契约
 
 `bazel test //tools/docs-check:docs_check_test` 从构建出的真实 `into-md` 递归发现公共命令，
