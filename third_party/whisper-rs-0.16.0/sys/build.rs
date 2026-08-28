@@ -295,6 +295,15 @@ fn main() {
         }
     }
 
+    if runtime_dispatch {
+        // GNUInstallDirs selects lib64 on some x86_64 distributions (including
+        // the EL8 release authority), while Cargo's native link search and the
+        // portable runtime staging contract use <prefix>/lib. Apply this after
+        // forwarded CMake variables so the reviewed layout cannot be changed by
+        // an ambient CMAKE_INSTALL_LIBDIR.
+        config.define("CMAKE_INSTALL_LIBDIR", "lib");
+    }
+
     if cfg!(not(feature = "openmp")) {
         config.define("GGML_OPENMP", "OFF");
     }

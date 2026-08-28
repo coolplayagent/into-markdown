@@ -1809,8 +1809,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "b43df56b404ad1456b7ed33b223083a14d3072a9ca04fe2dcb90db4bb01cf2d7";
-    const TREE_SHA256: &str = "e4ecfd6e940aac27d4f2f5d2cff2b436b6429d3a8d3d98ac8ae000b233232a47";
+        "b1394e767280cfd68605e11353d76a6bd2b0134c192f80d7d7dbe4fb582a4e10";
+    const TREE_SHA256: &str = "4a836ad69e36ca9061cf14887294bf44ec8037cb29e28a60cfa24bee1b0f95a0";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
@@ -1842,7 +1842,7 @@ fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
         || authority.whisper_rs_sys_crates_io_sha256
             != "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
         || authority.patch_scope
-            != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0, enable authenticated x86 CPU runtime dispatch, and report dynamic-mode SystemInfo through OS-aware x86 feature detection"
+            != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0, enable authenticated x86 CPU runtime dispatch with a deterministic shared-library install directory, and report dynamic-mode SystemInfo through OS-aware x86 feature detection"
         || authority.tree_digest_algorithm
             != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
         || authority.tree_sha256 != TREE_SHA256
