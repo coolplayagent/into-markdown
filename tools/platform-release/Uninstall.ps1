@@ -3,7 +3,22 @@ param(
   [string]$CommandDirectory = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 )
 $ErrorActionPreference = "Stop"
-if (-not [IO.Path]::IsPathFullyQualified($Prefix) -or -not [IO.Path]::IsPathFullyQualified($CommandDirectory)) {
+$securityModule = Join-Path $PSHOME "Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1"
+if (-not (Test-Path -LiteralPath $securityModule -PathType Leaf)) {
+  throw "installEnvironmentUnsupported: Windows PowerShell security module is unavailable"
+}
+Import-Module -Name $securityModule -ErrorAction Stop
+
+function Test-FullyQualifiedPath([string]$Path) {
+  if ([String]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) { return $false }
+  if ($Path -match '^[A-Za-z]:[^\\/]' -or ($Path.StartsWith('\') -and -not $Path.StartsWith('\\'))) {
+    return $false
+  }
+  try { [void][IO.Path]::GetFullPath($Path) } catch { return $false }
+  return $true
+}
+
+if (-not (Test-FullyQualifiedPath $Prefix) -or -not (Test-FullyQualifiedPath $CommandDirectory)) {
   throw "installPathUnsafe: installation paths must be absolute"
 }
 $Prefix = [IO.Path]::GetFullPath($Prefix)
@@ -42,5 +57,6 @@ if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
   if ($identity -notmatch '^[0-9a-f]{64}$') { throw "installAuthorityInvalid: installed version authority is invalid" }
   $helper = Join-Path $Prefix "versions\$identity\bin\into-md-installer.exe"
 }
-& $helper uninstall $Prefix $CommandDirectory
+& $helper uninstall $Prefix $CommandDirectory | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "uninstallFailed: native uninstall transaction failed" }
+Write-Output "Into Markdown was removed successfully."

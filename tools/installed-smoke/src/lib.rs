@@ -50,7 +50,7 @@ fn run_with_executor(
     executor: &dyn process::Executor,
 ) -> Result<SmokeReport, String> {
     let started = Instant::now();
-    let validated = request.validate()?;
+    let mut validated = request.validate()?;
     let run_root = validated.create_run_root()?;
     let mut cases = Vec::new();
     let mut capabilities = Vec::new();
@@ -60,6 +60,10 @@ fn run_with_executor(
         if projection.target != platform.target() {
             return Err("archive manifest target differs from the executing platform".into());
         }
+        validated.rust_library = rust_consumer::extract_installed_library(
+            &validated.rust_library,
+            &run_root.join("rust"),
+        )?;
         match agent_skill::verify(&validated.install_root) {
             Ok(()) => cases.push(CaseResult::passed(
                 "agent-skill",
@@ -284,8 +288,30 @@ mod tests {
     struct FakeExecutor(Mutex<VecDeque<CommandOutput>>);
 
     impl Executor for FakeExecutor {
-        fn execute(&self, _: CommandSpec<'_>) -> Result<CommandOutput, String> {
-            self.0.lock().unwrap().pop_front().ok_or_else(|| "unexpected command".into())
+        fn execute(&self, spec: CommandSpec<'_>) -> Result<CommandOutput, String> {
+            let mut output = self
+                .0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "unexpected command".to_owned())?;
+            if output.stdout == b"dynamic-installed-metadata" {
+                let manifest_index = spec
+                    .arguments
+                    .iter()
+                    .position(|argument| argument == "--manifest-path")
+                    .ok_or_else(|| "metadata command omits manifest path".to_owned())?;
+                let manifest = spec
+                    .arguments
+                    .get(manifest_index + 1)
+                    .ok_or_else(|| "metadata command omits manifest value".to_owned())?;
+                output.stdout = serde_json::to_vec(&serde_json::json!({
+                    "packages": [{"id":"root","name":"into-markdown","source":null,"manifest_path":manifest}],
+                    "resolve":{"root":"root","nodes":[{"id":"root","dependencies":[]}]}
+                }))
+                .unwrap();
+            }
+            Ok(output)
         }
     }
 
@@ -295,9 +321,9 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let install = temporary.path().join("install");
         let fixtures = install.join("share/into-markdown/smoke/fixtures");
-        let rust = install.join("lib/into-markdown-rust");
+        let rust = install.join("lib/into-markdown-rust.zip");
         fs::create_dir_all(install.join("bin")).unwrap();
-        fs::create_dir_all(rust.join("vendor/example")).unwrap();
+        fs::create_dir_all(rust.parent().unwrap()).unwrap();
         for fixture in [
             "text/normal.txt",
             "docx/normal.docx",
@@ -323,10 +349,20 @@ mod tests {
         }
         let binary = install.join("bin/into-md");
         fs::write(&binary, b"installed binary").unwrap();
-        fs::write(rust.join("Cargo.toml"), b"[package]\nname='into-markdown'\nversion='0.0.0'\n")
-            .unwrap();
-        fs::write(rust.join("Cargo.lock"), b"version = 4\n").unwrap();
-        fs::write(rust.join("vendor/example/checksum"), b"vendor").unwrap();
+        {
+            use std::io::Write as _;
+            let mut archive = zip::ZipWriter::new(fs::File::create(&rust).unwrap());
+            let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+            for (name, contents) in [
+                ("Cargo.toml", b"[package]\nname='into-markdown'\nversion='0.0.0'\n".as_slice()),
+                ("Cargo.lock", b"version = 4\n".as_slice()),
+                ("vendor/example/checksum", b"vendor".as_slice()),
+            ] {
+                archive.start_file(name, options).unwrap();
+                archive.write_all(contents).unwrap();
+            }
+            archive.finish().unwrap();
+        }
         agent_skill::create_fixture(&install);
         let authority = into_markdown_converters::core_catalog_authority().unwrap();
         fs::write(
@@ -367,7 +403,7 @@ mod tests {
         let request = SmokeRequest {
             install_root: install,
             into_md: binary.clone(),
-            rust_library: rust.clone(),
+            rust_library: rust.with_extension(""),
             manifest,
             audio_fixture,
             fixtures,
@@ -402,11 +438,6 @@ mod tests {
         let image =
             br#"{"code":"componentUnavailable","exitCode":9,"message":"run into-md setup ocr"}"#
                 .to_vec();
-        let metadata = serde_json::to_vec(&serde_json::json!({
-            "packages": [{"id":"root","name":"into-markdown","source":null,"manifest_path":rust.join("Cargo.toml")}],
-            "resolve":{"root":"root","nodes":[{"id":"root","dependencies":[]}]}
-        }))
-        .unwrap();
         let mut outputs =
             VecDeque::from([ok(b"into-md 0.0.0\n".to_vec()), ok(formats), ok(doctor)]);
         outputs.extend(markdown.into_iter().map(ok));
@@ -426,7 +457,7 @@ mod tests {
             br#"{"assets":[{"mediaType":"image/png","dataBase64":"AA=="}]}"#.to_vec()
         ));
         outputs.push_back(ok(b"## Sheet: Corpus\n\n|  |  |  |\n| --- | --- | --- |\n| Corpus | `=TRUE [cached: true]` | 42\\.5 |\n| 2024\\-01\\-01 00:00:00 | `=SUM(1,2) [cached: 3]` | `=cmd` |\n".to_vec()));
-        outputs.push_back(ok(metadata));
+        outputs.push_back(ok(b"dynamic-installed-metadata".to_vec()));
         outputs.push_back(ok(vec![]));
         outputs.push_back(ok(vec![]));
         outputs.push_back(ok(
@@ -443,8 +474,8 @@ mod tests {
         assert!(completed.cleanup.clean);
         assert!(fs::read_dir(temp_root).unwrap().next().is_none());
         assert!(report.is_file());
-        fs::remove_file(rust.join("Cargo.toml")).unwrap();
-        assert!(missing_library_request.validate().unwrap_err().contains("Rust library must"));
+        fs::remove_file(rust).unwrap();
+        assert!(missing_library_request.validate().unwrap_err().contains("Rust library archive"));
     }
 
     fn ok(stdout: Vec<u8>) -> CommandOutput {

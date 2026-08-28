@@ -118,4 +118,6 @@ ln -s "$prefix/current/bin/into-md" "$command_link"
 mv -h "$command_link" "$bin_dir/into-md"
 
 case :$PATH: in *:"$bin_dir":*) ;; *) printf '%s\n' "into-md install: add $bin_dir to PATH";; esac
+"$destination/bin/into-md" setup ocr >/dev/null \
+  || fail "built-in OCR could not be initialized; rerun install to repair"
 printf '%s\n' "$destination"

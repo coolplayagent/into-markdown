@@ -60,6 +60,34 @@ class PlatformReleaseTests(unittest.TestCase):
             2,
         )
 
+    def test_windows_core_archive_contains_clickable_install_entries(self) -> None:
+        source = (ROOT / "tools/platform-release/release.py").read_text(
+            encoding="utf-8"
+        )
+        for name in ["Install.ps1", "Uninstall.ps1", "Install.cmd", "Uninstall.cmd"]:
+            self.assertIn(
+                f'copy_file(pathlib.Path(__file__).with_name("{name}"), output / "{name}")',
+                source,
+            )
+        install_ps1 = (ROOT / "tools/platform-release/Install.ps1").read_text(
+            encoding="utf-8"
+        )
+        install_cmd = (ROOT / "tools/platform-release/Install.cmd").read_text(
+            encoding="utf-8"
+        )
+        uninstall_ps1 = (ROOT / "tools/platform-release/Uninstall.ps1").read_text(
+            encoding="utf-8"
+        )
+        uninstall_cmd = (ROOT / "tools/platform-release/Uninstall.cmd").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("into-md-installer.exe\" install", install_ps1)
+        self.assertIn("| Out-Null", install_ps1)
+        self.assertEqual(install_cmd.count("Installation completed successfully."), 0)
+        self.assertIn("$helper uninstall", uninstall_ps1)
+        self.assertIn("| Out-Null", uninstall_ps1)
+        self.assertEqual(uninstall_cmd.count("Into Markdown was removed successfully."), 0)
+
     def test_native_release_reuses_fixed_toolchain_cargo_dependencies(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
@@ -175,6 +203,35 @@ class PlatformReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "filename"):
             published_plugin_file("nested/package.imp", "x86_64-pc-windows-msvc")
 
+    def test_release_metadata_receives_bundled_ocr_and_public_speech(self) -> None:
+        workflows = [
+            (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+                encoding="utf-8"
+            ),
+            (ROOT / ".github/workflows/macos-arm64-release.yml").read_text(
+                encoding="utf-8"
+            ),
+        ]
+        for workflow in workflows:
+            self.assertIn('metadata_plugins=', workflow)
+            self.assertIn('official.ocr.ppocrv6.imp" "$metadata_plugins/', workflow)
+            self.assertIn('official.media.whisper-', workflow)
+            self.assertIn('--plugins "$metadata_plugins"', workflow)
+
+    def test_release_page_exposes_only_four_core_four_speech_and_one_evidence(self) -> None:
+        platform = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        macos = (ROOT / ".github/workflows/macos-arm64-release.yml").read_text(
+            encoding="utf-8"
+        )
+        for workflow in [platform, macos]:
+            self.assertIn("release-evidence.zip", workflow)
+            self.assertNotIn('gh release upload "$RELEASE_TAG" "$evidence"', workflow)
+            self.assertNotIn('gh release upload "$RELEASE_TAG" *.sha256', workflow)
+        self.assertIn('test "$(find "$publish" -type f | wc -l)" -eq 6', platform)
+        self.assertIn('test "$(find "$publish" -type f | wc -l)" -eq 2', macos)
+
     def test_release_projection_excludes_non_distributed_source_records(self) -> None:
         manifest = {
             "components": [
@@ -186,6 +243,9 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(distributed_source_ids(manifest), ["cargo:runtime@1"])
 
     def test_release_matrix_has_exact_core_and_plugin_resource_partition(self) -> None:
+        # The outer archive projection declares only direct Core files. The
+        # release metadata pass opens the exact bundled OCR IMP and folds its
+        # verified component closure into the final Core SBOM.
         self.assertEqual(CORE_COMPONENTS, ["pdfium"])
         for target in authority()["targets"]:
             groups = {
@@ -193,12 +253,8 @@ class PlatformReleaseTests(unittest.TestCase):
                 "ocr": set(OCR_COMPONENTS),
                 "speech": set(SPEECH_COMPONENTS),
             }
-            for plugin, components in groups.items():
-                if plugin != "core":
-                    self.assertFalse(
-                        groups["core"] & components,
-                        f"{target}: Core and {plugin} duplicate release resources",
-                    )
+            self.assertFalse(groups["core"] & groups["ocr"])
+            self.assertFalse(groups["core"] & groups["speech"])
             self.assertIn("onnxruntime-cpu", groups["ocr"])
             self.assertIn("onnxruntime-cpu", groups["speech"])
 

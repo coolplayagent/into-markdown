@@ -29,6 +29,47 @@ pub(crate) fn load(
     runtime_root: &str,
     errors: &mut Vec<String>,
 ) -> Vec<Component> {
+    load_selected_roots(
+        repository,
+        lock_text,
+        approvals,
+        normal_runtime,
+        &[runtime_root],
+        runtime_root == "into-markdown-cli",
+        errors,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn load_for_roots(
+    repository: &std::path::Path,
+    lock_text: &str,
+    approvals: &str,
+    normal_runtime: &str,
+    runtime_roots: &[&str],
+    errors: &mut Vec<String>,
+) -> Vec<Component> {
+    load_selected_roots(
+        repository,
+        lock_text,
+        approvals,
+        normal_runtime,
+        runtime_roots,
+        runtime_roots.contains(&"into-markdown-cli"),
+        errors,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_selected_roots(
+    repository: &std::path::Path,
+    lock_text: &str,
+    approvals: &str,
+    normal_runtime: &str,
+    runtime_roots: &[&str],
+    include_reviewed_core: bool,
+    errors: &mut Vec<String>,
+) -> Vec<Component> {
     let lock: CargoLock = match toml::from_str(lock_text) {
         Ok(lock) => lock,
         Err(error) => {
@@ -67,11 +108,19 @@ pub(crate) fn load(
         normal_runtime,
         errors,
     );
-    let required = if runtime_root == "into-markdown-cli" {
+    let mut required = if include_reviewed_core {
         reviewed_core
     } else {
-        crate::cargo_runtime::packages_for_root(repository, runtime_root, errors)
+        crate::cargo_runtime::RuntimeClosure { registry: BTreeSet::new(), local: BTreeMap::new() }
     };
+    for runtime_root in runtime_roots {
+        if *runtime_root == "into-markdown-cli" {
+            continue;
+        }
+        let additional = crate::cargo_runtime::packages_for_root(repository, runtime_root, errors);
+        required.registry.extend(additional.registry);
+        required.local.extend(additional.local);
+    }
     let locked: BTreeSet<_> = lock
         .package
         .iter()

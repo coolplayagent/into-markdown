@@ -16,7 +16,8 @@ pub struct SmokeRequest {
     /// Installed into-md executable.
     #[arg(long)]
     pub into_md: PathBuf,
-    /// Installed standalone Rust package root, including Cargo.toml and vendor/.
+    /// Installed standalone Rust package archive. A legacy path without `.zip`
+    /// resolves to its adjacent `.zip` file.
     #[arg(long)]
     pub rust_library: PathBuf,
     /// #60 archive projection manifest.
@@ -83,13 +84,18 @@ impl SmokeRequest {
         }
         let install_root = canonical_directory(&self.install_root, "install root")?;
         let into_md = canonical_file(&self.into_md, "into-md")?;
-        let rust_library = canonical_directory(&self.rust_library, "Rust library")?;
+        let rust_archive_input = if self.rust_library.is_file() {
+            self.rust_library.clone()
+        } else {
+            self.rust_library.with_extension("zip")
+        };
+        let rust_library = canonical_file(&rust_archive_input, "Rust library archive")?;
         let manifest = canonical_file(&self.manifest, "archive manifest")?;
         let fixtures = canonical_directory(&self.fixtures, "fixture root")?;
         let audio_fixture = canonical_file(&self.audio_fixture, "audio fixture")?;
         for (path, label) in [
             (&into_md, "into-md"),
-            (&rust_library, "Rust library"),
+            (&rust_library, "Rust library archive"),
             (&manifest, "archive manifest"),
             (&fixtures, "fixture root"),
         ] {
@@ -119,15 +125,6 @@ impl SmokeRequest {
         let report = absolute_output(&self.report)?;
         if report.starts_with(&install_root) || report.starts_with(&temp_root) {
             return Err("report must be outside the installation and temporary root".into());
-        }
-        if !rust_library.join("Cargo.toml").is_file()
-            || !rust_library.join("Cargo.lock").is_file()
-            || !rust_library.join("vendor").is_dir()
-        {
-            return Err(
-                "Rust library must contain Cargo.toml, Cargo.lock, and an offline vendor directory"
-                    .into(),
-            );
         }
         Ok(ValidatedRequest {
             install_root,

@@ -37,13 +37,13 @@ from skill_release import materialize as materialize_agent_skill  # noqa: E402
 VERSION = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))["workspace"][
     "package"
 ]["version"]
-CORE_COMPONENTS = ["pdfium"]
 OCR_COMPONENTS = [
     "onnxruntime-cpu",
     "ppocrv6-tiny-detector-onnx-model",
     "ppocrv6-tiny-recognizer-character-table",
     "ppocrv6-tiny-recognizer-onnx-model",
 ]
+CORE_COMPONENTS = ["pdfium"]
 SPEECH_COMPONENTS = [
     "ffmpeg",
     "onnxruntime-cpu",
@@ -104,6 +104,17 @@ def source_revision() -> str:
 
 def distributed_source_ids(manifest: dict) -> list[str]:
     return [item["id"] for item in manifest["components"] if item["distributed"]]
+
+
+def bundled_ocr_components(package: pathlib.Path) -> set[str]:
+    try:
+        with zipfile.ZipFile(package) as archive:
+            sources = json.loads(archive.read("SOURCES.json"))
+    except (OSError, KeyError, ValueError, zipfile.BadZipFile, json.JSONDecodeError) as error:
+        raise ReleaseError(f"bundled OCR source authority is invalid: {error}") from error
+    if sources.get("artifact") != "official.ocr.ppocrv6":
+        raise ReleaseError("bundled OCR source authority has the wrong artifact identity")
+    return set(distributed_source_ids(sources))
 
 
 def authenticode_files(paths: list[pathlib.Path], thumbprint: str | None) -> None:
@@ -567,6 +578,13 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
     for component in sbom["components"]:
         if not component["id"].startswith("cargo:"):
             continue
+        if component["id"] == "cargo:whisper-rs@0.16.0":
+            path = destination / "whisper-rs-Unlicense.txt"
+            copy_file(ROOT / "third_party/whisper-rs-0.16.0/LICENSE", path)
+            result.append(
+                material(path, output, "license-text", [component["id"]], ["Unlicense"], True)
+            )
+            continue
         checksum = next(item["digest"] for item in component["integrity"] if item["subject"].startswith("crates.io archive"))
         archive_name = component["id"].removeprefix("cargo:").replace("@", "-") + ".crate"
         candidates = list(pathlib.Path.home().glob(f".cargo/registry/cache/*/{archive_name}"))
@@ -583,9 +601,12 @@ def core_projection(output: pathlib.Path, materials: list[dict], target: str, pd
     selected = distributed_source_ids(
         json.loads((output / "SOURCES.json").read_text(encoding="utf-8"))
     )
-    # PDFium is the only standalone native Core file. All other selected
-    # runtime components are linked or compiled into the product executable.
-    embedded = [item for item in selected if item != "pdfium"]
+    bundled_path = "share/into-markdown/plugins/packages/official.ocr.ppocrv6.imp"
+    bundled = bundled_ocr_components(output / bundled_path)
+    bundled_cargo = {item for item in bundled if item.startswith("cargo:")}
+    if not bundled_cargo.issubset(selected):
+        raise ReleaseError("bundled OCR Rust closure is absent from the Core authority")
+    embedded = [item for item in selected if item != "pdfium" and item not in bundled_cargo]
     files = []
     for path in regular_files(output):
         relative = path.relative_to(output).as_posix()
@@ -606,11 +627,13 @@ def core_projection(output: pathlib.Path, materials: list[dict], target: str, pd
             entry["component_id"] = owner
         if relative in {"bin/into-md", "bin/into-md.exe"}:
             entry["embedded_components"] = embedded
+        elif relative == bundled_path:
+            entry["embedded_components"] = sorted(bundled_cargo)
         files.append(entry)
     return {"schema_version": 1, "target": target, "version": VERSION, "source_revision": source_revision(), "components": selected, "files": files, "license_materials": materials, "native_transformations": native_transformations}
 
 
-def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, records: dict, signer: tuple[str, str], base_url: str, target: str, target_config: dict, windows_signing_thumbprint: str | None) -> pathlib.Path:
+def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathlib.Path, packages: pathlib.Path, records: dict, signer: tuple[str, str], base_url: str, target: str, target_config: dict, windows_signing_thumbprint: str | None) -> pathlib.Path:
     if output.exists():
         raise ReleaseError("Core output directory already exists")
     output.mkdir(parents=True)
@@ -623,6 +646,8 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     else:
         copy_file(pathlib.Path(__file__).with_name("Install.ps1"), output / "Install.ps1")
         copy_file(pathlib.Path(__file__).with_name("Uninstall.ps1"), output / "Uninstall.ps1")
+        copy_file(pathlib.Path(__file__).with_name("Install.cmd"), output / "Install.cmd")
+        copy_file(pathlib.Path(__file__).with_name("Uninstall.cmd"), output / "Uninstall.cmd")
     extract_member(cache / "pdfium", target_config["pdfium"]["member"], output / target_config["pdfium"]["destination"])
     native_transformations = []
     fixture_root = output / "share/into-markdown/smoke/fixtures"
@@ -631,15 +656,23 @@ def assemble_core(output: pathlib.Path, cache: pathlib.Path, release_bin: pathli
     for name in ["normal.doc", "normal.ppt", "normal.xls"]:
         copy_file(ROOT / "tools/macos-release/fixtures" / name, fixture_root / "legacy" / name)
     materialize_agent_skill(output / AGENT_SKILL_RELATIVE)
-    materialize_rust(output / "lib/into-markdown-rust")
+    materialize_rust(output / "lib/into-markdown-rust.zip")
     copy_file(ROOT / "LICENSE", output / "LICENSE")
-    catalog = {
-        identity: {
-            "url": f"{base_url.rstrip('/')}/{published_plugin_file(record['file'], target)}",
+    bundled_ocr = packages / "official.ocr.ppocrv6.imp"
+    copy_file(
+        bundled_ocr,
+        output / "share/into-markdown/plugins/packages/official.ocr.ppocrv6.imp",
+    )
+    catalog = {}
+    for identity, record in records.items():
+        catalog[identity] = {
             "sha256": record["sha256"],
+            **(
+                {"file": "official.ocr.ppocrv6.imp"}
+                if identity == "official.ocr.ppocrv6"
+                else {"url": f"{base_url.rstrip('/')}/{published_plugin_file(record['file'], target)}"}
+            ),
         }
-        for identity, record in records.items()
-    }
     write_json(output / "share/into-markdown/plugins/official-publisher.json", {"schemaVersion": 2, "signingKeyId": signer[0], "signingKeySha256": signer[1], "packages": catalog})
     projection = release_bin / executable_name("release-projection", target)
     write_release_inputs(output, projection, target)
@@ -697,7 +730,7 @@ def main() -> None:
         release_bin = build(arguments.target, arguments.build_root.resolve())
     acquire(arguments.cache.resolve(), downloads_for(config))
     records, signer = package_plugins(arguments.plugins_output.resolve(), arguments.cache.resolve(), release_bin, arguments.ffmpeg_artifacts.resolve(), arguments.plugin_signing_key.resolve(), arguments.target, config, arguments.windows_signing_thumbprint)
-    stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, records, signer, arguments.plugin_base_url, arguments.target, config, arguments.windows_signing_thumbprint)
+    stage = assemble_core(arguments.output.resolve(), arguments.cache.resolve(), release_bin, arguments.plugins_output.resolve(), records, signer, arguments.plugin_base_url, arguments.target, config, arguments.windows_signing_thumbprint)
     create_archive(stage, arguments.archive.resolve(), config, authority()["sourceDateEpoch"])
     arguments.archive.with_name(arguments.archive.name + ".sha256").write_text(f"{sha256(arguments.archive)}  {arguments.archive.name}\n", encoding="ascii")
     print(f"{sha256(arguments.archive)}  {arguments.archive}")

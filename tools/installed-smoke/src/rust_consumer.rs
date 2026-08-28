@@ -5,8 +5,99 @@ use crate::report::CaseResult;
 use crate::request::ValidatedRequest;
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::fs;
+use std::collections::BTreeSet;
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
+
+const ARCHIVE_ENTRY_LIMIT: usize = 25_000;
+const ARCHIVE_TOTAL_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+
+pub(crate) fn extract_installed_library(
+    archive: &Path,
+    destination: &Path,
+) -> Result<PathBuf, String> {
+    fs::create_dir(destination)
+        .map_err(|error| format!("cannot create Rust package extraction root: {error}"))?;
+    let input = File::open(archive)
+        .map_err(|error| format!("cannot open installed Rust package archive: {error}"))?;
+    let mut zip = zip::ZipArchive::new(input)
+        .map_err(|error| format!("installed Rust package archive is invalid: {error}"))?;
+    if zip.len() > ARCHIVE_ENTRY_LIMIT {
+        return Err("installed Rust package archive exceeds its entry budget".into());
+    }
+    let mut names = BTreeSet::new();
+    let mut total = 0_u64;
+    for index in 0..zip.len() {
+        let mut entry = zip
+            .by_index(index)
+            .map_err(|error| format!("cannot inspect installed Rust package member: {error}"))?;
+        let raw_name = std::str::from_utf8(entry.name_raw())
+            .map_err(|_| "installed Rust package member name is not UTF-8".to_owned())?;
+        let relative = safe_archive_member(raw_name)?;
+        let collision_key = raw_name.to_lowercase();
+        if !names.insert(collision_key) {
+            return Err("installed Rust package archive contains a duplicate member".into());
+        }
+        if let Some(mode) = entry.unix_mode() {
+            let kind = mode & 0o170_000;
+            let allowed = kind == 0 || kind == 0o100_000 || (kind == 0o040_000 && entry.is_dir());
+            if !allowed {
+                return Err(
+                    "installed Rust package archive contains a link or non-regular member".into()
+                );
+            }
+        }
+        total = total
+            .checked_add(entry.size())
+            .ok_or_else(|| "installed Rust package archive byte count overflowed".to_owned())?;
+        if total > ARCHIVE_TOTAL_LIMIT {
+            return Err("installed Rust package archive exceeds its byte budget".into());
+        }
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output)
+                .map_err(|error| format!("cannot create Rust package directory: {error}"))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create Rust package directory: {error}"))?;
+        }
+        let mut target = File::create_new(&output)
+            .map_err(|error| format!("cannot create Rust package member: {error}"))?;
+        io::copy(&mut entry, &mut target)
+            .map_err(|error| format!("cannot extract Rust package member: {error}"))?;
+    }
+    for required in ["Cargo.toml", "Cargo.lock"] {
+        if !destination.join(required).is_file() {
+            return Err(format!("installed Rust package archive omits {required}"));
+        }
+    }
+    if !destination.join("vendor").is_dir() {
+        return Err("installed Rust package archive omits the offline vendor directory".into());
+    }
+    destination
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve extracted Rust package: {error}"))
+}
+
+fn safe_archive_member(name: &str) -> Result<&Path, String> {
+    if name.is_empty()
+        || name.contains('\\')
+        || name.contains('\0')
+        || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("installed Rust package archive contains an unsafe member path".into());
+    }
+    let path = Path::new(name);
+    if path.is_absolute()
+        || path.components().any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err("installed Rust package archive contains an unsafe member path".into());
+    }
+    Ok(path)
+}
 
 #[derive(Deserialize)]
 struct CargoMetadata {
@@ -685,6 +776,7 @@ fn main() {
 mod tests {
     use super::*;
     use crate::process::CommandOutput;
+    use std::io::Write as _;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -725,6 +817,47 @@ mod tests {
         snapshot_installed_library(&source, &destination).unwrap();
         assert_eq!(fs::read(destination.join("Cargo.toml")).unwrap(), b"manifest\n");
         assert_eq!(fs::read(destination.join("vendor/pkg/file")).unwrap(), b"vendored\n");
+    }
+
+    fn write_archive(path: &Path, members: &[(&str, &[u8])]) {
+        let mut archive = zip::ZipWriter::new(File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default().unix_permissions(0o644);
+        for (name, contents) in members {
+            archive.start_file(*name, options).unwrap();
+            archive.write_all(contents).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn installed_library_archive_extracts_only_inside_owned_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let archive = temporary.path().join("rust.zip");
+        write_archive(
+            &archive,
+            &[
+                ("Cargo.toml", b"manifest"),
+                ("Cargo.lock", b"lock"),
+                ("vendor/example/source.rs", b"source"),
+            ],
+        );
+        let extracted =
+            extract_installed_library(&archive, &temporary.path().join("owned")).unwrap();
+        assert_eq!(fs::read(extracted.join("vendor/example/source.rs")).unwrap(), b"source");
+    }
+
+    #[test]
+    fn installed_library_archive_rejects_traversal_and_duplicates() {
+        for (name, members) in [
+            ("traversal", vec![("../escape", b"bad".as_slice()), ("Cargo.toml", b"manifest")]),
+            ("duplicate", vec![("Cargo.toml", b"one".as_slice()), ("cargo.toml", b"two")]),
+        ] {
+            let temporary = tempfile::tempdir().unwrap();
+            let archive = temporary.path().join(format!("{name}.zip"));
+            write_archive(&archive, &members);
+            assert!(extract_installed_library(&archive, &temporary.path().join("owned")).is_err());
+            assert!(!temporary.path().join("escape").exists());
+        }
     }
 
     #[test]

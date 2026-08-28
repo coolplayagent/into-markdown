@@ -10,4 +10,9 @@ case $prefix:$bin_dir in /*:/*) ;; *) fail "installPathUnsafe: installation path
 case $prefix:$bin_dir in *'/../'*|*/..|*'/./'*|*/.) fail "installPathUnsafe: installation paths must be normalized";; esac
 "$distribution/bin/archive-check" "$distribution" || fail "installIntegrityFailed: distribution integrity check failed"
 archive_id=$(sha256sum "$distribution/archive-manifest.json" | awk '{print $1}')
-exec "$distribution/bin/into-md-installer" install "$distribution" "$prefix" "$bin_dir" "$archive_id"
+installed=$("$distribution/bin/into-md-installer" install "$distribution" "$prefix" "$bin_dir" "$archive_id") \
+  || fail "installFailed: native installation transaction failed"
+installed=$(printf '%s\n' "$installed" | tail -n 1)
+"$installed/bin/into-md" setup ocr >/dev/null \
+  || fail "installFailed: built-in OCR could not be initialized; rerun install to repair"
+printf '%s\n' "$installed"

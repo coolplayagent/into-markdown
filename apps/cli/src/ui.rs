@@ -19,6 +19,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use futures::StreamExt as _;
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 use std::convert::Infallible;
 use std::future::{Future, IntoFuture as _};
 use std::io::Write;
@@ -172,6 +173,13 @@ struct StagedPluginPackageDto {
     source: String,
     filename: String,
     byte_len: u64,
+    sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    official_plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signing_key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signing_key_sha256: Option<String>,
 }
 
 impl CapabilityCache {
@@ -1206,6 +1214,7 @@ async fn stage_plugin_package(State(state): State<AppState>, request: Request) -
     let mut shutdown = state.shutdown.clone();
     let mut stream = request.into_body().into_data_stream();
     let mut byte_len = 0_u64;
+    let mut digest = Sha256::new();
     loop {
         let chunk = tokio::select! {
             changed = shutdown.changed() => {
@@ -1234,6 +1243,7 @@ async fn stage_plugin_package(State(state): State<AppState>, request: Request) -
             let _ = std::fs::remove_file(&partial_path);
             return rejection(StatusCode::PAYLOAD_TOO_LARGE, "pluginPackageTooLarge");
         }
+        digest.update(&chunk);
         let write = tokio::task::spawn_blocking(move || {
             file.write_all(&chunk)?;
             Ok::<_, std::io::Error>(file)
@@ -1267,7 +1277,25 @@ async fn stage_plugin_package(State(state): State<AppState>, request: Request) -
         return rejection(StatusCode::INTERNAL_SERVER_ERROR, "pluginPackageStageFailed");
     }
     let source = format!("staged:{id}");
-    Json(StagedPluginPackageDto { schema_version: 1, source, filename, byte_len }).into_response()
+    let sha256 = format!("{:x}", digest.finalize());
+    let authority = match crate::app::official_package_authority_for_sha256(&sha256) {
+        Ok(authority) => authority,
+        Err(error) => {
+            let _ = std::fs::remove_file(&final_path);
+            return admin_error(&error);
+        }
+    };
+    Json(StagedPluginPackageDto {
+        schema_version: 1,
+        source,
+        filename,
+        byte_len,
+        sha256,
+        official_plugin_id: authority.as_ref().map(|value| value.plugin_id.clone()),
+        signing_key_id: authority.as_ref().map(|value| value.signing_key_id.clone()),
+        signing_key_sha256: authority.map(|value| value.signing_key_sha256),
+    })
+    .into_response()
 }
 
 async fn admin_snapshot(State(state): State<AdminState>, uri: Uri) -> Response {
