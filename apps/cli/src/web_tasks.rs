@@ -415,6 +415,8 @@ struct Shared {
     #[cfg(test)]
     conversion_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
     #[cfg(test)]
+    publication_commit_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
+    #[cfg(test)]
     conversion_entries: AtomicUsize,
     #[cfg(test)]
     pre_acquire_gate: Mutex<Option<Arc<std::sync::Barrier>>>,
@@ -1189,6 +1191,8 @@ impl WebTaskBackend {
             #[cfg(test)]
             conversion_gate: Mutex::new(None),
             #[cfg(test)]
+            publication_commit_gate: Mutex::new(None),
+            #[cfg(test)]
             conversion_entries: AtomicUsize::new(0),
             #[cfg(test)]
             pre_acquire_gate: Mutex::new(None),
@@ -1728,7 +1732,7 @@ impl WebTaskBackend {
         Ok(self.owner.shared.events.subscribe(&record, cursor))
     }
 
-    /// Cancel queued/running work. Terminal tasks are left unchanged.
+    /// Cancel active work. Terminal tasks are left unchanged.
     pub fn cancel(&self, id: &TaskId) -> Result<TaskRecord, WebTaskError> {
         let token = {
             let queue = lock(&self.owner.shared.queue);
@@ -1738,17 +1742,7 @@ impl WebTaskBackend {
             token.cancel();
             self.owner.shared.disk_changed.notify_all();
         }
-        let record = lock(&self.owner.shared.task_store).get(id)?.ok_or(WebTaskError::NotFound)?;
-        if record.status == TaskStatus::Pending {
-            terminal_transition(
-                &self.owner.shared,
-                id,
-                TaskStatus::Cancelled,
-                DiagnosticCode::Cancelled,
-            )?;
-            return lock(&self.owner.shared.task_store).get(id)?.ok_or(WebTaskError::NotFound);
-        }
-        Ok(record)
+        cancel_durable_record(&self.owner.shared, id)
     }
 
     /// Resolve an opaque artifact ID to an authenticated regular file.
@@ -2779,6 +2773,14 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
         }
         let artifacts = publish_result(shared, &job.id, &converted, &job.cancellation)?;
         if promote_published_success(shared, &job.id, &artifacts).is_err() {
+            let cancellation_won = lock(&shared.task_store)
+                .get(&job.id)
+                .ok()
+                .flatten()
+                .is_some_and(|record| record.status == TaskStatus::Cancelled);
+            if cancellation_won && quarantine_invalid_published(shared, &job.id).is_ok() {
+                return Ok(());
+            }
             // The immutable publication won, but persistence cannot currently
             // record it. Stop admission rather than silently leaving this
             // process healthy with a permanently Converted task.
@@ -3086,6 +3088,13 @@ fn publish_result_named(
         stage.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         crash_hook("after-stage-fsync");
         cancelled(cancellation)?;
+        #[cfg(test)]
+        if let Some(gate) = { lock(&shared.publication_commit_gate).clone() } {
+            // Pause after the final cancellation check so the regression test
+            // deterministically exercises cancellation racing the publication CAS.
+            gate.wait();
+            gate.wait();
+        }
         Ok::<_, WebTaskError>((entries, staged_bytes))
     })();
     let (entries, staged_bytes) = match staged {
@@ -3767,7 +3776,40 @@ fn remove_private_files(directory: &SafeDir) -> Result<(), WebTaskError> {
 }
 
 fn cancel_durable(shared: &Shared, id: &TaskId) -> Result<(), WebTaskError> {
-    terminal_transition(shared, id, TaskStatus::Cancelled, DiagnosticCode::Cancelled)
+    cancel_durable_record(shared, id).map(drop)
+}
+
+fn cancel_durable_record(shared: &Shared, id: &TaskId) -> Result<TaskRecord, WebTaskError> {
+    {
+        let record = lock(&shared.task_store).get(id)?.ok_or(WebTaskError::NotFound)?;
+        if is_terminal(record.status) {
+            return Ok(record);
+        }
+    }
+    let (record, changed) = metadata_store_mutation(shared, STORE_MUTATION_RESERVATION, |store| {
+        let record = store.get(id)?.ok_or(WebTaskError::NotFound)?;
+        if matches!(
+            record.status,
+            TaskStatus::Pending | TaskStatus::Running | TaskStatus::Converted
+        ) {
+            let changed = store.transition(
+                id,
+                TaskTransition {
+                    expected: record.status,
+                    next: TaskStatus::Cancelled,
+                    progress_millionths: record.progress_millionths,
+                    diagnostics: vec![TaskDiagnostic { code: DiagnosticCode::Cancelled }],
+                    artifacts: Vec::new(),
+                },
+            )?;
+            return Ok((changed, true));
+        }
+        Ok((record, false))
+    })?;
+    if changed {
+        shared.events.publish_snapshot(&record);
+    }
+    Ok(record)
 }
 
 fn terminal_transition(
@@ -5423,8 +5465,8 @@ mod tests {
             std::thread::yield_now();
         }
 
-        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Running);
-        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Running);
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Cancelled);
+        assert_eq!(backend.cancel(&task.id).unwrap().status, TaskStatus::Cancelled);
         *lock(&backend.owner.shared.conversion_gate) = None;
         gate.wait();
         assert_eq!(wait_terminal(&backend, &task.id).status, TaskStatus::Cancelled);
@@ -6946,6 +6988,46 @@ mod tests {
                 other => panic!("invalid cancellation race outcome: {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn cancellation_at_publication_commit_boundary_wins_the_status_cas() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("backend");
+        let backend = WebTaskBackend::open(&root).unwrap();
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        *lock(&backend.owner.shared.publication_commit_gate) = Some(Arc::clone(&gate));
+
+        let mut upload = backend.begin_upload("cancel-at-publish.txt", None).unwrap();
+        upload.write_chunk(b"cancel at the publication boundary").unwrap();
+        let task = upload.finish().unwrap();
+
+        // The worker has staged and fsynced every artifact and has already
+        // passed its final token check, but has not renamed the publication or
+        // attempted the Converted -> Succeeded CAS.
+        gate.wait();
+        let cancelled = backend.cancel(&task.id).unwrap();
+        assert_eq!(cancelled.status, TaskStatus::Cancelled);
+        assert!(cancelled.artifacts.is_empty());
+        *lock(&backend.owner.shared.publication_commit_gate) = None;
+        gate.wait();
+
+        let published = root.join("objects").join(task.id.as_str()).join("published");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let worker_finished =
+                !lock(&backend.owner.shared.queue).cancellations.contains_key(&task.id);
+            if worker_finished && !published.exists() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "cancelled publication did not settle");
+            std::thread::yield_now();
+        }
+
+        let terminal = backend.get(&task.id).unwrap();
+        assert_eq!(terminal.status, TaskStatus::Cancelled);
+        assert!(terminal.artifacts.is_empty());
+        assert!(!lock(&backend.owner.shared.queue).stopped);
     }
 
     #[test]
