@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.util
+import inspect
 import json
 import pathlib
 import re
@@ -68,6 +71,30 @@ class PlatformReleaseTests(unittest.TestCase):
             source = (ROOT / relative).read_text(encoding="utf-8")
             for marker in required:
                 self.assertIn(marker, source, f"{relative} lacks {marker}")
+
+    def test_macos_archive_calls_match_the_real_writer_signature(self) -> None:
+        archive_path = ROOT / "tools/macos-release/archive.py"
+        spec = importlib.util.spec_from_file_location("macos_release_archive", archive_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(
+            tuple(inspect.signature(module.create).parameters),
+            ("source", "destination", "epoch"),
+        )
+
+        release_path = ROOT / "tools/macos-release/release.py"
+        tree = ast.parse(release_path.read_text(encoding="utf-8"), release_path.as_posix())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "create_archive"
+        ]
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertTrue(all(len(call.args) == 3 and not call.keywords for call in calls))
 
     def test_web_release_spdx_binds_the_production_app(self) -> None:
         value = json.loads(
