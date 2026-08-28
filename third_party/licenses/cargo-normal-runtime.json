@@ -27,7 +27,7 @@
     "crates/task-store/Cargo.toml": "546dd1855e8f1b73b5099c8b06ff7cc87f67775a772d0a74c1c64c927bb5c027",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
     "third_party/whisper-rs-0.16.0/Cargo.toml": "c8ef220097ed0878191082d402fcc218527d580fec079b2842c74ce80b51a5eb",
-    "third_party/whisper-rs-0.16.0/sys/Cargo.toml": "aea7de32e8941a8521e96d3a663051ce24444760cdeb626ce0d78b56b3fbca29",
+    "third_party/whisper-rs-0.16.0/sys/Cargo.toml": "096ffc71c00c9e8aeb7d94f38797696d03a0b333c6ae04e0f9eccdb5403a3d07",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
     "tools/installed-smoke/Cargo.toml": "57704e4d306df0137ba0e802c228a74ce0ec8f6946c1b295f0b2e6ef6065faf2",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"

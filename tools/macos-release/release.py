@@ -421,6 +421,49 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
                 )
             )
             continue
+        if component["id"] == "cargo:whisper-rs-sys@0.15.0":
+            source = destination / "cargo/whisper-rs-sys-0.15.0-vendored.zip"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            create_archive(
+                ROOT / "third_party/whisper-rs-0.16.0/sys",
+                source,
+                {"archive": "zip"},
+                0,
+            )
+            result.append(
+                material(
+                    source,
+                    output,
+                    "upstream-source-archive",
+                    [component["id"]],
+                    [],
+                )
+            )
+            for name, license_source, spdx in (
+                (
+                    "whisper-rs-sys-Unlicense.txt",
+                    "third_party/whisper-rs-0.16.0/LICENSE",
+                    "Unlicense",
+                ),
+                (
+                    "whisper.cpp-MIT.txt",
+                    "third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE",
+                    "MIT",
+                ),
+            ):
+                path = destination / name
+                copy_file(ROOT / license_source, path, 0o644)
+                result.append(
+                    material(
+                        path,
+                        output,
+                        "license-text",
+                        [component["id"]],
+                        [spdx],
+                        contents=True,
+                    )
+                )
+            continue
         checksum = next(evidence["digest"] for evidence in component["integrity"] if evidence["subject"].startswith("crates.io archive"))
         name_version = component["id"].removeprefix("cargo:").replace("@", "-") + ".crate"
         candidates = list(pathlib.Path.home().glob(f".cargo/registry/cache/*/{name_version}"))

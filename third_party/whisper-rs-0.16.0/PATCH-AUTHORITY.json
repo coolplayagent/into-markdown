@@ -8,5 +8,5 @@
   "whisper_rs_sys_crates_io_sha256": "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f",
   "patch_scope": "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0 and enable authenticated x86 CPU runtime dispatch",
   "tree_digest_algorithm": "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)",
-  "tree_sha256": "e094daf91520d5712d80acb19627683d62b59bec389b85ff026c98966d152815"
+  "tree_sha256": "9f955d9b7e2e5788c3a476ba5c8116c53aba1f0107c6c564200ab27707f77141"
 }

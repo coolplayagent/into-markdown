@@ -1809,8 +1809,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "affa9144146fc0462c3c7c06ebda9310e86153d66d74e8db0a7608400987ec28";
-    const TREE_SHA256: &str = "e094daf91520d5712d80acb19627683d62b59bec389b85ff026c98966d152815";
+        "448e39039682dbfaffc2905e8442172b3cf4c421f73dbed5566a5fec46ab6702";
+    const TREE_SHA256: &str = "9f955d9b7e2e5788c3a476ba5c8116c53aba1f0107c6c564200ab27707f77141";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
