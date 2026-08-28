@@ -705,7 +705,9 @@ fn reject_existing_ancestor_links(path: &Path) -> Result<(), String> {
     let mut cursor = Some(path);
     while let Some(candidate) = cursor {
         match fs::symlink_metadata(candidate) {
-            Ok(metadata) if is_reparse_or_link(&metadata) => {
+            Ok(metadata)
+                if is_reparse_or_link(&metadata) && !is_trusted_macos_system_alias(candidate) =>
+            {
                 return Err("runtime path contains a link or reparse point".into());
             }
             Ok(_) => {}
@@ -715,6 +717,19 @@ fn reject_existing_ancestor_links(path: &Path) -> Result<(), String> {
         cursor = candidate.parent();
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn is_trusted_macos_system_alias(path: &Path) -> bool {
+    // macOS exposes /var as a root-owned compatibility symlink to /private/var.
+    // Temporary directories returned by the OS therefore necessarily traverse it.
+    path == Path::new("/var")
+        && fs::canonicalize(path).is_ok_and(|target| target == Path::new("/private/var"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_trusted_macos_system_alias(_path: &Path) -> bool {
+    false
 }
 
 fn reject_link(path: &Path) -> Result<(), String> {
