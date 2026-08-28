@@ -29,7 +29,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     environment: release
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       INTO_MD_RELEASE_STREAM_LOGS: '1'
     strategy:
@@ -40,18 +40,22 @@ jobs:
             runner: ubuntu-24.04
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: x86_64-unknown-linux-gnu
+            timeout_minutes: 30
           - label: Linux ARM64
             runner: ubuntu-24.04-arm
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: aarch64-unknown-linux-gnu
+            timeout_minutes: 30
           - label: Windows x86_64
             runner: windows-2025
             container: ''
             target: x86_64-pc-windows-msvc
+            timeout_minutes: 35
           - label: macOS Apple Silicon
             runner: macos-14
             container: ''
             target: aarch64-apple-darwin
+            timeout_minutes: 30
     steps:
       - name: Bootstrap fixed Linux container
         if: runner.os == 'Linux'
@@ -104,6 +108,10 @@ jobs:
           path: ${{ runner.temp }}/release-work/build
           key: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
           restore-keys: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/release-work/cache
+          key: release-native-inputs-v1-${{ matrix.target }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/macos-release/authority.json') }}
       - uses: actions/cache@v4
         id: ffmpeg-cache
         with:

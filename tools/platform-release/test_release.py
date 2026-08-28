@@ -12,15 +12,19 @@ import tempfile
 import tomllib
 import unittest
 import zipfile
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import release as release_module
 from common import ROOT, ReleaseError, authority, run, sha256
 from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
+    RELEASE_BUILD_PRODUCTS,
     SPEECH_COMPONENTS,
     VERSION,
+    WINDOWS_CORE_PREWARM_PRODUCT,
     create_archive,
     distributed_source_ids,
     published_plugin_file,
@@ -92,7 +96,11 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertNotIn("tools/platform-release/release.py", workflow)
         for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
             self.assertNotIn(forbidden, workflow)
-        self.assertIn("timeout-minutes: 30", workflow)
+        self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
+        self.assertEqual(workflow.count("timeout_minutes: 30"), 3)
+        self.assertEqual(workflow.count("timeout_minutes: 35"), 1)
+        windows = workflow.index("target: x86_64-pc-windows-msvc")
+        self.assertIn("timeout_minutes: 35", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
 
     def test_embedded_core_is_verified_without_an_installer_or_launcher(self) -> None:
@@ -146,6 +154,97 @@ class PlatformReleaseTests(unittest.TestCase):
             "${{ hashFiles('Cargo.lock') }}",
             workflow,
         )
+        self.assertIn("${{ runner.temp }}/release-work/cache", workflow)
+        self.assertIn(
+            "key: release-native-inputs-v1-${{ matrix.target }}-"
+            "${{ hashFiles('tools/platform-release/authority.json', "
+            "'tools/macos-release/authority.json') }}",
+            workflow,
+        )
+
+    def test_release_build_compiles_exact_helper_products_once(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            output = pathlib.Path(name)
+            commands = []
+
+            def fake_run(arguments, **_kwargs):
+                command = [str(value) for value in arguments]
+                commands.append(command)
+                if command[:2] == ["cargo", "build"]:
+                    release_bin = output / "release"
+                    release_bin.mkdir()
+                    for _, binary in [
+                        *RELEASE_BUILD_PRODUCTS,
+                        WINDOWS_CORE_PREWARM_PRODUCT,
+                    ]:
+                        (release_bin / release_module.executable_name(binary, "x86_64-pc-windows-msvc")).touch()
+                return ""
+
+            with mock.patch.object(release_module, "run", side_effect=fake_run):
+                self.assertEqual(
+                    release_module.build("x86_64-pc-windows-msvc", output),
+                    output / "release",
+                )
+            builds = [command for command in commands if command[:2] == ["cargo", "build"]]
+            self.assertEqual(len(builds), 1)
+            selections = [
+                builds[0][index : index + 4]
+                for index, value in enumerate(builds[0])
+                if value == "-p"
+            ]
+            self.assertEqual(
+                selections,
+                [
+                    ["-p", package, "--bin", binary]
+                    for package, binary in [
+                        *RELEASE_BUILD_PRODUCTS,
+                        WINDOWS_CORE_PREWARM_PRODUCT,
+                    ]
+                ],
+            )
+
+    def test_release_build_rejects_a_missing_helper_product(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            output = pathlib.Path(name)
+
+            def fake_run(arguments, **_kwargs):
+                command = [str(value) for value in arguments]
+                if command[:2] == ["cargo", "build"]:
+                    release_bin = output / "release"
+                    release_bin.mkdir()
+                    for _, binary in RELEASE_BUILD_PRODUCTS:
+                        (release_bin / release_module.executable_name(binary, "x86_64-pc-windows-msvc")).touch()
+                return ""
+
+            with mock.patch.object(release_module, "run", side_effect=fake_run):
+                with self.assertRaisesRegex(ReleaseError, "omitted required products"):
+                    release_module.build("x86_64-pc-windows-msvc", output)
+
+    def test_final_core_rebuild_uses_staged_embedded_runtime_feature(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            commands = []
+
+            def fake_run(arguments, **_kwargs):
+                commands.append([str(value) for value in arguments])
+                return ""
+
+            with mock.patch.object(release_module, "run", side_effect=fake_run):
+                result = release_module.build_embedded_core(
+                    "x86_64-pc-windows-msvc",
+                    root / "build",
+                    root / "pdfium",
+                    root / "ocr",
+                )
+            self.assertEqual(
+                result,
+                root / "build/release/into-md.exe",
+            )
+            self.assertEqual(len(commands), 1)
+            self.assertIn("into-markdown-cli", commands[0])
+            self.assertIn("into-md", commands[0])
+            feature = commands[0].index("--features")
+            self.assertEqual(commands[0][feature + 1], "embedded-runtime")
 
     def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
         source = (ROOT / "tools/platform-release/release.py").read_text(

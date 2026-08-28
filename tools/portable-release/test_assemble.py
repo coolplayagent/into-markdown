@@ -8,6 +8,7 @@ import pathlib
 import stat
 import struct
 import tempfile
+import threading
 import unittest
 import warnings
 import zipfile
@@ -22,6 +23,30 @@ SPEC.loader.exec_module(assemble)
 
 class PortableReleaseTests(unittest.TestCase):
     TARGET = "x86_64-unknown-linux-gnu"
+
+    class ConcurrentRelease:
+        def __init__(self, fail_build: bool = False, fail_acquire: bool = False):
+            self.barrier = threading.Barrier(2)
+            self.fail_build = fail_build
+            self.fail_acquire = fail_acquire
+            self.downloads = {"model": {"sha256": "0" * 64}}
+
+        def downloads_for(self, _config):
+            return self.downloads
+
+        def build(self, _target, output):
+            self.barrier.wait(timeout=2)
+            if self.fail_build:
+                raise RuntimeError("build failed")
+            return output / "release"
+
+        def acquire(self, cache, downloads):
+            self.barrier.wait(timeout=2)
+            if self.fail_acquire:
+                raise RuntimeError("acquire failed")
+            if downloads != self.downloads:
+                raise RuntimeError("download authority changed")
+            cache.mkdir(parents=True)
 
     def write_speech_package(
         self,
@@ -127,6 +152,39 @@ class PortableReleaseTests(unittest.TestCase):
             self.assertIn('"embedded-runtime"', authority)
             self.assertIn("INTO_MD_EMBEDDED_PDFIUM_ROOT", authority)
             self.assertIn("INTO_MD_EMBEDDED_OCR_ROOT", authority)
+
+    def test_platform_build_and_downloads_run_concurrently_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            release = self.ConcurrentRelease()
+            result = assemble.build_and_acquire(
+                release,
+                self.TARGET,
+                {},
+                root / "build",
+                root / "cache",
+            )
+            self.assertEqual(result, root / "build/release")
+            self.assertTrue((root / "cache").is_dir())
+            self.assertFalse((root / "release").exists())
+
+    def test_parallel_platform_input_failure_propagates_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            for release, failure in [
+                (self.ConcurrentRelease(fail_build=True), "build failed"),
+                (self.ConcurrentRelease(fail_acquire=True), "acquire failed"),
+            ]:
+                with self.subTest(failure=failure):
+                    with self.assertRaisesRegex(RuntimeError, failure):
+                        assemble.build_and_acquire(
+                            release,
+                            self.TARGET,
+                            {},
+                            root / "build",
+                            root / "cache",
+                        )
+                    self.assertFalse((root / "release").exists())
 
     def test_core_archive_has_one_direct_run_binary(self) -> None:
         with tempfile.TemporaryDirectory() as name:
