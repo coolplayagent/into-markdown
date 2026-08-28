@@ -121,6 +121,7 @@ jobs:
       - name: Build once and run browser plus documentation contracts
         run: |
           cargo build --locked -p into-markdown-cli --bin into-md -j2
+          node web/console/build.mjs "$RUNNER_TEMP/into-md-verified-assets" --verify web/console/dist
           corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
           INTO_MD_CLI="$GITHUB_WORKSPACE/target/debug/into-md" \
             corepack pnpm --filter @into-markdown/console exec playwright test \
