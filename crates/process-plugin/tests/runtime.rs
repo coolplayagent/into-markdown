@@ -27,6 +27,9 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let private_temp = harness.execute(b"private-temp", ExecutionOptions::default()).unwrap();
     assert_eq!(private_temp.result.markdown, "private-temp-ready");
 
+    let system_topology = harness.execute(b"system-topology", ExecutionOptions::default()).unwrap();
+    assert_eq!(system_topology.result.markdown, "system-topology-ready");
+
     let outside = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(outside.path(), b"host-secret").unwrap();
     let file = harness
@@ -315,7 +318,11 @@ impl Harness {
         let mut policy = RuntimePolicy {
             max_frame_bytes: 16 * 1024 * 1024,
             max_output_bytes: 8 * 1024 * 1024,
-            max_memory_bytes: 256 * 1024 * 1024,
+            // These tests exercise protocol and lifecycle classification, not a
+            // deliberately small memory budget. A debug test process can carry
+            // a larger fork-time resident high-water mark on Linux runners, so
+            // keep the fixture aligned with the production policy default.
+            max_memory_bytes: 512 * 1024 * 1024,
             handshake_timeout: Duration::from_secs(3),
             cancellation_grace: Duration::from_millis(50),
             ..RuntimePolicy::default()

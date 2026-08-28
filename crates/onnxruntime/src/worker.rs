@@ -14,6 +14,8 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -22,6 +24,8 @@ use tempfile::TempDir;
 const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(2);
+#[cfg(target_os = "linux")]
+const LINUX_PHYSICAL_MEMORY_EXIT_CODE: i32 = 71;
 
 pub(crate) struct WorkerClient {
     process: WorkerProcess,
@@ -194,8 +198,32 @@ impl WorkerClient {
                     return Ok(frame);
                 }
                 Ok(Err(())) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.terminate();
-                    return Err(resource_error("nativeWorkerMemory"));
+                    #[cfg(target_os = "linux")]
+                    {
+                        let mut memory_limit_exit = false;
+                        for _ in 0..100 {
+                            match self.process.child.try_wait() {
+                                Ok(Some(status)) => {
+                                    memory_limit_exit =
+                                        linux_worker_exit_is_memory_limit(status.code());
+                                    break;
+                                }
+                                Ok(None) => std::thread::sleep(POLL_INTERVAL),
+                                Err(_) => break,
+                            }
+                        }
+                        self.terminate();
+                        return if memory_limit_exit {
+                            Err(resource_error("nativeWorkerMemory"))
+                        } else {
+                            Err(ort_error("workerCrashed"))
+                        };
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        self.terminate();
+                        return Err(resource_error("nativeWorkerMemory"));
+                    }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if let Err(error) = context.checkpoint() {
@@ -226,6 +254,11 @@ impl WorkerClient {
     }
 }
 
+#[cfg(target_os = "linux")]
+const fn linux_worker_exit_is_memory_limit(code: Option<i32>) -> bool {
+    matches!(code, Some(LINUX_PHYSICAL_MEMORY_EXIT_CODE))
+}
+
 impl Drop for WorkerClient {
     fn drop(&mut self) {
         if !self.stopped {
@@ -244,6 +277,61 @@ struct WorkerProcess {
     physical_memory_limit: u64,
     #[cfg(windows)]
     _job: std::os::windows::io::OwnedHandle,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxPhysicalMemorySupervisor {
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxPhysicalMemorySupervisor {
+    fn start(limit: u64) -> Result<Self, ()> {
+        if limit == 0 {
+            return Err(());
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let thread = std::thread::Builder::new()
+            .name("onnx-memory-supervisor".into())
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                while !thread_stop.load(Ordering::Acquire) {
+                    if linux_peak_resident_bytes().is_none_or(|bytes| bytes > limit) {
+                        // SAFETY: a failed or exceeded physical-memory audit must terminate the
+                        // whole isolated worker immediately; `_exit` performs no Rust cleanup.
+                        unsafe { libc::_exit(71) };
+                    }
+                    std::thread::sleep(POLL_INTERVAL);
+                }
+            })
+            .map_err(|_| ())?;
+        Ok(Self { stop, thread: Some(thread) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxPhysicalMemorySupervisor {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_peak_resident_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: the output points to an exact `rusage` value and `RUSAGE_SELF`
+    // queries only this isolated process.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: successful `getrusage` initialized the output structure.
+    let kibibytes = u64::try_from(unsafe { usage.assume_init() }.ru_maxrss).ok()?;
+    kibibytes.checked_mul(1024)
 }
 
 impl WorkerProcess {
@@ -346,6 +434,10 @@ fn spawn_worker(
             .arg(limits.physical_memory.to_string())
             .current_dir(working_directory)
             .env_clear()
+            // ONNX Runtime 1.29 enables POSIX telemetry unless this documented opt-out is
+            // explicit. The isolated worker must never inspect host identifiers or attempt
+            // telemetry initialization; keep the otherwise-empty environment deterministic.
+            .env("ORT_DISABLE_TELEMETRY", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -420,6 +512,7 @@ fn spawn_worker_windows(
         .arg(physical_memory.to_string())
         .current_dir(working_directory)
         .env_clear()
+        .env("ORT_DISABLE_TELEMETRY", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -658,6 +751,8 @@ fn worker_entry_inner() -> Result<(), ()> {
     {
         return Err(());
     }
+    #[cfg(target_os = "linux")]
+    let _physical_memory_supervisor = LinuxPhysicalMemorySupervisor::start(physical_limit)?;
     let authority = authority().map_err(|_| ())?;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
@@ -898,6 +993,15 @@ mod tests {
         assert_eq!(align_physical_memory_limit(4_096, 4_096), Some(4_096));
         assert_eq!(align_physical_memory_limit(4_095, 4_096), None);
         assert_eq!(align_physical_memory_limit(4_096, 0), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_worker_reads_a_nonzero_kernel_physical_high_water_mark() {
+        assert!(linux_peak_resident_bytes().is_some_and(|bytes| bytes > 0));
+        assert!(linux_worker_exit_is_memory_limit(Some(71)));
+        assert!(!linux_worker_exit_is_memory_limit(Some(70)));
+        assert!(!linux_worker_exit_is_memory_limit(None));
     }
 
     #[cfg(windows)]

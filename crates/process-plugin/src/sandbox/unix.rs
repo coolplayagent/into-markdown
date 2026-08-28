@@ -9,7 +9,7 @@ pub(super) fn prepare(
     policy: &RuntimePolicy,
     directory: &Path,
 ) -> Result<(), PluginError> {
-    let memory = policy.max_memory_bytes;
+    let address_space = policy.max_address_space_bytes.unwrap_or(policy.max_memory_bytes);
     let file = policy.max_file_bytes;
     let open_files = policy.max_open_files;
     command.process_group(0);
@@ -42,7 +42,7 @@ pub(super) fn prepare(
     // macOS sandbox_init is the platform's process activation API and receives a prebuilt profile.
     unsafe {
         command.pre_exec(move || {
-            install_limits(memory, file, open_files)?;
+            install_limits(address_space, file, open_files)?;
             install_no_new_privileges()?;
             #[cfg(target_os = "linux")]
             {
@@ -57,9 +57,9 @@ pub(super) fn prepare(
     Ok(())
 }
 
-fn install_limits(_memory: u64, file: u64, open_files: u32) -> std::io::Result<()> {
+fn install_limits(_address_space: u64, file: u64, open_files: u32) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
-    set_limit(libc::RLIMIT_AS, _memory)?;
+    set_limit(libc::RLIMIT_AS, _address_space)?;
     #[cfg(target_os = "macos")]
     set_limit(libc::RLIMIT_AS, 2 * 1024 * 1024 * 1024 * 1024)?;
     set_limit(libc::RLIMIT_FSIZE, file)?;
@@ -188,7 +188,18 @@ mod linux {
             for root in read_only_roots {
                 add_path(&ruleset, root, READ)?;
             }
-            for path in ["/lib", "/lib64", "/usr/lib", "/usr/lib64", "/etc/ld.so.cache"] {
+            // Native inference libraries inspect only these kernel-exported CPU topology
+            // records when selecting a portable execution path. Keep the authority exact:
+            // granting all of /proc or /sys would expose unrelated host/process metadata.
+            for path in [
+                "/lib",
+                "/lib64",
+                "/usr/lib",
+                "/usr/lib64",
+                "/etc/ld.so.cache",
+                "/proc/cpuinfo",
+                "/sys/devices/system/cpu",
+            ] {
                 let path = Path::new(path);
                 if path.exists() {
                     let access = if path.is_dir() { READ } else { READ_FILE };

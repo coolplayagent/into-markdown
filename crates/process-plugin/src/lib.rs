@@ -35,6 +35,7 @@ const HASH_BUFFER_BYTES: u64 = 64 * 1024;
 const ABSOLUTE_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_ENTRIES: usize = 25_000;
+const ABSOLUTE_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024 * 1024;
 
 /// Stable process-plugin failure categories.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,8 +279,12 @@ pub struct RuntimePolicy {
     pub max_frame_bytes: u32,
     /// Maximum nested result JSON bytes.
     pub max_output_bytes: u64,
-    /// Child virtual-address/job memory ceiling.
+    /// Child physical/job memory ceiling.
     pub max_memory_bytes: u64,
+    /// Optional virtual-address ceiling when sparse native mappings require
+    /// more address space than the physical memory budget. `None` binds the
+    /// address-space ceiling to `max_memory_bytes`.
+    pub max_address_space_bytes: Option<u64>,
     /// Maximum size of a child-created file.
     pub max_file_bytes: u64,
     /// Maximum child file descriptors.
@@ -309,6 +314,7 @@ impl Default for RuntimePolicy {
             max_frame_bytes: 16 * 1024 * 1024,
             max_output_bytes: 12 * 1024 * 1024,
             max_memory_bytes: 512 * 1024 * 1024,
+            max_address_space_bytes: None,
             max_file_bytes: 64 * 1024 * 1024,
             max_open_files: 64,
             handshake_timeout: Duration::from_secs(5),
@@ -1135,6 +1141,9 @@ fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
         || policy.max_output_bytes == 0
         || policy.max_output_bytes > u64::from(policy.max_frame_bytes)
         || policy.max_memory_bytes < 32 * 1024 * 1024
+        || policy.max_address_space_bytes.is_some_and(|bytes| {
+            bytes < policy.max_memory_bytes || bytes > ABSOLUTE_ADDRESS_SPACE_BYTES
+        })
         || policy.max_file_bytes == 0
         || !(16..=4096).contains(&policy.max_open_files)
         || policy.handshake_timeout.is_zero()
@@ -1664,6 +1673,21 @@ mod tests {
             RuntimePolicy { request_timeout: Duration::from_hours(2), ..RuntimePolicy::default() };
         validate_policy(&policy).unwrap();
         policy.request_timeout += Duration::from_millis(1);
+        assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
+    }
+
+    #[test]
+    fn policy_keeps_physical_and_sparse_address_space_limits_ordered_and_finite() {
+        let physical = 512 * 1024 * 1024;
+        let mut policy = RuntimePolicy {
+            max_memory_bytes: physical,
+            max_address_space_bytes: Some(2 * 1024 * 1024 * 1024 * 1024),
+            ..RuntimePolicy::default()
+        };
+        validate_policy(&policy).unwrap();
+        policy.max_address_space_bytes = Some(physical - 1);
+        assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
+        policy.max_address_space_bytes = Some(ABSOLUTE_ADDRESS_SPACE_BYTES + 1);
         assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
     }
 

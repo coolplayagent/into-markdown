@@ -134,10 +134,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: native-target-cache
         with:
           path: ${{ runner.temp }}/build
-          key: native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          key: native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('crates/**/*.rs', 'tools/**/*.rs', 'third_party/onnxruntime/manifest.json') }}
+          restore-keys: |
+            native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
+            native-release-rust-1.97.1-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
@@ -216,6 +220,11 @@ jobs:
           --target ${{ matrix.target }}
           --build-root "${{ runner.temp }}/build"
           --build-only
+      - uses: actions/cache/save@v4
+        if: steps.native-target-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/build
+          key: ${{ steps.native-target-cache.outputs.cache-primary-key }}
       - name: Prepare Cargo plugin lifecycle fixture on Linux
         if: runner.os == 'Linux'
         shell: bash
