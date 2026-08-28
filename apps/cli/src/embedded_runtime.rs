@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const COMPLETE_MARKER: &str = ".complete";
 const MAX_CATALOG_BYTES: u64 = 64 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static MATERIALIZE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[derive(Debug)]
 pub(super) struct EmbeddedFile {
@@ -303,6 +304,12 @@ fn cache_runtime_root() -> Result<PathBuf, String> {
 }
 
 fn materialize_at(base: &Path, payload: Payload) -> Result<PathBuf, String> {
+    // Some Unix file-lock implementations are process-scoped, so two threads in
+    // this process must not contend on separate descriptors for the same lock.
+    // The on-disk lock below remains the authority between different processes.
+    let _process_guard = MATERIALIZE_LOCK
+        .lock()
+        .map_err(|_| format!("lock {} runtime materialization in this process", payload.label))?;
     reject_existing_ancestor_links(base)?;
     create_private_directory(base)?;
     reject_link(base)?;
