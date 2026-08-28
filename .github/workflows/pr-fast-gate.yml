@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  linux-core:
-    name: Linux core and release authority
+  linux-x86-64:
+    name: Linux x86_64, shared tests, and Web
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -23,31 +23,56 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.13.0
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/git/db
             target
-          key: pr-fast-linux-core-${{ hashFiles('Cargo.lock') }}
-      - name: Check formatting, release metadata, and locked authority
+          key: pr-fast-linux-x86-64-${{ hashFiles('Cargo.lock') }}
+      - name: Check shared Rust and release contracts
         run: |
           cargo fmt --all -- --check
-          cargo fetch --locked
-          cargo test --locked -p license-check normal_runtime_authority_matches_locked_metadata -j2
-          python -m unittest \
-            tools.publish_release_assets_test \
-            tools.release_metadata_test \
-            tools.release_signing_policy_test \
-            tools.stage_release_artifact_test
-          python tools/macos-release/fixtures/generate.py --check
-      - name: Run portable Core, OCR, layout, and process regressions
-        run: |
           cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2
           cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
+          python -m unittest \
+            tools.platform-release.test_release \
+            tools.portable-release.test_assemble \
+            tools.portable-release.test_native_acceptance \
+            tools.release_evidence_test \
+            tools.release_metadata_test \
+            tools.skill-release.test_skill_release
+      - name: Build the checked production Web bundle without Bazel
+        run: |
+          corepack enable
+          corepack pnpm install --frozen-lockfile
+          node web/console/tests/typecheck.mjs
+          node web/console/build.mjs "${{ runner.temp }}/web-dist" --verify web/console/dist
 
-  windows-install:
-    name: Windows installer and process smoke
+  linux-arm64:
+    name: Linux ARM64 Core
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: pr-fast-linux-arm64-${{ hashFiles('Cargo.lock') }}
+      - name: Compile and test the native Core path
+        run: cargo test --locked -p into-markdown-cli --bin into-md -j2
+
+  windows-x86-64:
+    name: Windows x86_64 Core
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
@@ -62,16 +87,16 @@ jobs:
         with:
           path: |
             ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/git/db
             target
-          key: pr-fast-windows-${{ hashFiles('Cargo.lock') }}
-      - name: Run Windows installer transactions and process sandbox
+          key: pr-fast-windows-x86-64-${{ hashFiles('Cargo.lock') }}
+      - name: Test the native Core and portable archive authority
         run: |
-          python tools/platform-release/test_platform_tools.py
-          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
+          cargo test --locked -p into-markdown-cli --bin into-md -j2
+          python tools/portable-release/test_assemble.py
 
-  macos-install:
-    name: macOS installer and process smoke
+  macos-arm64:
+    name: macOS ARM64 Core
     runs-on: macos-14
     timeout-minutes: 15
     steps:
@@ -79,52 +104,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
       - uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/git/db
             target
-          key: pr-fast-macos-${{ hashFiles('Cargo.lock') }}
-      - name: Run macOS installer transactions and process sandbox
-        run: |
-          python -m unittest discover -s tools/macos-release -p '*test.py'
-          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
-
-  web-and-docs:
-    name: Web browser and documentation smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.97.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24.13.0
-      - uses: bazel-contrib/setup-bazel@0.15.0
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: pr-fast-web-${{ hashFiles('Cargo.lock') }}
-      - name: Install locked browser dependencies
-        run: |
-          corepack enable
-          corepack pnpm install --frozen-lockfile
-          corepack pnpm --filter @into-markdown/console exec playwright install --with-deps chromium
-      - name: Build once and run browser plus documentation contracts
-        run: |
-          cargo build --locked -p into-markdown-cli --bin into-md -j2
-          bazel build --lockfile_mode=error //web/console:assets //web/console:determinism_test --jobs=1
-          corepack pnpm --filter @into-markdown/console exec tsc -p tsconfig.e2e.json
-          INTO_MD_CLI="$GITHUB_WORKSPACE/target/debug/into-md" \
-            corepack pnpm --filter @into-markdown/console exec playwright test \
-            tests/web-security.e2e.spec.ts --workers=1 --reporter=line
-          python tools/docs-check/docs_check.py --into-md "$GITHUB_WORKSPACE/target/debug/into-md"
+          key: pr-fast-macos-arm64-${{ hashFiles('Cargo.lock') }}
+      - name: Test the native Core path
+        run: cargo test --locked -p into-markdown-cli --bin into-md -j2

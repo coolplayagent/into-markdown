@@ -121,8 +121,27 @@ pub(crate) fn authorize_path(
     path: &Path,
 ) -> Result<(), PluginError> {
     let app = AppContainerSid::derive_verified(&authority.profile_name, &authority.sid)?;
-    grant_runtime_path(path, app.as_ptr(), true)?;
+    grant_runtime_tree(path, app.as_ptr())?;
     verify_runtime_tree(path, app.as_ptr(), true)
+}
+
+fn grant_runtime_tree(path: &Path, app_sid: PSID) -> Result<(), PluginError> {
+    use std::os::windows::fs::MetadataExt as _;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|_| unavailable("runtime snapshot metadata unavailable"))?;
+    if metadata.file_attributes() & 0x400 != 0 {
+        return Err(unavailable("runtime snapshot reparse point rejected"));
+    }
+    grant_runtime_path(path, app_sid, metadata.is_dir())?;
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path)
+            .map_err(|_| unavailable("runtime snapshot inventory unavailable"))?
+        {
+            let entry = entry.map_err(|_| unavailable("runtime snapshot entry unavailable"))?;
+            grant_runtime_tree(&entry.path(), app_sid)?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn authorize_request_source(

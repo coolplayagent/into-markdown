@@ -7,7 +7,7 @@ import argparse
 import pathlib
 import sys
 
-from skill_release import SkillReleaseError, create_archive, materialize, validate, verify_release
+from skill_release import SkillReleaseError, core_inputs, create_archive, materialize, validate, verify_release
 
 
 def main() -> None:
@@ -15,6 +15,9 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     build = commands.add_parser("build")
     build.add_argument("--archive", required=True, type=pathlib.Path)
+    build.add_argument("--windows-x86-64-core", required=True, type=pathlib.Path)
+    build.add_argument("--linux-x86-64-core", required=True, type=pathlib.Path)
+    build.add_argument("--linux-arm64-core", required=True, type=pathlib.Path)
     verify = commands.add_parser("verify")
     verify.add_argument("--archive", required=True, type=pathlib.Path)
     copy = commands.add_parser("materialize")
@@ -22,7 +25,14 @@ def main() -> None:
     commands.add_parser("validate")
     arguments = parser.parse_args()
     if arguments.command == "build":
-        create_archive(arguments.archive.resolve())
+        create_archive(
+            arguments.archive.resolve(),
+            core_inputs(
+                arguments.windows_x86_64_core.resolve(),
+                arguments.linux_x86_64_core.resolve(),
+                arguments.linux_arm64_core.resolve(),
+            ),
+        )
     elif arguments.command == "verify":
         verify_release(arguments.archive.resolve())
     elif arguments.command == "materialize":

@@ -4,6 +4,7 @@ mod admin;
 mod app;
 mod args;
 mod config;
+mod embedded_runtime;
 mod error;
 mod i18n;
 mod output;
@@ -18,6 +19,9 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 
 fn main() {
+    // Registration installs only a function pointer. `-h`, `version`, and all
+    // non-PDF conversions remain free of runtime-cache filesystem activity.
+    embedded_runtime::register_pdfium_resolver();
     let arguments = std::env::args_os().skip(1).collect::<Vec<OsString>>();
     let stdin_is_terminal = std::io::stdin().is_terminal();
     let mut stdout = std::io::stdout().lock();

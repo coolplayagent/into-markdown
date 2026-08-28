@@ -53,6 +53,8 @@ const MIN_NATIVE_TEXT_CHARS: usize = 8;
 const MIN_SCAN_IMAGE_COVERAGE: f64 = 0.50;
 const MAX_RENDER_DIMENSION: u32 = 4096;
 static PDF_CONVERSION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+type PdfiumRuntimeResolver = fn() -> Result<PathBuf, ConversionError>;
+static PDFIUM_RUNTIME_RESOLVER: OnceLock<PdfiumRuntimeResolver> = OnceLock::new();
 
 fn request_path_scan<T>(
     context: &ExecutionContext,
@@ -94,15 +96,30 @@ impl PdfConverter {
     }
 
     fn runtime_path(&self) -> Result<PathBuf, ConversionError> {
-        self.runtime_path
+        if let Some(path) = self
+            .runtime_path
             .clone()
             .or_else(|| std::env::var_os("PDFIUM_LIBRARY").map(PathBuf::from))
-            .or_else(default_pdfium_runtime_path)
-            .ok_or_else(|| ConversionError::ComponentUnavailable {
-                component: "pdfium".into(),
-                detail: crate::core_catalog::PDFIUM.install_hint.into(),
-            })
+            .or_else(packaged_pdfium_runtime_path)
+        {
+            return Ok(path);
+        }
+        if let Some(resolver) = PDFIUM_RUNTIME_RESOLVER.get() {
+            return resolver();
+        }
+        Err(ConversionError::ComponentUnavailable {
+            component: "pdfium".into(),
+            detail: crate::core_catalog::PDFIUM.install_hint.into(),
+        })
     }
+}
+
+/// Install a process-local lazy resolver for a `PDFium` runtime embedded by the
+/// final application binary. Registering the resolver performs no filesystem
+/// work; it is called only when a PDF conversion actually begins.
+#[must_use]
+pub fn install_pdfium_runtime_resolver(resolver: PdfiumRuntimeResolver) -> bool {
+    PDFIUM_RUNTIME_RESOLVER.set(resolver).is_ok()
 }
 
 /// Resolve the explicit environment override or the pinned runtime shipped
@@ -112,6 +129,13 @@ pub fn default_pdfium_runtime_path() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("PDFIUM_LIBRARY") {
         return Some(PathBuf::from(path));
     }
+    if let Some(path) = packaged_pdfium_runtime_path() {
+        return Some(path);
+    }
+    PDFIUM_RUNTIME_RESOLVER.get().and_then(|resolver| resolver().ok())
+}
+
+fn packaged_pdfium_runtime_path() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
     packaged_pdfium_path(&executable)
 }

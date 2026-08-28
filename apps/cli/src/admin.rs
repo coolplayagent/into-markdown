@@ -535,6 +535,9 @@ fn snapshot_loaded(
     let mut plugins = Vec::new();
     for (scope_name, scoped_plugins) in [("global", global_plugins), ("project", project_plugins)] {
         for (id, plugin) in scoped_plugins {
+            if id == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+                continue;
+            }
             let package_scope = effective_plugin_scope(loaded, cwd, id)?;
             plugins.push(PluginDto {
                 id: id.clone(),
@@ -560,6 +563,9 @@ fn snapshot_loaded(
         }
     }
     for (id, plugin) in &loaded.effective.plugins {
+        if id == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+            continue;
+        }
         let package_scope =
             (!synthetic_context).then(|| effective_plugin_scope(loaded, cwd, id)).transpose()?;
         let official_capability = match id.as_str() {
@@ -794,17 +800,22 @@ fn apply_inner(
             });
         }
         "capability.install" => {
-            if !action.authorize_network {
-                return Err(policy("networkAuthorizationRequired"));
+            if target == "ocr" && crate::embedded_runtime::enabled() {
+                let loaded = context.load(cwd)?;
+                crate::app::verify_capability_runtime("ocr", &loaded, cwd)?;
+            } else {
+                if !action.authorize_network {
+                    return Err(policy("networkAuthorizationRequired"));
+                }
+                require_dangerous(action)?;
+                let setup_target = match target {
+                    "ocr" => "ocr",
+                    "transcription" | "diarization" | "media" => "media",
+                    _ => return Err(CliError::usage("unknown capability")),
+                };
+                let command = vec![OsString::from("setup"), OsString::from(setup_target)];
+                run_admin_cli(context, cwd, command, test_user_data_anchor)?;
             }
-            require_dangerous(action)?;
-            let setup_target = match target {
-                "ocr" => "ocr",
-                "transcription" | "diarization" | "media" => "media",
-                _ => return Err(CliError::usage("unknown capability")),
-            };
-            let command = vec![OsString::from("setup"), OsString::from(setup_target)];
-            run_admin_cli(context, cwd, command, test_user_data_anchor)?;
         }
         "capability.use" => {
             require_dangerous(action)?;
@@ -818,12 +829,19 @@ fn apply_inner(
             config::set_capability_source(scope, cwd, target, source)?;
         }
         "capability.verify" => {
-            let plugin_id = capability_plugin_id(target)?;
             let loaded = context.load(cwd)?;
-            verify_effective_plugin(&loaded, cwd, plugin_id)?;
+            if target == "ocr" && crate::embedded_runtime::enabled() {
+                crate::app::verify_capability_runtime(target, &loaded, cwd)?;
+            } else {
+                let plugin_id = capability_plugin_id(target)?;
+                verify_effective_plugin(&loaded, cwd, plugin_id)?;
+            }
         }
         "capability.remove" => {
             require_dangerous(action)?;
+            if target == "ocr" && crate::embedded_runtime::enabled() {
+                return Err(CliError::usage("OCR is built into into-md and cannot be removed"));
+            }
             let plugin_id = capability_plugin_id(target)?;
             run_plugin_command(context, cwd, scope, "remove", plugin_id, test_user_data_anchor)?;
         }

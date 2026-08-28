@@ -431,6 +431,26 @@ impl ProcessPlugin {
         Ok(Self { plugin, policy, runtime_staging: RuntimeStaging::ManagerVerifiedPrivateSnapshot })
     }
 
+    /// Bind a complete authenticated runtime that was materialized into an
+    /// owner-private, replacement-protected, read-only application cache.
+    ///
+    /// The caller must verify every file against application-embedded
+    /// authority immediately before constructing this value and must retain
+    /// the runtime root for this value's lifetime. The executable is rehashed
+    /// on every request and each child still receives a private working
+    /// directory and the normal process sandbox. This keeps large embedded
+    /// model runtimes out of the per-request copy path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginErrorCode::Authority`] when manifest or policy authority is invalid.
+    pub fn from_authenticated_read_only_runtime(
+        manifest: PluginManifest,
+        policy: RuntimePolicy,
+    ) -> Result<Self, PluginError> {
+        Self::from_manager_verified_private_snapshot(manifest, policy)
+    }
+
     /// Execute one plugin request, forwarding progress and respecting cancellation/deadlines.
     ///
     /// # Errors

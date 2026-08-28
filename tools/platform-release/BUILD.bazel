@@ -43,9 +43,9 @@ py_test(
     data = [
         "//:Cargo.toml",
         "//:MODULE.bazel",
-        "//:.github/workflows/macos-arm64-release.yml",
-        "//:.github/workflows/native-release-gates.yml",
         "//:.github/workflows/platform-modular-release.yml",
+        "//:.github/workflows/pr-fast-gate.yml",
+        "//tools/portable-release:native_acceptance.py",
         "Install.cmd",
         "Install.ps1",
         "Uninstall.cmd",

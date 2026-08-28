@@ -1154,6 +1154,7 @@ impl ModelManager {
         }
     }
 
+    #[cfg(not(unix))]
     fn required_runtime_file(&self, path: &Path, missing: &str) -> Result<File, ModelManagerError> {
         match self.verification {
             ModelVerification::ContentDigest => required_regular_file(path, missing),

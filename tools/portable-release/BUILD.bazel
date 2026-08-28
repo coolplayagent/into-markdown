@@ -1,0 +1,4 @@
+exports_files([
+    "assemble.py",
+    "native_acceptance.py",
+])

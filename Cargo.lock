@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "asset-update"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "rustix 1.1.4",
  "tempfile",
@@ -1467,7 +1467,7 @@ dependencies = [
 
 [[package]]
 name = "installed-smoke"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "into-markdown-converters",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "image",
  "into-markdown-ai",
@@ -1505,7 +1505,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-ai"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "flate2",
@@ -1519,7 +1519,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-asr"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "futures",
  "into-markdown-core",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "axum",
  "base64",
@@ -1542,6 +1542,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "directories",
+ "fd-lock",
  "futures",
  "getrandom 0.4.3",
  "globset",
@@ -1569,14 +1570,14 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-contracts"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "into-markdown",
 ]
 
 [[package]]
 name = "into-markdown-converters"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "calamine",
@@ -1609,7 +1610,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "serde",
@@ -1620,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-engine"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "getrandom 0.4.3",
@@ -1636,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-ffmpeg"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "into-markdown-core",
  "libc",
@@ -1651,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-http-transport"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "flate2",
  "into-markdown-core",
@@ -1665,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-layout-quality"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "into-markdown-converters",
  "into-markdown-core",
@@ -1678,7 +1679,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-ocr"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clipper2-rust",
  "futures",
@@ -1701,7 +1702,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-official-provider"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "futures",
@@ -1716,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-onnxruntime"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "futures",
  "image",
@@ -1739,7 +1740,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-pdf-layout"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "into-markdown-core",
  "serde_json",
@@ -1749,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-pdfium"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "libc",
  "libloading 0.9.0",
@@ -1763,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-plugin-manager"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "into-markdown-core",
@@ -1782,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-plugin-wasi"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "bytes",
  "cap-primitives",
@@ -1802,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-process-plugin"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "into-markdown-core",
@@ -1817,7 +1818,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-provider-plugin"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "into-markdown-core",
@@ -1833,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-render-markdown"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64",
  "into-markdown-core",
@@ -1843,7 +1844,7 @@ dependencies = [
 
 [[package]]
 name = "into-markdown-task-store"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "futures",
  "getrandom 0.4.3",
@@ -1995,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "license-check"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "into-markdown-converters",
  "serde",
