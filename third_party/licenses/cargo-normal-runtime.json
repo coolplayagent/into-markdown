@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "019644bb44dca7e3318616db49be2fb807f8f115861dffe95e3e3c80a9ea9dd9",
+  "cargo_lock_sha256": "10872239453909c3dbf49052554ec1c27dd9f1f0d8eea10cf801e3b9348355eb",
   "workspace_manifest_sha256": {
-    "Cargo.toml": "79c1092e56886ca4c29effb70941e2c36d485c46c17bae1868c0196ec735ba49",
+    "Cargo.toml": "17172bc27e8a2021f2df5cea317989c8c9c9949179fa7e52d19e7fd57a6e1f9f",
     "apps/cli/Cargo.toml": "7a356bec81a668f1b23cb0d409154ebd7104663a862b83e40293b2202875c634",
-    "apps/official-provider/Cargo.toml": "6a0e9e72741846674c6d94790186427a0234a640483deb6400b930b8150ef6a7",
+    "apps/official-provider/Cargo.toml": "ff280ebe22ace51d7d9ed6b895cd29ebe636aacefb49d72ac5148830fbabaa75",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
-    "crates/api/Cargo.toml": "fe0a95f3c11da60ec76b75ec5f17e94bd10be2eed365100def297010f493cc9d",
-    "crates/asr/Cargo.toml": "b55399bc9acdc041349b4c21398a5a13a51de773f346caa5a38859c48d746729",
+    "crates/api/Cargo.toml": "055ab15d210d664c6a361111d848852b0a7fa590d90fce98fd4b966d64f6ec7f",
+    "crates/asr/Cargo.toml": "3f49f957b4949fc673c81f8514fc5b8834529a8f0e25aeb07455c11c1d87816c",
     "crates/converters/Cargo.toml": "c160f3954300321beb0fda4b83d0e3882f6f9fd68d1bd2e0299f805f5ee801f8",
     "crates/core/Cargo.toml": "7c93a33a5e435723ab22262f9200637134d6047cf39fa1f162976cb1a643226f",
     "crates/engine/Cargo.toml": "92b56a53ce709d57a10d56aefa281d2df731c18bd4e685d64556e1546a15dddf",
@@ -26,7 +26,8 @@
     "crates/render-markdown/Cargo.toml": "d5cf0e875d12baaf6e78a0befa0efcb3ac04234d2bb6d8c11324ca18394fb0c8",
     "crates/task-store/Cargo.toml": "546dd1855e8f1b73b5099c8b06ff7cc87f67775a772d0a74c1c64c927bb5c027",
     "tests/contracts/Cargo.toml": "2b0bc6bf495f298b497d6d8177bc2a9f67f78f1d24e1e5946d53dfc75e9c8e5f",
-    "third_party/whisper-rs-0.16.0/Cargo.toml": "225e6bca4268aeba3129615708af389fca34293a9d01d0f9045dd96a348bf215",
+    "third_party/whisper-rs-0.16.0/Cargo.toml": "c8ef220097ed0878191082d402fcc218527d580fec079b2842c74ce80b51a5eb",
+    "third_party/whisper-rs-0.16.0/sys/Cargo.toml": "aea7de32e8941a8521e96d3a663051ce24444760cdeb626ce0d78b56b3fbca29",
     "tools/asset-update/Cargo.toml": "eec86c662bc803e10c1fcf177702620137acd6a383c89339164889b8ffb927e7",
     "tools/installed-smoke/Cargo.toml": "57704e4d306df0137ba0e802c228a74ce0ec8f6946c1b295f0b2e6ef6065faf2",
     "tools/license-check/Cargo.toml": "6fab86ccb7bbea089f51a32175a01ef9c963f8e3c0a37c54a1ab72fd9ecd472d"
@@ -437,7 +438,6 @@
     "version_check@0.9.5",
     "wasmtime-internal-jit-debug@39.0.1",
     "wasmtime-internal-winch@39.0.1",
-    "whisper-rs-sys@0.15.0",
     "winch-codegen@39.0.1"
   ]
 }

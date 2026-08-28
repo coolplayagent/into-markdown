@@ -36,6 +36,7 @@ jobs:
       - name: Check shared Rust and release contracts
         run: |
           cargo fmt --all -- --check
+          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
           cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2
           cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
           python -m unittest \
@@ -74,7 +75,9 @@ jobs:
   windows-x86-64:
     name: Windows x86_64 Core
     runs-on: windows-2025
-    timeout-minutes: 15
+    # A cold Windows runner must populate the native media-runtime cache once.
+    # The post-release gate split keeps steady-state PRs below five minutes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -93,6 +96,7 @@ jobs:
       - name: Test the native Core and portable archive authority
         run: |
           cargo test --locked -p into-markdown-cli --bin into-md -j2
+          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
           python tools/portable-release/test_assemble.py
 
   macos-arm64:

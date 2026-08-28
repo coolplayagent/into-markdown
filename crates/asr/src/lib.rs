@@ -25,6 +25,110 @@ use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
+/// Load the best compatible GGML CPU backend from an authenticated runtime directory.
+///
+/// x86_64 release providers carry a generic x86-64 backend plus optimized variants.
+/// GGML scores them from CPUID and OSXSAVE state before loading one, so older CPUs keep
+/// the baseline while AVX2/AVX-512 hosts do not pay the portable-backend penalty.
+/// Other targets keep their existing statically linked backend and this is a no-op.
+///
+/// # Errors
+///
+/// Returns an error if the trusted runtime directory or its baseline backend is absent,
+/// or if its path cannot be represented by GGML's UTF-8 loader API.
+pub fn initialize_cpu_runtime(runtime_directory: &Path) -> std::io::Result<()> {
+    #[cfg(all(
+        feature = "runtime-dispatch",
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    ))]
+    {
+        use std::collections::BTreeSet;
+        use std::sync::OnceLock;
+
+        static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
+        let result = INITIALIZED.get_or_init(|| {
+            if !runtime_directory.is_absolute() {
+                return Err("GGML runtime directory is not absolute".into());
+            }
+            #[cfg(windows)]
+            const EXPECTED: &[&str] = &[
+                "ggml-cpu-alderlake.dll",
+                "ggml-cpu-cannonlake.dll",
+                "ggml-cpu-cascadelake.dll",
+                "ggml-cpu-haswell.dll",
+                "ggml-cpu-icelake.dll",
+                "ggml-cpu-sandybridge.dll",
+                "ggml-cpu-skylakex.dll",
+                "ggml-cpu-sse42.dll",
+                "ggml-cpu-x64.dll",
+            ];
+            #[cfg(target_os = "linux")]
+            const EXPECTED: &[&str] = &[
+                "libggml-cpu-alderlake.so",
+                "libggml-cpu-cannonlake.so",
+                "libggml-cpu-cascadelake.so",
+                "libggml-cpu-cooperlake.so",
+                "libggml-cpu-haswell.so",
+                "libggml-cpu-icelake.so",
+                "libggml-cpu-ivybridge.so",
+                "libggml-cpu-piledriver.so",
+                "libggml-cpu-sandybridge.so",
+                "libggml-cpu-sapphirerapids.so",
+                "libggml-cpu-skylakex.so",
+                "libggml-cpu-sse42.so",
+                "libggml-cpu-x64.so",
+                "libggml-cpu-zen4.so",
+            ];
+            let expected = EXPECTED.iter().map(|name| (*name).to_owned()).collect::<BTreeSet<_>>();
+            let mut observed = BTreeSet::new();
+            for entry in std::fs::read_dir(runtime_directory)
+                .map_err(|_| "GGML runtime directory is unavailable".to_owned())?
+            {
+                let entry = entry.map_err(|_| "GGML runtime directory changed".to_owned())?;
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                let candidate = if cfg!(windows) {
+                    name.starts_with("ggml-cpu-") && name.ends_with(".dll")
+                } else {
+                    name.starts_with("libggml-cpu-") && name.ends_with(".so")
+                };
+                if !candidate {
+                    continue;
+                }
+                if !expected.contains(name.as_str()) {
+                    return Err(format!("unexpected GGML CPU backend: {name}"));
+                }
+                let metadata = std::fs::symlink_metadata(entry.path())
+                    .map_err(|_| "GGML CPU backend changed".to_owned())?;
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(format!("GGML CPU backend is not a regular file: {name}"));
+                }
+                observed.insert(name);
+            }
+            if observed != expected {
+                return Err("GGML CPU backend inventory is incomplete".into());
+            }
+            whisper_rs::harden_library_search().map_err(|error| error.to_string())?;
+            whisper_rs::load_cpu_backends_from_path(runtime_directory)
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        });
+        return result.clone().map_err(std::io::Error::other);
+    }
+
+    #[cfg(not(all(
+        feature = "runtime-dispatch",
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    )))]
+    {
+        let _ = runtime_directory;
+        Ok(())
+    }
+}
+
 const PROVIDER_ID: &str = "builtin.asr.whisper-small";
 const SAMPLE_RATE: u32 = 16_000;
 const MAX_THREADS: u16 = 8;

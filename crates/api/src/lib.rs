@@ -71,7 +71,7 @@ pub use into_markdown_ai::{
     ProviderNetworkPolicy, ProviderTestResult, StructuredAiPatchEnricher,
 };
 #[cfg(feature = "official-provider-runtime")]
-pub use into_markdown_asr::{WhisperConfig, WhisperSmallTranscriber};
+pub use into_markdown_asr::{WhisperConfig, WhisperSmallTranscriber, initialize_cpu_runtime};
 pub use into_markdown_converters::{
     CapabilityAvailability, CapabilityDescriptor, CapabilityKind, CapabilitySource,
     CatalogFormatDescriptor, CoreCatalogAuthority, CoreCatalogAuthorityEntry,
@@ -103,7 +103,7 @@ pub use into_markdown_task_store::{
     InputReference, NewTask, OutputFormat, ReconcileSummary, TaskCursor, TaskDiagnostic, TaskId,
     TaskRecord, TaskStatus, TaskStore, TaskStoreError, TaskTransition,
 };
-#[cfg(feature = "official-provider-runtime")]
+#[cfg(feature = "ocr-provider-runtime")]
 pub use ocr_service::installed_ocr_service_in_read_only_sandbox;
 #[cfg(feature = "ocr-provider-runtime")]
 pub use ocr_service::{InstalledOcrConfig, expected_ocr_runtime_library, installed_ocr_service};

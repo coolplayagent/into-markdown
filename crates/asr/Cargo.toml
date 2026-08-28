@@ -9,6 +9,7 @@ license.workspace = true
 [features]
 default = []
 metal = ["whisper-rs/metal"]
+runtime-dispatch = ["whisper-rs/runtime-dispatch"]
 
 [dependencies]
 into-markdown-core = { path = "../core" }

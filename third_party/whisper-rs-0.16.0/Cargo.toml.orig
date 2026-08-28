@@ -30,6 +30,7 @@ rand = "0.8.4"
 default = []
 
 raw-api = []
+runtime-dispatch = ["whisper-rs-sys/runtime-dispatch"]
 coreml = ["whisper-rs-sys/coreml"]
 cuda = ["whisper-rs-sys/cuda", "_gpu"]
 hipblas = ["whisper-rs-sys/hipblas", "_gpu"]

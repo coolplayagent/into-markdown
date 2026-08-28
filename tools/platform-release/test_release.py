@@ -78,7 +78,10 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(len(checks), 4)
         timeouts = [int(value) for value in re.findall(r"timeout-minutes: (\d+)", workflow)]
         self.assertEqual(len(timeouts), len(checks))
-        self.assertTrue(all(value <= 20 for value in timeouts))
+        # Windows may use a one-time 30 minute ceiling while a cold native
+        # media-runtime cache is populated; the steady-state gate is tightened
+        # separately once fixed runtime assets are available.
+        self.assertTrue(all(value <= 30 for value in timeouts))
 
     def test_one_cargo_only_release_matrix_builds_all_four_targets(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -173,12 +176,14 @@ class PlatformReleaseTests(unittest.TestCase):
                 commands.append(command)
                 if command[:2] == ["cargo", "build"]:
                     release_bin = output / "release"
-                    release_bin.mkdir()
+                    release_bin.mkdir(exist_ok=True)
                     for _, binary in [
                         *RELEASE_BUILD_PRODUCTS,
                         WINDOWS_CORE_PREWARM_PRODUCT,
                     ]:
                         (release_bin / release_module.executable_name(binary, "x86_64-pc-windows-msvc")).touch()
+                    for binary, _ in release_module.PROVIDER_BUILD_PRODUCTS:
+                        (release_bin / f"{binary}.exe").touch()
                 return ""
 
             with mock.patch.object(release_module, "run", side_effect=fake_run):
@@ -187,7 +192,7 @@ class PlatformReleaseTests(unittest.TestCase):
                     output / "release",
                 )
             builds = [command for command in commands if command[:2] == ["cargo", "build"]]
-            self.assertEqual(len(builds), 1)
+            self.assertEqual(len(builds), 3)
             selections = [
                 builds[0][index : index + 4]
                 for index, value in enumerate(builds[0])
@@ -203,6 +208,10 @@ class PlatformReleaseTests(unittest.TestCase):
                     ]
                 ],
             )
+            self.assertEqual(
+                [(build[build.index("--bin") + 1], build[build.index("--features") + 1]) for build in builds[1:]],
+                list(release_module.PROVIDER_BUILD_PRODUCTS),
+            )
 
     def test_release_build_disables_native_ggml_cpu_tuning(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -214,15 +223,18 @@ class PlatformReleaseTests(unittest.TestCase):
                 if command[:2] == ["cargo", "build"]:
                     environments.append(kwargs["env"])
                     release_bin = output / "release"
-                    release_bin.mkdir()
+                    release_bin.mkdir(exist_ok=True)
                     for _, binary in RELEASE_BUILD_PRODUCTS:
+                        (release_bin / binary).touch()
+                    for binary, _ in release_module.PROVIDER_BUILD_PRODUCTS:
                         (release_bin / binary).touch()
                 return ""
 
             with mock.patch.object(release_module, "run", side_effect=fake_run):
                 release_module.build("x86_64-unknown-linux-gnu", output)
-            self.assertEqual(len(environments), 1)
+            self.assertEqual(len(environments), 3)
             self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
+            self.assertEqual(environments[0]["GGML_CPU_ALL_VARIANTS"], "ON")
             for key in (
                 "GGML_SSE42",
                 "GGML_AVX",
@@ -238,8 +250,49 @@ class PlatformReleaseTests(unittest.TestCase):
     def test_release_cpu_policy_is_explicit_for_every_x86_64_extension(self) -> None:
         policy = portable_cpu_environment("x86_64-unknown-linux-gnu")
         self.assertEqual(policy["GGML_NATIVE"], "OFF")
-        self.assertTrue(all(value == "OFF" for value in policy.values()))
+        self.assertEqual(policy["GGML_CPU_ALL_VARIANTS"], "ON")
+        self.assertTrue(
+            all(
+                value == ("ON" if key == "GGML_CPU_ALL_VARIANTS" else "OFF")
+                for key, value in policy.items()
+            )
+        )
         self.assertNotIn("GGML_AVX", portable_cpu_environment("aarch64-unknown-linux-gnu"))
+
+    def test_explicit_ggml_directory_does_not_append_environment_backend(self) -> None:
+        source = (
+            ROOT
+            / "third_party/whisper-rs-0.16.0/sys/whisper.cpp/ggml/src/ggml-backend-reg.cpp"
+        ).read_text(encoding="utf-8")
+        marker = source.index('std::getenv("GGML_BACKEND_PATH")')
+        guard = source.rfind("if (dir_path == nullptr)", 0, marker)
+        self.assertGreater(guard, source.index("void ggml_backend_load_all_from_path"))
+        cpu_loader = source[source.index("void ggml_backend_load_cpu_from_path") :]
+        self.assertIn('ggml_backend_load_best("cpu", silent, dir_path)', cpu_loader)
+        self.assertNotIn("GGML_BACKEND_PATH", cpu_loader)
+        for backend in ("rpc", "cuda", "vulkan", "blas"):
+            self.assertNotIn(f'ggml_backend_load_best("{backend}"', cpu_loader)
+
+    def test_stage_ggml_runtime_requires_and_copies_exact_windows_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            output = root / "release/build/whisper-rs-sys-fixture/out"
+            expected = {
+                *release_module.GGML_CPU_VARIANTS["x86_64-pc-windows-msvc"],
+                "whisper.dll",
+                "ggml.dll",
+                "ggml-base.dll",
+            }
+            for filename in expected:
+                path = output / "bin" / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(filename.encode())
+            destination = root / "speech/bin"
+            staged = release_module.stage_ggml_runtime(
+                root, "x86_64-pc-windows-msvc", destination
+            )
+            self.assertEqual({path.name for path in staged}, expected)
+            self.assertEqual({path.name for path in destination.iterdir()}, expected)
 
     def test_release_build_rejects_a_missing_helper_product(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -249,9 +302,11 @@ class PlatformReleaseTests(unittest.TestCase):
                 command = [str(value) for value in arguments]
                 if command[:2] == ["cargo", "build"]:
                     release_bin = output / "release"
-                    release_bin.mkdir()
+                    release_bin.mkdir(exist_ok=True)
                     for _, binary in RELEASE_BUILD_PRODUCTS:
                         (release_bin / release_module.executable_name(binary, "x86_64-pc-windows-msvc")).touch()
+                    for binary, _ in release_module.PROVIDER_BUILD_PRODUCTS:
+                        (release_bin / f"{binary}.exe").touch()
                 return ""
 
             with mock.patch.object(release_module, "run", side_effect=fake_run):

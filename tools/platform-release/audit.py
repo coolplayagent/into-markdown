@@ -26,9 +26,18 @@ TARGETS = {
 }
 PROJECT_WINDOWS_BINARIES = re.compile(
     r"(?:into-md(?:-(?:installer|ocr-provider|media-provider))?"
-    r"|installed-smoke|archive-check|onnxruntime-worker)\.exe$",
+    r"|installed-smoke|archive-check|onnxruntime-worker)\.exe$"
+    r"|(?:whisper|ggml(?:-base|-cpu-[a-z0-9]+)?)\.dll$",
     re.IGNORECASE,
 )
+GGML_LINUX_VARIANTS = {
+    f"libggml-cpu-{name}.so"
+    for name in (
+        "x64", "sse42", "sandybridge", "ivybridge", "piledriver", "haswell",
+        "skylakex", "cannonlake", "cascadelake", "cooperlake", "icelake",
+        "alderlake", "sapphirerapids", "zen4",
+    )
+}
 GLIBC = re.compile(r"GLIBC_(\d+)\.(\d+)")
 RPATH = re.compile(r"\((?:RPATH|RUNPATH)\).*?\[(.*?)\]")
 NEEDED = re.compile(r"\(NEEDED\).*?\[(.*?)\]")
@@ -333,8 +342,19 @@ def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None
     audit.require("objdump", "tool-present", objdump is not None, "GNU objdump is required")
     binaries = candidates(root, b"\x7fELF")
     audit.require(root, "elf-present", bool(binaries), "no ELF binary found")
+    if expected_machine == "Advanced Micro Devices X86-64" and any(
+        path.name == "into-md-media-provider" for path in binaries
+    ):
+        observed_variants = {path.name for path in binaries if path.name.startswith("libggml-cpu-")}
+        audit.require(
+            root,
+            "ggml-cpu-variant-inventory",
+            observed_variants == GGML_LINUX_VARIANTS,
+            f"expected {sorted(GGML_LINUX_VARIANTS)}, found {sorted(observed_variants)}",
+        )
     for binary in binaries:
         relative = binary.relative_to(root)
+        audit.record(relative, "sha256", True, sha256(binary))
         headers = command([readelf, "-h", str(binary)])
         machine = next((line.split(":", 1)[1].strip() for line in headers.splitlines() if "Machine:" in line), "")
         audit.require(relative, "elf-machine", machine == expected_machine, machine)
@@ -356,13 +376,18 @@ def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None
             audit.require(relative, "elf-interpreter", paths[0] in allowed, paths[0])
         if expected_machine == "Advanced Micro Devices X86-64":
             notes = command([readelf, "-nW", str(binary)])
-            audit.require(
-                relative,
-                "x86-64-isa-baseline",
-                not requires_x86_64_extension_level(notes),
-                "ELF must not require x86-64-v2/v3/v4",
+            optimized_variant = (
+                binary.name in GGML_LINUX_VARIANTS
+                and binary.name != "libggml-cpu-x64.so"
             )
-            if binary.name == "into-md-media-provider":
+            if not optimized_variant:
+                audit.require(
+                    relative,
+                    "x86-64-isa-baseline",
+                    not requires_x86_64_extension_level(notes),
+                    "non-variant ELF must not require x86-64-v2/v3/v4",
+                )
+            if binary.name == "libggml-cpu-x64.so":
                 ggml_init = command(
                     [objdump, "-d", "-M", "intel", "--disassemble=ggml_cpu_init", str(binary)]
                 )
@@ -391,6 +416,7 @@ def audit_windows(
     audit.require(root, "pe-present", bool(binaries), "no PE binary found")
     for binary in binaries:
         relative = binary.relative_to(root)
+        audit.record(relative, "sha256", True, sha256(binary))
         headers = command([dumpbin, "/nologo", "/headers", str(binary)])
         machine_lines = [line.strip() for line in headers.splitlines() if "machine (" in line.lower()]
         native_machine = any(

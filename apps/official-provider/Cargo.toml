@@ -5,23 +5,28 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [features]
-default = []
-metal = ["into-markdown/metal"]
+default = ["ocr-runtime", "media-runtime"]
+ocr-runtime = ["into-markdown/ocr-provider-runtime"]
+media-runtime = ["into-markdown/official-provider-runtime"]
+metal = ["media-runtime", "into-markdown/metal"]
 
 [[bin]]
 name = "into-md-ocr-provider"
 path = "src/bin/ocr.rs"
+required-features = ["ocr-runtime"]
 
 [[bin]]
 name = "into-md-media-provider"
 path = "src/bin/media.rs"
+required-features = ["media-runtime"]
 
 [dependencies]
 base64.workspace = true
 futures.workspace = true
-into-markdown = { path = "../../crates/api", features = ["official-provider-runtime"] }
+into-markdown = { path = "../../crates/api" }
 into-markdown-process-plugin = { path = "../../crates/process-plugin" }
 into-markdown-provider-plugin = { path = "../../crates/provider-plugin" }
 serde.workspace = true

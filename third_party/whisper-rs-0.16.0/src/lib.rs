@@ -12,6 +12,8 @@ pub mod vulkan;
 mod common_logging;
 mod error;
 mod ggml_logging_hook;
+#[cfg(feature = "runtime-dispatch")]
+mod runtime_dispatch;
 mod standalone;
 mod utilities;
 mod whisper_ctx;
@@ -24,6 +26,8 @@ mod whisper_vad;
 
 pub use common_logging::GGMLLogLevel;
 pub use error::WhisperError;
+#[cfg(feature = "runtime-dispatch")]
+pub use runtime_dispatch::{harden_library_search, load_cpu_backends_from_path};
 pub use standalone::*;
 pub use utilities::*;
 pub use whisper_ctx::DtwMode;

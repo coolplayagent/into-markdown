@@ -56,9 +56,13 @@ class PortableReleaseTests(unittest.TestCase):
         entry_mode: dict[str, int] | None = None,
         corrupt_signature: bool = False,
     ) -> None:
+        elf = bytearray(64)
+        elf[:6] = b"\x7fELF\x02\x01"
+        struct.pack_into("<H", elf, 18, 62)
         runtime = {
             "bin/into-md-media-provider": b"provider",
             "ffmpeg/ffmpeg": b"ffmpeg",
+            **{name: bytes(elf) for name in assemble.GGML_RUNTIME_FILES[self.TARGET]},
         }
         if extra is not None:
             runtime[extra[0]] = extra[1]
@@ -240,6 +244,18 @@ class PortableReleaseTests(unittest.TestCase):
             )
             with zipfile.ZipFile(package_path) as package, self.assertRaisesRegex(
                 assemble.PortableReleaseError, "audit-only"
+            ):
+                assemble._validate_speech_package(package, self.TARGET)
+
+    def test_speech_package_requires_exact_ggml_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            package_path = pathlib.Path(name) / "speech.imp"
+            self.write_speech_package(
+                package_path,
+                extra=("bin/libggml-cpu-attacker.so", b"not an ELF"),
+            )
+            with zipfile.ZipFile(package_path) as package, self.assertRaisesRegex(
+                assemble.PortableReleaseError, "GGML runtime inventory"
             ):
                 assemble._validate_speech_package(package, self.TARGET)
 
