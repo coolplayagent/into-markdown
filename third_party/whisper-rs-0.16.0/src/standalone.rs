@@ -115,6 +115,25 @@ pub struct SystemInfo {
     pub f16c: bool,
 }
 
+// `GGML_BACKEND_DL` deliberately keeps the CPU implementation in a runtime-
+// selected shared library.  Its `ggml_cpu_has_*` exports therefore are not
+// available to the provider's link step.  Query the same architectural CPU
+// capabilities through Rust's OS-aware CPUID detection on x86 instead of
+// introducing a static dependency on the baseline CPU backend.  GGML still
+// performs its own compatibility scoring before loading an optimized backend.
+#[cfg(all(feature = "runtime-dispatch", any(target_arch = "x86", target_arch = "x86_64")))]
+impl Default for SystemInfo {
+    fn default() -> Self {
+        Self {
+            avx: std::arch::is_x86_feature_detected!("avx"),
+            avx2: std::arch::is_x86_feature_detected!("avx2"),
+            fma: std::arch::is_x86_feature_detected!("fma"),
+            f16c: std::arch::is_x86_feature_detected!("f16c"),
+        }
+    }
+}
+
+#[cfg(not(all(feature = "runtime-dispatch", any(target_arch = "x86", target_arch = "x86_64"))))]
 impl Default for SystemInfo {
     fn default() -> Self {
         unsafe {
