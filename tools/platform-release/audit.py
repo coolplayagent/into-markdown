@@ -235,6 +235,31 @@ def requires_x86_64_extension_level(notes: str) -> bool:
     return re.search(r"\bx86-64-v[234]\b", needed, re.IGNORECASE) is not None
 
 
+def ggml_cpu_init_uses_nonbaseline_x86(disassembly: str) -> bool:
+    """Detect optional x86 ISA in GGML's unconditional CPU initializer.
+
+    GNU property notes are only emitted when every linked object declares an
+    ISA requirement. A statically linked `-march=native` GGML object can contain
+    EVEX/VEX instructions without raising that note and then SIGILL before its
+    runtime feature dispatch is usable. The release provider keeps this symbol,
+    so audit the initializer itself in addition to the ELF notes.
+    """
+    instruction = re.compile(r"^\s*[0-9a-f]+:\s+(?:[0-9a-f]{2}\s+)+\s*([^\s]+)(?:\s|$)")
+    extended_register = re.compile(
+        r"\b(?:[yz]mm\d+|xmm(?:1[6-9]|2\d|3[01])|k[0-7])\b",
+        re.IGNORECASE,
+    )
+    for line in disassembly.splitlines():
+        matched = instruction.match(line)
+        if not matched:
+            continue
+        mnemonic = matched.group(1).lower()
+        operands = line[matched.end() :]
+        if mnemonic.startswith("v") or extended_register.search(operands):
+            return True
+    return False
+
+
 def audit_tree(root: pathlib.Path, audit: Audit, linux: bool) -> None:
     audit.require(root, "regular-root", root.is_dir() and not root.is_symlink(), "root must be a real directory")
     for path in sorted(root.rglob("*")):
@@ -303,7 +328,9 @@ def audit_rust_facade(root: pathlib.Path, audit: Audit) -> None:
 
 def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None:
     readelf = shutil.which("readelf")
+    objdump = shutil.which("objdump")
     audit.require("readelf", "tool-present", readelf is not None, "GNU readelf is required")
+    audit.require("objdump", "tool-present", objdump is not None, "GNU objdump is required")
     binaries = candidates(root, b"\x7fELF")
     audit.require(root, "elf-present", bool(binaries), "no ELF binary found")
     for binary in binaries:
@@ -335,6 +362,17 @@ def audit_linux(root: pathlib.Path, expected_machine: str, audit: Audit) -> None
                 not requires_x86_64_extension_level(notes),
                 "ELF must not require x86-64-v2/v3/v4",
             )
+            if binary.name == "into-md-media-provider":
+                ggml_init = command(
+                    [objdump, "-d", "-M", "intel", "--disassemble=ggml_cpu_init", str(binary)]
+                )
+                audit.require(
+                    relative,
+                    "ggml-x86-64-isa-baseline",
+                    "<ggml_cpu_init>" in ggml_init
+                    and not ggml_cpu_init_uses_nonbaseline_x86(ggml_init),
+                    "GGML CPU initialization must contain only x86-64 baseline instructions",
+                )
 
 
 def audit_windows(

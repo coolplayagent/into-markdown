@@ -675,13 +675,52 @@ fn create_private_directory(path: &Path) -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn create_private_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _};
+
     reject_existing_ancestor_links(path)?;
-    fs::create_dir_all(path)
-        .map_err(|error| format!("create private runtime directory: {error}"))?;
-    reject_link(path)?;
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("protect runtime directory: {error}"))?;
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    loop {
+        match fs::symlink_metadata(cursor) {
+            Ok(metadata) => {
+                if !metadata.is_dir() || is_reparse_or_link(&metadata) {
+                    return Err("private runtime path is a link or non-directory".into());
+                }
+                if cursor == path
+                    && (metadata.uid() != rustix::process::geteuid().as_raw()
+                        || metadata.mode() & 0o7777 != 0o700)
+                {
+                    return Err("private runtime directory owner or permissions are unsafe".into());
+                }
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(cursor.to_owned());
+                cursor = cursor
+                    .parent()
+                    .ok_or_else(|| "private runtime directory has no trusted parent".to_owned())?;
+            }
+            Err(error) => return Err(format!("inspect private runtime directory: {error}")),
+        }
+    }
+    for directory in missing.into_iter().rev() {
+        match fs::DirBuilder::new().mode(0o700).create(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(format!("create private runtime directory: {error}"));
+            }
+        }
+        let metadata = fs::symlink_metadata(&directory)
+            .map_err(|error| format!("inspect created runtime directory: {error}"))?;
+        if !metadata.is_dir()
+            || is_reparse_or_link(&metadata)
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o7777 != 0o700
+        {
+            return Err("created runtime directory owner or permissions are unsafe".into());
+        }
+    }
     Ok(())
 }
 
@@ -894,6 +933,70 @@ mod tests {
         let published = materialize_at(&base, payload).unwrap();
         assert!(!stale.exists());
         verify_tree(&published, payload).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_ocr_materialization_under_default_umask_makes_every_directory_private() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        const CHILD: &str = "INTO_MD_TEST_UMASK_022_MATERIALIZATION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let current_test = std::thread::current().name().unwrap().to_owned();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(current_test)
+                .arg("--nocapture")
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "umask regression subprocess failed");
+            return;
+        }
+
+        let previous = rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o022));
+        let temporary = tempfile::tempdir().unwrap();
+        let (archive, files) = test_archive(&[
+            ("bin/helpers/tool", b"tool", true),
+            ("models/detection/model", b"model", false),
+        ]);
+        let archive = Box::leak(archive.into_boxed_slice());
+        let files = Box::leak(files.into_boxed_slice());
+        let archive_sha256 = Box::leak(format!("{:x}", Sha256::digest(&*archive)).into_boxed_str());
+        let payload = Payload { label: "ocr", archive, archive_sha256, files };
+        let base = temporary.path().join("cache/into-markdown/runtime");
+        let published = materialize_at(&base, payload).unwrap();
+        for directory in [
+            temporary.path().join("cache"),
+            temporary.path().join("cache/into-markdown"),
+            base,
+            published.clone(),
+            published.join("bin"),
+            published.join("bin/helpers"),
+            published.join("models"),
+            published.join("models/detection"),
+        ] {
+            let metadata = fs::symlink_metadata(&directory).unwrap();
+            assert_eq!(metadata.mode() & 0o7777, 0o700, "{}", directory.display());
+        }
+        verify_tree(&published, payload).unwrap();
+        let _ = rustix::process::umask(previous);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_non_private_managed_directory_is_rejected() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let managed = temporary.path().join("runtime");
+        fs::create_dir(&managed).unwrap();
+        fs::set_permissions(&managed, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            create_private_directory(&managed).unwrap_err(),
+            "private runtime directory owner or permissions are unsafe"
+        );
+        assert_eq!(fs::symlink_metadata(&managed).unwrap().permissions().mode() & 0o7777, 0o755);
     }
 
     #[cfg(unix)]

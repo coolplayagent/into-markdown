@@ -27,6 +27,7 @@ from release import (
     WINDOWS_CORE_PREWARM_PRODUCT,
     create_archive,
     distributed_source_ids,
+    portable_cpu_environment,
     published_plugin_file,
 )
 
@@ -150,7 +151,7 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertIn("${{ runner.temp }}/release-work/build", workflow)
         self.assertIn(
-            "key: release-cargo-only-v1-${{ matrix.target }}-"
+            "key: release-cargo-only-v2-${{ matrix.target }}-"
             "${{ hashFiles('Cargo.lock') }}",
             workflow,
         )
@@ -222,7 +223,23 @@ class PlatformReleaseTests(unittest.TestCase):
                 release_module.build("x86_64-unknown-linux-gnu", output)
             self.assertEqual(len(environments), 1)
             self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
+            for key in (
+                "GGML_SSE42",
+                "GGML_AVX",
+                "GGML_AVX2",
+                "GGML_FMA",
+                "GGML_F16C",
+                "GGML_BMI2",
+                "GGML_AVX512",
+            ):
+                self.assertEqual(environments[0][key], "OFF")
             self.assertIn("target-cpu=x86-64", environments[0]["RUSTFLAGS"])
+
+    def test_release_cpu_policy_is_explicit_for_every_x86_64_extension(self) -> None:
+        policy = portable_cpu_environment("x86_64-unknown-linux-gnu")
+        self.assertEqual(policy["GGML_NATIVE"], "OFF")
+        self.assertTrue(all(value == "OFF" for value in policy.values()))
+        self.assertNotIn("GGML_AVX", portable_cpu_environment("aarch64-unknown-linux-gnu"))
 
     def test_release_build_rejects_a_missing_helper_product(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -284,6 +301,17 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
+
+    def test_release_cargo_cache_is_bound_to_native_cpu_policy(self) -> None:
+        workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("release-cargo-only-v2-", workflow)
+        self.assertIn(
+            "hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json')",
+            workflow,
+        )
+        self.assertNotIn("release-cargo-only-v1-", workflow)
 
     def test_linux_release_does_not_bootstrap_a_second_build_system(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(

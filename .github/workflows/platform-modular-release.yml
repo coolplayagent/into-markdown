@@ -106,8 +106,12 @@ jobs:
         if: inputs.signing_mode == 'unsigned'
         with:
           path: ${{ runner.temp }}/release-work/build
-          key: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
-          restore-keys: release-cargo-only-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-
+          # whisper-rs-sys forwards GGML_* variables dynamically and does not
+          # declare them as Cargo rerun inputs. Put the explicit CPU policy
+          # ahead of the source hash so no target cache built under a different
+          # native-ISA policy can be restored.
+          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'tools/**/*.rs', 'Cargo.toml') }}
+          restore-keys: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/release-work/cache
