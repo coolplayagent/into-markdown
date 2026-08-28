@@ -2601,7 +2601,7 @@ impl Drop for ActiveWorker<'_> {
 fn run_job(shared: &Arc<Shared>, job: &Job) {
     let mut registered_waiter = RegisteredDiskWaiter { shared, ticket: job.admission_ticket };
     #[cfg(test)]
-    if let Some(gate) = { lock(&shared.pre_acquire_gate).clone() } {
+    if let Some(gate) = { lock(&shared.pre_acquire_gate).take() } {
         gate.wait();
     }
     #[cfg(test)]
