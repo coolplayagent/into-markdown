@@ -75,7 +75,9 @@ jobs:
   windows-x86-64:
     name: Windows x86_64 Core
     runs-on: windows-2025
-    timeout-minutes: 15
+    # A cold Windows runner must populate the native media-runtime cache once.
+    # The post-release gate split keeps steady-state PRs below five minutes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
