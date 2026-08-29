@@ -3,7 +3,7 @@ use super::super::budget::{ASSET_INDEX_ENTRY_CHARGE, MAX_XML_WIDTH};
 use super::super::convert_presentation;
 use super::super::error::malformed;
 use super::super::geometry::sort_shapes_for_reading;
-use super::super::model::{Package, ParseState, Shape};
+use super::super::model::{Package, ParseState, PresentationCell, Shape};
 use super::super::opc_package::part_allocation_charge;
 use super::super::schema::{P_NS, TYPES_NS};
 use super::super::tables::table_block;
@@ -16,9 +16,9 @@ use super::support::{
 };
 use crate::docx::{supported_image, validate_image_bytes};
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    ExecutionOptions, FormatCandidate, InputFormat, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_NODES,
-    ResolvedInput, SourceMetadata, estimate_retained_output,
+    Block, ConversionError, ConversionOptions, Converter, ConverterOutput, ErrorPolicy,
+    ExecutionContext, ExecutionOptions, FormatCandidate, InputFormat, MAX_DOCUMENT_INLINES,
+    MAX_DOCUMENT_NODES, ResolvedInput, SourceMetadata, estimate_retained_output,
 };
 use std::io::{Cursor, Read};
 use std::sync::Arc;
@@ -491,7 +491,11 @@ fn xml_ir_and_geometry_work_limits_are_stable() {
         let mut state = ParseState::default();
         assert!(matches!(
             table_block(
-                vec![vec![Vec::new()]],
+                vec![vec![PresentationCell {
+                    row_span: 1,
+                    column_span: 1,
+                    ..PresentationCell::default()
+                }]],
                 "table",
                 1,
                 None,
@@ -524,13 +528,17 @@ fn presentation_default_text_style_accepts_only_its_default_run_properties() {
     .expect("ECMA-376 default paragraph run properties must be accepted");
 
     let invalid = valid.replace("<a:defPPr>", "<a:bodyPr>").replace("</a:defPPr>", "</a:bodyPr>");
+    let mut strict_options = options.clone();
+    strict_options.error_policy = ErrorPolicy::Strict;
+    let strict_context =
+        ExecutionContext::new(ExecutionOptions::default(), strict_options.limits.clone());
     assert!(matches!(
         preflight_xml(
             invalid.as_bytes(),
             "ppt/presentation.xml",
             XmlProfile::Presentation,
-            &options,
-            &context,
+            &strict_options,
+            &strict_context,
         ),
         Err(ConversionError::Malformed { .. })
     ));
@@ -576,13 +584,17 @@ fn presentation_extension_and_geometry_extent_are_namespace_distinct() {
     let invalid = valid
         .replace("<p:extLst>", "<p:defaultTextStyle>")
         .replace("</p:extLst>", "</p:defaultTextStyle>");
+    let mut strict_options = options.clone();
+    strict_options.error_policy = ErrorPolicy::Strict;
+    let strict_context =
+        ExecutionContext::new(ExecutionOptions::default(), strict_options.limits.clone());
     assert!(matches!(
         preflight_xml(
             invalid.as_bytes(),
             "ppt/presentation.xml",
             XmlProfile::Presentation,
-            &options,
-            &context,
+            &strict_options,
+            &strict_context,
         ),
         Err(ConversionError::Malformed { .. })
     ));

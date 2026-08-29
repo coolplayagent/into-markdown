@@ -1,4 +1,4 @@
-use crate::workbook::budget::{checked_field_bytes, enforce_grid};
+use crate::workbook::budget::{checked_field_bytes, enforce_grid, requires_paged_grid};
 use crate::workbook::cell::{cell_name, within};
 use crate::workbook::error::{limit, malformed, map_calamine};
 use crate::workbook::extras::metadata::display_ranges;
@@ -7,8 +7,9 @@ use crate::workbook::output::{data_text, provenance, stable_id};
 use crate::workbook::xlsb::merges::extract_xlsb_merges;
 use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xls, Xlsb, Xlsx};
 use into_markdown_core::{
-    Block, BlockNode, Cell, ConversionError, ConversionOptions, ConverterOutput, Document,
-    ExecutionContext, Inline, NodeId, TableAlignment, TableRow,
+    Block, BlockNode, Cell, ConversionError, ConversionOptions, ConverterOutput, Diagnostic,
+    DiagnosticSeverity, Document, ExecutionContext, Inline, NodeId, SourceLocator, TableAlignment,
+    TableRow,
 };
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
@@ -106,8 +107,12 @@ where
     E: std::fmt::Debug + From<std::io::Error>,
 {
     let mut document = Document::default();
-    let diagnostics = Vec::new();
+    let mut diagnostics = Vec::new();
     let mut sheet_blocks = Vec::<(String, Vec<BlockNode>)>::new();
+    let authenticated_cells = authenticated_bounds.values().fold(0_u64, |total, (row, column)| {
+        total.saturating_add((u64::from(*row) + 1).saturating_mul(u64::from(*column) + 1))
+    });
+    let paged_workbook = requires_paged_grid(authenticated_cells, 1);
 
     for (sheet_index, sheet) in sheets.iter().enumerate() {
         context.checkpoint()?;
@@ -225,141 +230,183 @@ where
                 format!("spreadsheet.sheet.{sheet_index}.bounds"),
                 format!("A1:{}", cell_name(last_row, last_column)),
             );
-            let mut merge_index = MergeIndex::new(&sheet_merges, last_row, last_column, context)?;
-            let mut hyperlink_index = HyperlinkIndex::new(&sheet_extras.hyperlinks, context)?;
-            let mut rows = Vec::new();
-            rows.try_reserve_exact(
-                usize::try_from(last_row + 1)
-                    .map_err(|_| limit("max_memory_bytes", "worksheet row inventory overflow"))?,
-            )
-            .map_err(|_| limit("max_memory_bytes", "worksheet row inventory allocation failed"))?;
-            for row in 0..=last_row {
-                context.checkpoint()?;
-                merge_index.prepare_row(row, context)?;
-                hyperlink_index.prepare_row(row, context)?;
-                let mut cells = Vec::new();
-                for column in 0..=last_column {
-                    if column.trailing_zeros() >= 8 {
-                        context.checkpoint()?;
-                    }
-                    let merge = merge_index.at(row, column);
-                    if merge.is_some_and(|merge| merge.start != (row, column)) {
-                        continue;
-                    }
-                    let value = values.get_value((row, column)).unwrap_or(&Data::Empty);
-                    let formula = formulas.get_value((row, column)).map_or("", String::as_str);
-                    let cached = data_text(value);
-                    let cached_bytes = u64::try_from(cached.len()).unwrap_or(u64::MAX);
-                    let formula_bytes = u64::try_from(formula.len()).unwrap_or(u64::MAX);
-                    if cached_bytes.max(formula_bytes) > options.limits.max_field_bytes {
-                        return Err(limit(
-                            "max_field_bytes",
-                            format!(
-                                "{}!{} exceeds field limit",
-                                sheet.name,
-                                cell_name(row, column)
-                            ),
-                        ));
-                    }
-                    let hyperlink = hyperlink_index.at(column);
-                    let marks =
-                        sheet_extras.cell_marks.get(&(row, column)).cloned().unwrap_or_default();
-                    let inlines = if !formula.is_empty() {
-                        let raw = formula.strip_prefix('=').unwrap_or(formula);
-                        let rendered_bytes = if cached.is_empty() {
+            if paged_workbook
+                || requires_paged_grid(u64::from(last_row) + 1, u64::from(last_column) + 1)
+            {
+                blocks = paged_tsv_blocks(
+                    &values,
+                    &formulas,
+                    &sheet.name,
+                    sheet_index,
+                    last_row,
+                    last_column,
+                    options,
+                    context,
+                )?;
+                diagnostics.push(Diagnostic {
+                    code: "spreadsheet.largeTablePaged".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!(
+                        "worksheet {} was emitted as ordered TSV page blocks to keep IR bounded",
+                        sheet.name
+                    ),
+                    locator: Some(SourceLocator {
+                        sheet: Some(sheet.name.clone()),
+                        ..SourceLocator::default()
+                    }),
+                });
+            } else {
+                let mut merge_index =
+                    MergeIndex::new(&sheet_merges, last_row, last_column, context)?;
+                let mut hyperlink_index = HyperlinkIndex::new(&sheet_extras.hyperlinks, context)?;
+                let mut rows = Vec::new();
+                rows.try_reserve_exact(
+                    usize::try_from(last_row + 1).map_err(|_| {
+                        limit("max_memory_bytes", "worksheet row inventory overflow")
+                    })?,
+                )
+                .map_err(|_| {
+                    limit("max_memory_bytes", "worksheet row inventory allocation failed")
+                })?;
+                for row in 0..=last_row {
+                    context.checkpoint()?;
+                    merge_index.prepare_row(row, context)?;
+                    hyperlink_index.prepare_row(row, context)?;
+                    let mut cells = Vec::new();
+                    for column in 0..=last_column {
+                        if column.trailing_zeros() >= 8 {
+                            context.checkpoint()?;
+                        }
+                        let merge = merge_index.at(row, column);
+                        if merge.is_some_and(|merge| merge.start != (row, column)) {
+                            continue;
+                        }
+                        let value = values.get_value((row, column)).unwrap_or(&Data::Empty);
+                        let formula = formulas.get_value((row, column)).map_or("", String::as_str);
+                        let cached = data_text(value);
+                        let cached_bytes = u64::try_from(cached.len()).unwrap_or(u64::MAX);
+                        let formula_bytes = u64::try_from(formula.len()).unwrap_or(u64::MAX);
+                        if cached_bytes.max(formula_bytes) > options.limits.max_field_bytes {
+                            return Err(limit(
+                                "max_field_bytes",
+                                format!(
+                                    "{}!{} exceeds field limit",
+                                    sheet.name,
+                                    cell_name(row, column)
+                                ),
+                            ));
+                        }
+                        let hyperlink = hyperlink_index.at(column);
+                        let marks = sheet_extras
+                            .cell_marks
+                            .get(&(row, column))
+                            .cloned()
+                            .unwrap_or_default();
+                        let inlines = if !formula.is_empty() {
+                            let raw = formula.strip_prefix('=').unwrap_or(formula);
+                            let rendered_bytes = if cached.is_empty() {
+                                checked_field_bytes(
+                                    options,
+                                    "formula rendering",
+                                    &[1, u64::try_from(raw.len()).unwrap_or(u64::MAX)],
+                                )?
+                            } else {
+                                checked_field_bytes(
+                                    options,
+                                    "formula and cached-value rendering",
+                                    &[
+                                        1,
+                                        u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                                        11,
+                                        cached_bytes,
+                                    ],
+                                )?
+                            };
+                            debug_assert!(rendered_bytes <= options.limits.max_field_bytes);
+                            let rendered = if cached.is_empty() {
+                                format!("={raw}")
+                            } else {
+                                format!("={raw} [cached: {cached}]")
+                            };
+                            let code = Inline::Code(rendered);
+                            if let Some(link) = hyperlink {
+                                checked_field_bytes(
+                                    options,
+                                    "formula hyperlink target",
+                                    &[u64::try_from(link.target.len()).unwrap_or(u64::MAX)],
+                                )?;
+                                // Formula text is always atomic Code. Cell style
+                                // marks cannot be attached to Code in the unified IR
+                                // and deliberately do not weaken that inert semantic;
+                                // a hyperlink wraps the Code so neither fact is lost.
+                                vec![Inline::Link {
+                                    target: link.target.clone(),
+                                    content: vec![code],
+                                }]
+                            } else {
+                                vec![code]
+                            }
+                        } else if let Some(link) = hyperlink {
                             checked_field_bytes(
                                 options,
-                                "formula rendering",
-                                &[1, u64::try_from(raw.len()).unwrap_or(u64::MAX)],
-                            )?
-                        } else {
-                            checked_field_bytes(
-                                options,
-                                "formula and cached-value rendering",
-                                &[
-                                    1,
-                                    u64::try_from(raw.len()).unwrap_or(u64::MAX),
-                                    11,
-                                    cached_bytes,
-                                ],
-                            )?
-                        };
-                        debug_assert!(rendered_bytes <= options.limits.max_field_bytes);
-                        let rendered = if cached.is_empty() {
-                            format!("={raw}")
-                        } else {
-                            format!("={raw} [cached: {cached}]")
-                        };
-                        let code = Inline::Code(rendered);
-                        if let Some(link) = hyperlink {
-                            checked_field_bytes(
-                                options,
-                                "formula hyperlink target",
+                                "hyperlink target",
                                 &[u64::try_from(link.target.len()).unwrap_or(u64::MAX)],
                             )?;
-                            // Formula text is always atomic Code. Cell style
-                            // marks cannot be attached to Code in the unified IR
-                            // and deliberately do not weaken that inert semantic;
-                            // a hyperlink wraps the Code so neither fact is lost.
-                            vec![Inline::Link { target: link.target.clone(), content: vec![code] }]
+                            let label = link
+                                .label
+                                .clone()
+                                .filter(|value| !value.is_empty())
+                                .unwrap_or_else(|| cached.as_ref().to_owned());
+                            vec![Inline::Link {
+                                target: link.target.clone(),
+                                content: vec![Inline::Text { value: label, marks }],
+                            }]
+                        } else if cached.starts_with(['=', '+', '-', '@']) {
+                            // Spreadsheet-control prefixes remain literal code and
+                            // cannot become a formula if exported by a downstream UI.
+                            vec![Inline::Code(cached.into_owned())]
+                        } else if cached.is_empty() {
+                            Vec::new()
                         } else {
-                            vec![code]
-                        }
-                    } else if let Some(link) = hyperlink {
-                        checked_field_bytes(
-                            options,
-                            "hyperlink target",
-                            &[u64::try_from(link.target.len()).unwrap_or(u64::MAX)],
-                        )?;
-                        let label = link
-                            .label
-                            .clone()
-                            .filter(|value| !value.is_empty())
-                            .unwrap_or_else(|| cached.as_ref().to_owned());
-                        vec![Inline::Link {
-                            target: link.target.clone(),
-                            content: vec![Inline::Text { value: label, marks }],
-                        }]
-                    } else if cached.starts_with(['=', '+', '-', '@']) {
-                        // Spreadsheet-control prefixes remain literal code and
-                        // cannot become a formula if exported by a downstream UI.
-                        vec![Inline::Code(cached.into_owned())]
-                    } else if cached.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![Inline::Text { value: cached.into_owned(), marks }]
-                    };
-                    let cell_provenance = provenance(&sheet.name, Some(row), Some(column));
-                    let cell_blocks = if inlines.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![BlockNode {
-                            id: stable_id("cell", sheet_index, row, column),
-                            block: Block::Paragraph(inlines),
-                            provenance: cell_provenance,
-                        }]
-                    };
-                    let (row_span, column_span) = merge.map_or((1, 1), |merge| {
-                        (merge.end.0 - merge.start.0 + 1, merge.end.1 - merge.start.1 + 1)
-                    });
-                    cells.push(Cell { row_span, column_span, header: false, blocks: cell_blocks });
+                            vec![Inline::Text { value: cached.into_owned(), marks }]
+                        };
+                        let cell_provenance = provenance(&sheet.name, Some(row), Some(column));
+                        let cell_blocks = if inlines.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![BlockNode {
+                                id: stable_id("cell", sheet_index, row, column),
+                                block: Block::Paragraph(inlines),
+                                provenance: cell_provenance,
+                            }]
+                        };
+                        let (row_span, column_span) = merge.map_or((1, 1), |merge| {
+                            (merge.end.0 - merge.start.0 + 1, merge.end.1 - merge.start.1 + 1)
+                        });
+                        cells.push(Cell {
+                            row_span,
+                            column_span,
+                            header: false,
+                            blocks: cell_blocks,
+                        });
+                    }
+                    rows.push(TableRow { cells });
                 }
-                rows.push(TableRow { cells });
+                blocks.push(BlockNode {
+                    id: NodeId(format!("workbook-table-{sheet_index}")),
+                    block: Block::Table {
+                        rows,
+                        alignments: vec![
+                            TableAlignment::None;
+                            usize::try_from(last_column + 1).map_err(|_| limit(
+                                "max_table_columns",
+                                "column count overflow"
+                            ))?
+                        ],
+                    },
+                    provenance: provenance(&sheet.name, None, None),
+                });
             }
-            blocks.push(BlockNode {
-                id: NodeId(format!("workbook-table-{sheet_index}")),
-                block: Block::Table {
-                    rows,
-                    alignments: vec![
-                        TableAlignment::None;
-                        usize::try_from(last_column + 1).map_err(|_| limit(
-                            "max_table_columns",
-                            "column count overflow"
-                        ))?
-                    ],
-                },
-                provenance: provenance(&sheet.name, None, None),
-            });
         } else {
             document
                 .metadata
@@ -380,6 +427,103 @@ where
         });
     }
     Ok(ConverterOutput::new(document, assets, diagnostics))
+}
+
+const PAGED_TSV_ROWS: u32 = 2_048;
+
+#[allow(clippy::too_many_arguments)]
+fn paged_tsv_blocks(
+    values: &Range<Data>,
+    formulas: &Range<String>,
+    sheet_name: &str,
+    sheet_index: usize,
+    last_row: u32,
+    last_column: u32,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    let page_count = last_row / PAGED_TSV_ROWS + 1;
+    let mut blocks = Vec::new();
+    blocks.try_reserve_exact(usize::try_from(page_count).unwrap_or(usize::MAX)).map_err(
+        |error| limit("max_memory_bytes", format!("cannot reserve worksheet pages: {error}")),
+    )?;
+    let mut page = String::new();
+    let mut page_index = 0_u32;
+    for row in 0..=last_row {
+        context.checkpoint()?;
+        for column in 0..=last_column {
+            if column != 0 {
+                page.push('\t');
+            }
+            let cached = data_text(values.get_value((row, column)).unwrap_or(&Data::Empty));
+            let formula = formulas.get_value((row, column)).map_or("", String::as_str);
+            let field_bytes = u64::try_from(cached.len().max(formula.len())).unwrap_or(u64::MAX);
+            if field_bytes > options.limits.max_field_bytes {
+                return Err(limit(
+                    "max_field_bytes",
+                    format!("{sheet_name}!{} exceeds field limit", cell_name(row, column)),
+                ));
+            }
+            if formula.is_empty() {
+                append_tsv_value(&mut page, &cached)?;
+            } else {
+                append_tsv_value(&mut page, "=")?;
+                append_tsv_value(&mut page, formula.strip_prefix('=').unwrap_or(formula))?;
+                if !cached.is_empty() {
+                    append_tsv_value(&mut page, " [cached: ")?;
+                    append_tsv_value(&mut page, &cached)?;
+                    append_tsv_value(&mut page, "]")?;
+                }
+            }
+        }
+        page.push('\n');
+        if (row + 1) % PAGED_TSV_ROWS == 0 || row == last_row {
+            blocks.push(BlockNode {
+                id: NodeId(format!("workbook-page-{sheet_index}-{page_index}")),
+                block: Block::Code {
+                    language: Some("tsv".into()),
+                    text: std::mem::take(&mut page),
+                },
+                provenance: provenance(sheet_name, Some(row + 1 - (row % PAGED_TSV_ROWS)), None),
+            });
+            page_index += 1;
+        }
+    }
+    Ok(blocks)
+}
+
+fn append_tsv_value(output: &mut String, value: &str) -> Result<(), ConversionError> {
+    let extra = value
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| limit("max_memory_bytes", "TSV field size overflow"))?;
+    output.try_reserve(extra).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve paged TSV output: {error}"))
+    })?;
+    for character in value.chars() {
+        match character {
+            '\t' => output.push_str("\\t"),
+            '\r' => output.push_str("\\r"),
+            '\n' => output.push_str("\\n"),
+            '\\' => output.push_str("\\\\"),
+            '`' => output.push_str("\\`"),
+            value => output.push(value),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod paged_tests {
+    use super::append_tsv_value;
+
+    #[test]
+    fn paged_tsv_uses_reversible_single_line_escaping_and_bounds_fences() {
+        let mut output = String::new();
+        append_tsv_value(&mut output, "a\tb\r\nc\\d```").unwrap();
+        assert_eq!(output, "a\\tb\\r\\nc\\\\d\\`\\`\\`");
+        assert!(!output.contains("```"));
+    }
 }
 
 fn combined_bounds(

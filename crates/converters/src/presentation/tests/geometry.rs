@@ -3,7 +3,7 @@ use super::super::geometry::convex_quadrilaterals_overlap;
 use super::super::model::{DisplayPoint, Geometry, GroupTransform};
 use super::super::schema::{A_NS, P_NS, REL_NS, REL_PREFIX, SEEN_CHILD_EXTENT, SEEN_EXTENT};
 use super::super::text::plain_text;
-use super::support::{convert, fixture, rewrite_part};
+use super::support::{convert, convert_strict, fixture, rewrite_part};
 use into_markdown_core::{
     Block, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions, ListKind,
 };
@@ -58,8 +58,13 @@ fn reads_geometry_order_rotation_lists_tables_and_groups() {
     assert!((list_bounds.height - 1.0).abs() < f32::EPSILON);
 
     let merged = slide.replacen("<a:tc>", "<a:tc gridSpan=\"2\">", 1);
+    let recovered =
+        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", merged.as_bytes())).unwrap();
+    assert!(
+        recovered.diagnostics.iter().any(|diagnostic| diagnostic.code == "office.tableNormalized")
+    );
     assert!(matches!(
-        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", merged.as_bytes())),
+        convert_strict(&rewrite_part(&original, "ppt/slides/slide1.xml", merged.as_bytes())),
         Err(ConversionError::Malformed { .. })
     ));
     for malformed_table in [
@@ -68,7 +73,11 @@ fn reads_geometry_order_rotation_lists_tables_and_groups() {
         slide.replacen("<a:tbl>", "<a:tbl></a:tbl><a:tbl>", 1),
     ] {
         assert!(matches!(
-            convert(&rewrite_part(&original, "ppt/slides/slide1.xml", malformed_table.as_bytes())),
+            convert_strict(&rewrite_part(
+                &original,
+                "ppt/slides/slide1.xml",
+                malformed_table.as_bytes()
+            )),
             Err(ConversionError::Malformed { .. })
         ));
     }
@@ -77,8 +86,17 @@ fn reads_geometry_order_rotation_lists_tables_and_groups() {
         r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="Unknown"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><a:graphic><a:graphicData/></a:graphic></p:graphicFrame>"#,
     ] {
         let malformed = slide.replace("</p:spTree>", &format!("{unsupported_shape}</p:spTree>"));
+        let recovered =
+            convert(&rewrite_part(&original, "ppt/slides/slide1.xml", malformed.as_bytes()))
+                .unwrap();
+        assert!(
+            recovered
+                .diagnostics
+                .iter()
+                .any(|diagnostic| { diagnostic.code == "presentation.graphicPlaceholder" })
+        );
         assert!(matches!(
-            convert(&rewrite_part(&original, "ppt/slides/slide1.xml", malformed.as_bytes())),
+            convert_strict(&rewrite_part(&original, "ppt/slides/slide1.xml", malformed.as_bytes())),
             Err(ConversionError::Malformed { .. })
         ));
     }

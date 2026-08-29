@@ -18,16 +18,10 @@ pub(super) struct EntryPolicy {
 impl EntryPolicy {
     pub(super) fn accept(
         &mut self,
-        raw_name: &[u8],
         decoded_name: &str,
         unix_mode: Option<u32>,
         directory: bool,
     ) -> Result<(String, EntryKind), ConversionError> {
-        let raw = std::str::from_utf8(raw_name)
-            .map_err(|_| malformed(decoded_name, "entry name is not UTF-8"))?;
-        if raw != decoded_name {
-            return Err(malformed(decoded_name, "raw and decoded entry names disagree"));
-        }
         let kind = validate_type(decoded_name, unix_mode, directory)?;
         let name = canonical_name(decoded_name, kind)?;
         let alias = alias_key(&name)?;
@@ -194,7 +188,7 @@ mod tests {
     use super::*;
 
     fn accept(policy: &mut EntryPolicy, name: &str) -> Result<(), ConversionError> {
-        policy.accept(name.as_bytes(), name, Some(0o100_644), false).map(|_| ())
+        policy.accept(name, Some(0o100_644), false).map(|_| ())
     }
 
     #[test]

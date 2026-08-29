@@ -3,7 +3,7 @@ use super::error::{limit, malformed};
 use super::mce::McSelection;
 use super::model::{
     Geometry, Package, PlaceholderClass, PlaceholderKey, Relationships, RichStyle, Shape,
-    ShapeStyle, TextParagraph,
+    ShapeRecovery, ShapeStyle, TextParagraph,
 };
 use super::relationships::{require_content_type, resolve_target, unique_relationship};
 use super::schema::{
@@ -16,7 +16,9 @@ use super::shape_elements::{
 use super::slides::parse_shapes;
 use super::xml::{XmlProfile, preflight_xml};
 use super::xml_base::{attr, level_paragraph, local, required_attr};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, Inline, ListKind};
+use into_markdown_core::{
+    ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, Inline, ListKind,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::NsReader;
 use std::cmp::Ordering;
@@ -305,6 +307,7 @@ pub(super) fn parse_master_text_styles(
                             apply_master_bullet(
                                 &element,
                                 part,
+                                options,
                                 current.as_mut().ok_or_else(|| {
                                     malformed(Some(part), "master bullet is outside a level")
                                 })?,
@@ -373,6 +376,7 @@ pub(super) fn parse_master_text_styles(
                         apply_master_bullet(
                             &element,
                             part,
+                            options,
                             current.as_mut().ok_or_else(|| {
                                 malformed(Some(part), "master bullet is outside a level")
                             })?,
@@ -485,6 +489,7 @@ fn mark_master_text_section(
 fn apply_master_bullet(
     element: &BytesStart<'_>,
     part: &str,
+    options: &ConversionOptions,
     paragraph: &mut TextParagraph,
 ) -> Result<(), ConversionError> {
     if paragraph.bullet_explicit {
@@ -522,7 +527,14 @@ fn apply_master_bullet(
             }
             paragraph.numbering = Some(numbering);
         }
-        "buBlip" => return Err(malformed(Some(part), "bitmap bullets are not supported")),
+        "buBlip" => {
+            if options.error_policy == ErrorPolicy::Strict {
+                return Err(malformed(Some(part), "bitmap bullets are not supported"));
+            }
+            paragraph.bullet = Some(ListKind::Bullet);
+            paragraph.numbering = None;
+            paragraph.bullet_recovered = true;
+        }
         _ => {}
     }
     Ok(())
@@ -641,6 +653,7 @@ fn try_clone_text_paragraphs(
                 .as_deref()
                 .map(|value| try_clone_string(value, "inherited numbering"))
                 .transpose()?,
+            bullet_recovered: paragraph.bullet_recovered,
         });
     }
     Ok(result)
@@ -693,12 +706,14 @@ pub(super) fn apply_inheritance(
             shape.pending_groups.extend_from_slice(inherited_groups);
         }
         if let Some(style) = layout_style {
+            record_inherited_bullet_recovery(shape, &style.paragraphs)?;
             if !style.paragraphs.is_empty() {
                 apply_inherited_text_style(&mut shape.paragraphs, &style.paragraphs)?;
             }
             merge_sorted_languages(&mut shape.languages, &style.languages)?;
         }
         if let Some(style) = master_style {
+            record_inherited_bullet_recovery(shape, &style.paragraphs)?;
             if !style.paragraphs.is_empty() {
                 apply_inherited_text_style(&mut shape.paragraphs, &style.paragraphs)?;
             }
@@ -709,6 +724,31 @@ pub(super) fn apply_inheritance(
         shape.hidden |= layout_style.is_some_and(|style| style.hidden);
         shape.hidden |= master_style.is_some_and(|style| style.hidden);
     }
+    Ok(())
+}
+
+fn record_inherited_bullet_recovery(
+    shape: &mut Shape,
+    paragraphs: &[TextParagraph],
+) -> Result<(), ConversionError> {
+    if !paragraphs.iter().any(|paragraph| paragraph.bullet_recovered)
+        || shape.recoveries.iter().any(|recovery| {
+            recovery.code == "office.extensionOmitted"
+                && recovery.message == "bitmap bullet was replaced by a standard bullet"
+        })
+    {
+        return Ok(());
+    }
+    shape.recoveries.try_reserve(1).map_err(|error| {
+        limit(
+            "max_memory_bytes",
+            format!("cannot reserve inherited bitmap-bullet recovery: {error}"),
+        )
+    })?;
+    shape.recoveries.push(ShapeRecovery {
+        code: "office.extensionOmitted",
+        message: "bitmap bullet was replaced by a standard bullet".into(),
+    });
     Ok(())
 }
 

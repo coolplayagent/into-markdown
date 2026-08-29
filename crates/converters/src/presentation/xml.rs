@@ -2,10 +2,10 @@ use super::allocation::try_clone_bytes;
 use super::budget::{MAX_XML_EVENTS, MAX_XML_WIDTH};
 use super::error::{limit, malformed};
 use super::mce::{McSelection, mc_choice_is_understood, validate_mc_requires};
-use super::schema::{A_NS, C_NS, MC_NS, P_NS, R_NS, REL_NS, TYPES_NS};
+use super::schema::{A_NS, C_NS, M_NS, MC_NS, P_NS, R_NS, REL_NS, TYPES_NS};
 use super::xml_base::{attr, level_paragraph, resolved};
 use crate::docx::{decode_cdata, decode_reference, decode_text, decode_xml_attribute};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
 use quick_xml::reader::NsReader;
@@ -141,7 +141,13 @@ pub(super) fn preflight_xml(
                         "AlternateContent payload must be inside Choice or Fallback",
                     ));
                 }
-                validate_interpreted_element(profile, &name, parent, part)?;
+                validate_interpreted_element(
+                    profile,
+                    &name,
+                    parent,
+                    part,
+                    options.error_policy == ErrorPolicy::Strict,
+                )?;
                 validate_attributes(&reader, &element, &name, part, options)?;
                 if interpreted {
                     validate_master_text_style_cardinality(
@@ -200,7 +206,13 @@ pub(super) fn preflight_xml(
                         "AlternateContent payload must be inside Choice or Fallback",
                     ));
                 }
-                validate_interpreted_element(profile, &name, parent, part)?;
+                validate_interpreted_element(
+                    profile,
+                    &name,
+                    parent,
+                    part,
+                    options.error_policy == ErrorPolicy::Strict,
+                )?;
                 validate_attributes(&reader, &element, &name, part, options)?;
                 if interpreted {
                     validate_master_text_style_cardinality(
@@ -334,12 +346,23 @@ fn validate_interpreted_element(
     name: &(Vec<u8>, Vec<u8>),
     parent: Option<&(Vec<u8>, Vec<u8>)>,
     part: &str,
+    strict: bool,
 ) -> Result<(), ConversionError> {
     let ns = name.0.as_slice();
     let local = name.1.as_slice();
     let parent_is = |namespace: &[u8], local: &[u8]| {
         parent.is_some_and(|value| value.0 == namespace && value.1 == local)
     };
+    // Vendor extensions frequently reuse core local names. They are opaque to
+    // the deterministic parser and must not be validated as if they belonged
+    // to PresentationML/DrawingML/ChartML.
+    if !matches!(ns, TYPES_NS | REL_NS | MC_NS | P_NS | A_NS | C_NS | M_NS) {
+        return if strict {
+            Err(malformed(Some(part), "unsupported extension namespace"))
+        } else {
+            Ok(())
+        };
+    }
     if parent_is(A_NS, b"t") || parent_is(C_NS, b"v") {
         return Err(malformed(
             Some(part),
@@ -350,11 +373,13 @@ fn validate_interpreted_element(
         b"Types" | b"Override" | b"Default" => Some(TYPES_NS),
         b"Relationships" | b"Relationship" => Some(REL_NS),
         b"AlternateContent" | b"Choice" | b"Fallback" => Some(MC_NS),
+        b"r" | b"t" if ns == M_NS => Some(M_NS),
+        b"blipFill" | b"pt" if ns == A_NS => Some(A_NS),
         b"presentation" | b"sldIdLst" | b"sldId" | b"sld" | b"notes" | b"sldLayout"
         | b"sldMaster" | b"cSld" | b"spTree" | b"sp" | b"pic" | b"graphicFrame" | b"grpSp"
-        | b"grpSpPr" | b"nvSpPr" | b"nvPicPr" | b"nvGraphicFramePr" | b"nvGrpSpPr" | b"cNvPr"
-        | b"cNvSpPr" | b"cNvPicPr" | b"cNvGraphicFramePr" | b"cNvGrpSpPr" | b"nvPr" | b"ph"
-        | b"blipFill" => Some(P_NS),
+        | b"cxnSp" | b"grpSpPr" | b"nvSpPr" | b"nvPicPr" | b"nvGraphicFramePr" | b"nvGrpSpPr"
+        | b"nvCxnSpPr" | b"cNvPr" | b"cNvSpPr" | b"cNvPicPr" | b"cNvGraphicFramePr"
+        | b"cNvGrpSpPr" | b"cNvCxnSpPr" | b"nvPr" | b"ph" | b"blipFill" => Some(P_NS),
         b"txStyles" | b"titleStyle" | b"bodyStyle" | b"otherStyle" | b"defaultTextStyle" => {
             Some(P_NS)
         }
@@ -366,7 +391,7 @@ fn validate_interpreted_element(
         | b"numRef" | b"strCache" | b"numCache" | b"pt" | b"v" => Some(C_NS),
         _ => None,
     };
-    if expected.is_some_and(|expected| expected != ns) {
+    if strict && expected.is_some_and(|expected| expected != ns) {
         return Err(malformed(
             Some(part),
             format!(
@@ -375,16 +400,16 @@ fn validate_interpreted_element(
             ),
         ));
     }
-    if local == b"xfrm" && !matches!(ns, P_NS | A_NS) {
+    if strict && local == b"xfrm" && !matches!(ns, P_NS | A_NS) {
         return Err(malformed(Some(part), "xfrm has an unexpected namespace"));
     }
-    if local == b"txBody" && !matches!(ns, P_NS | A_NS) {
+    if strict && local == b"txBody" && !matches!(ns, P_NS | A_NS) {
         return Err(malformed(Some(part), "txBody has an unexpected namespace"));
     }
-    if local == b"spPr" && !matches!(ns, P_NS | A_NS | C_NS) {
+    if strict && local == b"spPr" && !matches!(ns, P_NS | A_NS | C_NS) {
         return Err(malformed(Some(part), "spPr has an unexpected namespace"));
     }
-    if local == b"ext" && !matches!(ns, P_NS | A_NS | C_NS) {
+    if strict && local == b"ext" && !matches!(ns, P_NS | A_NS | C_NS) {
         return Err(malformed(Some(part), "ext has an unexpected namespace"));
     }
     let valid = match (ns, local) {
@@ -402,37 +427,49 @@ fn validate_interpreted_element(
         (P_NS, b"spTree") => parent_is(P_NS, b"cSld"),
         (P_NS, b"grpSp") => parent_is(P_NS, b"spTree") || parent_is(P_NS, b"grpSp"),
         (P_NS, b"grpSpPr") => parent_is(P_NS, b"grpSp") || parent_is(P_NS, b"spTree"),
-        (P_NS, b"sp" | b"pic" | b"graphicFrame") => {
+        (P_NS, b"sp" | b"pic" | b"graphicFrame" | b"cxnSp") => {
             parent_is(P_NS, b"spTree") || parent_is(P_NS, b"grpSp")
         }
         (P_NS, b"nvSpPr") => parent_is(P_NS, b"sp"),
         (P_NS, b"nvPicPr") => parent_is(P_NS, b"pic"),
         (P_NS, b"nvGraphicFramePr") => parent_is(P_NS, b"graphicFrame"),
         (P_NS, b"nvGrpSpPr") => parent_is(P_NS, b"grpSp") || parent_is(P_NS, b"spTree"),
+        (P_NS, b"nvCxnSpPr") => parent_is(P_NS, b"cxnSp"),
         (P_NS, b"cNvPr") => matches!(
             parent,
             Some((namespace, local))
                 if namespace == P_NS
                     && matches!(
                         local.as_slice(),
-                        b"nvSpPr" | b"nvPicPr" | b"nvGraphicFramePr" | b"nvGrpSpPr"
+                        b"nvSpPr"
+                            | b"nvPicPr"
+                            | b"nvGraphicFramePr"
+                            | b"nvGrpSpPr"
+                            | b"nvCxnSpPr"
                     )
         ),
         (P_NS, b"cNvSpPr") => parent_is(P_NS, b"nvSpPr"),
         (P_NS, b"cNvPicPr") => parent_is(P_NS, b"nvPicPr"),
         (P_NS, b"cNvGraphicFramePr") => parent_is(P_NS, b"nvGraphicFramePr"),
         (P_NS, b"cNvGrpSpPr") => parent_is(P_NS, b"nvGrpSpPr"),
+        (P_NS, b"cNvCxnSpPr") => parent_is(P_NS, b"nvCxnSpPr"),
         (P_NS, b"nvPr") => matches!(
             parent,
             Some((namespace, local))
                 if namespace == P_NS
                     && matches!(
                         local.as_slice(),
-                        b"nvSpPr" | b"nvPicPr" | b"nvGraphicFramePr" | b"nvGrpSpPr"
+                        b"nvSpPr"
+                            | b"nvPicPr"
+                            | b"nvGraphicFramePr"
+                            | b"nvGrpSpPr"
+                            | b"nvCxnSpPr"
                     )
         ),
         (P_NS, b"ph") => parent_is(P_NS, b"nvPr"),
-        (P_NS, b"spPr") => parent_is(P_NS, b"sp") || parent_is(P_NS, b"pic"),
+        (P_NS, b"spPr") => {
+            parent_is(P_NS, b"sp") || parent_is(P_NS, b"pic") || parent_is(P_NS, b"cxnSp")
+        }
         (A_NS, b"spPr") => {
             profile == XmlProfile::Theme
                 && parent.is_some_and(|(namespace, local)| {
@@ -445,6 +482,10 @@ fn validate_interpreted_element(
         (P_NS, b"txBody") => parent_is(P_NS, b"sp"),
         (A_NS, b"txBody") => parent_is(A_NS, b"tc"),
         (P_NS, b"blipFill") => parent_is(P_NS, b"pic"),
+        (A_NS, b"blipFill") => matches!(
+            parent.map(|name| name.1.as_slice()),
+            Some(b"bgFillStyleLst" | b"spPr" | b"tcPr")
+        ),
         (P_NS, b"txStyles") => parent_is(P_NS, b"sldMaster"),
         (P_NS, b"titleStyle" | b"bodyStyle" | b"otherStyle") => parent_is(P_NS, b"txStyles"),
         (P_NS, b"defaultTextStyle") => parent_is(P_NS, b"presentation"),
@@ -473,7 +514,7 @@ fn validate_interpreted_element(
                 || parent_is(C_NS, b"rich")
                 || parent_is(C_NS, b"txPr")
         }
-        (A_NS, b"pPr") => parent_is(A_NS, b"p"),
+        (A_NS, b"pPr") => parent_is(A_NS, b"p") || parent_is(A_NS, b"fld"),
         (A_NS, b"defPPr") => {
             matches!(
                 parent,
@@ -483,7 +524,7 @@ fn validate_interpreted_element(
                             local.as_slice(),
                             b"defaultTextStyle" | b"titleStyle" | b"bodyStyle" | b"otherStyle"
                         )
-            )
+            ) || parent_is(A_NS, b"lstStyle")
         }
         (A_NS, local) if level_paragraph(local).is_some() => {
             matches!(
@@ -497,7 +538,14 @@ fn validate_interpreted_element(
             ) || parent_is(A_NS, b"lstStyle")
         }
         (A_NS, b"r") => parent_is(A_NS, b"p"),
-        (A_NS, b"rPr") => parent_is(A_NS, b"r") || parent_is(A_NS, b"fld"),
+        (A_NS, b"rPr") => {
+            parent_is(A_NS, b"r")
+                || parent_is(A_NS, b"fld")
+                || parent_is(A_NS, b"br")
+                || parent_is(M_NS, b"r")
+                || parent_is(M_NS, b"ctrlPr")
+        }
+        (M_NS, b"r" | b"t") => true,
         (A_NS, b"defRPr") => {
             parent_is(A_NS, b"pPr")
                 || parent_is(A_NS, b"defPPr")
@@ -556,12 +604,16 @@ fn validate_interpreted_element(
             parent_is(C_NS, b"strRef") || parent_is(C_NS, b"numRef")
         }
         (C_NS, b"pt") => parent_is(C_NS, b"strCache") || parent_is(C_NS, b"numCache"),
+        (A_NS, b"pt") => matches!(
+            parent.map(|name| name.1.as_slice()),
+            Some(b"moveTo" | b"lnTo" | b"cubicBezTo" | b"quadBezTo")
+        ),
         (C_NS, b"v") => parent_is(C_NS, b"pt") || parent_is(C_NS, b"tx"),
         (C_NS, b"ext") => parent_is(C_NS, b"extLst"),
         (MC_NS, b"Choice" | b"Fallback") => parent_is(MC_NS, b"AlternateContent"),
         _ => true,
     };
-    if valid {
+    if valid || !strict {
         Ok(())
     } else {
         Err(malformed(

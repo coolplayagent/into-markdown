@@ -99,6 +99,10 @@ impl<'a> ArchiveBudget<'a> {
     pub(super) fn context(&self) -> &'a ExecutionContext {
         self.context
     }
+
+    pub(super) fn zip_charset(&self) -> Option<&str> {
+        self.options.archive.zip_charset.as_deref()
+    }
 }
 
 fn limit(limit: &'static str, detail: impl Into<String>) -> ConversionError {

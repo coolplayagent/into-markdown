@@ -1130,11 +1130,14 @@ fn structured_text_candidate(
             }));
         }
         if strong_json_prefix(json) {
-            return Ok(Some(FormatCandidate::new(
-                InputFormat::Json,
-                0.94,
-                "JSON structural prefix with invalid or incomplete syntax",
-            )));
+            return Ok(Some(
+                FormatCandidate::new(
+                    InputFormat::Json,
+                    0.50,
+                    "JSON structural prefix with invalid or incomplete syntax",
+                )
+                .with_diagnostic("incomplete JSON evidence does not override a filename extension"),
+            ));
         }
     }
 
@@ -1151,11 +1154,22 @@ fn structured_text_candidate(
             structured::XmlDetectionText::Decoded(decoded) => {
                 let text = decoded.trim_start();
                 if let Some(root) = xml_root_name(text) {
-                    return Ok(Some(FormatCandidate::new(
-                        InputFormat::Xml,
-                        0.92,
-                        format!("UTF-16 XML {root} root element"),
-                    )));
+                    return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+                        FormatCandidate::new(
+                            InputFormat::Xml,
+                            0.92,
+                            format!("complete UTF-16 XML {root} root element"),
+                        )
+                    } else {
+                        FormatCandidate::new(
+                            InputFormat::Xml,
+                            0.50,
+                            format!("incomplete UTF-16 XML {root} root element"),
+                        )
+                        .with_diagnostic(
+                            "incomplete XML evidence does not override a filename extension",
+                        )
+                    }));
                 }
                 if strong_xml_prefix(text) {
                     return Ok(Some(FormatCandidate::new(
@@ -1168,7 +1182,7 @@ fn structured_text_candidate(
             structured::XmlDetectionText::InvalidUtf16 => {
                 return Ok(Some(FormatCandidate::new(
                     InputFormat::Xml,
-                    0.90,
+                    0.50,
                     "UTF-16 XML signature with invalid encoded content",
                 )));
             }
@@ -1195,7 +1209,12 @@ fn structured_text_candidate(
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element")));
     }
     if text.starts_with("<?xml") {
-        return Ok(Some(FormatCandidate::new(InputFormat::Xml, 0.92, "XML declaration")));
+        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+            FormatCandidate::new(InputFormat::Xml, 0.92, "complete XML declaration")
+        } else {
+            FormatCandidate::new(InputFormat::Xml, 0.50, "incomplete XML declaration")
+                .with_diagnostic("incomplete XML evidence does not override a filename extension")
+        }));
     }
     let markdown = markdown::strong_markdown_evidence(text, context)?;
     let html = html_document_evidence(text, context)?;
@@ -1214,18 +1233,30 @@ fn structured_text_candidate(
         )));
     }
     if let Some(root) = root {
-        return Ok(Some(FormatCandidate::new(
-            InputFormat::Xml,
-            0.92,
-            format!("XML {root} root element"),
-        )));
+        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+            FormatCandidate::new(
+                InputFormat::Xml,
+                0.92,
+                format!("complete XML {root} root element"),
+            )
+        } else {
+            FormatCandidate::new(
+                InputFormat::Xml,
+                0.50,
+                format!("incomplete XML {root} root element"),
+            )
+            .with_diagnostic("incomplete XML evidence does not override a filename extension")
+        }));
     }
     if strong_xml_prefix(text) {
-        return Ok(Some(FormatCandidate::new(
-            InputFormat::Xml,
-            0.90,
-            "XML declaration or paired markup with invalid structure",
-        )));
+        return Ok(Some(
+            FormatCandidate::new(
+                InputFormat::Xml,
+                0.50,
+                "XML declaration or paired markup with invalid structure",
+            )
+            .with_diagnostic("incomplete XML evidence does not override a filename extension"),
+        ));
     }
     if markdown {
         return Ok(Some(FormatCandidate::new(

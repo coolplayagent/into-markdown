@@ -1,7 +1,7 @@
 //! Stable CLI error and exit-code mapping.
 
 use crate::args::Language;
-use into_markdown::{ConversionError, ErrorCode, ProviderError, ProviderErrorCode};
+use into_markdown::{ConversionError, ErrorCode, InputFormat, ProviderError, ProviderErrorCode};
 
 /// Stable shell-level failure classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +46,19 @@ pub struct CliError {
     class: ExitClass,
     code: &'static str,
     message: String,
+    metadata: Option<Box<CliErrorMetadata>>,
     broken_pipe: bool,
     language: Option<Language>,
     json_log: bool,
+}
+
+#[derive(Debug)]
+struct CliErrorMetadata {
+    reason_code: String,
+    component: Option<String>,
+    part: Option<String>,
+    limit: Option<(String, String)>,
+    detected_format: Option<InputFormat>,
 }
 
 impl CliError {
@@ -57,6 +67,7 @@ impl CliError {
             class,
             code,
             message: message.into(),
+            metadata: None,
             broken_pipe: false,
             language: None,
             json_log: false,
@@ -94,6 +105,46 @@ impl CliError {
 
     pub fn message(&self) -> &str {
         &self.message
+    }
+
+    pub fn reason_code(&self) -> &str {
+        self.metadata.as_ref().map_or(self.code, |metadata| &metadata.reason_code)
+    }
+
+    pub fn component_name(&self) -> Option<&str> {
+        self.metadata.as_ref().and_then(|metadata| metadata.component.as_deref())
+    }
+
+    pub fn part(&self) -> Option<&str> {
+        self.metadata.as_ref().and_then(|metadata| metadata.part.as_deref())
+    }
+
+    pub fn limit(&self) -> Option<(&str, &str)> {
+        self.metadata
+            .as_ref()
+            .and_then(|metadata| metadata.limit.as_ref())
+            .map(|(name, detail)| (name.as_str(), detail.as_str()))
+    }
+
+    pub fn detected_format(&self) -> Option<InputFormat> {
+        self.metadata.as_ref().and_then(|metadata| metadata.detected_format)
+    }
+
+    pub fn with_detected_format(mut self, format: Option<InputFormat>) -> Self {
+        if let Some(format) = format {
+            self.metadata
+                .get_or_insert_with(|| {
+                    Box::new(CliErrorMetadata {
+                        reason_code: self.code.into(),
+                        component: None,
+                        part: None,
+                        limit: None,
+                        detected_format: None,
+                    })
+                })
+                .detected_format = Some(format);
+        }
+        self
     }
 
     pub fn exit_code(&self) -> i32 {
@@ -139,6 +190,7 @@ impl From<std::io::Error> for CliError {
                 class: ExitClass::Success,
                 code: "brokenPipe",
                 message: error.to_string(),
+                metadata: None,
                 broken_pipe: true,
                 language: None,
                 json_log: false,
@@ -165,7 +217,19 @@ impl From<ConversionError> for CliError {
             ErrorCode::Cancelled => ExitClass::Cancelled,
             _ => ExitClass::Internal,
         };
-        Self::new(class, error.code().as_str(), error.to_string())
+        let reason_code = error.reason_code().to_owned();
+        let component = error.component().map(str::to_owned);
+        let part = error.part().map(str::to_owned);
+        let limit = error.limit().map(|(name, detail)| (name.to_owned(), detail.to_owned()));
+        let mut cli = Self::new(class, error.code().as_str(), error.to_string());
+        cli.metadata = Some(Box::new(CliErrorMetadata {
+            reason_code,
+            component,
+            part,
+            limit,
+            detected_format: None,
+        }));
+        cli
     }
 }
 

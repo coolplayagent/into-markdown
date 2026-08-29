@@ -41,6 +41,7 @@ log_format = "text"
 
 [conversion]
 timeout_ms = 120000
+error_policy = "best-effort" # best-effort（默认）或 strict
 
 [conversion.ocr]
 policy = "auto"
@@ -70,6 +71,9 @@ max_redirects = 3
 allowed_hosts = ["api.example.com"]
 deny_private_networks = true
 
+[conversion.archive]
+zip_charset = "gb18030"
+
 [conversion.limits]
 max_input_bytes = 536870912
 max_decompressed_bytes = 1073741824
@@ -81,7 +85,7 @@ max_nesting_depth = 256
 max_pages = 10000
 max_asset_bytes = 268435456
 max_total_asset_bytes = 1073741824
-max_memory_bytes = 1073741824
+max_memory_bytes = "auto"
 max_temporary_bytes = 4294967296
 max_table_rows = 100000
 max_table_columns = 16384

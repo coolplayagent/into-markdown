@@ -33,9 +33,9 @@ use ir::character_ir_allocation_bytes;
 
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter,
-    ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext, FormatCandidate,
-    Inline, InputFormat, NodeId, OcrPolicy, ProbeOutcome, Provenance, ProvenanceKind, Rect,
-    ResolvedInput, ResourceReservation, Services, SourceLocator,
+    ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext,
+    FormatCandidate, Inline, InputFormat, NodeId, OcrPolicy, ProbeOutcome, Provenance,
+    ProvenanceKind, Rect, ResolvedInput, ResourceReservation, Services, SourceLocator,
 };
 use into_markdown_pdfium::{
     Bitmap, Character, Error as PdfiumError, ImageBitmap, Limits, LinkTarget, PageInfo, PdfRect,
@@ -51,7 +51,8 @@ const PROVIDER_ID: &str = "builtin.converter.pdfium";
 const FORMATS: &[InputFormat] = &[InputFormat::Pdf];
 const MIN_NATIVE_TEXT_CHARS: usize = 8;
 const MIN_SCAN_IMAGE_COVERAGE: f64 = 0.50;
-const MAX_RENDER_DIMENSION: u32 = 4096;
+const MAX_RENDER_DIMENSION: u32 = 16_384;
+const MAX_PAGE_RENDER_DIMENSION: u32 = 4096;
 static PDF_CONVERSION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 type PdfiumRuntimeResolver = fn() -> Result<PathBuf, ConversionError>;
 static PDFIUM_RUNTIME_RESOLVER: OnceLock<PdfiumRuntimeResolver> = OnceLock::new();
@@ -393,7 +394,41 @@ fn convert_pdf(
                 .and_then(|bytes| bytes.checked_add(output_block_overhead(2).ok()?))
                 .ok_or_else(|| resource("max_memory_bytes", "link IR memory overflow"))?;
             retain_output_bytes(context, &mut retained_memory, link_ir_bytes)?;
-            let target = safe_link_target(link.target, pdf.page_count())?;
+            let display_text = match &link.target {
+                LinkTarget::ExternalUri(value) => Some(value.clone()),
+                LinkTarget::InternalPage { .. } => None,
+            };
+            let target = match safe_link_target(link.target, pdf.page_count()) {
+                Ok(target) => target,
+                Err(error) if options.error_policy == ErrorPolicy::Strict => return Err(error),
+                Err(error) => {
+                    diagnostics.push(Diagnostic {
+                        code: "pdf.linkOmitted".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: error.to_string(),
+                        locator: Some(page_locator(page_number, &info)),
+                    });
+                    if let Some(value) = display_text {
+                        blocks.try_reserve(1).map_err(|_| {
+                            resource("max_memory_bytes", "PDF block allocation failed")
+                        })?;
+                        blocks.push(BlockNode {
+                            id: NodeId(format!("pdf-page-{page_number}-link-{link_index}")),
+                            block: Block::Paragraph(vec![Inline::Text {
+                                value,
+                                marks: Vec::new(),
+                            }]),
+                            provenance: provenance(
+                                page_number,
+                                Some(normalize_rect(link.bounds, &info)?),
+                                None,
+                                &info,
+                            )?,
+                        });
+                    }
+                    continue;
+                }
+            };
             blocks
                 .try_reserve(1)
                 .map_err(|_| resource("max_memory_bytes", "PDF block allocation failed"))?;

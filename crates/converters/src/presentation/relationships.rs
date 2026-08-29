@@ -44,7 +44,7 @@ pub(super) fn parse_relationships(
                     Some("External") => true,
                     Some(_) => return Err(malformed(Some(&part), "unsupported TargetMode")),
                 };
-                if !external {
+                if !external && !internal_hyperlink_fragment(&kind, &target) {
                     resolve_target(owner, &target)?;
                 }
                 result.try_reserve(1).map_err(|error| {
@@ -61,6 +61,16 @@ pub(super) fn parse_relationships(
         return Err(malformed(Some(&part), "duplicate relationship Id"));
     }
     Ok(result)
+}
+
+pub(super) fn internal_hyperlink_fragment(kind: &str, target: &str) -> bool {
+    kind.ends_with("/hyperlink")
+        && target.strip_prefix('#').is_some_and(|fragment| {
+            !fragment.is_empty()
+                && !fragment
+                    .chars()
+                    .any(|value| value.is_control() || matches!(value, '\\' | '/' | ':'))
+        })
 }
 
 fn reject_spoofed_relationship_type(value: &str, part: &str) -> Result<(), ConversionError> {
@@ -225,14 +235,22 @@ pub(super) fn resolve_target<'a>(
     owner: &'a str,
     target: &'a str,
 ) -> Result<String, ConversionError> {
+    if target.is_empty() || target.contains(['\\', '\0', ':', '?', '#']) {
+        return Err(malformed(Some(owner), "unsafe internal relationship target"));
+    }
+    let package_absolute = target.starts_with('/');
+    let target = target.strip_prefix('/').unwrap_or(target);
     if target.is_empty()
         || target.starts_with('/')
-        || target.contains(['\\', '\0', ':', '?', '#'])
         || target.split('/').any(|segment| segment.is_empty() || segment == ".")
     {
         return Err(malformed(Some(owner), "unsafe internal relationship target"));
     }
-    let owner_directory = owner.rsplit_once('/').map_or("", |(directory, _)| directory);
+    let owner_directory = if package_absolute {
+        ""
+    } else {
+        owner.rsplit_once('/').map_or("", |(directory, _)| directory)
+    };
     let planned_segments = owner_directory
         .split('/')
         .filter(|value| !value.is_empty())

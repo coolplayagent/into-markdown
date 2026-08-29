@@ -12,7 +12,7 @@ use std::ffi::{OsStr, OsString};
 #[cfg(windows)]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -1255,6 +1255,115 @@ pub struct Target<'a> {
     pub bytes: &'a [u8],
 }
 
+/// One requested target whose staged contents come from a seekable file.
+pub struct FileTarget<'a> {
+    pub path: PathBuf,
+    pub file: &'a File,
+}
+
+trait TransactionSource {
+    fn path(&self) -> &Path;
+    fn size_and_sha256(&self, context: &ExecutionContext) -> Result<(u64, String), CliError>;
+    fn write_to(&self, destination: &mut File, context: &ExecutionContext) -> Result<(), CliError>;
+}
+
+impl TransactionSource for Target<'_> {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn size_and_sha256(&self, _: &ExecutionContext) -> Result<(u64, String), CliError> {
+        let size = u64::try_from(self.bytes.len()).map_err(|_| {
+            CliError::new(ExitClass::Policy, "resourceLimit", "target size cannot be represented")
+        })?;
+        Ok((size, sha256_hex(self.bytes)))
+    }
+
+    fn write_to(&self, destination: &mut File, context: &ExecutionContext) -> Result<(), CliError> {
+        context.checkpoint().map_err(CliError::from)?;
+        destination.write_all(self.bytes).map_err(CliError::from)
+    }
+}
+
+impl TransactionSource for FileTarget<'_> {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn size_and_sha256(&self, context: &ExecutionContext) -> Result<(u64, String), CliError> {
+        let mut source = self.file.try_clone()?;
+        source.rewind()?;
+        let mut digest = Sha256::new();
+        let mut size = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            context.checkpoint().map_err(CliError::from)?;
+            let read = source.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            size = size.checked_add(u64::try_from(read).unwrap_or(u64::MAX)).ok_or_else(|| {
+                CliError::new(ExitClass::Policy, "resourceLimit", "target size overflowed")
+            })?;
+            digest.update(&buffer[..read]);
+        }
+        Ok((size, format!("{:x}", digest.finalize())))
+    }
+
+    fn write_to(&self, destination: &mut File, context: &ExecutionContext) -> Result<(), CliError> {
+        let mut source = self.file.try_clone()?;
+        source.rewind()?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            context.checkpoint().map_err(CliError::from)?;
+            let read = source.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(());
+            }
+            destination.write_all(&buffer[..read])?;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MixedContent<'a> {
+    Bytes(&'a [u8]),
+    File(&'a File),
+}
+
+struct MixedTarget<'a> {
+    path: &'a Path,
+    content: MixedContent<'a>,
+}
+
+impl TransactionSource for MixedTarget<'_> {
+    fn path(&self) -> &Path {
+        self.path
+    }
+
+    fn size_and_sha256(&self, context: &ExecutionContext) -> Result<(u64, String), CliError> {
+        match self.content {
+            MixedContent::Bytes(bytes) => {
+                Target { path: PathBuf::new(), bytes }.size_and_sha256(context)
+            }
+            MixedContent::File(file) => {
+                FileTarget { path: PathBuf::new(), file }.size_and_sha256(context)
+            }
+        }
+    }
+
+    fn write_to(&self, destination: &mut File, context: &ExecutionContext) -> Result<(), CliError> {
+        match self.content {
+            MixedContent::Bytes(bytes) => {
+                Target { path: PathBuf::new(), bytes }.write_to(destination, context)
+            }
+            MixedContent::File(file) => {
+                FileTarget { path: PathBuf::new(), file }.write_to(destination, context)
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 pub(crate) struct SafeDir {
     fd: OwnedFd,
@@ -2389,6 +2498,9 @@ impl PreparedTransaction {
         self.temporary_reservations.clear();
         let result = recover_transaction(&self.root, &self.directory, self.lock.take());
         self.deactivate();
+        if result.is_ok() {
+            try_cleanup_empty_registry(&self.root);
+        }
         result
     }
 
@@ -2550,6 +2662,7 @@ impl PreparedTransaction {
         match finish_committed(&self.root, &self.directory, &self.journal, self.lock.take()) {
             Ok(()) => {
                 self.deactivate();
+                try_cleanup_empty_registry(&self.root);
                 Ok(targets)
             }
             Err(error) => {
@@ -2564,6 +2677,7 @@ impl PreparedTransaction {
         match recover_transaction(&self.root, &self.directory, self.lock.take()) {
             Ok(()) => {
                 self.deactivate();
+                try_cleanup_empty_registry(&self.root);
                 Err(original)
             }
             Err(recovery) => {
@@ -2627,6 +2741,7 @@ impl PreparedTransaction {
             match recover_transaction(&self.root, &self.directory, self.lock.take()) {
                 Ok(()) => {
                     self.deactivate();
+                    try_cleanup_empty_registry(&self.root);
                     Err(original)
                 }
                 Err(recovery) => {
@@ -2700,6 +2815,65 @@ pub fn prepare(
     unreachable!("bounded recovery loop always returns")
 }
 
+/// Recover manager-owned transactions, then stage seekable files in bounded chunks.
+pub fn prepare_files(
+    targets: &[FileTarget<'_>],
+    overwrite: bool,
+    context: &ExecutionContext,
+) -> Result<PreparedTransaction, CliError> {
+    for recovered in 0..=MAX_RECOVERY_RETRIES {
+        context.checkpoint().map_err(CliError::from)?;
+        match prepare_sources_with_hook(targets, overwrite, context, |_, _| {
+            Ok(HookDecision::Continue)
+        }) {
+            Err(error) if error.code() == "transactionRecoveredRetry" => {
+                if recovered == MAX_RECOVERY_RETRIES {
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "recoveryLimit",
+                        "output transaction recovery retry limit exceeded",
+                    ));
+                }
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded recovery loop always returns")
+}
+
+/// Stage one seekable primary artifact and zero or more in-memory companion assets.
+pub fn prepare_file_and_bytes(
+    primary: &FileTarget<'_>,
+    companions: &[Target<'_>],
+    overwrite: bool,
+    context: &ExecutionContext,
+) -> Result<PreparedTransaction, CliError> {
+    let mut sources = Vec::with_capacity(companions.len() + 1);
+    sources.push(MixedTarget { path: &primary.path, content: MixedContent::File(primary.file) });
+    sources.extend(companions.iter().map(|target| MixedTarget {
+        path: &target.path,
+        content: MixedContent::Bytes(target.bytes),
+    }));
+    for recovered in 0..=MAX_RECOVERY_RETRIES {
+        context.checkpoint().map_err(CliError::from)?;
+        match prepare_sources_with_hook(&sources, overwrite, context, |_, _| {
+            Ok(HookDecision::Continue)
+        }) {
+            Err(error) if error.code() == "transactionRecoveredRetry" => {
+                if recovered == MAX_RECOVERY_RETRIES {
+                    return Err(CliError::new(
+                        ExitClass::Io,
+                        "recoveryLimit",
+                        "output transaction recovery retry limit exceeded",
+                    ));
+                }
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded recovery loop always returns")
+}
+
 /// Recover any interrupted transaction owning one of these physical parent
 /// directories before higher-level conflict planning observes the filesystem.
 pub fn recover_for_paths(paths: &[PathBuf], context: &ExecutionContext) -> Result<(), CliError> {
@@ -2731,6 +2905,16 @@ pub(crate) fn prepare_with_hook(
     context: &ExecutionContext,
     mut hook: impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
 ) -> Result<PreparedTransaction, CliError> {
+    prepare_sources_with_hook(targets, overwrite, context, hook)
+}
+
+#[allow(clippy::too_many_lines)]
+fn prepare_sources_with_hook<T: TransactionSource>(
+    targets: &[T],
+    overwrite: bool,
+    context: &ExecutionContext,
+    mut hook: impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
+) -> Result<PreparedTransaction, CliError> {
     ensure_transaction_platform()?;
     #[cfg(not(any(unix, windows)))]
     return Err(transaction_platform_unavailable());
@@ -2748,7 +2932,7 @@ pub(crate) fn prepare_with_hook(
         }
         let paths = targets
             .iter()
-            .map(|target| absolute_lexical(&target.path))
+            .map(|target| absolute_lexical(target.path()))
             .collect::<Result<Vec<_>, _>>()?;
         let parent_handles = open_target_parents(&paths)?;
         recover_parent_transactions(&parent_handles)?;
@@ -2760,6 +2944,7 @@ pub(crate) fn prepare_with_hook(
         let mut seen = BTreeSet::new();
         let mut seen_originals = BTreeSet::new();
         for (target, absolute) in targets.iter().zip(&paths) {
+            let (size, content_sha256) = target.size_and_sha256(context)?;
             let relative = absolute.strip_prefix(&root).map_err(|_| {
                 CliError::new(
                     ExitClass::Io,
@@ -2809,14 +2994,8 @@ pub(crate) fn prepare_with_hook(
             entries.push(JournalEntry {
                 target: encoded,
                 original,
-                content_sha256: sha256_hex(target.bytes),
-                size: u64::try_from(target.bytes.len()).map_err(|_| {
-                    CliError::new(
-                        ExitClass::Policy,
-                        "resourceLimit",
-                        "target size cannot be represented",
-                    )
-                })?,
+                content_sha256,
+                size,
                 state: EntryState::Prepared,
             });
         }
@@ -2966,13 +3145,7 @@ pub(crate) fn prepare_with_hook(
                 }
                 return transaction.fail_and_recover(error);
             }
-            let amount = u64::try_from(target.bytes.len()).map_err(|_| {
-                CliError::new(
-                    ExitClass::Policy,
-                    "resourceLimit",
-                    "target size cannot be represented",
-                )
-            })?;
+            let amount = transaction.journal.entries[index].size;
             let reservation = match context.reserve_temporary(amount).map_err(CliError::from) {
                 Ok(reservation) => reservation,
                 Err(error) => return transaction.fail_and_recover(error),
@@ -2988,11 +3161,7 @@ pub(crate) fn prepare_with_hook(
                 }
                 return transaction.fail_and_recover(error);
             }
-            if let Err(error) = context
-                .checkpoint()
-                .map_err(CliError::from)
-                .and_then(|()| file.write_all(target.bytes).map_err(CliError::from))
-            {
+            if let Err(error) = target.write_to(&mut file, context) {
                 return transaction.fail_and_recover(error);
             }
             if let Err(error) = crash_point(&mut hook, "stageWritten", index, &mut transaction) {
@@ -4982,6 +5151,32 @@ fn transaction_registry(root: &SafeDir, create: bool) -> Result<Option<SafeDir>,
     }
 }
 
+/// Remove an empty manager-owned registry after the last in-process transaction
+/// releases it. Races are harmless: a non-empty directory simply survives for
+/// the next transaction or recovery pass.
+#[cfg(any(unix, windows))]
+fn try_cleanup_empty_registry(root: &Path) {
+    let registry_path = root.join(REGISTRY_NAME);
+    let active = active_transactions().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if active.iter().any(|path| path.starts_with(&registry_path)) {
+        return;
+    }
+    drop(active);
+    let Ok(root_handle) = SafeDir::open_absolute(root) else { return };
+    let Ok(Some(registry)) = transaction_registry(&root_handle, false) else { return };
+    let Ok(names) = registry.names() else { return };
+    if !names.is_empty() {
+        return;
+    }
+    drop(registry);
+    if root_handle.remove_empty_child(OsStr::new(REGISTRY_NAME)).is_ok() {
+        let _ = root_handle.sync();
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn try_cleanup_empty_registry(_root: &Path) {}
+
 #[cfg(windows)]
 fn transaction_registry(root: &SafeDir, create: bool) -> Result<Option<SafeDir>, CliError> {
     match root.open_child_optional(OsStr::new(REGISTRY_NAME))? {
@@ -5125,6 +5320,44 @@ mod tests {
                 managed_nonce(&name).map(|_| entry.path())
             })
             .collect()
+    }
+
+    #[test]
+    fn successful_transaction_removes_the_empty_registry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let output = root.join("document.md");
+        prepare(&[Target { path: output.clone(), bytes: b"document" }], false, &context())
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        assert_eq!(fs::read(output).unwrap(), b"document");
+        assert!(!root.join(REGISTRY_NAME).exists());
+    }
+
+    #[test]
+    fn file_backed_primary_and_byte_companion_commit_as_one_set() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let source_path = root.join("encoded.tmp");
+        fs::write(&source_path, b"streamed primary").unwrap();
+        let source = File::open(&source_path).unwrap();
+        let primary = root.join("document.md");
+        let asset = root.join("asset.bin");
+        prepare_file_and_bytes(
+            &FileTarget { path: primary.clone(), file: &source },
+            &[Target { path: asset.clone(), bytes: b"asset" }],
+            false,
+            &context(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+
+        assert_eq!(fs::read(primary).unwrap(), b"streamed primary");
+        assert_eq!(fs::read(asset).unwrap(), b"asset");
+        assert!(!root.join(REGISTRY_NAME).exists());
     }
 
     #[test]

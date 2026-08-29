@@ -700,15 +700,44 @@ fn planned_render_peak(
                     owners.output
                 }
                 Block::Code { language, text } => {
-                    let mut rendered = 16_u64;
-                    if let Some(language) = language {
-                        rendered = rendered
-                            .checked_add(plan.text(language, depth)?)
-                            .ok_or_else(render_plan_overflow)?;
+                    if language.as_deref() == Some("tsv") && longest_run(text, '`') <= 2 {
+                        let source =
+                            u64::try_from(text.len()).map_err(|_| render_plan_overflow())?;
+                        let newlines =
+                            u64::try_from(text.bytes().filter(|byte| *byte == b'\n').count())
+                                .map_err(|_| render_plan_overflow())?;
+                        // Paged workbook TSV escapes backticks, so the three-byte
+                        // fence is fixed. Account the two LF-normalization owners,
+                        // the fenced output, and each enclosing block join.
+                        plan.add(source)?;
+                        plan.add(source)?;
+                        let mut rendered =
+                            source.checked_add(16).ok_or_else(render_plan_overflow)?;
+                        plan.add(rendered)?;
+                        for _ in 0..depth {
+                            plan.add(rendered)?;
+                            rendered = rendered
+                                .checked_add(
+                                    newlines.checked_mul(4).ok_or_else(render_plan_overflow)?,
+                                )
+                                .and_then(|value| value.checked_add(64))
+                                .ok_or_else(render_plan_overflow)?;
+                            plan.add(rendered)?;
+                            plan.add(rendered)?;
+                            plan.add(rendered)?;
+                        }
+                        rendered
+                    } else {
+                        let mut rendered = 16_u64;
+                        if let Some(language) = language {
+                            rendered = rendered
+                                .checked_add(plan.text(language, depth)?)
+                                .ok_or_else(render_plan_overflow)?;
+                        }
+                        rendered
+                            .checked_add(plan.text(text, depth)?)
+                            .ok_or_else(render_plan_overflow)?
                     }
-                    rendered
-                        .checked_add(plan.text(text, depth)?)
-                        .ok_or_else(render_plan_overflow)?
                 }
                 Block::Formula(value) => plan.text(value, depth)?,
                 Block::Footnote { label, blocks } => plan

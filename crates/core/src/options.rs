@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+/// Recovery policy for non-critical format defects.
+///
+/// Security, integrity, resource, cancellation, timeout, and I/O failures are
+/// never recoverable through this policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ErrorPolicy {
+    /// Preserve recoverable content and emit stable diagnostics for omissions.
+    #[default]
+    BestEffort,
+    /// Reject every structural defect, including otherwise recoverable ones.
+    Strict,
+}
+
 /// Local OCR routing policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -219,7 +233,7 @@ impl Default for ResourceLimits {
             max_pages: 10_000,
             max_asset_bytes: 256 * 1024 * 1024,
             max_total_asset_bytes: 1024 * 1024 * 1024,
-            max_memory_bytes: 1024 * 1024 * 1024,
+            max_memory_bytes: 2 * 1024 * 1024 * 1024,
             // Speech decoding and legacy Office normalization are isolated in
             // capability processes but share this request-scoped disk budget.
             // Their audited manifests are bounded at 4 GiB.
@@ -305,6 +319,15 @@ pub struct DelimitedTextOptions {
     pub ragged_rows: RaggedRowsMode,
 }
 
+/// Archive decoding policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArchiveOptions {
+    /// Explicit legacy ZIP filename encoding label. Unicode Path extra fields
+    /// and the UTF-8 flag still take precedence.
+    pub zip_charset: Option<String>,
+}
+
 /// Markdown representation policy for assets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -332,12 +355,18 @@ impl Default for OutputOptions {
 /// Complete policy passed through the conversion pipeline.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConversionOptions {
+    /// Handling of recoverable, non-security format defects.
+    #[serde(default)]
+    pub error_policy: ErrorPolicy,
     /// Plain-text decoding policy.
     #[serde(default)]
     pub text: TextOptions,
     /// CSV and TSV parsing policy.
     #[serde(default)]
     pub delimited_text: DelimitedTextOptions,
+    /// Archive filename and container compatibility policy.
+    #[serde(default)]
+    pub archive: ArchiveOptions,
     /// Local OCR policy.
     pub ocr: OcrOptions,
     /// Local speech-recognition policy.
@@ -363,10 +392,16 @@ mod tests {
     #[test]
     fn defaults_are_offline_and_ai_free() {
         let defaults = ConversionOptions::default();
+        assert_eq!(defaults.error_policy, ErrorPolicy::BestEffort);
         assert!(!defaults.network.enabled);
         assert_eq!(defaults.ocr.policy, OcrPolicy::Auto);
         assert_eq!(defaults.ai.vision_ocr, AiMode::Off);
         assert_eq!(defaults.ai.markdown_postprocess, AiMode::Off);
+    }
+
+    #[test]
+    fn default_memory_budget_is_two_gibibytes() {
+        assert_eq!(ResourceLimits::default().max_memory_bytes, 2 * 1024 * 1024 * 1024);
     }
 
     #[test]

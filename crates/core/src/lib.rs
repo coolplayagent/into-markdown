@@ -18,12 +18,13 @@ mod options;
 mod spi;
 
 pub use dto::{
-    AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemStatus, BatchReportDto, BundleAssetDto,
-    BundleManifestDto, DTO_SCHEMA_VERSION, DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto,
-    DtoError, DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
-    MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH, MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES,
-    MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES, MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES,
-    ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto, canonical_external_asset_uri,
+    AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
+    BatchLimitDto, BatchReportDto, BundleAssetDto, BundleManifestDto, DTO_SCHEMA_VERSION,
+    DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto, DtoError, DtoErrorCode, DtoJsonStyle,
+    DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES, MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH,
+    MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES, MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES,
+    MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES, ProvenanceDto, ProvenanceKindDto,
+    ProvenanceListDto, ResultDto, canonical_external_asset_uri,
 };
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{
@@ -53,14 +54,15 @@ pub use ocr_binding::{
     OcrRecognition, OcrRegion, OcrResult,
 };
 pub use options::{
-    AiMode, AiOptions, AsrOptions, AssetMode, ChineseScript, ConversionOptions,
-    DelimitedTextOptions, DiarizationOptions, NetworkOptions, OcrOptions, OcrPolicy, OutputOptions,
-    RaggedRowsMode, ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
+    AiMode, AiOptions, ArchiveOptions, AsrOptions, AssetMode, ChineseScript, ConversionOptions,
+    DelimitedTextOptions, DiarizationOptions, ErrorPolicy, NetworkOptions, OcrOptions, OcrPolicy,
+    OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
 };
 pub use spi::{
-    AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoxFuture, ConversionRequest,
-    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult,
-    DiarizationRequest, DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, FormatDetector,
+    AiCapability, AiInput, AiOutput, AiProvider, AiRequest, ArtifactSink, AssetStreamInfo,
+    BoxFuture, ConversionOutcome, ConversionRequest, ConversionResult, ConversionSummary,
+    Converter, ConverterOutput, DetectionRequest, DetectionResult, DiarizationRequest,
+    DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, FormatDetector,
     LegacyOfficeNormalizer, LegacyOfficeRequest, LegacyOfficeResult, MarkdownRenderer, OcrEngine,
     OcrRequest, OutputEnricher, PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor,
     TensorRuntime, Transcriber, TranscriptionRequest, TranscriptionResult,

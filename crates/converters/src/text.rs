@@ -54,8 +54,11 @@ impl Converter for TextConverter {
             }
             let explicit_charset_hint = candidate.detector_id == "builtin.detector.hints"
                 && candidate.evidence.contains("character encoding hint");
+            let extension_hint = candidate.detector_id == "builtin.detector.hints"
+                && candidate.evidence.contains("filename extension");
             if candidate.explicit
                 || explicit_charset_hint
+                || (extension_hint && sniff_unstructured_text(&input.bytes, context)?.is_some())
                 || sniff_text(&input.bytes, context)?.is_some()
             {
                 Ok(ProbeOutcome::Match { confidence: 1.0 })

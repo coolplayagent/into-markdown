@@ -8,11 +8,13 @@ pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
 use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
-    Asset, Block, BlockNode, ConversionError, ConversionOptions, ConversionRequest,
-    ConversionResult, Converter, ConverterOutput, DetectionRequest, DetectionResult, Document,
-    EnrichmentPlan, ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
-    MarkdownRenderer, OutputEnricher, ProbeOutcome, Provenance, ResolvedInput, ResourceReservation,
-    Services, SourceLocator, SourceMetadata, SourceResolver, estimate_retained_result,
+    AiMode, ArtifactSink, Asset, AssetStreamInfo, Block, BlockNode, ConversionError,
+    ConversionOptions, ConversionOutcome, ConversionRequest, ConversionResult, ConversionSummary,
+    Converter, ConverterOutput, DetectionRequest, DetectionResult, Diagnostic, DiagnosticSeverity,
+    Document, EnrichmentPlan, ErrorPolicy, ExecutionContext, ExecutionStage, FormatCandidate,
+    FormatDetector, FormatHint, InputFormat, MarkdownRenderer, OcrPolicy, OutputEnricher,
+    ProbeOutcome, Provenance, ResolvedInput, ResourceReservation, Services, SourceLocator,
+    SourceMetadata, SourceResolver, TextDecodingMode, estimate_retained_result,
     estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
@@ -254,12 +256,82 @@ impl Engine {
     #[allow(clippy::too_many_lines)]
     pub async fn convert(
         &self,
-        mut request: ConversionRequest,
+        request: ConversionRequest,
     ) -> Result<ConversionResult, ConversionError> {
+        let context =
+            ExecutionContext::new(request.execution.clone(), request.options.limits.clone());
+        self.convert_with_context(request, context).await
+    }
+
+    /// Convert and emit ordered Markdown and asset chunks to a caller-owned sink.
+    ///
+    /// This avoids a second aggregate serialization buffer. Format converters
+    /// may still retain their bounded document IR while producing the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns conversion failures and sink failures.
+    pub async fn convert_into(
+        &self,
+        request: ConversionRequest,
+        sink: &mut dyn ArtifactSink,
+    ) -> Result<ConversionSummary, ConversionError> {
+        let result = self.convert(request).await?;
+        for chunk in result.markdown.as_bytes().chunks(64 * 1024) {
+            sink.write_markdown(chunk)?;
+        }
+        for asset in &result.assets {
+            let size =
+                u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+                    limit: "max_asset_bytes",
+                    detail: "asset byte length cannot be represented".into(),
+                })?;
+            sink.begin_asset(&AssetStreamInfo {
+                id: asset.id.clone(),
+                filename: asset.filename.clone(),
+                media_type: asset.media_type.clone(),
+                size,
+                external_uri: asset.external_uri.clone(),
+            })?;
+            for chunk in asset.bytes.chunks(64 * 1024) {
+                sink.write_asset(chunk)?;
+            }
+            sink.end_asset()?;
+        }
+        Ok(ConversionSummary {
+            format: result.detected_format(),
+            outcome: if result.diagnostics.is_empty() {
+                ConversionOutcome::Complete
+            } else {
+                ConversionOutcome::Degraded
+            },
+            diagnostics: result.diagnostics.clone(),
+            markdown_bytes: u64::try_from(result.markdown.len()).unwrap_or(u64::MAX),
+            assets: u64::try_from(result.assets.len()).unwrap_or(u64::MAX),
+        })
+    }
+
+    /// Convert using an independently controlled context backed by a caller-owned
+    /// shared resource pool.
+    ///
+    /// The context limits must exactly match the request limits. This seam is
+    /// primarily used by bounded batch schedulers; ordinary callers should use
+    /// [`Self::convert`].
+    #[doc(hidden)]
+    #[allow(clippy::too_many_lines)]
+    pub async fn convert_with_context(
+        &self,
+        mut request: ConversionRequest,
+        context: ExecutionContext,
+    ) -> Result<ConversionResult, ConversionError> {
+        if context.resource_limits() != &request.options.limits {
+            return Err(ConversionError::Internal {
+                detail: "shared execution context limits do not match conversion request".into(),
+            });
+        }
         if request.options.text.charset.is_none() {
             request.options.text.charset.clone_from(&request.hint.charset);
         }
-        let context = ExecutionContext::new(request.execution, request.options.limits.clone());
         context.report(ExecutionStage::Resolving, None, None, None::<String>)?;
         let mut source = self.resolve_input(&request.input, &request.options, &context).await?;
         measured_input_bytes(source.input(), &request.options)?;
@@ -272,6 +344,7 @@ impl Engine {
                 detail: "format detectors produced no candidates".into(),
             });
         }
+        context.record_detected_format(candidates[0].format);
 
         context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
         let mut attempts = Vec::new();
@@ -310,6 +383,7 @@ impl Engine {
                 .join(",");
             return Err(ConversionError::NoConverter { format: formats });
         };
+        context.record_detected_format(attempt.candidate.format);
 
         // A successful probe makes conversion authoritative. Conversion errors
         // are returned immediately rather than being hidden by another parser.
@@ -364,14 +438,22 @@ impl Engine {
             });
         }
         context.report(ExecutionStage::Rendering, None, None, Some(renderer.id()))?;
-        let (markdown, markdown_memory) = invoke_renderer_preflighted(
-            renderer.as_ref(),
-            &output.document,
-            &output.assets,
-            &request.options,
-            &context,
-        )
-        .await?;
+        let (markdown, markdown_memory) = if attempt.candidate.format == InputFormat::Markdown
+            && request.options.ai.markdown_postprocess == AiMode::Off
+            && request.options.text.charset.is_none()
+            && request.options.text.decoding_mode == TextDecodingMode::Strict
+        {
+            preserve_utf8_markdown(source.input(), &context)?
+        } else {
+            invoke_renderer_preflighted(
+                renderer.as_ref(),
+                &output.document,
+                &output.assets,
+                &request.options,
+                &context,
+            )
+            .await?
+        };
         let markdown_bytes =
             u64::try_from(markdown.capacity()).map_err(|_| ConversionError::ResourceLimit {
                 limit: "max_memory_bytes",
@@ -394,11 +476,12 @@ impl Engine {
                     .saturating_add(provenance_inventory_bytes(&provenance)?),
             ),
         )?;
-        let result = output.into_conversion_result(
+        let mut result = output.into_conversion_result(
             markdown,
             provenance,
             [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
         )?;
+        result.set_detected_format(attempt.candidate.format);
         context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
         // Keep the resolver's source-memory lease through conversion,
         // rendering, result assembly, and the terminal event.
@@ -433,6 +516,32 @@ impl Engine {
     }
 }
 
+fn preserve_utf8_markdown(
+    input: &ResolvedInput,
+    context: &ExecutionContext,
+) -> Result<(String, ResourceReservation), ConversionError> {
+    let source = std::str::from_utf8(&input.bytes).map_err(|error| ConversionError::Malformed {
+        part: Some("markdown".into()),
+        detail: format!("Markdown source is not valid UTF-8: {error}"),
+    })?;
+    let requested = u64::try_from(source.len()).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "Markdown byte length cannot be represented".into(),
+    })?;
+    let mut memory = context.reserve_memory(requested)?;
+    let mut markdown = String::new();
+    markdown.try_reserve_exact(source.len()).map_err(|error| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: format!("reserve verbatim Markdown output: {error}"),
+    })?;
+    let capacity = u64::try_from(markdown.capacity()).unwrap_or(u64::MAX);
+    if capacity > requested {
+        memory.grow(capacity - requested)?;
+    }
+    markdown.push_str(source);
+    Ok((markdown, memory))
+}
+
 pub(crate) async fn invoke_enrichers(
     enrichers: &[Arc<dyn OutputEnricher>],
     mut output: ConverterOutput,
@@ -444,18 +553,38 @@ pub(crate) async fn invoke_enrichers(
 ) -> Result<ConverterOutput, ConversionError> {
     for enricher in enrichers {
         context.checkpoint()?;
-        let plan = enricher.planned_enrichment_bytes(
+        let plan = match enricher.planned_enrichment_bytes(
             &output,
             converter_id,
             format,
             options,
             services,
             context,
-        )?;
+        ) {
+            Ok(plan) => plan,
+            Err(error)
+                if optional_embedded_ocr(options, enricher.as_ref())
+                    && matches!(error, ConversionError::ResourceLimit { .. }) =>
+            {
+                push_optional_ocr_skipped(&mut output, &error)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let EnrichmentPlan::Reserve(plan) = plan else {
             continue;
         };
-        let mut memory = context.reserve_memory(plan)?;
+        let mut memory = match context.reserve_memory(plan) {
+            Ok(memory) => memory,
+            Err(error)
+                if optional_embedded_ocr(options, enricher.as_ref())
+                    && matches!(error, ConversionError::ResourceLimit { .. }) =>
+            {
+                push_optional_ocr_skipped(&mut output, &error)?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let credited_context = context.with_memory_credit(&mut memory)?;
         output = context
             .run(enricher.enrich(
@@ -492,6 +621,39 @@ pub(crate) async fn invoke_enrichers(
         output = output.certify_enrichment_reservation(context, memory)?;
     }
     Ok(output)
+}
+
+fn optional_embedded_ocr(options: &ConversionOptions, enricher: &dyn OutputEnricher) -> bool {
+    if options.error_policy != ErrorPolicy::BestEffort
+        || enricher.id() != "builtin.enricher.embedded-visual-ocr"
+    {
+        return false;
+    }
+    let effective = match options.ai.vision_ocr {
+        AiMode::Only => OcrPolicy::Always,
+        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
+            OcrPolicy::Auto
+        }
+        _ => options.ocr.policy,
+    };
+    effective == OcrPolicy::Auto
+}
+
+fn push_optional_ocr_skipped(
+    output: &mut ConverterOutput,
+    error: &ConversionError,
+) -> Result<(), ConversionError> {
+    output.diagnostics.try_reserve(1).map_err(|allocation| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: format!("cannot reserve optional OCR diagnostic: {allocation}"),
+    })?;
+    output.diagnostics.push(Diagnostic {
+        code: "presentation.optionalOcrSkipped".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("optional embedded OCR was skipped: {error}"),
+        locator: None,
+    });
+    Ok(())
 }
 
 async fn invoke_converter_preflighted<F>(
@@ -1268,6 +1430,57 @@ mod tests {
         }
     }
 
+    struct ChunkedRenderer;
+    impl MarkdownRenderer for ChunkedRenderer {
+        fn id(&self) -> &'static str {
+            "test.chunked-renderer"
+        }
+
+        fn planned_markdown_bytes(
+            &self,
+            _: &Document,
+            _: &[Asset],
+            _: &ConversionOptions,
+            _: &ExecutionContext,
+        ) -> Result<u64, ConversionError> {
+            Ok(130 * 1024)
+        }
+
+        fn render<'a>(
+            &'a self,
+            _: &'a Document,
+            _: &'a [Asset],
+            _: &'a ConversionOptions,
+            _: &'a ExecutionContext,
+        ) -> BoxFuture<'a, Result<String, ConversionError>> {
+            Box::pin(async { Ok("x".repeat(130 * 1024)) })
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        markdown_chunks: Vec<Vec<u8>>,
+    }
+
+    impl ArtifactSink for RecordingSink {
+        fn write_markdown(&mut self, chunk: &[u8]) -> Result<(), ConversionError> {
+            self.markdown_chunks.push(chunk.to_vec());
+            Ok(())
+        }
+
+        fn begin_asset(&mut self, _: &AssetStreamInfo) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn write_asset(&mut self, _: &[u8]) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn end_asset(&mut self) -> Result<(), ConversionError> {
+            Ok(())
+        }
+    }
+
     struct TitleEnricher {
         id: &'static str,
         suffix: &'static str,
@@ -1461,6 +1674,31 @@ mod tests {
         let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
         let error = block_on(engine.convert(request)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::NoConverter);
+    }
+
+    #[test]
+    fn convert_into_emits_ordered_bounded_chunks_and_summary() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(ChunkedRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(MatchingConverter("stream.converter")));
+        let engine = builder.build().unwrap();
+        let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let mut sink = RecordingSink::default();
+
+        let summary = block_on(engine.convert_into(request, &mut sink)).unwrap();
+
+        assert_eq!(
+            sink.markdown_chunks.iter().map(Vec::len).collect::<Vec<_>>(),
+            [64 * 1024, 64 * 1024, 2 * 1024]
+        );
+        assert!(sink.markdown_chunks.iter().flatten().all(|byte| *byte == b'x'));
+        assert_eq!(summary.format, Some(InputFormat::Text));
+        assert_eq!(summary.outcome, ConversionOutcome::Complete);
+        assert_eq!(summary.markdown_bytes, 130 * 1024);
+        assert_eq!(summary.assets, 0);
     }
 
     #[test]

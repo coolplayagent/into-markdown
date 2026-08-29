@@ -790,6 +790,89 @@ pub(super) fn decode_xml_for_detection(
     }
 }
 
+/// Validate that XML evidence contains exactly one complete root without
+/// allocating document IR. Syntax failures remain detection evidence only;
+/// resource, cancellation, and timeout failures stay authoritative.
+pub(super) fn xml_complete_for_detection(
+    source: &[u8],
+    context: &ExecutionContext,
+) -> Result<bool, ConversionError> {
+    let (charset, _) = xml_charset(source);
+    let decoded = match super::text::decode_source(
+        source,
+        Some(charset),
+        TextDecodingMode::Strict,
+        context,
+    ) {
+        Ok((decoded, _)) => decoded,
+        Err(ConversionError::Malformed { .. }) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = preflight_xml(&decoded.text, context) {
+        return match error {
+            ConversionError::Malformed { .. } => Ok(false),
+            other => Err(other),
+        };
+    }
+    let mut reader = NsReader::from_str(&decoded.text);
+    {
+        let config = reader.config_mut();
+        config.allow_dangling_amp = false;
+        config.allow_unmatched_ends = false;
+        config.check_end_names = true;
+        config.check_comments = true;
+    }
+    let mut depth = 0_u64;
+    let mut roots = 0_u8;
+    loop {
+        context.checkpoint()?;
+        let Ok(event) = reader.read_event() else {
+            return Ok(false);
+        };
+        match event {
+            Event::Start(_) => {
+                if depth == 0 {
+                    roots = roots.saturating_add(1);
+                }
+                depth = depth.checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
+                    limit: "max_nesting_depth",
+                    detail: "XML detection depth overflowed".into(),
+                })?;
+                if depth > u64::from(context.resource_limits().max_nesting_depth) {
+                    return Err(ConversionError::ResourceLimit {
+                        limit: "max_nesting_depth",
+                        detail: format!(
+                            "{depth} > {}",
+                            context.resource_limits().max_nesting_depth
+                        ),
+                    });
+                }
+            }
+            Event::Empty(_) => {
+                if depth == 0 {
+                    roots = roots.saturating_add(1);
+                }
+            }
+            Event::End(_) => {
+                let Some(next) = depth.checked_sub(1) else { return Ok(false) };
+                depth = next;
+            }
+            Event::Text(text) if depth == 0 => {
+                let Ok(value) = text.decode() else { return Ok(false) };
+                if !value.chars().all(char::is_whitespace) {
+                    return Ok(false);
+                }
+            }
+            Event::CData(_) | Event::GeneralRef(_) if depth == 0 => return Ok(false),
+            Event::Eof => return Ok(depth == 0 && roots == 1),
+            _ => {}
+        }
+        if roots > 1 {
+            return Ok(false);
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn convert_xml(
     source: &[u8],

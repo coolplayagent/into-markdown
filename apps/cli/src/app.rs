@@ -3,19 +3,21 @@
 use crate::args::{
     AssetModeArg, CapabilitiesCommand, Cli, Command, CompletionShell, ConfigCommand,
     ConfigOutputFormat, ConflictPolicy, ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg,
-    FormatsCommand, LogFormat, OcrPolicyArg, PluginsCommand, ProfileCommand, ProviderType,
-    ProvidersCommand, RaggedRowsArg, Scope, SetupCommand, TableHeaderArg, TranscriptCommand,
-    UiArgs,
+    ErrorPolicyArg, FormatsCommand, LogFormat, MemorySizeArg, OcrPolicyArg, PluginsCommand,
+    ProfileCommand, ProviderType, ProvidersCommand, RaggedRowsArg, Scope, SetupCommand,
+    TableHeaderArg, TranscriptCommand, UiArgs,
 };
 use crate::config::{self, LoadedConfig, PluginConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};
 use crate::i18n::{self, Catalog};
-use crate::output::{self, BatchItemReport, BatchItemStatus, BatchReport};
+use crate::output::{
+    self, BatchItemOutcome, BatchItemReport, BatchItemStatus, BatchLimitDto, BatchReport,
+};
 use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
-    AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, FormatHint,
-    InputFormat, InputRef, OcrPolicy, OpenAiCompatibleClient,
+    AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, ErrorPolicy,
+    FormatHint, InputFormat, InputRef, OcrPolicy, OpenAiCompatibleClient,
     ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, RaggedRowsMode,
     TableHeaderMode, TextDecodingMode,
 };
@@ -26,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
@@ -4126,6 +4128,7 @@ struct WorkItem {
     display: String,
     relative: PathBuf,
     root_label: String,
+    input_root: PathBuf,
     from_directory: bool,
     local_path: Option<PathBuf>,
 }
@@ -4310,15 +4313,24 @@ fn run_conversion(
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        let (output_path, diagnostics, warnings) =
+        let (output_path, detected_format, diagnostics, warnings) =
             process_file_task_inner(plan, &policy, &output_phase)?;
         vec![BatchItemReport {
             input: plan.item.display.clone(),
-            output: Some(output_path.display().to_string()),
-            format: policy.hint.format.map(|format| format.as_str().into()),
+            output: Some(report_path(&output_path)),
+            format: detected_format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
+            outcome: if diagnostics.is_empty() && warnings.is_empty() {
+                BatchItemOutcome::Complete
+            } else {
+                BatchItemOutcome::Degraded
+            },
             diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings,
         }]
@@ -4395,6 +4407,15 @@ fn apply_conversion_overrides(
     arguments: &ConversionArgs,
     loaded: &mut LoadedConfig,
 ) -> Result<(), CliError> {
+    if let Some(policy) = arguments.error_policy {
+        loaded.options.error_policy = match policy {
+            ErrorPolicyArg::BestEffort => ErrorPolicy::BestEffort,
+            ErrorPolicyArg::Strict => ErrorPolicy::Strict,
+        };
+    }
+    if let Some(charset) = &arguments.zip_charset {
+        loaded.options.archive.zip_charset = Some(charset.clone());
+    }
     apply_ocr_overrides(arguments, &mut loaded.options)?;
     apply_asr_overrides(arguments, &mut loaded.options)?;
     apply_text_overrides(arguments, &mut loaded.options);
@@ -4519,7 +4540,12 @@ fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut ConversionOpt
     assign!(max_depth, max_nesting_depth);
     assign!(max_pages, max_pages);
     assign!(max_asset_size, max_asset_bytes);
-    assign!(max_memory_size, max_memory_bytes);
+    if let Some(value) = arguments.max_memory_size {
+        options.limits.max_memory_bytes = match value {
+            MemorySizeArg::Auto => config::adaptive_memory_budget(),
+            MemorySizeArg::Bytes(bytes) => bytes,
+        };
+    }
     assign!(max_temporary_size, max_temporary_bytes);
     assign!(max_table_rows, max_table_rows);
     assign!(max_table_columns, max_table_columns);
@@ -4685,6 +4711,7 @@ fn expand_inputs(
                 display: "stdin".into(),
                 relative: PathBuf::from("stdin"),
                 root_label: "stdin".into(),
+                input_root: PathBuf::from("stdin:"),
                 from_directory: false,
                 local_path: None,
             });
@@ -4704,6 +4731,7 @@ fn expand_inputs(
                 display: redact_parsed_url(parsed.clone()),
                 relative: PathBuf::from(sanitize_component(name)),
                 root_label: sanitize_component(parsed.host_str().unwrap_or("remote")),
+                input_root: PathBuf::from(redact_parsed_url(parsed)),
                 from_directory: false,
                 local_path: None,
             });
@@ -4750,6 +4778,7 @@ fn expand_inputs(
                     .and_then(Path::file_name)
                     .and_then(OsStr::to_str)
                     .map_or_else(|| "input".into(), sanitize_component),
+                input_root: path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
                 from_directory: false,
                 local_path: Some(path),
             });
@@ -4794,6 +4823,7 @@ fn walk_directory(
                 display: path.display().to_string(),
                 relative: relative.to_path_buf(),
                 root_label: root_label.to_owned(),
+                input_root: root.to_path_buf(),
                 from_directory: true,
                 local_path: Some(path),
             });
@@ -4840,22 +4870,29 @@ fn plan_outputs(
 }
 
 fn disambiguate_planned_outputs(plans: &mut [WorkPlan]) {
-    let collisions = plans.iter().filter_map(|plan| plan.output.as_ref()).fold(
-        BTreeMap::<PathBuf, usize>::new(),
-        |mut counts, path| {
-            *counts.entry(path.clone()).or_default() += 1;
-            counts
-        },
-    );
-    for plan in plans.iter_mut() {
-        let Some(path) = plan.output.as_mut() else {
-            continue;
-        };
-        if collisions.get(path).copied().unwrap_or_default() > 1
-            && let Some(root) = &plan.output_root
-            && let Ok(relative) = path.strip_prefix(root)
-        {
-            *path = root.join(&plan.item.root_label).join(relative);
+    let mut collisions = BTreeMap::<PathBuf, Vec<usize>>::new();
+    for (index, plan) in plans.iter().enumerate() {
+        if let Some(path) = &plan.output {
+            collisions.entry(path.clone()).or_default().push(index);
+        }
+    }
+    for indexes in collisions.values().filter(|indexes| indexes.len() > 1) {
+        let distinct_roots = indexes
+            .iter()
+            .map(|index| plans[*index].item.input_root.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for index in indexes {
+            let plan = &mut plans[*index];
+            let Some(path) = plan.output.as_mut() else { continue };
+            if distinct_roots.len() > 1 {
+                if let Some(root) = &plan.output_root
+                    && let Ok(relative) = path.strip_prefix(root)
+                {
+                    *path = root.join(&plan.item.root_label).join(relative);
+                }
+            } else {
+                *path = qualify_output_with_source_name(path, &plan.item.relative);
+            }
         }
     }
     let mut seen = BTreeMap::<PathBuf, usize>::new();
@@ -4869,6 +4906,18 @@ fn disambiguate_planned_outputs(plans: &mut [WorkPlan]) {
         }
         *count += 1;
     }
+}
+
+fn qualify_output_with_source_name(output: &Path, source: &Path) -> PathBuf {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let source_name = source.file_name().and_then(OsStr::to_str).unwrap_or("document");
+    let output_name = output.file_name().and_then(OsStr::to_str).unwrap_or("document.md");
+    let suffix = if output_name.ends_with(".mdpkg.zip") {
+        "mdpkg.zip"
+    } else {
+        output.extension().and_then(OsStr::to_str).unwrap_or("md")
+    };
+    parent.join(format!("{source_name}.{suffix}"))
 }
 
 fn add_numeric_suffix(path: &Path, number: usize) -> PathBuf {
@@ -4900,6 +4949,12 @@ fn process_stdout(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    let mut encoded =
+        policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
+    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    encoded.sync_all().map_err(CliError::from)?;
+    let mut reader = encoded.as_file().map_err(CliError::from)?.try_clone()?;
+    reader.rewind()?;
     let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
         (!result.assets.is_empty())
             .then(|| {
@@ -4922,28 +4977,17 @@ fn process_stdout(
     } else {
         None
     };
-    let encoded = match output::encode_result(&result, policy.emit) {
-        Ok(encoded) => encoded,
-        Err(error) => {
-            if let Some(staged) = staged_assets
-                && let Err(recovery) = staged.abort()
-            {
-                return Err(CliError::new(
-                    crate::error::ExitClass::Io,
-                    "rollbackFailed",
-                    format!(
-                        "output encoding failed ({}: {}); staged asset rollback failed ({}: {})",
-                        error.code(),
-                        error.message(),
-                        recovery.code(),
-                        recovery.message()
-                    ),
-                ));
+    let mut buffer = [0_u8; 64 * 1024];
+    let write_result = (|| -> Result<(), std::io::Error> {
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(());
             }
-            return Err(error);
+            context.stdout.write_all(&buffer[..read])?;
         }
-    };
-    if let Err(error) = context.stdout.write_all(&encoded) {
+    })();
+    if let Err(error) = write_result {
         let error = CliError::from(error);
         if let Some(staged) = staged_assets {
             if error.is_broken_pipe() {
@@ -4970,10 +5014,19 @@ fn process_stdout(
     Ok(BatchItemReport {
         input: plan.item.display.clone(),
         output: None,
-        format: policy.hint.format.map(|format| format.as_str().into()),
+        format: result.detected_format().map(|format| format.as_str().into()),
         status: BatchItemStatus::Success,
+        outcome: if result.diagnostics.is_empty() {
+            BatchItemOutcome::Complete
+        } else {
+            BatchItemOutcome::Degraded
+        },
         diagnostics: result.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
+        reason_code: None,
+        component: None,
+        part: None,
+        limit: None,
         message: None,
         warnings: vec![],
     })
@@ -4991,12 +5044,18 @@ fn process_batch(
     // commit phases serialized so sibling outputs cannot trip each other's
     // authenticated parent lease.
     let output_phase = Arc::new(Mutex::new(()));
+    // Converter preflight credits intentionally cover each converter's full
+    // request envelope. Hold one batch-wide admission lease until that item's
+    // retained result has been committed so `--jobs` can never multiply the
+    // shared memory ceiling.
+    let memory_phase = Arc::new(Mutex::new(()));
     let (sender, receiver) = mpsc::channel();
     let worker_count = jobs.max(1).min(task_count.max(1));
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             let queue = Arc::clone(&queue);
             let output_phase = Arc::clone(&output_phase);
+            let memory_phase = Arc::clone(&memory_phase);
             let sender = sender.clone();
             let policy = policy.clone();
             scope.spawn(move || {
@@ -5009,7 +5068,7 @@ fn process_batch(
                         break;
                     };
                     let index_key = task.item.display.clone();
-                    let report = process_file_task(task, &policy, &output_phase);
+                    let report = process_file_task(task, &policy, &output_phase, &memory_phase);
                     if sender.send((index_key, report)).is_err() {
                         break;
                     }
@@ -5030,25 +5089,47 @@ fn process_file_task(
     plan: WorkPlan,
     policy: &ExecutionPolicy,
     output_phase: &Mutex<()>,
+    memory_phase: &Mutex<()>,
 ) -> BatchItemReport {
+    let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok((output_path, diagnostics, warnings)) => BatchItemReport {
+        Ok((output_path, detected_format, diagnostics, warnings)) => BatchItemReport {
             input: plan.item.display,
-            output: Some(output_path.display().to_string()),
-            format: policy.hint.format.map(|format| format.as_str().into()),
+            output: Some(report_path(&output_path)),
+            format: detected_format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
+            outcome: if diagnostics.is_empty() && warnings.is_empty() {
+                BatchItemOutcome::Complete
+            } else {
+                BatchItemOutcome::Degraded
+            },
             diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings,
         },
         Err(error) => BatchItemReport {
             input: plan.item.display,
-            output: plan.output.map(|path| path.display().to_string()),
-            format: policy.hint.format.map(|format| format.as_str().into()),
+            output: plan.output.as_deref().map(report_path),
+            format: error
+                .detected_format()
+                .or(policy.hint.format)
+                .map(|format| format.as_str().into()),
             status: BatchItemStatus::Failed,
+            outcome: BatchItemOutcome::Failed,
             diagnostics: vec![],
             error_code: Some(error.code().into()),
+            reason_code: Some(error.reason_code().into()),
+            component: error.component_name().map(str::to_owned),
+            part: error.part().map(str::to_owned),
+            limit: error.limit().map(|(name, detail)| BatchLimitDto {
+                name: name.into(),
+                detail: Some(detail.into()),
+            }),
             message: Some(error.to_string()),
             warnings: vec![],
         },
@@ -5059,7 +5140,7 @@ fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
     output_phase: &Mutex<()>,
-) -> Result<(PathBuf, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
+) -> Result<(PathBuf, Option<InputFormat>, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
     let output_path = {
@@ -5075,13 +5156,21 @@ fn process_file_task_inner(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
-    let encoded = output::encode_result(&result, policy.emit)?;
+    let output_parent = output_path
+        .parent()
+        .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
+    let mut encoded = policy
+        .output_context
+        .temporary_file_in(output_parent, "into-md-encoded")
+        .map_err(CliError::from)?;
+    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    encoded.sync_all().map_err(CliError::from)?;
     let outcome = {
         let _guard =
             output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
-        output::write_output_set(
+        output::write_output_set_file(
             &output_path,
-            &encoded,
+            encoded.as_file().map_err(CliError::from)?,
             &result,
             asset_output.external_directory.as_deref(),
             policy.asset_mode,
@@ -5096,7 +5185,11 @@ fn process_file_task_inner(
             outcome.path.display()
         ));
     }
-    Ok((outcome.path, result.diagnostics, warnings))
+    Ok((outcome.path, result.detected_format(), result.diagnostics, warnings))
+}
+
+fn report_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn convert_item(
@@ -5114,7 +5207,11 @@ fn convert_item(
     request.hint = policy.hint.clone();
     let engine = into_markdown::default_engine_with_services(policy.services.clone())
         .map_err(CliError::from)?;
-    futures::executor::block_on(engine.convert(request)).map_err(CliError::from)
+    let context = policy.output_context.fork_with_shared_resources(policy.execution.clone());
+    let observed_context = context.clone();
+    futures::executor::block_on(engine.convert_with_context(request, context)).map_err(|error| {
+        CliError::from(error).with_detected_format(observed_context.detected_format())
+    })
 }
 
 fn plan_stdout_asset_output(
@@ -6912,6 +7009,7 @@ mod tests {
             display: display.into(),
             relative: PathBuf::from("same.pdf"),
             root_label: root_label.into(),
+            input_root: PathBuf::from(root_label),
             from_directory: false,
             local_path: Some(PathBuf::from(display)),
         };
@@ -6927,6 +7025,31 @@ mod tests {
     }
 
     #[test]
+    fn same_root_stem_collisions_keep_the_relative_directory() {
+        let output = PathBuf::from("out");
+        let item = |name: &str| WorkItem {
+            input: InputRef::Path(PathBuf::from("public-web").join(name)),
+            display: name.into(),
+            relative: PathBuf::from(name),
+            root_label: "public-web".into(),
+            input_root: PathBuf::from("public-web"),
+            from_directory: true,
+            local_path: Some(PathBuf::from("public-web").join(name)),
+        };
+        let mut plans = plan_outputs(
+            vec![item("atom.xml"), item("atom.rss")],
+            None,
+            Some(&output),
+            EmitKind::Markdown,
+        );
+
+        disambiguate_planned_outputs(&mut plans);
+
+        assert_eq!(plans[0].output.as_deref(), Some(Path::new("out/atom.xml.md")));
+        assert_eq!(plans[1].output.as_deref(), Some(Path::new("out/atom.rss.md")));
+    }
+
+    #[test]
     fn service_assembly_is_scoped_to_reachable_input_capabilities() {
         let plan = |name: &str| WorkPlan {
             item: WorkItem {
@@ -6934,6 +7057,7 @@ mod tests {
                 display: name.into(),
                 relative: PathBuf::from(name),
                 root_label: "input".into(),
+                input_root: PathBuf::from("input"),
                 from_directory: false,
                 local_path: Some(PathBuf::from(name)),
             },
@@ -7130,8 +7254,13 @@ mod tests {
             output: None,
             format: None,
             status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Complete,
             diagnostics: Vec::new(),
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings: Vec::new(),
         };

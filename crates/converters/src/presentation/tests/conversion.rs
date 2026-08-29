@@ -51,6 +51,17 @@ fn converts_title_unicode_slide_and_central_renderer() {
         Block::Slide { title: None, blocks, .. }
             if matches!(&blocks[0].block, Block::Paragraph(_))
     ));
+    let break_properties = slide.replace("</a:r><a:r>", "</a:r><a:br><a:rPr b=\"1\"/></a:br><a:r>");
+    let break_output =
+        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", break_properties.as_bytes()))
+            .unwrap();
+    let break_markdown =
+        render(&break_output.document, &break_output.assets, &ConversionOptions::default())
+            .unwrap();
+    assert!(
+        break_markdown.contains("你好") && break_markdown.contains("Привет"),
+        "{break_markdown}"
+    );
     let shape_start = slide.find("<p:sp>").unwrap();
     let shape_end = slide.find("</p:sp>").unwrap() + "</p:sp>".len();
     let title_shape = &slide[shape_start..shape_end];
@@ -314,7 +325,6 @@ fn rejects_encrypted_unsafe_relationships_and_doctype() {
     assert!(matches!(convert(&bytes), Err(ConversionError::Malformed { .. })));
     for target in [
         "../../../escape",
-        "/absolute",
         "//host/object",
         "C:drive",
         "a\\b",
@@ -325,4 +335,5 @@ fn rejects_encrypted_unsafe_relationships_and_doctype() {
     ] {
         assert!(resolve_target("ppt/slides/slide1.xml", target).is_err());
     }
+    assert_eq!(resolve_target("ppt/slides/slide1.xml", "/absolute").unwrap(), "absolute");
 }

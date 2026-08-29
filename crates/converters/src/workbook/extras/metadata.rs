@@ -123,6 +123,7 @@ fn push_font_mark(marks: &mut Vec<InlineMark>, name: quick_xml::name::LocalName<
 
 type CellMetadata = (BTreeMap<CellCoordinate, Vec<InlineMark>>, Vec<(u32, u32)>, Vec<(u32, u32)>);
 
+#[allow(clippy::too_many_lines)] // Streaming XML state is kept together to preserve row/column inference.
 pub(super) fn parse_sheet_cell_metadata(
     xml: &[u8],
     part: &str,
@@ -136,13 +137,21 @@ pub(super) fn parse_sheet_cell_metadata(
     let mut hidden_columns = Vec::new();
     let mut hidden_row_field_bytes = 0_u64;
     let mut hidden_column_field_bytes = 0_u64;
+    let mut current_row = None;
+    let mut next_row = 0_u32;
+    let mut next_column = 0_u32;
     loop {
         context.checkpoint()?;
         match reader.read_resolved_event() {
-            Ok((namespace, Event::Start(event) | Event::Empty(event))) => {
+            Ok((namespace, raw_event @ (Event::Start(_) | Event::Empty(_)))) => {
+                let is_empty = matches!(raw_event, Event::Empty(_));
+                let (Event::Start(event) | Event::Empty(event)) = raw_event else { unreachable!() };
                 require_spreadsheet_namespace(&namespace, part)?;
                 match event.local_name().as_ref() {
                     b"c" => {
+                        let row = current_row.ok_or_else(|| {
+                            malformed(Some(part), "cell metadata lies outside worksheet row")
+                        })?;
                         let mut reference = None;
                         let mut style_id = None;
                         for attr in event.attributes().with_checks(false) {
@@ -155,10 +164,19 @@ pub(super) fn parse_sheet_cell_metadata(
                                 _ => {}
                             }
                         }
+                        let coordinate = reference
+                            .as_deref()
+                            .map(parse_cell_ref)
+                            .transpose()?
+                            .unwrap_or((row, next_column));
+                        if coordinate.0 != row || coordinate.1 < next_column {
+                            return Err(malformed(
+                                Some(part),
+                                "cell metadata is duplicated or out of order",
+                            ));
+                        }
+                        next_column = coordinate.1.saturating_add(1);
                         if let Some(style_id) = style_id {
-                            let coordinate = parse_cell_ref(&reference.ok_or_else(|| {
-                                malformed(Some(part), "styled cell reference is missing")
-                            })?)?;
                             let style_id = style_id
                                 .parse::<usize>()
                                 .map_err(|_| malformed(Some(part), "invalid cell style id"))?;
@@ -170,19 +188,40 @@ pub(super) fn parse_sheet_cell_metadata(
                             }
                         }
                     }
-                    b"row" if hidden_attribute(&event, part)? => {
-                        let row = required_u32_attribute(&event, b"r", part)?;
-                        if row == 0 || row > MAX_EXCEL_ROWS {
-                            return Err(malformed(Some(part), "hidden row is out of range"));
+                    b"row" => {
+                        if current_row.is_some() {
+                            return Err(malformed(Some(part), "nested worksheet metadata row"));
                         }
-                        push_compact_range(
-                            &mut hidden_rows,
-                            &mut hidden_row_field_bytes,
-                            (row - 1, row - 1),
-                            true,
-                            part,
-                            options,
-                        )?;
+                        let explicit_row = optional_u32_attribute(&event, b"r", part)?;
+                        let row = match explicit_row {
+                            Some(value) if value != 0 && value <= MAX_EXCEL_ROWS => value - 1,
+                            Some(_) => {
+                                return Err(malformed(Some(part), "worksheet row is out of range"));
+                            }
+                            None => next_row,
+                        };
+                        if row < next_row {
+                            return Err(malformed(
+                                Some(part),
+                                "worksheet metadata rows are out of order",
+                            ));
+                        }
+                        current_row = Some(row);
+                        next_column = 0;
+                        if hidden_attribute(&event, part)? {
+                            push_compact_range(
+                                &mut hidden_rows,
+                                &mut hidden_row_field_bytes,
+                                (row, row),
+                                true,
+                                part,
+                                options,
+                            )?;
+                        }
+                        if is_empty {
+                            current_row = None;
+                            next_row = row.saturating_add(1);
+                        }
                     }
                     b"col" if hidden_attribute(&event, part)? => {
                         let min = required_u32_attribute(&event, b"min", part)?;
@@ -202,6 +241,12 @@ pub(super) fn parse_sheet_cell_metadata(
                     _ => {}
                 }
             }
+            Ok((_, Event::End(event))) if event.local_name().as_ref() == b"row" => {
+                let row = current_row.take().ok_or_else(|| {
+                    malformed(Some(part), "worksheet metadata row end is unmatched")
+                })?;
+                next_row = row.saturating_add(1);
+            }
             Ok((_, Event::Eof)) => break,
             Err(error) => {
                 return Err(malformed(Some(part), format!("invalid worksheet metadata: {error}")));
@@ -213,6 +258,26 @@ pub(super) fn parse_sheet_cell_metadata(
         }
     }
     Ok((marks, hidden_rows, hidden_columns))
+}
+
+fn optional_u32_attribute(
+    event: &quick_xml::events::BytesStart<'_>,
+    name: &[u8],
+    part: &str,
+) -> Result<Option<u32>, ConversionError> {
+    let mut value = None;
+    for attr in event.attributes().with_checks(false) {
+        let attr = attr.map_err(|error| malformed(Some(part), format!("attribute: {error}")))?;
+        if attr.key.local_name().as_ref() == name {
+            let parsed = decode_attr(&attr, part)?
+                .parse::<u32>()
+                .map_err(|_| malformed(Some(part), "invalid integer attribute"))?;
+            if value.replace(parsed).is_some() {
+                return Err(malformed(Some(part), "duplicate integer attribute"));
+            }
+        }
+    }
+    Ok(value)
 }
 
 fn hidden_attribute(

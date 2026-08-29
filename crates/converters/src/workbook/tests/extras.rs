@@ -147,6 +147,19 @@ fn hidden_metadata_is_compacted_and_field_limited_before_rendering() {
     .unwrap();
     assert_eq!(xml_rows, [(0, 0), (2, 2)]);
     assert_eq!(xml_columns, [(0, 0), (2, 3)]);
+
+    let inferred_cells = br#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c s="0"/><c s="0"/></row></sheetData></worksheet>"#;
+    let styles = vec![vec![into_markdown_core::InlineMark::Bold]];
+    let (marks, _, _) = parse_sheet_cell_metadata_for_test(
+        inferred_cells,
+        "xl/worksheets/sheet1.xml",
+        &styles,
+        &ConversionOptions::default(),
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(marks.keys().copied().collect::<Vec<_>>(), [(0, 0), (0, 1)]);
+
     let mut xml_low = ConversionOptions::default();
     xml_low.limits.max_field_bytes = 4;
     assert!(matches!(

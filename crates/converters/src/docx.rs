@@ -29,6 +29,9 @@ const DRAWING_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/mai
 const WORD_DRAWING_NS: &[u8] =
     b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
 const VML_NS: &[u8] = b"urn:schemas-microsoft-com:vml";
+const CHART_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/chart";
+const DIAGRAM_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/diagram";
+const OFFICE_VML_NS: &[u8] = b"urn:schemas-microsoft-com:office:office";
 const CORE_PROPERTIES_NS: &[u8] =
     b"http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
 const DUBLIN_CORE_NS: &[u8] = b"http://purl.org/dc/elements/1.1/";
@@ -40,7 +43,7 @@ const REL_TYPE_PREFIX: &str =
 const MAX_IMAGE_DIMENSION: u32 = 32_768;
 const MAX_IMAGE_PIXELS: u64 = 100_000_000;
 
-/// Strict, non-networking Word Open XML converter. Macro parts are never opened.
+/// Bounded, non-networking Word Open XML converter. Macro parts are never opened.
 #[derive(Debug, Default)]
 pub struct DocxConverter;
 
@@ -372,7 +375,7 @@ fn parse_content_types(
     context: &ExecutionContext,
 ) -> Result<ContentTypes, ConversionError> {
     preflight_xml(bytes, "[Content_Types].xml", XmlProfile::ContentTypes, options, context)?;
-    let mut reader = Reader::from_reader(bytes);
+    let mut reader = NsReader::from_reader(bytes);
     let mut result = ContentTypes::default();
     loop {
         context.checkpoint()?;
@@ -519,6 +522,13 @@ impl ParseState {
     }
 
     fn warning(&mut self, code: &str, message: impl Into<String>, part: &str) {
+        if self.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == code
+                && diagnostic.locator.as_ref().and_then(|locator| locator.part.as_deref())
+                    == Some(part)
+        }) {
+            return;
+        }
         self.diagnostics.push(Diagnostic {
             code: code.into(),
             severity: DiagnosticSeverity::Warning,
@@ -683,16 +693,20 @@ fn convert_docx(
         options,
         context,
     )?;
-    notes.extend(referenced_annotations(
-        &package,
-        &relationships,
-        "endnotes",
-        &main_part,
-        &state.endnote_refs,
-        XmlProfile::Endnotes,
-        options,
-        context,
-    )?);
+    notes.extend(
+        referenced_annotations(
+            &package,
+            &relationships,
+            "endnotes",
+            &main_part,
+            &state.endnote_refs,
+            XmlProfile::Endnotes,
+            options,
+            context,
+        )?
+        .into_iter()
+        .map(|(id, content)| (format!("endnote-{id}"), content)),
+    );
     for (id, content) in notes {
         state.add_inlines(content.len())?;
         let paragraph = state.node(Block::Paragraph(content), "notes")?;
@@ -799,10 +813,11 @@ fn parse_core_properties(
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     preflight_xml(bytes, part, XmlProfile::CoreProperties, options, context)?;
-    let mut reader = Reader::from_reader(bytes);
+    let mut reader = NsReader::from_reader(bytes);
     reader.config_mut().trim_text(true);
     let mut current = None::<String>;
     let mut value = String::new();
+    let mut stack = Vec::<(Vec<u8>, Vec<u8>)>::new();
     loop {
         context.checkpoint()?;
         match reader
@@ -810,32 +825,60 @@ fn parse_core_properties(
             .map_err(|error| malformed(Some(part), format!("invalid XML: {error}")))?
         {
             Event::Start(e) => {
-                let name = local(e.name().as_ref()).to_owned();
-                if matches!(name.as_str(), "title" | "creator" | "lastModifiedBy") {
-                    current = Some(name);
+                let name = resolved_element(&reader, e.name(), part)?;
+                let property = if stack.len() == 1 {
+                    match (name.0.as_slice(), name.1.as_slice()) {
+                        (DUBLIN_CORE_NS, b"title") => Some("title"),
+                        (DUBLIN_CORE_NS, b"creator") => Some("creator"),
+                        (CORE_PROPERTIES_NS, b"lastModifiedBy") => Some("lastModifiedBy"),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(property) = property {
+                    current = Some(property.into());
+                    value.clear();
+                } else if current.is_some() && stack.len() >= 2 {
+                    current = None;
                     value.clear();
                 }
+                stack.push(name);
             }
-            Event::Text(e) if current.is_some() => {
+            Event::Text(e) if current.is_some() && stack.len() == 2 => {
                 append_bounded_text(&mut value, &decode_text(&e, part)?, options)?;
             }
-            Event::CData(e) if current.is_some() => {
+            Event::CData(e) if current.is_some() && stack.len() == 2 => {
                 append_bounded_text(&mut value, &decode_cdata(&e, part)?, options)?;
             }
-            Event::GeneralRef(e) if current.is_some() => {
+            Event::GeneralRef(e) if current.is_some() && stack.len() == 2 => {
                 append_bounded_text(&mut value, &decode_reference(&e, part)?, options)?;
             }
-            Event::End(e)
-                if current.as_deref().is_some_and(|name| name == local(e.name().as_ref())) =>
-            {
-                match current.take().as_deref() {
-                    Some("title") => {
-                        state.document.metadata.title = Some(std::mem::take(&mut value));
+            Event::End(e) => {
+                let actual = resolved_element(&reader, e.name(), part)?;
+                if stack.len() == 2 {
+                    let closes_current = current.as_deref().is_some_and(|property| {
+                        matches!(
+                            (property, actual.0.as_slice(), actual.1.as_slice()),
+                            ("title", DUBLIN_CORE_NS, b"title")
+                                | ("creator", DUBLIN_CORE_NS, b"creator")
+                                | ("lastModifiedBy", CORE_PROPERTIES_NS, b"lastModifiedBy")
+                        )
+                    });
+                    if closes_current {
+                        match current.take().as_deref() {
+                            Some("title") => {
+                                state.document.metadata.title = Some(std::mem::take(&mut value));
+                            }
+                            Some("creator" | "lastModifiedBy") => {
+                                state.document.metadata.authors.push(std::mem::take(&mut value));
+                            }
+                            _ => {}
+                        }
                     }
-                    Some("creator" | "lastModifiedBy") => {
-                        state.document.metadata.authors.push(std::mem::take(&mut value));
-                    }
-                    _ => {}
+                }
+                if stack.pop().as_ref() != Some(&actual) {
+                    return Err(malformed(Some(part), "XML end namespace differs from start"));
                 }
             }
             Event::DocType(_) => {
@@ -859,7 +902,7 @@ fn parse_relationships(
     };
     let part = relationship_part(owner);
     preflight_xml(bytes, &part, XmlProfile::Relationships, options, context)?;
-    let mut reader = Reader::from_reader(bytes);
+    let mut reader = NsReader::from_reader(bytes);
     let mut result = BTreeMap::new();
     loop {
         context.checkpoint()?;
@@ -1192,12 +1235,13 @@ fn parse_word_part(
     state: &mut ParseState,
 ) -> Result<(), ConversionError> {
     preflight_xml(bytes, part, profile, options, context)?;
-    let mut reader = Reader::from_reader(bytes);
+    let mut reader = NsReader::from_reader(bytes);
     reader.config_mut().trim_text(false);
     let mut paragraph = None::<Paragraph>;
+    let mut paragraph_nesting = 0_usize;
     let mut marks = Vec::<InlineMark>::new();
     let mut hyperlink = None::<(String, Vec<Inline>)>;
-    let mut table = None::<TableBuild>;
+    let mut tables = Vec::<TableBuild>::new();
     let mut depth = 0_u16;
     let mut element_stack = Vec::<String>::new();
     let mut skipped_choice_depth = None::<u16>;
@@ -1221,7 +1265,7 @@ fn parse_word_part(
                         format!("{depth} > {}", options.limits.max_nesting_depth),
                     ));
                 }
-                let name = local(e.name().as_ref()).to_owned();
+                let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
                 if skipped_choice_depth.is_some() {
                     element_stack.push(name);
                     continue;
@@ -1249,24 +1293,74 @@ fn parse_word_part(
                         ));
                     }
                     if paragraph.is_some() {
-                        return Err(malformed(Some(part), "nested paragraphs are unsupported"));
+                        if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                            return Err(malformed(Some(part), "nested paragraphs are unsupported"));
+                        }
+                        let outer = paragraph.take().expect("checked above");
+                        finish_paragraph(
+                            outer,
+                            part,
+                            relationships,
+                            styles,
+                            numbering,
+                            package,
+                            options,
+                            context,
+                            state,
+                            tables.last_mut(),
+                        )?;
+                        hyperlink = None;
+                        field_active = false;
+                        state.warning(
+                            "word.unsupportedWrapperOmitted",
+                            "nested paragraph wrapper was flattened in document order",
+                            part,
+                        );
                     }
-                    if table.as_ref().is_some_and(|table| !table.cell_open) {
+                    if tables.last().is_some_and(|table| !table.cell_open) {
                         return Err(malformed(Some(part), "table paragraph is outside a cell"));
                     }
                     paragraph = Some(Paragraph::default());
+                    paragraph_nesting = paragraph_nesting.saturating_add(1);
                 } else if name == "instrText" && !field_active {
-                    return Err(malformed(Some(part), "field instruction is outside a field"));
+                    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                        return Err(malformed(Some(part), "field instruction is outside a field"));
+                    }
+                    field_active = true;
+                    if let Some(p) = &mut paragraph {
+                        p.field.clear();
+                    }
+                    state.warning(
+                        "word.unsupportedWrapperOmitted",
+                        "field instruction without a begin marker was recovered",
+                        part,
+                    );
                 } else if name == "tbl" {
                     if profile == XmlProfile::Document && body_depth.is_none() {
                         return Err(malformed(Some(part), "table is outside the document body"));
                     }
-                    if table.is_some() {
-                        return Err(malformed(Some(part), "nested tables are unsupported"));
+                    if !tables.is_empty() {
+                        if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                            return Err(malformed(Some(part), "nested tables are unsupported"));
+                        }
+                        if !tables.last().is_some_and(|table| table.cell_open) {
+                            return Err(malformed(
+                                Some(part),
+                                "nested table is outside a table cell",
+                            ));
+                        }
+                        state.warning(
+                            "word.tableNormalized",
+                            "nested table was preserved inside its containing cell",
+                            part,
+                        );
                     }
-                    table = Some(TableBuild::default());
+                    tables.try_reserve(1).map_err(|error| {
+                        limit("max_memory_bytes", format!("cannot reserve table stack: {error}"))
+                    })?;
+                    tables.push(TableBuild::default());
                 } else if name == "tr" {
-                    if let Some(t) = &mut table {
+                    if let Some(t) = tables.last_mut() {
                         if t.row_open {
                             return Err(malformed(Some(part), "nested table rows are invalid"));
                         }
@@ -1277,7 +1371,7 @@ fn parse_word_part(
                         return Err(malformed(Some(part), "table row is outside a table"));
                     }
                 } else if name == "tc" {
-                    if let Some(t) = &mut table {
+                    if let Some(t) = tables.last_mut() {
                         if !t.row_open || t.cell_open {
                             return Err(malformed(Some(part), "invalid table cell hierarchy"));
                         }
@@ -1324,7 +1418,19 @@ fn parse_word_part(
                         p.images.push((id, p.pending_alt.take()));
                     }
                 } else if name == "vMerge" {
-                    return Err(malformed(Some(part), "vertical table merges are unsupported"));
+                    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                        return Err(malformed(Some(part), "vertical table merges are unsupported"));
+                    }
+                    state.warning(
+                        "word.tableNormalized",
+                        "vertical table merge was normalized",
+                        part,
+                    );
+                } else if matches!(
+                    name.as_str(),
+                    "altChunk" | "object" | "chart" | "relIds" | "OLEObject"
+                ) {
+                    recover_unsupported_word_object(&name, part, options, state)?;
                 } else if matches!(
                     name.as_str(),
                     "headerReference"
@@ -1334,14 +1440,21 @@ fn parse_word_part(
                         | "commentReference"
                         | "fldChar"
                 ) {
-                    return Err(malformed(
-                        Some(part),
-                        "reference and field marker elements must be empty",
-                    ));
+                    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                        return Err(malformed(
+                            Some(part),
+                            "reference and field marker elements must be empty",
+                        ));
+                    }
+                    state.warning(
+                        "word.unsupportedWrapperOmitted",
+                        "non-empty reference or field marker was flattened",
+                        part,
+                    );
                 }
             }
             Event::Empty(e) => {
-                let name = local(e.name().as_ref()).to_owned();
+                let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
                 if skipped_choice_depth.is_some()
                     || (name == "Choice"
                         && element_stack.last().is_some_and(|parent| parent == "AlternateContent"))
@@ -1357,13 +1470,19 @@ fn parse_word_part(
                                 .and_then(|v| v.parse().ok())
                                 .unwrap_or(0);
                         }
-                        "b" => marks.push(InlineMark::Bold),
-                        "i" => marks.push(InlineMark::Italic),
-                        "strike" | "dstrike" => marks.push(InlineMark::Strikethrough),
-                        "u" => marks.push(InlineMark::Underline),
+                        "b" => push_unique_mark(&mut marks, InlineMark::Bold),
+                        "i" => push_unique_mark(&mut marks, InlineMark::Italic),
+                        "strike" | "dstrike" => {
+                            push_unique_mark(&mut marks, InlineMark::Strikethrough);
+                        }
+                        "u" => push_unique_mark(&mut marks, InlineMark::Underline),
                         "vertAlign" => match attr_local(&e, "val", part)?.as_deref() {
-                            Some("superscript") => marks.push(InlineMark::Superscript),
-                            Some("subscript") => marks.push(InlineMark::Subscript),
+                            Some("superscript") => {
+                                push_unique_mark(&mut marks, InlineMark::Superscript);
+                            }
+                            Some("subscript") => {
+                                push_unique_mark(&mut marks, InlineMark::Subscript);
+                            }
                             _ => {}
                         },
                         "tab" => push_inline(
@@ -1374,12 +1493,14 @@ fn parse_word_part(
                         "br" | "cr" => push_inline(p, &mut hyperlink, Inline::LineBreak),
                         "footnoteReference" | "endnoteReference" => {
                             if let Some(id) = attr_local(&e, "id", part)? {
-                                if name == "footnoteReference" {
+                                let label = if name == "footnoteReference" {
                                     state.footnote_refs.insert(id.clone());
+                                    id.clone()
                                 } else {
                                     state.endnote_refs.insert(id.clone());
-                                }
-                                push_inline(p, &mut hyperlink, Inline::FootnoteReference(id));
+                                    format!("endnote-{id}")
+                                };
+                                push_inline(p, &mut hyperlink, Inline::FootnoteReference(label));
                             }
                         }
                         "commentReference" => {
@@ -1448,7 +1569,11 @@ fn parse_word_part(
                         if suffix == "header" { "Header" } else { "Footer" },
                     ));
                 }
-                if let Some(t) = &mut table {
+                if matches!(name.as_str(), "altChunk" | "object" | "chart" | "relIds" | "OLEObject")
+                {
+                    recover_unsupported_word_object(&name, part, options, state)?;
+                }
+                if let Some(t) = tables.last_mut() {
                     if name == "gridSpan" {
                         t.cell_column_span = attr_local(&e, "val", part)?
                             .and_then(|value| value.parse::<u32>().ok())
@@ -1459,7 +1584,17 @@ fn parse_word_part(
                     } else if name == "tblHeader" {
                         t.row_header = true;
                     } else if name == "vMerge" {
-                        return Err(malformed(Some(part), "vertical table merges are unsupported"));
+                        if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                            return Err(malformed(
+                                Some(part),
+                                "vertical table merges are unsupported",
+                            ));
+                        }
+                        state.warning(
+                            "word.tableNormalized",
+                            "vertical table merge was normalized",
+                            part,
+                        );
                     }
                 }
             }
@@ -1512,7 +1647,7 @@ fn parse_word_part(
                 )?;
             }
             Event::End(e) => {
-                let name = local(e.name().as_ref()).to_owned();
+                let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
                 if let Some(skip_depth) = skipped_choice_depth {
                     element_stack.pop();
                     if depth == skip_depth {
@@ -1533,7 +1668,7 @@ fn parse_word_part(
                     } else if !formula.is_empty() {
                         let node =
                             state.node(Block::Formula(std::mem::take(&mut formula)), part)?;
-                        if let Some(table) = &mut table {
+                        if let Some(table) = tables.last_mut() {
                             table.cell_blocks.push(node);
                         } else {
                             state.document.blocks.push(node);
@@ -1549,7 +1684,21 @@ fn parse_word_part(
                     }
                 } else if name == "p" {
                     if field_active {
-                        return Err(malformed(Some(part), "field instruction crosses a paragraph"));
+                        if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                            return Err(malformed(
+                                Some(part),
+                                "field instruction crosses a paragraph",
+                            ));
+                        }
+                        if let Some(p) = &mut paragraph {
+                            emit_field(p, &mut hyperlink);
+                        }
+                        field_active = false;
+                        state.warning(
+                            "word.unsupportedWrapperOmitted",
+                            "unterminated field instruction was closed at the paragraph boundary",
+                            part,
+                        );
                     }
                     if let Some(p) = paragraph.take() {
                         finish_paragraph(
@@ -1562,11 +1711,17 @@ fn parse_word_part(
                             options,
                             context,
                             state,
-                            table.as_mut(),
+                            tables.last_mut(),
                         )?;
                     }
+                    if paragraph_nesting > 1 {
+                        paragraph_nesting -= 1;
+                        paragraph = Some(Paragraph::default());
+                    } else {
+                        paragraph_nesting = 0;
+                    }
                 } else if name == "tc" {
-                    if let Some(t) = &mut table {
+                    if let Some(t) = tables.last_mut() {
                         if !t.cell_open {
                             return Err(malformed(Some(part), "table cell closes without opening"));
                         }
@@ -1579,7 +1734,7 @@ fn parse_word_part(
                         t.cell_open = false;
                     }
                 } else if name == "tr" {
-                    if let Some(t) = &mut table {
+                    if let Some(t) = tables.last_mut() {
                         if !t.row_open || t.cell_open {
                             return Err(malformed(
                                 Some(part),
@@ -1590,16 +1745,27 @@ fn parse_word_part(
                         t.row_open = false;
                     }
                 } else if name == "tbl" {
-                    if let Some(t) = table.take() {
+                    if let Some(mut t) = tables.pop() {
                         if t.row_open || t.cell_open {
                             return Err(malformed(Some(part), "table closes with incomplete rows"));
                         }
-                        validate_table_limits(&t.rows, part, options)?;
+                        if validate_table_limits(&t.rows, part, options)? {
+                            normalize_ragged_table(&mut t.rows, options)?;
+                            state.warning(
+                                "word.tableNormalized",
+                                "ragged table rows were padded to a consistent logical width",
+                                part,
+                            );
+                        }
                         let node = state.node(
                             Block::Table { rows: t.rows, alignments: Vec::<TableAlignment>::new() },
                             part,
                         )?;
-                        state.document.blocks.push(node);
+                        if let Some(parent) = tables.last_mut() {
+                            parent.cell_blocks.push(node);
+                        } else {
+                            state.document.blocks.push(node);
+                        }
                     }
                 } else if name == "body" {
                     body_depth = None;
@@ -1613,7 +1779,7 @@ fn parse_word_part(
         }
     }
     if paragraph.is_some()
-        || table.is_some()
+        || !tables.is_empty()
         || depth != 0
         || !element_stack.is_empty()
         || skipped_choice_depth.is_some()
@@ -1623,11 +1789,47 @@ fn parse_word_part(
     Ok(())
 }
 
+fn interpreted_word_local(
+    reader: &NsReader<&[u8]>,
+    name: quick_xml::name::QName<'_>,
+    part: &str,
+) -> Result<Option<String>, ConversionError> {
+    let (namespace, local_name) = reader.resolve_element(name);
+    let namespace = match namespace {
+        ResolveResult::Bound(value) => value,
+        ResolveResult::Unbound => return Ok(None),
+        ResolveResult::Unknown(prefix) => {
+            return Err(malformed(
+                Some(part),
+                format!("undeclared XML namespace prefix {}", String::from_utf8_lossy(&prefix)),
+            ));
+        }
+    };
+    let local_name = local_name.as_ref();
+    let interpreted = namespace.as_ref() == WORD_NS
+        || namespace.as_ref() == MC_NS
+            && matches!(local_name, b"AlternateContent" | b"Choice" | b"Fallback")
+        || namespace.as_ref() == MATH_NS && matches!(local_name, b"oMath" | b"r" | b"t")
+        || namespace.as_ref() == DRAWING_NS && local_name == b"blip"
+        || namespace.as_ref() == WORD_DRAWING_NS && local_name == b"docPr"
+        || namespace.as_ref() == VML_NS && local_name == b"imagedata"
+        || namespace.as_ref() == CHART_NS && local_name == b"chart"
+        || namespace.as_ref() == DIAGRAM_NS && local_name == b"relIds"
+        || namespace.as_ref() == OFFICE_VML_NS && local_name == b"OLEObject";
+    interpreted
+        .then(|| {
+            std::str::from_utf8(local_name)
+                .map(str::to_owned)
+                .map_err(|_| malformed(Some(part), "XML local name is not UTF-8"))
+        })
+        .transpose()
+}
+
 fn validate_table_limits(
     rows: &[TableRow],
     part: &str,
     options: &ConversionOptions,
-) -> Result<(), ConversionError> {
+) -> Result<bool, ConversionError> {
     if rows.is_empty() {
         return Err(malformed(Some(part), "table has no rows"));
     }
@@ -1640,6 +1842,7 @@ fn validate_table_limits(
     }
     let mut cells = 0_u64;
     let mut expected_width = None;
+    let mut ragged = false;
     for row in rows {
         if row.cells.is_empty() {
             return Err(malformed(Some(part), "table row has no cells"));
@@ -1662,7 +1865,10 @@ fn validate_table_limits(
             ));
         }
         if expected_width.replace(width).is_some_and(|expected| expected != width) {
-            return Err(malformed(Some(part), "table rows have inconsistent widths"));
+            if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                return Err(malformed(Some(part), "table rows have inconsistent widths"));
+            }
+            ragged = true;
         }
     }
     if cells > options.limits.max_table_cells {
@@ -1671,7 +1877,7 @@ fn validate_table_limits(
             format!("{cells} > {}", options.limits.max_table_cells),
         ));
     }
-    Ok(())
+    Ok(ragged)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1718,13 +1924,95 @@ fn append_text_inline(
     if value.is_empty() {
         return Ok(());
     }
+    let mut unique_marks = Vec::new();
+    unique_marks.try_reserve_exact(marks.len()).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve inline marks: {error}"))
+    })?;
+    for mark in marks {
+        if !unique_marks.contains(mark) {
+            unique_marks.push(*mark);
+        }
+    }
     if let Some(Inline::Text { value: previous, marks: previous_marks }) = inlines.last_mut()
-        && previous_marks == marks
+        && *previous_marks == unique_marks
     {
         append_bounded_text(previous, &value, options)?;
     } else {
         enforce_field_limit(&value, options)?;
-        inlines.push(Inline::Text { value, marks: marks.to_vec() });
+        inlines.push(Inline::Text { value, marks: unique_marks });
+    }
+    Ok(())
+}
+
+fn push_unique_mark(marks: &mut Vec<InlineMark>, mark: InlineMark) {
+    if !marks.contains(&mark) {
+        marks.push(mark);
+    }
+}
+
+fn recover_unsupported_word_object(
+    name: &str,
+    part: &str,
+    options: &ConversionOptions,
+    state: &mut ParseState,
+) -> Result<(), ConversionError> {
+    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+        return Err(malformed(
+            Some(part),
+            format!("unsupported Word object {name} requires best-effort recovery"),
+        ));
+    }
+    state.warning(
+        "word.unsupportedWrapperOmitted",
+        format!(
+            "unsupported Word object {name} was omitted while preserving visible fallback content"
+        ),
+        part,
+    );
+    Ok(())
+}
+
+fn normalize_ragged_table(
+    rows: &mut [TableRow],
+    options: &ConversionOptions,
+) -> Result<(), ConversionError> {
+    let width = rows.iter().try_fold(0_u64, |maximum, row| {
+        let width = row.cells.iter().try_fold(0_u64, |total, cell| {
+            total
+                .checked_add(u64::from(cell.column_span))
+                .ok_or_else(|| limit("max_table_columns", "DOCX table width overflow"))
+        })?;
+        Ok::<_, ConversionError>(maximum.max(width))
+    })?;
+    let mut added = 0_u64;
+    for row in rows.iter_mut() {
+        let row_width = row.cells.iter().map(|cell| u64::from(cell.column_span)).sum::<u64>();
+        let missing = width.saturating_sub(row_width);
+        added = added
+            .checked_add(missing)
+            .ok_or_else(|| limit("max_table_cells", "normalized DOCX cell count overflow"))?;
+        let missing = usize::try_from(missing)
+            .map_err(|_| limit("max_table_cells", "normalized cell count is not representable"))?;
+        row.cells.try_reserve(missing).map_err(|error| {
+            limit("max_memory_bytes", format!("cannot reserve normalized DOCX cells: {error}"))
+        })?;
+        for _ in 0..missing {
+            row.cells.push(Cell { row_span: 1, column_span: 1, header: false, blocks: Vec::new() });
+        }
+    }
+    let total = rows.iter().try_fold(0_u64, |count, row| {
+        count
+            .checked_add(u64::try_from(row.cells.len()).unwrap_or(u64::MAX))
+            .ok_or_else(|| limit("max_table_cells", "normalized DOCX cell count overflow"))
+    })?;
+    if total > options.limits.max_table_cells {
+        return Err(limit(
+            "max_table_cells",
+            format!(
+                "{total} > {} after adding {added} normalized cells",
+                options.limits.max_table_cells
+            ),
+        ));
     }
     Ok(())
 }
@@ -1782,7 +2070,7 @@ fn emit_field(paragraph: &mut Paragraph, hyperlink: &mut Option<(String, Vec<Inl
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn finish_paragraph(
-    p: Paragraph,
+    mut p: Paragraph,
     part: &str,
     relationships: &BTreeMap<String, Relationship>,
     styles: &BTreeMap<String, u8>,
@@ -1793,10 +2081,25 @@ fn finish_paragraph(
     state: &mut ParseState,
     mut table: Option<&mut TableBuild>,
 ) -> Result<(), ConversionError> {
+    normalize_word_inlines(&mut p.inlines, part, options, state)?;
     for (id, alt) in p.images {
         let rel = relationships
             .get(&id)
             .ok_or_else(|| malformed(Some(part), format!("image relationship {id} is missing")))?;
+        if rel.kind == relationship_type("image")
+            && rel.external
+            && options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+        {
+            push_word_media_placeholder(
+                state,
+                table.as_deref_mut(),
+                part,
+                alt.as_deref(),
+                "external image relationship was removed without downloading it",
+                "office.relationshipOmitted",
+            )?;
+            continue;
+        }
         if rel.kind != relationship_type("image") || rel.external {
             return Err(malformed(
                 Some(part),
@@ -1813,12 +2116,44 @@ fn finish_paragraph(
                     format!("image target {target} has no content type"),
                 )
             })?;
-            let image = supported_image(&target, declared_type)?;
+            let image = match supported_image(&target, declared_type) {
+                Ok(image) => image,
+                Err(error)
+                    if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+                        && recoverable_office_media_error(&error) =>
+                {
+                    push_word_media_placeholder(
+                        state,
+                        table.as_deref_mut(),
+                        part,
+                        alt.as_deref(),
+                        &format!("unsupported media {target} was omitted: {error}"),
+                        "word.mediaPlaceholder",
+                    )?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let bytes = package
                 .parts
                 .remove(&target)
                 .ok_or_else(|| malformed(Some(&target), "related image part is missing"))?;
-            validate_image_bytes(image, &bytes, &target, options, context)?;
+            if let Err(error) = validate_image_bytes(image, &bytes, &target, options, context) {
+                if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+                    && recoverable_office_media_error(&error)
+                {
+                    push_word_media_placeholder(
+                        state,
+                        table.as_deref_mut(),
+                        part,
+                        alt.as_deref(),
+                        &format!("invalid media {target} was omitted: {error}"),
+                        "word.mediaPlaceholder",
+                    )?;
+                    continue;
+                }
+                return Err(error);
+            }
             let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
             if size > options.limits.max_asset_bytes {
                 return Err(limit(
@@ -1914,6 +2249,91 @@ fn finish_paragraph(
     context.checkpoint()
 }
 
+fn normalize_word_inlines(
+    inlines: &mut Vec<Inline>,
+    part: &str,
+    options: &ConversionOptions,
+    state: &mut ParseState,
+) -> Result<(), ConversionError> {
+    let mut normalized = Vec::new();
+    normalized.try_reserve_exact(inlines.len()).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve normalized Word inlines: {error}"))
+    })?;
+    for mut inline in std::mem::take(inlines) {
+        match &mut inline {
+            Inline::Text { marks, .. } => {
+                let mut index = 0;
+                while index < marks.len() {
+                    if marks[..index].contains(&marks[index]) {
+                        marks.remove(index);
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            Inline::Link { target, content } => {
+                normalize_word_inlines(content, part, options, state)?;
+                if !safe_link_target(target) {
+                    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                        return Err(malformed(Some(part), "hyperlink uses a disallowed target"));
+                    }
+                    state.warning(
+                        "office.relationshipOmitted",
+                        "unsafe hyperlink target was removed while preserving its text",
+                        part,
+                    );
+                    normalized.append(content);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        normalized.push(inline);
+    }
+    *inlines = normalized;
+    Ok(())
+}
+
+fn safe_link_target(value: &str) -> bool {
+    if value.chars().any(char::is_control) || contains_html_character_reference(value) {
+        return false;
+    }
+    let Some(colon) = value.find(':') else {
+        return true;
+    };
+    let scheme = &value[..colon];
+    if scheme.is_empty()
+        || !scheme.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphabetic() || index > 0 && matches!(byte, b'+' | b'-' | b'.')
+        })
+    {
+        return true;
+    }
+    if matches!(scheme.to_ascii_lowercase().as_str(), "javascript" | "vbscript" | "data" | "file") {
+        return false;
+    }
+    !value[colon + 1..]
+        .strip_prefix("//")
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|authority| authority.contains('@'))
+}
+
+fn contains_html_character_reference(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.iter().enumerate().any(|(index, byte)| {
+        if *byte != b'&' {
+            return false;
+        }
+        let tail = &bytes[index + 1..];
+        tail.iter().position(|candidate| *candidate == b';').is_some_and(|end| {
+            let entity = &tail[..end];
+            !entity.is_empty()
+                && entity.len() <= 32
+                && (entity[0] == b'#' || entity.iter().all(u8::is_ascii_alphanumeric))
+        })
+    })
+}
+
 fn append_related_parts(
     package: &mut Package,
     options: &ConversionOptions,
@@ -1965,6 +2385,33 @@ fn append_related_parts(
             context,
             state,
         )?;
+    }
+    Ok(())
+}
+
+fn recoverable_office_media_error(error: &ConversionError) -> bool {
+    matches!(error, ConversionError::Malformed { .. } | ConversionError::Unsupported { .. })
+}
+
+fn push_word_media_placeholder(
+    state: &mut ParseState,
+    table: Option<&mut TableBuild>,
+    part: &str,
+    alt: Option<&str>,
+    message: &str,
+    code: &str,
+) -> Result<(), ConversionError> {
+    state.warning(code, message, part);
+    let label = alt.filter(|value| !value.is_empty()).unwrap_or("Unsupported media");
+    state.add_inlines(1)?;
+    let node = state.node(
+        Block::Paragraph(vec![Inline::Text { value: format!("[{label}]"), marks: Vec::new() }]),
+        part,
+    )?;
+    if let Some(table) = table {
+        table.cell_blocks.push(node);
+    } else {
+        state.document.blocks.push(node);
     }
     Ok(())
 }
@@ -2060,8 +2507,20 @@ fn preflight_xml(
                     }
                     root_seen = true;
                 }
-                validate_xml_element(profile, &name, &stack, part)?;
-                validate_xml_attributes(&reader, &element, &name, part)?;
+                validate_xml_element(
+                    profile,
+                    &name,
+                    &stack,
+                    part,
+                    options.error_policy == into_markdown_core::ErrorPolicy::Strict,
+                )?;
+                validate_xml_attributes(
+                    &reader,
+                    &element,
+                    &name,
+                    part,
+                    options.error_policy == into_markdown_core::ErrorPolicy::Strict,
+                )?;
                 if profile == XmlProfile::Document
                     && name.0.as_slice() == WORD_NS
                     && name.1.as_slice() == b"body"
@@ -2094,8 +2553,20 @@ fn preflight_xml(
                 if stack.is_empty() {
                     return Err(malformed(Some(part), "package XML root cannot be empty"));
                 }
-                validate_xml_element(profile, &name, &stack, part)?;
-                validate_xml_attributes(&reader, &element, &name, part)?;
+                validate_xml_element(
+                    profile,
+                    &name,
+                    &stack,
+                    part,
+                    options.error_policy == into_markdown_core::ErrorPolicy::Strict,
+                )?;
+                validate_xml_attributes(
+                    &reader,
+                    &element,
+                    &name,
+                    part,
+                    options.error_policy == into_markdown_core::ErrorPolicy::Strict,
+                )?;
                 if name.0.as_slice() == MC_NS && name.1.as_slice() == b"AlternateContent" {
                     return Err(malformed(
                         Some(part),
@@ -2197,6 +2668,7 @@ fn validate_xml_element(
     name: &(Vec<u8>, Vec<u8>),
     ancestors: &[(Vec<u8>, Vec<u8>)],
     part: &str,
+    strict_semantics: bool,
 ) -> Result<(), ConversionError> {
     let ns = name.0.as_slice();
     let local = name.1.as_slice();
@@ -2226,7 +2698,9 @@ fn validate_xml_element(
         | b"footnoteReference" | b"endnoteReference" | b"commentReference" | b"headerReference"
         | b"footerReference" | b"fldChar" | b"instrText" | b"hyperlink" | b"tbl" | b"tblPr"
         | b"tr" | b"trPr" | b"tc" | b"tcPr" | b"gridSpan" | b"tblHeader" | b"vMerge"
-        | b"sectPr" | b"drawing" | b"pict" | b"t" => Some(WORD_NS),
+        | b"sectPr" | b"drawing" | b"pict" | b"sdt" | b"sdtPr" | b"sdtContent" | b"t" => {
+            Some(WORD_NS)
+        }
         b"coreProperties" | b"keywords" | b"lastModifiedBy" | b"revision" | b"category"
         | b"contentStatus" | b"version" => Some(CORE_PROPERTIES_NS),
         b"title" | b"subject" | b"creator" | b"description" | b"identifier" | b"language" => {
@@ -2235,7 +2709,7 @@ fn validate_xml_element(
         b"created" | b"modified" => Some(DUBLIN_CORE_TERMS_NS),
         _ => None,
     };
-    if expected_namespace.is_some_and(|expected| ns != expected) {
+    if strict_semantics && expected_namespace.is_some_and(|expected| ns != expected) {
         return Err(malformed(
             Some(part),
             format!(
@@ -2244,75 +2718,95 @@ fn validate_xml_element(
             ),
         ));
     }
-    if matches!(
-        local,
-        b"Types"
-            | b"Relationships"
-            | b"document"
-            | b"hdr"
-            | b"ftr"
-            | b"styles"
-            | b"numbering"
-            | b"comments"
-            | b"footnotes"
-            | b"endnotes"
-            | b"coreProperties"
-    ) && depth != 1
+    if strict_semantics
+        && matches!(
+            local,
+            b"Types"
+                | b"Relationships"
+                | b"document"
+                | b"hdr"
+                | b"ftr"
+                | b"styles"
+                | b"numbering"
+                | b"comments"
+                | b"footnotes"
+                | b"endnotes"
+                | b"coreProperties"
+        )
+        && depth != 1
     {
         return Err(malformed(Some(part), "package part root appears at a nested level"));
     }
-    if local == b"body" && (profile != XmlProfile::Document || !parent_is(WORD_NS, b"document")) {
+    if strict_semantics
+        && local == b"body"
+        && (profile != XmlProfile::Document || !parent_is(WORD_NS, b"document"))
+    {
         return Err(malformed(Some(part), "w:body is only valid in the main document"));
     }
-    match profile {
-        XmlProfile::ContentTypes if depth > 1 && !parent_is(CONTENT_TYPES_NS, b"Types") => {
-            return Err(malformed(Some(part), "content type declarations must be direct children"));
+    if strict_semantics {
+        match profile {
+            XmlProfile::ContentTypes if depth > 1 && !parent_is(CONTENT_TYPES_NS, b"Types") => {
+                return Err(malformed(
+                    Some(part),
+                    "content type declarations must be direct children",
+                ));
+            }
+            XmlProfile::Relationships
+                if depth > 1
+                    && !(local == b"Relationship"
+                        && parent_is(PACKAGE_REL_NS, b"Relationships")) =>
+            {
+                return Err(malformed(Some(part), "relationships must be direct children"));
+            }
+            XmlProfile::Styles => validate_styles_hierarchy(ns, local, parent, ancestors, part)?,
+            XmlProfile::Numbering => validate_numbering_hierarchy(ns, local, parent, part)?,
+            XmlProfile::Comments
+                if matches!(local, b"comment" | b"footnote" | b"endnote")
+                    && !(local == b"comment" && parent_is(WORD_NS, b"comments")) =>
+            {
+                return Err(malformed(
+                    Some(part),
+                    "invalid annotation definition for comments part",
+                ));
+            }
+            XmlProfile::Footnotes
+                if matches!(local, b"comment" | b"footnote" | b"endnote")
+                    && !(local == b"footnote" && parent_is(WORD_NS, b"footnotes")) =>
+            {
+                return Err(malformed(
+                    Some(part),
+                    "invalid annotation definition for footnotes part",
+                ));
+            }
+            XmlProfile::Endnotes
+                if matches!(local, b"comment" | b"footnote" | b"endnote")
+                    && !(local == b"endnote" && parent_is(WORD_NS, b"endnotes")) =>
+            {
+                return Err(malformed(
+                    Some(part),
+                    "invalid annotation definition for endnotes part",
+                ));
+            }
+            XmlProfile::CoreProperties
+                if is_core_property(ns, local)
+                    && !(ns == CORE_PROPERTIES_NS && local == b"coreProperties")
+                    && !raw_parent_is(CORE_PROPERTIES_NS, b"coreProperties") =>
+            {
+                return Err(malformed(
+                    Some(part),
+                    "core properties must be direct coreProperties children",
+                ));
+            }
+            XmlProfile::CoreProperties
+                if raw_parent.is_some_and(|name| is_core_property(&name.0, &name.1))
+                    && !raw_parent_is(CORE_PROPERTIES_NS, b"coreProperties") =>
+            {
+                return Err(malformed(Some(part), "core property values must contain text only"));
+            }
+            _ => {}
         }
-        XmlProfile::Relationships
-            if depth > 1
-                && !(local == b"Relationship" && parent_is(PACKAGE_REL_NS, b"Relationships")) =>
-        {
-            return Err(malformed(Some(part), "relationships must be direct children"));
-        }
-        XmlProfile::Styles => validate_styles_hierarchy(ns, local, parent, ancestors, part)?,
-        XmlProfile::Numbering => validate_numbering_hierarchy(ns, local, parent, part)?,
-        XmlProfile::Comments
-            if matches!(local, b"comment" | b"footnote" | b"endnote")
-                && !(local == b"comment" && parent_is(WORD_NS, b"comments")) =>
-        {
-            return Err(malformed(Some(part), "invalid annotation definition for comments part"));
-        }
-        XmlProfile::Footnotes
-            if matches!(local, b"comment" | b"footnote" | b"endnote")
-                && !(local == b"footnote" && parent_is(WORD_NS, b"footnotes")) =>
-        {
-            return Err(malformed(Some(part), "invalid annotation definition for footnotes part"));
-        }
-        XmlProfile::Endnotes
-            if matches!(local, b"comment" | b"footnote" | b"endnote")
-                && !(local == b"endnote" && parent_is(WORD_NS, b"endnotes")) =>
-        {
-            return Err(malformed(Some(part), "invalid annotation definition for endnotes part"));
-        }
-        XmlProfile::CoreProperties
-            if is_core_property(ns, local)
-                && !(ns == CORE_PROPERTIES_NS && local == b"coreProperties")
-                && !raw_parent_is(CORE_PROPERTIES_NS, b"coreProperties") =>
-        {
-            return Err(malformed(
-                Some(part),
-                "core properties must be direct coreProperties children",
-            ));
-        }
-        XmlProfile::CoreProperties
-            if raw_parent.is_some_and(|name| is_core_property(&name.0, &name.1))
-                && !raw_parent_is(CORE_PROPERTIES_NS, b"coreProperties") =>
-        {
-            return Err(malformed(Some(part), "core property values must contain text only"));
-        }
-        _ => {}
     }
-    if is_word_content_profile(profile) {
+    if strict_semantics && is_word_content_profile(profile) {
         if matches!(local, b"comment" | b"footnote" | b"endnote")
             && !matches!(
                 profile,
@@ -2322,15 +2816,20 @@ fn validate_xml_element(
             return Err(malformed(Some(part), "annotation definition is invalid for this part"));
         }
         validate_word_content_hierarchy(ns, local, parent, ancestors, part)?;
-    } else if is_word_content_semantic(ns, local)
+    } else if strict_semantics
+        && is_word_content_semantic(ns, local)
         && !matches!(profile, XmlProfile::Styles | XmlProfile::Numbering)
     {
         return Err(malformed(Some(part), "Word content element is invalid for this part profile"));
     }
-    if matches!(local, b"Choice" | b"Fallback") && !raw_parent_is(MC_NS, b"AlternateContent") {
+    if strict_semantics
+        && matches!(local, b"Choice" | b"Fallback")
+        && !raw_parent_is(MC_NS, b"AlternateContent")
+    {
         return Err(malformed(Some(part), "MC branches must be direct AlternateContent children"));
     }
-    if ns == MC_NS
+    if strict_semantics
+        && ns == MC_NS
         && local == b"AlternateContent"
         && !has_ancestor(WORD_NS, b"document")
         && !matches!(profile, XmlProfile::Header | XmlProfile::Footer)
@@ -2347,7 +2846,8 @@ fn xml_name_is(name: Option<&(Vec<u8>, Vec<u8>)>, namespace: &[u8], local: &[u8]
 fn semantic_parent(ancestors: &[(Vec<u8>, Vec<u8>)]) -> Option<&(Vec<u8>, Vec<u8>)> {
     ancestors.iter().rev().find(|name| {
         !(name.0.as_slice() == MC_NS
-            && matches!(name.1.as_slice(), b"AlternateContent" | b"Choice" | b"Fallback"))
+            && matches!(name.1.as_slice(), b"AlternateContent" | b"Choice" | b"Fallback")
+            || name.0.as_slice() == WORD_NS && matches!(name.1.as_slice(), b"sdt" | b"sdtContent"))
     })
 }
 
@@ -2414,7 +2914,17 @@ fn validate_styles_hierarchy(
     if valid {
         Ok(())
     } else {
-        Err(malformed(Some(part), "invalid styles semantic element hierarchy"))
+        Err(malformed(
+            Some(part),
+            format!(
+                "invalid styles semantic element hierarchy for {} under {}",
+                String::from_utf8_lossy(local),
+                parent.map_or_else(
+                    || "<root>".into(),
+                    |value| String::from_utf8_lossy(&value.1).into_owned()
+                )
+            ),
+        ))
     }
 }
 
@@ -2438,7 +2948,17 @@ fn validate_numbering_hierarchy(
     if valid {
         Ok(())
     } else {
-        Err(malformed(Some(part), "invalid numbering semantic element hierarchy"))
+        Err(malformed(
+            Some(part),
+            format!(
+                "invalid numbering semantic element hierarchy for {} under {}",
+                String::from_utf8_lossy(local),
+                parent.map_or_else(
+                    || "<root>".into(),
+                    |value| String::from_utf8_lossy(&value.1).into_owned()
+                )
+            ),
+        ))
     }
 }
 
@@ -2550,7 +3070,17 @@ fn validate_word_content_hierarchy(
     if valid {
         Ok(())
     } else {
-        Err(malformed(Some(part), "invalid Word semantic element hierarchy"))
+        Err(malformed(
+            Some(part),
+            format!(
+                "invalid Word semantic element hierarchy for {} under {}",
+                String::from_utf8_lossy(local),
+                parent.map_or_else(
+                    || "<root>".into(),
+                    |value| String::from_utf8_lossy(&value.1).into_owned()
+                )
+            ),
+        ))
     }
 }
 
@@ -2559,6 +3089,7 @@ fn validate_xml_attributes(
     element: &BytesStart<'_>,
     element_name: &(Vec<u8>, Vec<u8>),
     part: &str,
+    strict_semantics: bool,
 ) -> Result<(), ConversionError> {
     for attribute in element.attributes() {
         let attribute = attribute
@@ -2611,7 +3142,7 @@ fn validate_xml_attributes(
         } else {
             None
         };
-        if expected.is_some_and(|expected| namespace.as_slice() != expected) {
+        if strict_semantics && expected.is_some_and(|expected| namespace.as_slice() != expected) {
             return Err(malformed(
                 Some(part),
                 format!(
@@ -2639,17 +3170,21 @@ fn canonical_part_name(name: &str) -> Result<String, ConversionError> {
 }
 
 fn resolve_target(owner: &str, target: &str) -> Result<String, ConversionError> {
-    if target.is_empty()
-        || target.contains('\\')
-        || target.contains('\0')
-        || target.starts_with('/')
-        || target.contains(':')
-    {
+    if target.is_empty() || target.contains('\\') || target.contains('\0') || target.contains(':') {
         return Err(malformed(Some(owner), "unsafe internal relationship target"));
     }
-    let mut segments = owner
-        .rsplit_once('/')
-        .map_or(Vec::new(), |(dir, _)| dir.split('/').map(str::to_owned).collect());
+    let package_absolute = target.starts_with('/');
+    let target = target.strip_prefix('/').unwrap_or(target);
+    if target.is_empty() || target.starts_with('/') {
+        return Err(malformed(Some(owner), "unsafe internal relationship target"));
+    }
+    let mut segments = if package_absolute {
+        Vec::new()
+    } else {
+        owner
+            .rsplit_once('/')
+            .map_or(Vec::new(), |(dir, _)| dir.split('/').map(str::to_owned).collect())
+    };
     for value in target.split('/') {
         match value {
             "" | "." => {}
@@ -3532,6 +4067,13 @@ mod tests {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
     }
 
+    fn strict_options() -> ConversionOptions {
+        ConversionOptions {
+            error_policy: into_markdown_core::ErrorPolicy::Strict,
+            ..ConversionOptions::default()
+        }
+    }
+
     fn limited_context(max_memory_bytes: u64) -> ExecutionContext {
         let limits = ResourceLimits { max_memory_bytes, ..ResourceLimits::default() };
         ExecutionContext::new(ExecutionOptions::default(), limits)
@@ -3687,6 +4229,52 @@ mod tests {
             ("word/_rels/document.xml.rels".into(), relationships.into_bytes()),
             (part.into(), bytes.to_vec()),
         ])
+    }
+
+    #[test]
+    fn best_effort_recovers_loose_fields_unsafe_links_duplicate_marks_and_ragged_tables() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}"><w:body>
+                <w:p><w:r><w:rPr><w:b/><w:i/><w:b/></w:rPr><w:t>styled</w:t></w:r><w:instrText>HYPERLINK "file:///private/report"</w:instrText></w:p>
+                <w:tbl>
+                  <w:tr><w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr>
+                  <w:tr><w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc></w:tr>
+                </w:tbl>
+            </w:body></w:document>"#
+        );
+        let bytes = base(document.as_bytes(), &[]);
+        let options = ConversionOptions::default();
+        let output = convert_docx(&bytes, &options, &context()).unwrap();
+        output.document.validate().unwrap();
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "word.unsupportedWrapperOmitted")
+        );
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "office.relationshipOmitted")
+        );
+        assert!(
+            output.diagnostics.iter().any(|diagnostic| diagnostic.code == "word.tableNormalized")
+        );
+        let markdown = render(&output.document, &output.assets, &options).unwrap();
+        assert!(markdown.contains("file:///private/report"));
+        assert!(!markdown.contains("](file:///private/report)"));
+        let table = output.document.blocks.iter().find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        });
+        assert!(
+            matches!(table, Some(rows) if rows.len() == 2 && rows.iter().all(|row| row.cells.len() == 2))
+        );
+        assert!(matches!(
+            convert_docx(&bytes, &strict_options(), &context()),
+            Err(ConversionError::Malformed { .. })
+        ));
     }
 
     #[test]
@@ -3858,19 +4446,27 @@ mod tests {
             format!(
                 r#"<w:document xmlns:w="{WORD}"><w:p><w:r><w:t>outside</w:t></w:r></w:p><w:body/></w:document>"#
             ),
-            format!(
-                r#"<w:document xmlns:w="{WORD}" xmlns:e="urn:evil"><w:body><w:p><w:r><e:t>spoofed</e:t></w:r></w:p></w:body></w:document>"#
-            ),
         ] {
             assert!(matches!(
-                convert_docx(
-                    &base(invalid.as_bytes(), &[]),
-                    &ConversionOptions::default(),
-                    &context()
-                ),
+                convert_docx(&base(invalid.as_bytes(), &[]), &strict_options(), &context()),
                 Err(ConversionError::Malformed { .. })
             ));
         }
+
+        let spoofed = format!(
+            r#"<w:document xmlns:w="{WORD}" xmlns:e="urn:evil"><w:body><w:p><w:r><e:t>spoofed</e:t><w:t>kept</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let output =
+            convert_docx(&base(spoofed.as_bytes(), &[]), &ConversionOptions::default(), &context())
+                .unwrap();
+        let markdown =
+            render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+        assert!(markdown.contains("kept"), "{markdown}");
+        assert!(!markdown.contains("spoofed"), "{markdown}");
+        assert!(matches!(
+            convert_docx(&base(spoofed.as_bytes(), &[]), &strict_options(), &context()),
+            Err(ConversionError::Malformed { .. })
+        ));
 
         let document = format!(
             r#"<w:document xmlns:w="{WORD}" xmlns:mc="{MC}" xmlns:x="urn:fixture-extension"><w:body>
@@ -3888,6 +4484,19 @@ mod tests {
             render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
         assert!(markdown.contains("kept") && markdown.contains("fallback\\-kept"), "{markdown}");
         assert!(!markdown.contains("must-not-leak") && !markdown.contains("choice-must-not-leak"));
+
+        let structured_document_tag = format!(
+            r#"<w:document xmlns:w="{WORD}"><w:body><w:tbl><w:tblPr/><w:sdt><w:sdtPr><w:id w:val="1001"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>SDT Cell</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt></w:tbl></w:body></w:document>"#
+        );
+        let output = convert_docx(
+            &base(structured_document_tag.as_bytes(), &[]),
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap();
+        let markdown =
+            render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+        assert!(markdown.contains("SDT Cell"), "{markdown}");
     }
 
     #[test]
@@ -3906,7 +4515,7 @@ mod tests {
             assert!(matches!(
                 convert_docx(
                     &base(document.as_bytes(), &[("docProps/core.xml", core.as_bytes())],),
-                    &ConversionOptions::default(),
+                    &strict_options(),
                     &context(),
                 ),
                 Err(ConversionError::Malformed { .. })
@@ -3954,7 +4563,7 @@ mod tests {
                             ("word/styles.xml", styles.as_bytes()),
                         ],
                     ),
-                    &ConversionOptions::default(),
+                    &strict_options(),
                     &context(),
                 ),
                 Err(ConversionError::Malformed { .. })
@@ -3988,7 +4597,7 @@ mod tests {
                             ("word/numbering.xml", numbering.as_bytes()),
                         ],
                     ),
-                    &ConversionOptions::default(),
+                    &strict_options(),
                     &context(),
                 ),
                 Err(ConversionError::Malformed { .. })
@@ -4017,11 +4626,7 @@ mod tests {
         ];
         for invalid in invalid_documents {
             assert!(matches!(
-                convert_docx(
-                    &base(invalid.as_bytes(), &[]),
-                    &ConversionOptions::default(),
-                    &context(),
-                ),
+                convert_docx(&base(invalid.as_bytes(), &[]), &strict_options(), &context(),),
                 Err(ConversionError::Malformed { .. })
             ));
         }
@@ -4080,7 +4685,7 @@ mod tests {
         );
         match convert_docx(
             &image_package("word/media/codestream.jpg", "image/jpeg", &corrupt_jpeg_codestream),
-            &ConversionOptions::default(),
+            &strict_options(),
             &context(),
         ) {
             Err(ConversionError::Malformed { detail, .. }) => {
@@ -4107,7 +4712,7 @@ mod tests {
             assert!(matches!(
                 convert_docx(
                     &image_package(part, content_type, bytes),
-                    &ConversionOptions::default(),
+                    &strict_options(),
                     &context(),
                 ),
                 Err(ConversionError::Malformed { .. })
@@ -4290,11 +4895,19 @@ mod tests {
             (nested, "nested tables are unsupported"),
             (merged, "vertical table merges are unsupported"),
         ] {
-            match convert_docx(
+            let recovered = convert_docx(
                 &base(document.as_bytes(), &[]),
                 &ConversionOptions::default(),
                 &context(),
-            ) {
+            )
+            .unwrap();
+            assert!(
+                recovered
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "word.tableNormalized")
+            );
+            match convert_docx(&base(document.as_bytes(), &[]), &strict_options(), &context()) {
                 Err(ConversionError::Malformed { detail, .. }) => {
                     assert!(detail.contains(expected));
                 }

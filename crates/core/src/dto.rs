@@ -304,6 +304,26 @@ pub enum BatchItemStatus {
     Failed,
 }
 
+/// Stable semantic outcome for one batch item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchItemOutcome {
+    /// Conversion completed without recoverable losses.
+    Complete,
+    /// Conversion completed after omitting or sanitizing non-critical content.
+    Degraded,
+    /// Conversion did not commit an output.
+    Failed,
+}
+
+/// Structured resource-limit detail for a failed batch item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchLimitDto {
+    /// Stable limit identifier, such as `max_memory_bytes`.
+    pub name: String,
+    /// Sanitized observed-versus-allowed detail, when available.
+    pub detail: Option<String>,
+}
+
 /// One item in a machine-readable batch report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BatchItemDto {
@@ -315,10 +335,20 @@ pub struct BatchItemDto {
     pub format: Option<String>,
     /// Completion state.
     pub status: BatchItemStatus,
+    /// Semantic outcome, including successful degraded conversions.
+    pub outcome: BatchItemOutcome,
     /// Ordered diagnostics.
     pub diagnostics: Vec<DiagnosticDto>,
     /// Stable failure code.
     pub error_code: Option<String>,
+    /// Stable reason code with finer detail than `errorCode` when available.
+    pub reason_code: Option<String>,
+    /// Component responsible for the failure, when known.
+    pub component: Option<String>,
+    /// Package part or stream responsible for the failure, when known.
+    pub part: Option<String>,
+    /// Structured resource-limit detail, when applicable.
+    pub limit: Option<BatchLimitDto>,
     /// Human-readable failure detail.
     pub message: Option<String>,
     /// Human-readable warnings produced by output handling.
@@ -447,14 +477,39 @@ enum RawBatchItemStatus {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawBatchItemOutcome {
+    Complete,
+    Degraded,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBatchLimitDto {
+    name: String,
+    detail: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawBatchItemDto {
     input: String,
     output: Option<String>,
     format: Option<String>,
     status: RawBatchItemStatus,
+    #[serde(default)]
+    outcome: Option<RawBatchItemOutcome>,
     diagnostics: Vec<RawDiagnosticDto>,
     error_code: Option<String>,
+    #[serde(default)]
+    reason_code: Option<String>,
+    #[serde(default)]
+    component: Option<String>,
+    #[serde(default)]
+    part: Option<String>,
+    #[serde(default)]
+    limit: Option<RawBatchLimitDto>,
     message: Option<String>,
     warnings: Vec<String>,
 }
@@ -765,8 +820,20 @@ fn encode_batch_report(value: &BatchReportDto) -> RawBatchReportDto {
                     BatchItemStatus::Success => RawBatchItemStatus::Success,
                     BatchItemStatus::Failed => RawBatchItemStatus::Failed,
                 },
+                outcome: Some(match item.outcome {
+                    BatchItemOutcome::Complete => RawBatchItemOutcome::Complete,
+                    BatchItemOutcome::Degraded => RawBatchItemOutcome::Degraded,
+                    BatchItemOutcome::Failed => RawBatchItemOutcome::Failed,
+                }),
                 diagnostics: item.diagnostics.iter().map(RawDiagnosticDto::from).collect(),
                 error_code: item.error_code.clone(),
+                reason_code: item.reason_code.clone(),
+                component: item.component.clone(),
+                part: item.part.clone(),
+                limit: item.limit.as_ref().map(|limit| RawBatchLimitDto {
+                    name: limit.name.clone(),
+                    detail: limit.detail.clone(),
+                }),
                 message: item.message.clone(),
                 warnings: item.warnings.clone(),
             })
@@ -942,6 +1009,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
                 .into_iter()
                 .map(Provenance::try_from)
                 .collect::<Result<_, _>>()?,
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         })
     }
@@ -1781,6 +1849,15 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
             .items
             .into_iter()
             .map(|item| BatchItemDto {
+                outcome: match item.outcome {
+                    Some(RawBatchItemOutcome::Complete) => BatchItemOutcome::Complete,
+                    Some(RawBatchItemOutcome::Degraded) => BatchItemOutcome::Degraded,
+                    Some(RawBatchItemOutcome::Failed) => BatchItemOutcome::Failed,
+                    None => match item.status {
+                        RawBatchItemStatus::Success => BatchItemOutcome::Complete,
+                        RawBatchItemStatus::Failed => BatchItemOutcome::Failed,
+                    },
+                },
                 input: item.input,
                 output: item.output,
                 format: item.format,
@@ -1790,6 +1867,12 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
                 },
                 diagnostics: item.diagnostics.into_iter().map(DiagnosticDto::from).collect(),
                 error_code: item.error_code,
+                reason_code: item.reason_code,
+                component: item.component,
+                part: item.part,
+                limit: item
+                    .limit
+                    .map(|limit| BatchLimitDto { name: limit.name, detail: limit.detail }),
                 message: item.message,
                 warnings: item.warnings,
             })
@@ -2513,6 +2596,7 @@ mod tests {
                 locator: SourceLocator::default(),
                 confidence: Some(1.0),
             }],
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ResultDto::from_json(&ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap())
@@ -2575,6 +2659,7 @@ mod tests {
             assets: Vec::new(),
             diagnostics: Vec::new(),
             provenance: Vec::new(),
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
@@ -2714,6 +2799,7 @@ mod tests {
             assets,
             diagnostics: vec![],
             provenance: vec![],
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2739,6 +2825,7 @@ mod tests {
             }],
             diagnostics: vec![],
             provenance: vec![],
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2811,6 +2898,7 @@ mod tests {
             assets,
             diagnostics: vec![],
             provenance,
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let limits = DtoLimits::default();
@@ -2876,6 +2964,7 @@ mod tests {
             }],
             diagnostics: vec![],
             provenance: vec![],
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2908,6 +2997,7 @@ mod tests {
                 locator: None,
             }],
             provenance: vec![],
+            detected_format: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         for style in [DtoJsonStyle::Compact, DtoJsonStyle::Pretty] {
@@ -2961,15 +3051,20 @@ mod tests {
             output: Some("report.md".into()),
             format: Some("pdf".into()),
             status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Complete,
             diagnostics: vec![],
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings: vec![],
         }])
         .unwrap();
         assert_eq!(
             report.to_json().unwrap(),
-            r#"{"schemaVersion":1,"succeeded":1,"failed":0,"items":[{"input":"report.pdf","output":"report.md","format":"pdf","status":"success","diagnostics":[],"errorCode":null,"message":null,"warnings":[]}]}"#
+            r#"{"schemaVersion":1,"succeeded":1,"failed":0,"items":[{"input":"report.pdf","output":"report.md","format":"pdf","status":"success","outcome":"complete","diagnostics":[],"errorCode":null,"reasonCode":null,"component":null,"part":null,"limit":null,"message":null,"warnings":[]}]}"#
         );
     }
 
@@ -3053,6 +3148,7 @@ mod tests {
                 }],
                 diagnostics: vec![],
                 provenance: vec![],
+                detected_format: None,
                 memory_lease: crate::spi::OutputMemoryLease::default(),
             },
             DtoJsonStyle::Compact,
@@ -3324,8 +3420,13 @@ mod tests {
             output: None,
             format: Some("text".into()),
             status: BatchItemStatus::Failed,
+            outcome: BatchItemOutcome::Failed,
             diagnostics: vec![],
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: Some("failed".into()),
             warnings: vec![],
         }])
@@ -3357,8 +3458,13 @@ mod tests {
             output: None,
             format: Some("pptx".into()),
             status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Degraded,
             diagnostics: vec![diagnostic],
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings: vec![],
         }])

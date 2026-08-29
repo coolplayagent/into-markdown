@@ -64,7 +64,7 @@ use xml::{XmlProfile, preflight_xml};
 // remains live. Exact/boundary-minus-one/drop tests exercise the output lease; peak tests exercise
 // the conversion and transient categories above.
 
-/// Strict, non-networking `PresentationML` converter. It never opens macro or embedded-object parts.
+/// Bounded, non-networking `PresentationML` converter. It never opens macro or embedded-object parts.
 #[derive(Debug, Default)]
 pub struct PresentationConverter;
 
@@ -155,7 +155,7 @@ fn convert_presentation(
             "officeDocument does not target a supported PresentationML main part",
         ));
     }
-    let slides = {
+    let (slides, omitted_slide_references) = {
         let main_bytes = package.load_for_parse(&main_part, options, context)?;
         preflight_xml(main_bytes, &main_part, XmlProfile::Presentation, options, context)?;
         parse_slide_order(main_bytes, &main_part, options, context)?
@@ -167,6 +167,22 @@ fn convert_presentation(
     let main_relationships = package.relationships(&main_part, options, context)?;
     let main_relationship_part = relationship_part(&main_part)?;
     let mut state = ParseState::default();
+    if omitted_slide_references > 0 {
+        state.diagnostics.try_reserve(1).map_err(|error| {
+            limit("max_memory_bytes", format!("cannot reserve slide omission diagnostic: {error}"))
+        })?;
+        state.diagnostics.push(Diagnostic {
+            code: "office.relationshipOmitted".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "{omitted_slide_references} slide-list entries without relationships were omitted"
+            ),
+            locator: Some(into_markdown_core::SourceLocator {
+                part: Some(main_part.clone()),
+                ..into_markdown_core::SourceLocator::default()
+            }),
+        });
+    }
     for (index, slide_reference) in slides.into_iter().enumerate() {
         context.checkpoint()?;
         let slide_number =
@@ -371,6 +387,18 @@ fn convert_presentation(
             .metadata
             .properties
             .insert("presentation.dangerousPartsPresent".into(), "true".into());
+    }
+    if package.external_relationships_omitted {
+        state.diagnostics.try_reserve(1).map_err(|error| {
+            limit("max_memory_bytes", format!("cannot reserve external-link diagnostic: {error}"))
+        })?;
+        state.diagnostics.push(Diagnostic {
+            code: "presentation.externalRelationshipsOmitted".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "external relationships were not fetched; visible document text was retained"
+                .into(),
+            locator: Some(SourceLocator { part: Some("ppt".into()), ..SourceLocator::default() }),
+        });
     }
     let validation_bytes =
         estimate_validation_working_set(&state.document, &state.assets, &state.diagnostics)?;
