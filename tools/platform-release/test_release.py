@@ -170,16 +170,44 @@ class PlatformReleaseTests(unittest.TestCase):
         windows = workflow.index("target: x86_64-pc-windows-msvc")
         self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
+        platform_release = (
+            ROOT / "tools/platform-release/release.py"
+        ).read_text(encoding="utf-8")
+        macos_release = (ROOT / "tools/macos-release/release.py").read_text(
+            encoding="utf-8"
+        )
+        rust_package = (ROOT / "tools/macos-release/rust_package.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(platform_release.count("stream_stdout=False"), 2)
+        self.assertEqual(macos_release.count("stream_stdout=False"), 2)
+        self.assertEqual(rust_package.count("stream_stdout=False"), 1)
         self.assertEqual(workflow.count("uses: actions/cache/save@v4"), 2)
         self.assertEqual(
             workflow.count("path: ${{ runner.temp }}/release-work/build"), 1
         )
         for step in [
+            "Start artifact upload timing",
             "Record artifact upload timing",
+            "Start cache upload timing",
             "Record cache upload timing and publish summary",
         ]:
             position = workflow.index(f"- name: {step}")
             self.assertIn("shell: bash", workflow[position : position + 180])
+        artifact_finish = workflow.index("- name: Record artifact upload timing")
+        cache_finish = workflow.index(
+            "- name: Record cache upload timing and publish summary"
+        )
+        self.assertIn("if: always()", workflow[artifact_finish : artifact_finish + 120])
+        self.assertIn(
+            'test -f "$RUNNER_TEMP/artifact-upload.started"',
+            workflow[artifact_finish : artifact_finish + 700],
+        )
+        self.assertIn(
+            'test -f "$RUNNER_TEMP/cache-upload.started"',
+            workflow[cache_finish : cache_finish + 700],
+        )
+        self.assertIn("if-no-files-found: warn", workflow)
 
     def test_release_build_only_validates_without_mutating_github_release(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(

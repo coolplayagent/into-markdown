@@ -26,7 +26,13 @@ def materialize(destination: pathlib.Path) -> None:
 
 
 def _materialize_tree(destination: pathlib.Path) -> None:
-    metadata = json.loads(run(["cargo", "metadata", "--locked", "--format-version", "1"], cwd=ROOT))
+    metadata = json.loads(
+        run(
+            ["cargo", "metadata", "--locked", "--format-version", "1"],
+            cwd=ROOT,
+            stream_stdout=False,
+        )
+    )
     packages = {package["id"]: package for package in metadata["packages"]}
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     roots = [package["id"] for package in packages.values() if package["name"] == "into-markdown"]
