@@ -32,10 +32,10 @@ struct Layout {
     name_bytes: u64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Record<'a> {
     raw_name: &'a [u8],
-    name: &'a str,
+    name: String,
     kind: EntryKind,
     mode: Option<u32>,
     method: u16,
@@ -132,8 +132,8 @@ fn scan_records(
     let mut names = 0_u64;
     for index in 0..layout.entries {
         budget.context().checkpoint()?;
-        let (record, next) = record_at(bytes, *layout, cursor)?;
-        budget.validate_member(record.name, record.compressed, record.expanded)?;
+        let (record, next) = record_at(bytes, *layout, cursor, budget.zip_charset())?;
+        budget.validate_member(&record.name, record.compressed, record.expanded)?;
         names = names
             .checked_add(u64::try_from(record.raw_name.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| memory_limit("ZIP name inventory overflowed"))?;
@@ -166,13 +166,9 @@ fn collect_records(
     let mut cursor = layout.central_start;
     for index in 0..layout.entries {
         budget.context().checkpoint()?;
-        let (record, next) = record_at(bytes, layout, cursor)?;
-        let (name, kind) = policy.accept(
-            record.raw_name,
-            record.name,
-            record.mode,
-            record.kind == EntryKind::Directory,
-        )?;
+        let (record, next) = record_at(bytes, layout, cursor, budget.zip_charset())?;
+        let (name, kind) =
+            policy.accept(&record.name, record.mode, record.kind == EntryKind::Directory)?;
         occupied.push((record.local_start, record.physical_end, name.clone()));
         entries.push(EntryMeta {
             index,
@@ -200,11 +196,12 @@ fn collect_records(
     Ok(entries)
 }
 
-fn record_at(
-    bytes: &[u8],
+fn record_at<'a>(
+    bytes: &'a [u8],
     layout: Layout,
     central: usize,
-) -> Result<(Record<'_>, usize), ConversionError> {
+    explicit_charset: Option<&str>,
+) -> Result<(Record<'a>, usize), ConversionError> {
     let header = slice(bytes, central, CENTRAL_LEN, "central header")?;
     if header.get(..4) != Some(b"PK\x01\x02") {
         return Err(malformed("central header signature is invalid"));
@@ -234,11 +231,9 @@ fn record_at(
         return Err(malformed("central variable fields are truncated"));
     }
     let raw_name = slice(bytes, name_start, name_len, "central name")?;
-    let name = std::str::from_utf8(raw_name).map_err(|_| malformed("entry name is not UTF-8"))?;
-    if !raw_name.is_ascii() && flags & 0x0800 == 0 {
-        return Err(malformed("non-ASCII entry name lacks the UTF-8 flag"));
-    }
-    validate_extra(slice(bytes, extra_start, extra_len, "central extra field")?)?;
+    let extra = slice(bytes, extra_start, extra_len, "central extra field")?;
+    validate_extra(extra)?;
+    let name = decode_name(raw_name, flags, extra, explicit_charset)?;
     let compressed = u64::from(compressed32);
     let expanded = u64::from(expanded32);
     let local_start = layout
@@ -279,6 +274,79 @@ fn record_at(
         },
         next,
     ))
+}
+
+fn decode_name(
+    raw_name: &[u8],
+    flags: u16,
+    extra: &[u8],
+    explicit_charset: Option<&str>,
+) -> Result<String, ConversionError> {
+    if let Some(name) = unicode_path_name(raw_name, extra)? {
+        return Ok(name);
+    }
+    if flags & 0x0800 != 0 {
+        return String::from_utf8(raw_name.to_vec())
+            .map_err(|_| malformed("UTF-8 flagged entry name is not valid UTF-8"));
+    }
+    if let Some(label) = explicit_charset {
+        let encoding = encoding_rs::Encoding::for_label(label.trim().as_bytes())
+            .ok_or_else(|| malformed(format!("unsupported --zip-charset label {label:?}")))?;
+        let (decoded, had_errors) = encoding.decode_without_bom_handling(raw_name);
+        if had_errors {
+            return Err(malformed(format!("entry name is invalid for --zip-charset {label:?}")));
+        }
+        return Ok(decoded.into_owned());
+    }
+    Ok(decode_cp437(raw_name))
+}
+
+fn unicode_path_name(raw_name: &[u8], extra: &[u8]) -> Result<Option<String>, ConversionError> {
+    let mut cursor = 0;
+    let mut decoded = None;
+    while cursor < extra.len() {
+        let header = slice(extra, cursor, 4, "extra-field header")?;
+        let id = le16(header, 0)?;
+        let size = usize::from(le16(header, 2)?);
+        let body_start = cursor.checked_add(4).ok_or_else(|| malformed("extra field offset"))?;
+        let body = slice(extra, body_start, size, "extra-field body")?;
+        cursor = body_start.checked_add(size).ok_or_else(|| malformed("extra field end"))?;
+        if id != 0x7075 || body.len() < 5 || body[0] != 1 {
+            continue;
+        }
+        let expected_crc = le32(body, 1)?;
+        if crc32fast::hash(raw_name) != expected_crc {
+            continue;
+        }
+        let candidate = std::str::from_utf8(&body[5..])
+            .map_err(|_| malformed("Unicode Path extra field is not valid UTF-8"))?;
+        if decoded.as_deref().is_some_and(|previous| previous != candidate) {
+            return Err(malformed("ambiguous Unicode Path extra fields"));
+        }
+        decoded = Some(candidate.to_owned());
+    }
+    Ok(decoded)
+}
+
+fn decode_cp437(raw_name: &[u8]) -> String {
+    const HIGH: [char; 128] = [
+        'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ',
+        'Æ', 'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú',
+        'ñ', 'Ñ', 'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', 'Á',
+        'Â', 'À', '©', '╣', '║', '╗', '╝', '¢', '¥', '┐', '└', '┴', '┬', '├', '─', '┼', 'ã', 'Ã',
+        '╚', '╔', '╩', '╦', '╠', '═', '╬', '¤', 'ð', 'Ð', 'Ê', 'Ë', 'È', 'ı', 'Í', 'Î', 'Ï', '┘',
+        '┌', '█', '▄', '¦', 'Ì', '▀', 'Ó', 'ß', 'Ô', 'Ò', 'õ', 'Õ', 'µ', 'þ', 'Þ', 'Ú', 'Û', 'Ù',
+        'ý', 'Ý', '¯', '´', '≡', '±', '‗', '¾', '¶', '§', '÷', '¸', '°', '¨', '·', '¹', '³', '²',
+        '■', '\u{a0}',
+    ];
+    raw_name
+        .iter()
+        .map(
+            |byte| {
+                if byte.is_ascii() { char::from(*byte) } else { HIGH[usize::from(*byte - 0x80)] }
+            },
+        )
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -454,4 +522,42 @@ fn malformed(detail: impl Into<String>) -> ConversionError {
 
 fn memory_limit(detail: impl Into<String>) -> ConversionError {
     ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: detail.into() }
+}
+
+#[cfg(test)]
+mod filename_tests {
+    use super::*;
+
+    #[test]
+    fn decoding_obeys_unicode_utf8_override_and_cp437_precedence() {
+        assert_eq!(decode_name(b"caf\x82.txt", 0, &[], None).unwrap(), "café.txt");
+        assert_eq!(
+            decode_name(
+                &[0xd6, 0xd0, 0xce, 0xc4, b'.', b't', b'x', b't'],
+                0,
+                &[],
+                Some("gb18030"),
+            )
+            .unwrap(),
+            "中文.txt"
+        );
+        assert!(decode_name(&[0xff], 0x0800, &[], Some("windows-1252")).is_err());
+
+        let raw = b"legacy.txt";
+        let unicode = "统一.txt";
+        let mut body = vec![1];
+        body.extend_from_slice(&crc32fast::hash(raw).to_le_bytes());
+        body.extend_from_slice(unicode.as_bytes());
+        let mut extra = Vec::new();
+        extra.extend_from_slice(&0x7075_u16.to_le_bytes());
+        extra.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
+        extra.extend_from_slice(&body);
+        assert_eq!(decode_name(raw, 0, &extra, Some("shift_jis")).unwrap(), unicode);
+    }
+
+    #[test]
+    fn invalid_explicit_zip_charset_is_stable() {
+        let error = decode_name(&[0x80], 0, &[], Some("definitely-not-an-encoding")).unwrap_err();
+        assert!(matches!(error, ConversionError::Malformed { .. }));
+    }
 }

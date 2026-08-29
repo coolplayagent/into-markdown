@@ -180,6 +180,7 @@ impl<'a> Package<'a> {
             content_types,
             excluded,
             dangerous_present,
+            external_relationships_omitted: false,
             loaded_bytes,
             memory,
             memory_bytes: plan
@@ -299,21 +300,32 @@ impl<'a> Package<'a> {
             && relationships.iter().any(|relationship| {
                 relationship.external && dangerous_relationship_type(&relationship.kind)
             });
-        if relationships.iter().any(|relationship| {
+        let ordinary_external = relationships.iter().any(|relationship| {
             relationship.external
                 && !(owner.starts_with("ppt/charts/")
                     && dangerous_relationship_type(&relationship.kind))
-        }) {
+        });
+        if ordinary_external && options.error_policy == into_markdown_core::ErrorPolicy::Strict {
             return Err(malformed(
                 Some(&relationship_part),
                 "external relationships are forbidden by PresentationML conversion policy",
             ));
+        }
+        if ordinary_external {
+            self.external_relationships_omitted = true;
+            relationships.retain(|relationship| !relationship.external);
         }
         if isolated_external_chart_data {
             self.dangerous_present = true;
             relationships.retain(|relationship| !relationship.external);
         }
         for relationship in relationships.iter().filter(|relationship| !relationship.external) {
+            if super::relationships::internal_hyperlink_fragment(
+                &relationship.kind,
+                &relationship.target,
+            ) {
+                continue;
+            }
             let target = resolve_target(owner, &relationship.target)?;
             if dangerous_relationship_type(&relationship.kind) {
                 if !self.excluded.contains(&target) {

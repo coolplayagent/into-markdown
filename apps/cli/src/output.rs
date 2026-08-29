@@ -2,7 +2,7 @@
 
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
 use crate::error::{CliError, ExitClass};
-use crate::transaction::{self, PreparedTransaction, Target};
+use crate::transaction::{self, FileTarget, PreparedTransaction, Target};
 use into_markdown::{
     BUNDLE_SCHEMA_VERSION, BatchReportDto, ConversionOptions, ConversionResult, DTO_SCHEMA_VERSION,
     DiagnosticsDto, DtoJsonStyle, ExecutionContext, ProvenanceListDto, ResultDto, plan_assets,
@@ -14,7 +14,9 @@ use std::io::{Cursor, Seek, Write};
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 
-pub use into_markdown::{BatchItemDto as BatchItemReport, BatchItemStatus};
+pub use into_markdown::{
+    BatchItemDto as BatchItemReport, BatchItemOutcome, BatchItemStatus, BatchLimitDto,
+};
 pub type BatchReport = BatchReportDto;
 
 #[derive(Serialize)]
@@ -42,18 +44,41 @@ struct StreamingBundleManifest<'a> {
 
 /// Serialize a conversion result into the selected primary artifact.
 pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
+    let mut destination = Cursor::new(Vec::new());
+    encode_result_into(result, emit, &mut destination)?;
+    Ok(destination.into_inner())
+}
+
+/// Stream a conversion result into a seekable destination without allocating
+/// another complete primary-artifact buffer.
+pub fn encode_result_into<W: Write + Seek>(
+    result: &ConversionResult,
+    emit: EmitKind,
+    mut destination: W,
+) -> Result<(), CliError> {
     match emit {
-        EmitKind::Markdown => Ok(result.markdown.as_bytes().to_vec()),
-        EmitKind::IrJson => encode_document(&result.document),
-        EmitKind::ResultJson => {
-            let mut json = Vec::new();
-            ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut json)
-                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))?;
-            json.push(b'\n');
-            Ok(json)
+        EmitKind::Markdown => {
+            for chunk in result.markdown.as_bytes().chunks(64 * 1024) {
+                destination.write_all(chunk)?;
+            }
         }
-        EmitKind::Bundle => encode_bundle(result),
+        EmitKind::IrJson => {
+            result
+                .document
+                .validate()
+                .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
+            serde_json::to_writer_pretty(&mut destination, &result.document)
+                .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
+            destination.write_all(b"\n")?;
+        }
+        EmitKind::ResultJson => {
+            ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut destination)
+                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))?;
+            destination.write_all(b"\n")?;
+        }
+        EmitKind::Bundle => write_bundle(result, destination)?,
     }
+    Ok(())
 }
 
 /// Write extracted assets using safe, deterministic filenames.
@@ -191,14 +216,10 @@ pub struct WriteOutcome {
     pub renamed: bool,
 }
 
-/// Atomically replace one primary artifact and all extracted resources as a set.
-///
-/// Every byte is staged and synced before the first target is changed. A failed
-/// commit restores overwritten targets and removes targets created by this
-/// transaction.
-pub fn write_output_set(
+/// Atomically commit a file-backed primary artifact and in-memory companion assets.
+pub fn write_output_set_file(
     primary: &Path,
-    primary_bytes: &[u8],
+    primary_file: &std::fs::File,
     result: &ConversionResult,
     asset_directory: Option<&Path>,
     mode: AssetModeArg,
@@ -210,15 +231,20 @@ pub fn write_output_set(
         .map(|directory| plan_asset_writes(result, directory, mode, conflict, Some(context)))
         .transpose()?
         .unwrap_or_default();
-    let mut targets = Vec::with_capacity(planned_assets.len() + 1);
-    targets.push(Target { path: primary.clone(), bytes: primary_bytes });
-    for (source_index, path) in &planned_assets {
-        targets.push(Target {
+    let companions = planned_assets
+        .iter()
+        .map(|(source_index, path)| Target {
             path: path.clone(),
             bytes: result.assets[*source_index].bytes.as_slice(),
-        });
-    }
-    transaction::prepare(&targets, conflict == ConflictPolicy::Overwrite, context)?.commit()?;
+        })
+        .collect::<Vec<_>>();
+    transaction::prepare_file_and_bytes(
+        &FileTarget { path: primary.clone(), file: primary_file },
+        &companions,
+        conflict == ConflictPolicy::Overwrite,
+        context,
+    )?
+    .commit()?;
     Ok(WriteOutcome { path: primary, renamed: false })
 }
 
@@ -277,21 +303,6 @@ fn json_with_newline(json: String) -> Vec<u8> {
     let mut bytes = json.into_bytes();
     bytes.push(b'\n');
     bytes
-}
-
-fn encode_document(document: &into_markdown::Document) -> Result<Vec<u8>, CliError> {
-    document
-        .to_json()
-        .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
-    let json = serde_json::to_string_pretty(document)
-        .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
-    Ok(json_with_newline(json))
-}
-
-fn encode_bundle(result: &ConversionResult) -> Result<Vec<u8>, CliError> {
-    let mut cursor = Cursor::new(Vec::new());
-    write_bundle(result, &mut cursor)?;
-    Ok(cursor.into_inner())
 }
 
 /// Stream a deterministic portable bundle to a seekable destination.
@@ -706,8 +717,13 @@ mod tests {
             output: Some("example.md".into()),
             format: Some("text".into()),
             status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Complete,
             diagnostics: vec![],
             error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
             message: None,
             warnings: vec![],
         }])

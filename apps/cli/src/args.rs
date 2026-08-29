@@ -4,6 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// Convert documents to GitHub-Flavored Markdown and structured artifacts.
 #[derive(Debug, Parser)]
@@ -111,6 +112,14 @@ pub struct ConversionArgs {
     /// Character encoding hint.
     #[arg(long, value_name = "CHARSET")]
     pub charset: Option<String>,
+
+    /// Legacy ZIP filename encoding used when Unicode metadata is absent.
+    #[arg(long, value_name = "CHARSET")]
+    pub zip_charset: Option<String>,
+
+    /// Recovery policy for non-critical format defects.
+    #[arg(long, value_enum, value_name = "POLICY")]
+    pub error_policy: Option<ErrorPolicyArg>,
 
     /// Invalid character-sequence policy for plain text.
     #[arg(long, value_enum, value_name = "MODE")]
@@ -268,9 +277,9 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "MILLISECONDS", value_parser = parse_duration_ms)]
     pub timeout_ms: Option<u64>,
 
-    /// Maximum request-scoped accounted memory.
-    #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
-    pub max_memory_size: Option<u64>,
+    /// Shared conversion memory budget, or 'auto' for a machine-sized default.
+    #[arg(long, value_name = "SIZE|auto", value_parser = parse_memory_size)]
+    pub max_memory_size: Option<MemorySizeArg>,
 
     /// Maximum request-scoped temporary file bytes.
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
@@ -813,6 +822,29 @@ pub enum AssetModeArg {
     Omit,
 }
 
+/// Recovery policy for non-critical format defects.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ErrorPolicyArg {
+    #[default]
+    BestEffort,
+    Strict,
+}
+
+/// CLI memory-budget selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySizeArg {
+    Auto,
+    Bytes(u64),
+}
+
+impl FromStr for MemorySizeArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        parse_memory_size(value)
+    }
+}
+
 /// Existing-output policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum ConflictPolicy {
@@ -904,6 +936,14 @@ pub fn parse_byte_size(value: &str) -> Result<u64, String> {
     base.checked_mul(multiplier).ok_or_else(|| format!("byte size '{value}' is too large"))
 }
 
+fn parse_memory_size(value: &str) -> Result<MemorySizeArg, String> {
+    if value.eq_ignore_ascii_case("auto") {
+        Ok(MemorySizeArg::Auto)
+    } else {
+        parse_byte_size(value).map(MemorySizeArg::Bytes)
+    }
+}
+
 /// Parse a duration into milliseconds.
 pub fn parse_duration_ms(value: &str) -> Result<u64, String> {
     let trimmed = value.trim();
@@ -929,6 +969,11 @@ mod tests {
     #[test]
     fn parses_iec_sizes_and_durations() {
         assert_eq!(parse_byte_size("2 MiB").unwrap(), 2 * 1024 * 1024);
+        assert_eq!(parse_memory_size("auto").unwrap(), MemorySizeArg::Auto);
+        assert_eq!(
+            parse_memory_size("4 GiB").unwrap(),
+            MemorySizeArg::Bytes(4 * 1024 * 1024 * 1024)
+        );
         assert_eq!(parse_duration_ms("3s").unwrap(), 3_000);
         assert!(parse_duration_ms("0").is_err());
         assert!(parse_byte_size("many").is_err());

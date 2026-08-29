@@ -1,5 +1,5 @@
 use super::{
-    ConversionError, LinkTarget, MAX_RENDER_DIMENSION, PageInfo, PdfRect, Rect, SourceLocator,
+    ConversionError, LinkTarget, MAX_PAGE_RENDER_DIMENSION, PageInfo, PdfRect, Rect, SourceLocator,
     malformed,
 };
 
@@ -97,7 +97,7 @@ pub(super) fn safe_link_target(
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(super) fn render_dimensions(info: &PageInfo) -> Result<(u32, u32), ConversionError> {
     let (width, height) = displayed_dimensions(info);
-    let scale = (f64::from(MAX_RENDER_DIMENSION) / f64::from(width.max(height))).min(2.0);
+    let scale = (f64::from(MAX_PAGE_RENDER_DIMENSION) / f64::from(width.max(height))).min(2.0);
     let width = (f64::from(width) * scale).ceil();
     let height = (f64::from(height) * scale).ceil();
     if !width.is_finite() || !height.is_finite() || width < 1.0 || height < 1.0 {

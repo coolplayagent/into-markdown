@@ -1,10 +1,10 @@
-use crate::{ConversionError, ResourceLimits};
+use crate::{ConversionError, InputFormat, ResourceLimits};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
-use std::io::{self, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -208,10 +208,11 @@ struct ExecutionShared {
     timed_out: AtomicBool,
     timer_stop: Arc<TimerStop>,
     progress: Mutex<ProgressState>,
+    detected_format: Mutex<Option<InputFormat>>,
     dispatcher: Option<ProgressDispatcher>,
     limits: ResourceLimits,
-    memory_bytes: AtomicU64,
-    temporary_bytes: AtomicU64,
+    memory_bytes: Arc<AtomicU64>,
+    temporary_bytes: Arc<AtomicU64>,
     temporary_directory: PathBuf,
     media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
 }
@@ -290,6 +291,30 @@ impl ExecutionContext {
             Box<dyn FnOnce() + Send + 'static>,
         ) -> io::Result<JoinHandle<()>>,
     {
+        Self::new_with_timer_spawner_and_counters(
+            options,
+            limits,
+            temporary_directory,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+            spawn,
+        )
+    }
+
+    fn new_with_timer_spawner_and_counters<F>(
+        options: ExecutionOptions,
+        limits: ResourceLimits,
+        temporary_directory: PathBuf,
+        memory_bytes: Arc<AtomicU64>,
+        temporary_bytes: Arc<AtomicU64>,
+        spawn: F,
+    ) -> Self
+    where
+        F: FnOnce(
+            std::thread::Builder,
+            Box<dyn FnOnce() + Send + 'static>,
+        ) -> io::Result<JoinHandle<()>>,
+    {
         let now = Instant::now();
         let deadline = options.timeout.and_then(|duration| now.checked_add(duration));
         let dispatcher = options.progress_listener.and_then(ProgressDispatcher::new);
@@ -302,10 +327,11 @@ impl ExecutionContext {
             timed_out: AtomicBool::new(false),
             timer_stop: Arc::clone(&timer_stop),
             progress: Mutex::new(ProgressState::default()),
+            detected_format: Mutex::new(None),
             dispatcher,
             limits,
-            memory_bytes: AtomicU64::new(0),
-            temporary_bytes: AtomicU64::new(0),
+            memory_bytes,
+            temporary_bytes,
             temporary_directory,
             media_checkpoint: Mutex::new(None),
         });
@@ -337,6 +363,38 @@ impl ExecutionContext {
             }
         }
         Self { shared, memory_credit: None }
+    }
+
+    /// Create an independently cancellable request which leases from this
+    /// context's shared memory and temporary-storage pools.
+    ///
+    /// Batch schedulers use this to prevent a per-request limit from being
+    /// multiplied by concurrency while retaining per-item deadlines and
+    /// progress state.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn fork_with_shared_resources(&self, options: ExecutionOptions) -> Self {
+        Self::new_with_timer_spawner_and_counters(
+            options,
+            self.shared.limits.clone(),
+            self.shared.temporary_directory.clone(),
+            Arc::clone(&self.shared.memory_bytes),
+            Arc::clone(&self.shared.temporary_bytes),
+            std::thread::Builder::spawn,
+        )
+    }
+
+    /// Record the best format established by detection or authoritative probing.
+    #[doc(hidden)]
+    pub fn record_detected_format(&self, format: InputFormat) {
+        *lock_unpoisoned(&self.shared.detected_format) = Some(format);
+    }
+
+    /// Return the format established so far, including after a later conversion failure.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn detected_format(&self) -> Option<InputFormat> {
+        *lock_unpoisoned(&self.shared.detected_format)
     }
 
     /// Return a typed cancellation or timeout error at a cooperative checkpoint.
@@ -681,7 +739,7 @@ impl ExecutionContext {
             let path = directory
                 .as_ref()
                 .join(format!("{safe_prefix}-{}-{nonce}-{attempt}.tmp", std::process::id()));
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            match std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
                 Ok(file) => {
                     return Ok(TemporaryFile {
                         path,
@@ -712,7 +770,8 @@ impl ExecutionContext {
     ) -> Result<TemporaryFile, ConversionError> {
         self.checkpoint()?;
         let path = path.as_ref().to_path_buf();
-        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let file =
+            std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path)?;
         Ok(TemporaryFile { path, file: Some(file), context: self.clone(), charged: 0 })
     }
 
@@ -725,7 +784,7 @@ impl ExecutionContext {
         let (counter, limit, name) = match kind {
             ResourceKind::Memory => self.memory_account(),
             ResourceKind::Temporary => (
-                &self.shared.temporary_bytes,
+                self.shared.temporary_bytes.as_ref(),
                 self.shared.limits.max_temporary_bytes,
                 "max_temporary_bytes",
             ),
@@ -873,7 +932,7 @@ impl ResourceReservation {
         let (counter, limit, name) = match self.kind {
             ResourceKind::Memory => self.context.memory_account(),
             ResourceKind::Temporary => (
-                &self.context.shared.temporary_bytes,
+                self.context.shared.temporary_bytes.as_ref(),
                 self.context.shared.limits.max_temporary_bytes,
                 "max_temporary_bytes",
             ),
@@ -970,6 +1029,14 @@ impl TemporaryFile {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Borrow the authenticated temporary file handle for bounded downstream reads.
+    #[doc(hidden)]
+    pub fn as_file(&self) -> Result<&std::fs::File, ConversionError> {
+        self.file
+            .as_ref()
+            .ok_or_else(|| ConversionError::Internal { detail: "temporary file is closed".into() })
     }
 
     /// Flush buffered file data.
@@ -1082,6 +1149,16 @@ impl Write for TemporaryFile {
     fn flush(&mut self) -> io::Result<()> {
         self.context.checkpoint().map_err(io::Error::other)?;
         self.file.as_mut().ok_or_else(|| io::Error::other("temporary file is closed"))?.flush()
+    }
+}
+
+impl Seek for TemporaryFile {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.context.checkpoint().map_err(io::Error::other)?;
+        self.file
+            .as_mut()
+            .ok_or_else(|| io::Error::other("temporary file is closed"))?
+            .seek(position)
     }
 }
 
@@ -2109,5 +2186,28 @@ mod tests {
         let second = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
         let mut permit = first.reserve_memory(1).unwrap();
         assert!(second.with_memory_credit(&mut permit).is_err());
+    }
+
+    #[test]
+    fn forked_requests_share_the_resource_ceiling() {
+        let pool = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits {
+                max_memory_bytes: 10,
+                max_temporary_bytes: 10,
+                ..ResourceLimits::default()
+            },
+        );
+        let first = pool.fork_with_shared_resources(ExecutionOptions::default());
+        let second = pool.fork_with_shared_resources(ExecutionOptions::default());
+        let memory = first.reserve_memory(6).unwrap();
+        let temporary = second.reserve_temporary(6).unwrap();
+
+        assert!(second.reserve_memory(5).is_err());
+        assert!(first.reserve_temporary(5).is_err());
+        drop(memory);
+        drop(temporary);
+        assert!(second.reserve_memory(10).is_ok());
+        assert!(first.reserve_temporary(10).is_ok());
     }
 }

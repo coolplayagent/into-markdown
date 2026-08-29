@@ -5,6 +5,7 @@ pub(super) const PROVIDER_ID: &str = "builtin.converter.presentationml";
 pub(super) const P_NS: &[u8] = b"http://schemas.openxmlformats.org/presentationml/2006/main";
 pub(super) const A_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/main";
 pub(super) const C_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/chart";
+pub(super) const M_NS: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/math";
 pub(super) const MC_NS: &[u8] = b"http://schemas.openxmlformats.org/markup-compatibility/2006";
 pub(super) const R_NS: &[u8] =
     b"http://schemas.openxmlformats.org/officeDocument/2006/relationships";

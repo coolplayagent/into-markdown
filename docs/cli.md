@@ -198,6 +198,8 @@ markdown-postprocess
 --allow-network
 --allow-private-network
 --allow-host <HOST>
+--error-policy <best-effort|strict>
+--zip-charset <CHARSET>
 --max-redirects <N>
 --max-input-size <SIZE>
 --max-decompressed-size <SIZE>
@@ -206,7 +208,7 @@ markdown-postprocess
 --max-pages <N>
 --max-asset-size <SIZE>
 --max-total-asset-size <SIZE>
---max-memory-size <SIZE>
+--max-memory-size <SIZE|auto>
 --max-temporary-size <SIZE>
 --timeout-ms <MILLISECONDS>
 ```
@@ -219,6 +221,17 @@ markdown-postprocess
   DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
   目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
+- 本地 CLI 默认使用 `auto` 共享内存预算：物理内存小于 8 GiB、8–16 GiB、16–32 GiB、
+  32 GiB 及以上分别取 1、2、4、8 GiB。预算覆盖整个批处理，不随 `--jobs` 倍增；显式
+  数值覆盖自动值。
+- 超过统一 IR 节点阈值的大型 XLSX 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
+  block，所有块仍写入同一个最终 Markdown，并报告 `spreadsheet.largeTablePaged`。普通
+  工作簿继续输出 GFM table；分页不会放宽 `max_table_rows`、`max_table_cells` 或 ZIP
+  解压边界，发布门禁可显式提高这些结构上限，同时继续由共享内存预算约束实际处理。
+- `best-effort` 是默认错误策略，只恢复非关键格式兼容问题；路径穿越、DTD/实体、容器
+  损坏、加密、资源超限、组件缺失、取消、超时和 I/O 错误仍始终失败。外部资源不会下载。
+- `--zip-charset` 只在 ZIP 缺少有效 Unicode Path extra field 和 UTF-8 标志时生效；支持
+  `encoding_rs` 标签（包括 GB18030 与 Shift-JIS），未指定时使用 CP437。
 - `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回
   稳定的 `timeout` 错误码；值必须大于零。无法由平台单调时钟表示的极大 library
   `Duration` 按无 deadline 处理，不会意外变成立即超时。内存限制统计执行上下文中

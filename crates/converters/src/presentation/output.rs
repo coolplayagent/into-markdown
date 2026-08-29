@@ -10,8 +10,9 @@ use super::shape_elements::shape_block_count;
 use super::tables::table_block;
 use crate::docx::{supported_image, validate_image_bytes};
 use into_markdown_core::{
-    Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ExecutionContext, Inline,
-    ListItem, ListKind, Rect,
+    Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic,
+    DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, ListItem, ListKind, Rect,
+    SourceLocator,
 };
 use std::fmt::Write as _;
 use std::path::Path;
@@ -37,6 +38,22 @@ pub(super) fn shapes_to_blocks(
         let bounds = Some(shape.geometry.bounds()?);
         let z_order = shape.z_order;
         let languages = shape.languages;
+        for recovery in shape.recoveries {
+            state.diagnostics.try_reserve(1).map_err(|error| {
+                limit("max_memory_bytes", format!("cannot reserve recovery diagnostic: {error}"))
+            })?;
+            state.diagnostics.push(Diagnostic {
+                code: recovery.code.into(),
+                severity: DiagnosticSeverity::Warning,
+                message: recovery.message,
+                locator: Some(SourceLocator {
+                    slide: Some(slide),
+                    bounds,
+                    part: Some(part.into()),
+                    ..SourceLocator::default()
+                }),
+            });
+        }
         if let Some((id, alt)) = shape.image {
             let relationship = relationship_by_id(relationships, &id).ok_or_else(|| {
                 malformed(Some(part), format!("image relationship {id} is missing"))
@@ -48,13 +65,58 @@ pub(super) fn shapes_to_blocks(
             let content_type = package.content_types.content_type(&target).ok_or_else(|| {
                 malformed(Some("[Content_Types].xml"), format!("image {target} lacks content type"))
             })?;
-            let image = supported_image(&target, content_type)?;
+            let image = match supported_image(&target, content_type) {
+                Ok(image) => image,
+                Err(error)
+                    if options.error_policy == ErrorPolicy::BestEffort
+                        && recoverable_media_error(&error) =>
+                {
+                    push_omitted_image(
+                        &mut result,
+                        state,
+                        &target,
+                        alt.as_deref(),
+                        part,
+                        slide,
+                        bounds,
+                        z_order,
+                        &languages,
+                        &error,
+                    )?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let asset_id = if let Some(id) = state.assets_by_part.get(&target) {
                 try_clone_string(id, "asset part identifier")?
             } else {
-                {
+                let validation = {
                     let bytes = package.load(&target, options, context)?;
-                    validate_image_bytes(image, bytes, &target, options, context)?;
+                    validate_image_bytes(image, bytes, &target, options, context)
+                };
+                if let Err(error) = validation {
+                    if options.error_policy == ErrorPolicy::BestEffort
+                        && recoverable_media_error(&error)
+                    {
+                        let loaded = package
+                            .take_loaded(&target)
+                            .ok_or_else(|| malformed(Some(&target), "image part is missing"))?;
+                        package.shrink_memory(loaded.charge)?;
+                        push_omitted_image(
+                            &mut result,
+                            state,
+                            &target,
+                            alt.as_deref(),
+                            part,
+                            slide,
+                            bounds,
+                            z_order,
+                            &languages,
+                            &error,
+                        )?;
+                        continue;
+                    }
+                    return Err(error);
                 }
                 let loaded = package
                     .take_loaded(&target)
@@ -259,6 +321,56 @@ pub(super) fn shapes_to_blocks(
         }
     }
     Ok(result)
+}
+
+fn recoverable_media_error(error: &ConversionError) -> bool {
+    matches!(error, ConversionError::Malformed { .. } | ConversionError::Unsupported { .. })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_omitted_image(
+    blocks: &mut Vec<BlockNode>,
+    state: &mut ParseState,
+    target: &str,
+    alt: Option<&str>,
+    source_part: &str,
+    slide: u32,
+    bounds: Option<Rect>,
+    z_order: usize,
+    languages: &[String],
+    error: &ConversionError,
+) -> Result<(), ConversionError> {
+    state.diagnostics.try_reserve(1).map_err(|allocation| {
+        limit("max_memory_bytes", format!("cannot reserve omitted-media diagnostic: {allocation}"))
+    })?;
+    state.diagnostics.push(Diagnostic {
+        code: "presentation.unsupportedMediaOmitted".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("media {target} was omitted: {error}"),
+        locator: Some(SourceLocator {
+            slide: Some(slide),
+            bounds,
+            part: Some(target.into()),
+            ..SourceLocator::default()
+        }),
+    });
+    state.add_inlines(1)?;
+    let label = alt.filter(|value| !value.is_empty()).unwrap_or(target);
+    blocks.try_reserve(1).map_err(|allocation| {
+        limit("max_memory_bytes", format!("cannot reserve omitted-media placeholder: {allocation}"))
+    })?;
+    blocks.push(state.node(
+        Block::Paragraph(vec![Inline::Text {
+            value: format!("[Unsupported media: {label}]"),
+            marks: Vec::new(),
+        }]),
+        source_part,
+        slide,
+        bounds,
+        Some(z_order),
+        Some(languages),
+    )?);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

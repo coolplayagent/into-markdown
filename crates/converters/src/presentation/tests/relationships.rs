@@ -8,7 +8,9 @@ use super::super::schema::{
 use super::super::slides::slide_is_hidden;
 use super::super::test_observer::PART_MATERIALIZATIONS;
 use super::super::text::plain_text;
-use super::support::{append_parts, convert, fixture, rewrite_part, valid_jpeg, valid_png, zip};
+use super::support::{
+    append_parts, convert, convert_strict, fixture, rewrite_part, valid_jpeg, valid_png, zip,
+};
 use into_markdown_core::{
     Block, CancellationToken, ConversionError, ConversionOptions, ExecutionContext,
     ExecutionOptions,
@@ -163,7 +165,7 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
     let hidden_slide_reference =
         missing_image_reference.replacen("<p:sld ", "<p:sld show=\"0\" ", 1);
     assert!(matches!(
-        convert(&rewrite_part(
+        convert_strict(&rewrite_part(
             &zip(&part_refs),
             "ppt/slides/slide1.xml",
             hidden_slide_reference.as_bytes()
@@ -230,7 +232,7 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
         "<c:pt idx=\"0\"><c:plotArea><c:v>42</c:v></c:plotArea></c:pt>",
     );
     assert!(matches!(
-        convert(&rewrite_part(
+        convert_strict(&rewrite_part(
             &zip(&part_refs),
             "ppt/charts/chart1.xml",
             malformed_chart.as_bytes()
@@ -243,7 +245,7 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
         chart.replace("<c:v>42</c:v>", ""),
     ] {
         assert!(matches!(
-            convert(&rewrite_part(
+            convert_strict(&rewrite_part(
                 &zip(&part_refs),
                 "ppt/charts/chart1.xml",
                 malformed_cache.as_bytes()
@@ -265,7 +267,10 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
             .iter()
             .map(|(name, value)| (name.as_str(), value.clone()))
             .collect::<Vec<_>>();
-        assert!(matches!(convert(&zip(&related_refs)), Err(ConversionError::Malformed { .. })));
+        assert!(matches!(
+            convert_strict(&zip(&related_refs)),
+            Err(ConversionError::Malformed { .. })
+        ));
     }
     let external_chart_workbook = format!(
         r#"<Relationships xmlns="{rels}"><Relationship Id="external" Type="{prefix}oleObject" Target="https://example.test/source.xlsx" TargetMode="External"/></Relationships>"#,
@@ -299,7 +304,10 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
         .iter()
         .map(|(name, value)| (name.as_str(), value.clone()))
         .collect::<Vec<_>>();
-    assert!(matches!(convert(&zip(&hidden_chart_refs)), Err(ConversionError::Malformed { .. })));
+    assert!(matches!(
+        convert_strict(&zip(&hidden_chart_refs)),
+        Err(ConversionError::Malformed { .. })
+    ));
 }
 
 #[test]
@@ -382,31 +390,63 @@ fn images_require_relation_content_type_extension_bytes_and_deduplicate() {
     assert_eq!(mixed.assets[1].media_type, "image/jpeg");
 
     let bad = rewrite_part(&zip(&part_refs), "ppt/media/a.png", b"not a png");
-    assert!(matches!(convert(&bad), Err(ConversionError::Malformed { .. })));
+    assert!(matches!(convert_strict(&bad), Err(ConversionError::Malformed { .. })));
+    let degraded = convert(&bad).unwrap();
+    assert!(
+        degraded
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "presentation.unsupportedMediaOmitted")
+    );
     let duplicate_image_reference = slide.replace(
         r#"<a:blip r:embed="img1"/>"#,
         r#"<a:blip r:embed="missing"/><a:blip r:embed="img1"/>"#,
     );
     assert!(matches!(
-        convert(&rewrite_part(
+        convert_strict(&rewrite_part(
             &zip(&part_refs),
             "ppt/slides/slide1.xml",
             duplicate_image_reference.as_bytes()
         )),
         Err(ConversionError::Malformed { .. })
     ));
+    let duplicate_recovered = convert(&rewrite_part(
+        &zip(&part_refs),
+        "ppt/slides/slide1.xml",
+        duplicate_image_reference.as_bytes(),
+    ))
+    .unwrap();
+    assert!(
+        duplicate_recovered
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "office.extensionOmitted")
+    );
     let linked_image =
         slide.replace(r#"<a:blip r:embed="img1"/>"#, r#"<a:blip r:embed="img1" r:link="img1"/>"#);
     assert!(matches!(
-        convert(&rewrite_part(&zip(&part_refs), "ppt/slides/slide1.xml", linked_image.as_bytes())),
+        convert_strict(&rewrite_part(
+            &zip(&part_refs),
+            "ppt/slides/slide1.xml",
+            linked_image.as_bytes()
+        )),
         Err(ConversionError::Malformed { .. })
     ));
+    let linked_recovered =
+        convert(&rewrite_part(&zip(&part_refs), "ppt/slides/slide1.xml", linked_image.as_bytes()))
+            .unwrap();
+    assert!(
+        linked_recovered
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "office.relationshipOmitted")
+    );
     let wrong_content_type = rewrite_part(
         &zip(&part_refs),
         "[Content_Types].xml",
         types.replace("image/png", "image/jpeg").as_bytes(),
     );
-    assert!(matches!(convert(&wrong_content_type), Err(ConversionError::Malformed { .. })));
+    assert!(matches!(convert_strict(&wrong_content_type), Err(ConversionError::Malformed { .. })));
     let mut options = ConversionOptions::default();
     options.limits.max_asset_bytes = 1;
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
@@ -442,15 +482,33 @@ fn rejects_external_relationship_namespace_and_malformed_mc() {
         prefix = REL_PREFIX
     );
     assert!(matches!(
-        convert(&rewrite_part(&original, "ppt/_rels/presentation.xml.rels", external.as_bytes())),
+        convert_strict(&rewrite_part(
+            &original,
+            "ppt/_rels/presentation.xml.rels",
+            external.as_bytes()
+        )),
         Err(ConversionError::Malformed { .. })
     ));
+    let best_effort = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), best_effort.limits.clone());
+    let output = convert_presentation(
+        &rewrite_part(&original, "ppt/_rels/presentation.xml.rels", external.as_bytes()),
+        &best_effort,
+        &context,
+    )
+    .unwrap();
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "presentation.externalRelationshipsOmitted")
+    );
     let bad_namespace = format!(
         r#"<p:sld xmlns:p="{p}" xmlns:a="urn:evil"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="2" name="X"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:txBody><a:p><a:r><a:t>X</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
         p = String::from_utf8_lossy(P_NS)
     );
     assert!(matches!(
-        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", bad_namespace.as_bytes())),
+        convert_strict(&rewrite_part(&original, "ppt/slides/slide1.xml", bad_namespace.as_bytes())),
         Err(ConversionError::Malformed { .. })
     ));
     let bad_mc = format!(
@@ -468,7 +526,7 @@ fn rejects_external_relationship_namespace_and_malformed_mc() {
         a = String::from_utf8_lossy(A_NS)
     );
     assert!(matches!(
-        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", wrong_parent.as_bytes())),
+        convert_strict(&rewrite_part(&original, "ppt/slides/slide1.xml", wrong_parent.as_bytes())),
         Err(ConversionError::Malformed { .. })
     ));
     let duplicate_relationship = format!(
@@ -491,7 +549,7 @@ fn rejects_external_relationship_namespace_and_malformed_mc() {
             prefix = REL_PREFIX
         );
         assert!(matches!(
-            convert(&rewrite_part(
+            convert_strict(&rewrite_part(
                 &original,
                 "ppt/_rels/presentation.xml.rels",
                 external_object.as_bytes()
@@ -549,7 +607,11 @@ fn xml_references_are_exact_and_mc_choice_never_leaks() {
         r#"<future:payload xmlns:future="urn:future">MUST NOT LEAK</future:payload>"#,
     );
     assert!(matches!(
-        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", child_inside_text.as_bytes())),
+        convert_strict(&rewrite_part(
+            &original,
+            "ppt/slides/slide1.xml",
+            child_inside_text.as_bytes()
+        )),
         Err(ConversionError::Malformed { .. })
     ));
     for invalid_mc in [
@@ -781,7 +843,7 @@ fn xml_booleans_and_list_levels_are_strict_for_all_interpreted_shapes() {
         slide.replace(r#"<a:buChar char="•"/>"#, "<a:buBlip/>"),
     ] {
         assert!(matches!(
-            convert(&rewrite_part(&original, "ppt/slides/slide1.xml", invalid.as_bytes())),
+            convert_strict(&rewrite_part(&original, "ppt/slides/slide1.xml", invalid.as_bytes())),
             Err(ConversionError::Malformed { .. })
         ));
     }

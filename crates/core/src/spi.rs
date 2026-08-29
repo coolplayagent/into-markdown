@@ -1,7 +1,8 @@
 use crate::{
-    Asset, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document, ExecutionContext,
-    ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef, OcrOutputPlan,
-    OcrRecognition, OcrResult, Provenance, ResolvedInput, ResolvedSource, ResourceReservation,
+    Asset, AssetId, BlockNode, ConversionError, ConversionOptions, Diagnostic, Document,
+    ExecutionContext, ExecutionOptions, FormatCandidate, FormatHint, InputFormat, InputRef,
+    OcrOutputPlan, OcrRecognition, OcrResult, Provenance, ResolvedInput, ResolvedSource,
+    ResourceReservation,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -109,8 +110,84 @@ pub struct ConversionResult {
     pub diagnostics: Vec<Diagnostic>,
     /// Ordered material provenance records for auditing.
     pub provenance: Vec<Provenance>,
+    /// Format selected after detection and converter probing, when available.
+    pub(crate) detected_format: Option<InputFormat>,
     /// Live request-memory charges for retained IR and assets.
     pub(crate) memory_lease: OutputMemoryLease,
+}
+
+/// Metadata announced before streaming one asset to an [`ArtifactSink`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetStreamInfo {
+    /// Stable content identity.
+    pub id: AssetId,
+    /// Suggested deterministic filename.
+    pub filename: Option<String>,
+    /// IANA media type.
+    pub media_type: String,
+    /// Total byte length of the following asset stream.
+    pub size: u64,
+    /// External reference when the asset has no local payload.
+    pub external_uri: Option<String>,
+}
+
+/// Semantic result of a completed streaming conversion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversionOutcome {
+    /// No recoverable content was omitted or sanitized.
+    Complete,
+    /// Conversion completed with one or more diagnostics.
+    Degraded,
+}
+
+/// Bounded completion metadata returned after all sink writes succeed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversionSummary {
+    /// Authoritative format selected after probing.
+    pub format: Option<InputFormat>,
+    /// Whether conversion required recoverable degradation.
+    pub outcome: ConversionOutcome,
+    /// Ordered non-fatal diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Number of Markdown bytes written.
+    pub markdown_bytes: u64,
+    /// Number of assets written.
+    pub assets: u64,
+}
+
+/// Ordered destination for incremental Markdown and asset payloads.
+pub trait ArtifactSink {
+    /// Consume the next ordered Markdown byte chunk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O or destination-specific conversion error when the chunk
+    /// cannot be durably accepted.
+    fn write_markdown(&mut self, chunk: &[u8]) -> Result<(), ConversionError>;
+
+    /// Begin one asset stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O or destination-specific conversion error when the asset
+    /// metadata cannot be accepted.
+    fn begin_asset(&mut self, asset: &AssetStreamInfo) -> Result<(), ConversionError>;
+
+    /// Consume the next byte chunk for the active asset.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O or destination-specific conversion error when the chunk
+    /// cannot be durably accepted.
+    fn write_asset(&mut self, chunk: &[u8]) -> Result<(), ConversionError>;
+
+    /// Finish the active asset stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O or destination-specific conversion error when the asset
+    /// stream cannot be finalized.
+    fn end_asset(&mut self) -> Result<(), ConversionError>;
 }
 
 /// Opaque live-memory ownership transferred across conversion pipeline stages.
@@ -195,7 +272,15 @@ impl ConversionResult {
         provenance: Vec<Provenance>,
         memory_lease: OutputMemoryLease,
     ) -> Self {
-        Self { document, markdown, assets, diagnostics, provenance, memory_lease }
+        Self {
+            document,
+            markdown,
+            assets,
+            diagnostics,
+            provenance,
+            detected_format: None,
+            memory_lease,
+        }
     }
 
     /// Reassemble a validated recovery payload while keeping the checkpoint
@@ -232,6 +317,18 @@ impl ConversionResult {
     #[must_use]
     pub fn has_memory_lease(&self) -> bool {
         !self.memory_lease.leases.is_empty()
+    }
+
+    /// Format selected after detection and converter probing.
+    #[must_use]
+    pub const fn detected_format(&self) -> Option<InputFormat> {
+        self.detected_format
+    }
+
+    /// Attach the authoritative detected format during engine assembly.
+    #[doc(hidden)]
+    pub fn set_detected_format(&mut self, format: InputFormat) {
+        self.detected_format = Some(format);
     }
 }
 

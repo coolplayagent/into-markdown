@@ -1,4 +1,6 @@
-use crate::workbook::budget::{enforce_grid, enforce_total_cells, extras_retained_memory};
+use crate::workbook::budget::{
+    enforce_grid, enforce_total_cells, extras_retained_memory, requires_paged_grid,
+};
 use crate::workbook::calamine_adapter::validate_extras_fields;
 use crate::workbook::error::{limit, malformed, warning};
 use crate::workbook::extras::extract_sheet_extras;
@@ -412,33 +414,45 @@ pub(super) fn preflight_package(
         .saturating_add(inventory.number_formats)
         .checked_mul(128)
         .ok_or_else(|| limit("max_memory_bytes", "workbook metadata memory overflow"))?;
-    // These owners coexist at the end of conversion and through the Engine's
-    // retained-output validation.  The per-cell bounds cover both Calamine's
-    // dense value/formula ranges and the accumulated table IR; validation uses
-    // the core authority's 4 KiB path/tree plus 2 KiB inline high-water marks.
+    let paged = requires_paged_grid(cell_capacity, 1);
+    // Large sheets use bounded TSV page blocks rather than one paragraph node per
+    // cell. Calamine's dense value/formula ranges still coexist with accumulated
+    // page text, but validation and provenance scale with pages rather than cells.
+    let page_nodes = sheet_bounds
+        .values()
+        .fold(0_u64, |total, (row, _)| total.saturating_add((u64::from(*row) + 2_048) / 2_048));
     let calamine_range_memory = cell_capacity
-        .checked_mul(512)
+        .checked_mul(if paged { 64 } else { 512 })
         .ok_or_else(|| limit("max_memory_bytes", "Calamine range memory overflow"))?;
-    let retained_ir_memory = cell_capacity
-        .checked_mul(2_048)
-        .ok_or_else(|| limit("max_memory_bytes", "workbook retained IR overflow"))?;
-    let validation_memory = cell_capacity
+    let retained_ir_memory = if paged {
+        cell_capacity
+            .checked_mul(4)
+            .and_then(|value| value.checked_add(text_memory))
+            .ok_or_else(|| limit("max_memory_bytes", "paged workbook output overflow"))?
+    } else {
+        cell_capacity
+            .checked_mul(2_048)
+            .ok_or_else(|| limit("max_memory_bytes", "workbook retained IR overflow"))?
+    };
+    let validation_nodes = if paged { page_nodes } else { cell_capacity };
+    let validation_memory = validation_nodes
         .checked_mul(12_288)
         .and_then(|value| value.checked_add(extras_count.saturating_mul(8_192)))
         .ok_or_else(|| limit("max_memory_bytes", "workbook validation memory overflow"))?;
-    let provenance_nodes = cell_capacity
+    let provenance_nodes = validation_nodes
         .checked_add(extras_count)
         .and_then(|value| value.checked_add(u64::try_from(sheet_parts.len()).unwrap_or(u64::MAX)))
         .ok_or_else(|| limit("max_memory_bytes", "workbook provenance count overflow"))?;
     let provenance_memory = provenance_nodes
         .checked_mul(1_024)
         .ok_or_else(|| limit("max_memory_bytes", "workbook provenance memory overflow"))?;
+    let parser_text_memory = if paged { 0 } else { text_memory };
     let calamine_peak = package_materialization
         .checked_add(calamine_range_memory)
         .and_then(|value| value.checked_add(retained_ir_memory))
         .and_then(|value| value.checked_add(validation_memory))
         .and_then(|value| value.checked_add(provenance_memory))
-        .and_then(|value| value.checked_add(text_memory))
+        .and_then(|value| value.checked_add(parser_text_memory))
         .and_then(|value| value.checked_add(formula_materialized_memory))
         .and_then(|value| value.checked_add(xlsb_formula_preallocation_memory))
         .and_then(|value| value.checked_add(metadata_memory))

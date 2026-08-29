@@ -5,7 +5,8 @@ use super::super::schema::{
 };
 use crate::docx::png_crc32;
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ConverterOutput, ExecutionContext, ExecutionOptions,
+    ConversionError, ConversionOptions, ConverterOutput, ErrorPolicy, ExecutionContext,
+    ExecutionOptions,
 };
 use std::fmt::Write as _;
 use std::future::Future;
@@ -457,6 +458,13 @@ pub(super) fn retained_lease_fixture() -> Vec<u8> {
 
 pub(super) fn convert(bytes: &[u8]) -> Result<ConverterOutput, ConversionError> {
     let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    convert_presentation(bytes, &options, &context)
+}
+
+pub(super) fn convert_strict(bytes: &[u8]) -> Result<ConverterOutput, ConversionError> {
+    let options =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     convert_presentation(bytes, &options, &context)
 }

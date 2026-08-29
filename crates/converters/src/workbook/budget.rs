@@ -60,13 +60,13 @@ pub(super) fn enforce_total_cells(
             format!("{cells} > {}", options.limits.max_table_cells),
         ));
     }
-    // Each populated IR table cell owns a paragraph node in addition to the
-    // cell structural node. Reserve root Sheet/Table nodes as well.
-    let ir_limit = u64::try_from(MAX_DOCUMENT_NODES.saturating_sub(64) / 2).unwrap_or(u64::MAX);
-    if cells > ir_limit {
-        return Err(limit("max_document_nodes", format!("{cells} workbook cells > {ir_limit}")));
-    }
     Ok(())
+}
+
+pub(super) fn requires_paged_grid(rows: u64, columns: u64) -> bool {
+    let cells = rows.saturating_mul(columns);
+    let ir_limit = u64::try_from(MAX_DOCUMENT_NODES.saturating_sub(64) / 2).unwrap_or(u64::MAX);
+    cells > ir_limit
 }
 
 pub(super) fn extras_retained_memory(

@@ -575,7 +575,7 @@ fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
-        "![diagram](<https://cdn.example.com/diagram.png>)\n"
+        "![diagram](https://cdn.example.com/diagram.png)\n"
     );
 
     let output = Command::new(binary())
@@ -600,6 +600,20 @@ fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result
 #[test]
 fn structured_text_is_never_consumed_by_txt_fallback() {
     let directory = tempfile::tempdir().unwrap();
+
+    for (name, contents) in [
+        ("incomplete-json.txt", b"{ \"a\":".as_slice()),
+        ("incomplete-xml.txt", b"<root>text".as_slice()),
+    ] {
+        let path = directory.path().join(name);
+        std::fs::write(&path, contents).unwrap();
+        let output =
+            Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(!String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
+        assert!(!String::from_utf8_lossy(&output.stdout).starts_with("# XML"));
+    }
+
     let mut large_json = "[".repeat(200);
     large_json.push('"');
     large_json.extend(std::iter::repeat_n('x', 1024 * 1024 + 50_000));

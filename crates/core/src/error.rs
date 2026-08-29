@@ -173,6 +173,44 @@ impl ConversionError {
             Self::Internal { .. } => ErrorCode::Internal,
         }
     }
+
+    /// Stable detailed reason code for machine-readable reports.
+    #[must_use]
+    pub const fn reason_code(&self) -> &'static str {
+        match self {
+            Self::Recovery { reason, .. } => reason,
+            Self::ResourceLimit { limit, .. } => limit,
+            _ => self.code().as_str(),
+        }
+    }
+
+    /// Component associated with this failure, when one is known.
+    #[must_use]
+    pub fn component(&self) -> Option<&str> {
+        match self {
+            Self::ComponentUnavailable { component, .. } => Some(component),
+            Self::Ocr { provider, .. } | Self::Ai { provider, .. } => Some(provider),
+            _ => None,
+        }
+    }
+
+    /// Package part or stream associated with this failure, when one is known.
+    #[must_use]
+    pub fn part(&self) -> Option<&str> {
+        match self {
+            Self::Malformed { part, .. } => part.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Structured resource-limit identifier and detail, when applicable.
+    #[must_use]
+    pub fn limit(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Self::ResourceLimit { limit, detail } => Some((limit, detail)),
+            _ => None,
+        }
+    }
 }
 
 impl From<std::io::Error> for ConversionError {

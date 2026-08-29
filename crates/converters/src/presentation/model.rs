@@ -102,6 +102,7 @@ pub(super) struct Package<'a> {
     pub(super) content_types: ContentTypes,
     pub(super) excluded: HashSet<String>,
     pub(super) dangerous_present: bool,
+    pub(super) external_relationships_omitted: bool,
     pub(super) loaded_bytes: u64,
     pub(super) memory: into_markdown_core::ResourceReservation,
     pub(super) memory_bytes: u64,
@@ -157,6 +158,7 @@ pub(super) struct TextParagraph {
     pub(super) bullet_explicit: bool,
     pub(super) start: u64,
     pub(super) numbering: Option<String>,
+    pub(super) bullet_recovered: bool,
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -189,8 +191,24 @@ pub(super) struct Shape {
     pub(super) alt: Option<String>,
     pub(super) image: Option<(String, Option<String>)>,
     pub(super) chart: Option<String>,
-    pub(super) table: Option<Vec<Vec<Vec<Inline>>>>,
+    pub(super) table: Option<Vec<Vec<PresentationCell>>>,
     pub(super) languages: Vec<String>,
+    pub(super) recoveries: Vec<ShapeRecovery>,
+    pub(super) ignore_transform_children: bool,
+}
+
+#[derive(Default)]
+pub(super) struct PresentationCell {
+    pub(super) inlines: Vec<Inline>,
+    pub(super) row_span: u32,
+    pub(super) column_span: u32,
+    pub(super) horizontal_continuation: bool,
+    pub(super) vertical_continuation: bool,
+}
+
+pub(super) struct ShapeRecovery {
+    pub(super) code: &'static str,
+    pub(super) message: String,
 }
 
 #[derive(Default)]

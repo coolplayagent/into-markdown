@@ -69,7 +69,7 @@ fn block_is_collectable(
             valid = false;
             return Ok(());
         };
-        if !usable_rect(bounds, width, height)? {
+        if clipped_rect(bounds, width, height)?.is_none() {
             if native_separator {
                 return Ok(());
             }
@@ -137,15 +137,16 @@ fn collect_inlines(
     for inline in inlines {
         budget.checkpoint_item()?;
         match inline {
-            Inline::SourceText { value, marks, provenance } => {
+            Inline::SourceText { value, marks, mut provenance } => {
                 let bounds =
                     provenance.locator.bounds.ok_or_else(|| malformed("pdfLayoutMissingBounds"))?;
-                if !usable_rect(bounds, width, height)? {
+                let Some(bounds) = clipped_rect(bounds, width, height)? else {
                     if is_native_separator(&value) {
                         continue;
                     }
                     return Err(malformed("pdfLayoutVisibleTextMissingGeometry"));
-                }
+                };
+                provenance.locator.bounds = Some(bounds);
                 budget.consume_atom(value.len())?;
                 let font_size = valid_font_size(provenance.locator.font_size);
                 let orientation = orientation(provenance.locator.rotation_degrees, None);
@@ -160,15 +161,16 @@ fn collect_inlines(
                 *source_index =
                     source_index.checked_add(1).ok_or_else(|| memory("source index"))?;
             }
-            Inline::OcrText { value, marks, provenance, evidence } => {
+            Inline::OcrText { value, marks, mut provenance, evidence } => {
                 if evidence.page != page {
                     return Err(malformed("pdfLayoutOcrEvidencePageMismatch"));
                 }
                 let bounds =
                     provenance.locator.bounds.ok_or_else(|| malformed("pdfLayoutMissingBounds"))?;
-                if !usable_rect(bounds, width, height)? {
+                let Some(bounds) = clipped_rect(bounds, width, height)? else {
                     return Err(malformed("pdfLayoutOcrEvidenceMissingGeometry"));
-                }
+                };
+                provenance.locator.bounds = Some(bounds);
                 budget.consume_atom(value.len())?;
                 let angle = evidence_angle(&evidence);
                 let font_size = valid_font_size(provenance.locator.font_size);
@@ -272,7 +274,7 @@ fn count_source_inlines(nodes: &[BlockNode]) -> usize {
     nodes.iter().map(|node| count(&node.block)).sum()
 }
 
-fn usable_rect(rect: Rect, width: f32, height: f32) -> Result<bool, ConversionError> {
+fn clipped_rect(rect: Rect, width: f32, height: f32) -> Result<Option<Rect>, ConversionError> {
     let right = rect.x + rect.width;
     let bottom = rect.y + rect.height;
     if [rect.x, rect.y, rect.width, rect.height, right, bottom]
@@ -280,14 +282,15 @@ fn usable_rect(rect: Rect, width: f32, height: f32) -> Result<bool, ConversionEr
         .any(|value| !value.is_finite())
         || rect.width < 0.0
         || rect.height < 0.0
-        || rect.x < -0.5
-        || rect.y < -0.5
-        || right > width + 0.5
-        || bottom > height + 0.5
     {
-        return Err(malformed("pdfLayoutBoundsOutsidePage"));
+        return Err(malformed("pdfLayoutInvalidBounds"));
     }
-    Ok(rect.width > 0.0 && rect.height > 0.0)
+    let left = rect.x.max(0.0).min(width);
+    let top = rect.y.max(0.0).min(height);
+    let right = right.max(0.0).min(width);
+    let bottom = bottom.max(0.0).min(height);
+    let clipped = Rect { x: left, y: top, width: right - left, height: bottom - top };
+    Ok((clipped.width > 0.0 && clipped.height > 0.0).then_some(clipped))
 }
 
 fn is_native_separator(value: &str) -> bool {

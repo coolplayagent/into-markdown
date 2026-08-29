@@ -194,9 +194,20 @@ RAII guard；`temporary_file` 在写入时计费，并在成功、错误、取�
 内存预算只统计实现显式保留的内存，不声称代表进程 RSS。
 source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserve_exact` 避免实现主动
 请求额外增长余量；allocator 的 size-class 舍入、元数据及其他 RSS 开销不属于这项
-协作式逻辑预算。默认 `max_input_bytes` 为 512 MiB、`max_memory_bytes` 为 1 GiB 时，
-scratch 会在共享转换前先释放，所以最坏 `Vec`/`Arc` 双 payload 峰值恰好落在 1 GiB
-边界内，不会再叠加 64 KiB scratch。
+协作式逻辑预算。Rust 库的确定性 `ResourceLimits::default()` 使用 2 GiB；本地 CLI/Desktop
+按物理内存自动选择 1、2、4 或 8 GiB 的批处理共享预算。`--jobs` 不会复制该预算；当前
+converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
+source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
+
+`Engine::convert_into(request, sink)` 以 64 KiB 有序块向 `ArtifactSink` 写出 Markdown 和
+资产，并返回 `ConversionSummary`。它避免前端再创建一份完整序列化缓冲；兼容接口
+`convert()` 仍返回聚合的 `ConversionResult`，适合小文件或需要完整 IR 的调用方。CLI 的
+Markdown、IR JSON、result JSON 与 bundle 均先流式写入受 `max_temporary_bytes` 约束的
+同文件系统临时文件，再由输出事务分块哈希、同步并原子提交。
+大型 SpreadsheetML 在完整表格 IR 会超过统一节点上限时，转换器改用有界的 2048 行
+TSV page blocks；页块保持工作表、行和列顺序，Tab、换行、反斜杠和反引号采用可逆转义，
+渲染器对该受约束块使用专用内存计划。最终 artifact 仍是一个 Markdown 文件，结果以
+`spreadsheet.largeTablePaged` 标记为 degraded，避免把表格语义简化误报为 complete。
 提供者在分配大块输入副本、模型 tensor、解压缓冲或输出缓冲前必须调用
 `reserve_memory`，并在需要磁盘暂存时使用 `temporary_file`；引擎在 SPI 边界的计费只是
 补充防线，不能替代提供者内部检查。

@@ -5,7 +5,7 @@ use crate::error::CliError;
 #[cfg(not(test))]
 use directories::ProjectDirs;
 use into_markdown::{
-    AiMode, AssetMode, ChineseScript, ConversionOptions, OcrPolicy, RaggedRowsMode,
+    AiMode, AssetMode, ChineseScript, ConversionOptions, ErrorPolicy, OcrPolicy, RaggedRowsMode,
     TableHeaderMode, TextDecodingMode,
 };
 use into_markdown_provider_plugin::CapabilitySourceRef;
@@ -121,8 +121,10 @@ pub struct CliConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ConversionConfig {
     pub timeout_ms: Option<u64>,
+    pub error_policy: Option<ErrorPolicy>,
     pub text: TextConfig,
     pub delimited_text: DelimitedTextConfig,
+    pub archive: ArchiveConfig,
     pub ocr: OcrConfig,
     pub asr: AsrConfig,
     pub ai: AiConfig,
@@ -144,6 +146,13 @@ pub struct TextConfig {
 pub struct DelimitedTextConfig {
     pub header: Option<TableHeaderMode>,
     pub ragged_rows: Option<RaggedRowsMode>,
+}
+
+/// Partial archive compatibility policy.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ArchiveConfig {
+    pub zip_charset: Option<String>,
 }
 
 /// Partial local OCR configuration.
@@ -234,12 +243,20 @@ pub struct LimitsConfig {
     pub max_pages: Option<u32>,
     pub max_asset_bytes: Option<u64>,
     pub max_total_asset_bytes: Option<u64>,
-    pub max_memory_bytes: Option<u64>,
+    pub max_memory_bytes: Option<MemoryLimitConfig>,
     pub max_temporary_bytes: Option<u64>,
     pub max_table_rows: Option<u64>,
     pub max_table_columns: Option<u64>,
     pub max_table_cells: Option<u64>,
     pub max_field_bytes: Option<u64>,
+}
+
+/// Backward-compatible configured memory budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MemoryLimitConfig {
+    Bytes(u64),
+    Mode(String),
 }
 
 /// Partial artifact policy.
@@ -529,6 +546,7 @@ fn complete_sources(
 
 fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOptions, CliError> {
     let mut options = ConversionOptions::default();
+    options.error_policy = config.error_policy.unwrap_or_default();
     if let Some(mode) = config.text.decoding_mode {
         options.text.decoding_mode = mode;
     }
@@ -538,6 +556,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     if let Some(mode) = config.delimited_text.ragged_rows {
         options.delimited_text.ragged_rows = mode;
     }
+    options.archive.zip_charset.clone_from(&config.archive.zip_charset);
     if let Some(policy) = config.ocr.policy {
         options.ocr.policy = policy;
     }
@@ -613,7 +632,18 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     assign!(max_pages);
     assign!(max_asset_bytes);
     assign!(max_total_asset_bytes);
-    assign!(max_memory_bytes);
+    options.limits.max_memory_bytes = match config.limits.max_memory_bytes.as_ref() {
+        Some(MemoryLimitConfig::Bytes(value)) => *value,
+        Some(MemoryLimitConfig::Mode(value)) if value.eq_ignore_ascii_case("auto") => {
+            adaptive_memory_budget()
+        }
+        Some(MemoryLimitConfig::Mode(value)) => {
+            return Err(CliError::config(format!(
+                "conversion.limits.max_memory_bytes must be an integer or 'auto', got '{value}'"
+            )));
+        }
+        None => adaptive_memory_budget(),
+    };
     assign!(max_temporary_bytes);
     assign!(max_table_rows);
     assign!(max_table_columns);
@@ -629,6 +659,33 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
         options.output.asset_mode = value;
     }
     Ok(options)
+}
+
+pub(crate) fn adaptive_memory_budget() -> u64 {
+    adaptive_memory_budget_for(total_physical_memory().unwrap_or(8 * 1024 * 1024 * 1024))
+}
+
+const fn adaptive_memory_budget_for(total: u64) -> u64 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if total < 8 * GIB {
+        GIB
+    } else if total < 16 * GIB {
+        2 * GIB
+    } else if total < 32 * GIB {
+        4 * GIB
+    } else {
+        8 * GIB
+    }
+}
+
+fn total_physical_memory() -> Option<u64> {
+    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+
+    let mut system = System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+    );
+    system.refresh_memory();
+    (system.total_memory() > 0).then_some(system.total_memory())
 }
 
 fn validate_common(config: &RawConfig) -> Result<(), CliError> {
@@ -2040,6 +2097,28 @@ conflict = "rename"
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn adaptive_memory_tiers_and_legacy_numeric_config_are_stable() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(adaptive_memory_budget_for(7 * GIB), GIB);
+        assert_eq!(adaptive_memory_budget_for(8 * GIB), 2 * GIB);
+        assert_eq!(adaptive_memory_budget_for(16 * GIB), 4 * GIB);
+        assert_eq!(adaptive_memory_budget_for(32 * GIB), 8 * GIB);
+
+        let numeric: RawConfig =
+            toml::from_str("[conversion.limits]\nmax_memory_bytes = 123456\n").unwrap();
+        assert_eq!(
+            resolve_conversion_options(&numeric.conversion).unwrap().limits.max_memory_bytes,
+            123_456
+        );
+        let automatic: RawConfig =
+            toml::from_str("[conversion.limits]\nmax_memory_bytes = \"auto\"\n").unwrap();
+        assert!(
+            resolve_conversion_options(&automatic.conversion).unwrap().limits.max_memory_bytes
+                >= GIB
+        );
+    }
 
     #[test]
     fn heterogeneous_capability_routes_reject_contradictions_and_alias_duplicates() {

@@ -1,5 +1,5 @@
 use super::error::{limit, malformed};
-use super::model::{GroupTransform, Package, Relationships, RichStyle, Shape};
+use super::model::{GroupTransform, Package, Relationships, RichStyle, Shape, ShapeRecovery};
 use super::relationships::{relationship_by_id, require_content_type, resolve_target};
 use super::schema::{
     CHART_REL, EXPLICIT_BULLET, EXPLICIT_LIST_LEVEL, GEOMETRY_EXTENT, GEOMETRY_FLIP_H,
@@ -11,7 +11,7 @@ use super::xml_base::{
 };
 use crate::docx::supported_image;
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ExecutionContext, InlineMark, ListKind,
+    ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, InlineMark, ListKind,
     MAX_DOCUMENT_INLINES,
 };
 use quick_xml::events::BytesStart;
@@ -145,6 +145,7 @@ pub(super) fn apply_shape_element(
     element: &BytesStart<'_>,
     part: &str,
     shape: &mut Option<Shape>,
+    options: &ConversionOptions,
 ) -> Result<(), ConversionError> {
     let Some(shape) = shape.as_mut() else { return Ok(()) };
     match local(element.name().as_ref()) {
@@ -166,6 +167,19 @@ pub(super) fn apply_shape_element(
             apply_placeholder(element, part, shape)?;
         }
         "xfrm" => {
+            if shape.semantic_seen & SEEN_TRANSFORM != 0
+                && options.error_policy == ErrorPolicy::BestEffort
+            {
+                shape.ignore_transform_children = true;
+                shape.recoveries.try_reserve(1).map_err(|error| {
+                    limit("max_memory_bytes", format!("cannot reserve transform recovery: {error}"))
+                })?;
+                shape.recoveries.push(ShapeRecovery {
+                    code: "office.extensionOmitted",
+                    message: "secondary shape transform was ignored".into(),
+                });
+                return Ok(());
+            }
             mark_semantic_once(
                 &mut shape.semantic_seen,
                 SEEN_TRANSFORM,
@@ -188,6 +202,9 @@ pub(super) fn apply_shape_element(
             }
         }
         "off" => {
+            if shape.ignore_transform_children {
+                return Ok(());
+            }
             mark_semantic_once(
                 &mut shape.semantic_seen,
                 SEEN_OFFSET,
@@ -199,6 +216,9 @@ pub(super) fn apply_shape_element(
             shape.geometry.presence |= GEOMETRY_OFFSET;
         }
         "ext" => {
+            if shape.ignore_transform_children {
+                return Ok(());
+            }
             mark_semantic_once(
                 &mut shape.semantic_seen,
                 SEEN_EXTENT,
@@ -268,15 +288,57 @@ pub(super) fn apply_shape_element(
             shape.numbering = None;
         }
         "buBlip" => {
-            return Err(malformed(Some(part), "bitmap bullets are not supported"));
+            if options.error_policy == ErrorPolicy::Strict {
+                return Err(malformed(Some(part), "bitmap bullets are not supported"));
+            }
+            shape.bullet = Some(ListKind::Bullet);
+            shape.paragraph_explicit |= EXPLICIT_BULLET;
+            shape.numbering = None;
+            shape.recoveries.try_reserve(1).map_err(|error| {
+                limit("max_memory_bytes", format!("cannot reserve bitmap-bullet recovery: {error}"))
+            })?;
+            shape.recoveries.push(ShapeRecovery {
+                code: "office.extensionOmitted",
+                message: "bitmap bullet was replaced by a standard bullet".into(),
+            });
         }
         "blip" => {
             if optional_attr_ns(reader, element, R_NS, "link", part)?.is_some() {
-                return Err(malformed(Some(part), "linked images are not supported"));
+                if options.error_policy == ErrorPolicy::Strict {
+                    return Err(malformed(Some(part), "linked images are not supported"));
+                }
+                shape.recoveries.try_reserve(1).map_err(|error| {
+                    limit(
+                        "max_memory_bytes",
+                        format!("cannot reserve linked-image recovery: {error}"),
+                    )
+                })?;
+                shape.recoveries.push(ShapeRecovery {
+                    code: "office.relationshipOmitted",
+                    message: "external image relationship was removed without downloading it"
+                        .into(),
+                });
+                return Ok(());
             }
             let id = required_attr_ns(reader, element, R_NS, "embed", part)?;
             if shape.image.is_some() {
-                return Err(malformed(Some(part), "shape has multiple image references"));
+                if options.error_policy == ErrorPolicy::Strict {
+                    return Err(malformed(Some(part), "shape has multiple image references"));
+                }
+                shape.recoveries.try_reserve(1).map_err(|error| {
+                    limit(
+                        "max_memory_bytes",
+                        format!("cannot reserve duplicate-image recovery: {error}"),
+                    )
+                })?;
+                shape.recoveries.push(ShapeRecovery {
+                    code: "office.extensionOmitted",
+                    message: "duplicate image references were normalized to the final reference"
+                        .into(),
+                });
+                let alt = shape.image.take().and_then(|(_, alt)| alt).or_else(|| shape.alt.take());
+                shape.image = Some((id, alt));
+                return Ok(());
             }
             let alt = shape.alt.take();
             shape.image = Some((id, alt));
@@ -527,7 +589,15 @@ pub(super) fn validate_shape_relationships(
             let content_type = package.content_types.content_type(&target).ok_or_else(|| {
                 malformed(Some("[Content_Types].xml"), format!("image {target} lacks content type"))
             })?;
-            supported_image(&target, content_type)?;
+            if let Err(error) = supported_image(&target, content_type)
+                && !(options.error_policy == ErrorPolicy::BestEffort
+                    && matches!(
+                        &error,
+                        ConversionError::Malformed { .. } | ConversionError::Unsupported { .. }
+                    ))
+            {
+                return Err(error);
+            }
             package.authorize_referenced_part(&target)?;
         }
         if let Some(id) = &shape.chart {
