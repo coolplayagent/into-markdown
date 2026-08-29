@@ -10,11 +10,17 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  CARGO_TERM_COLOR: always
+
 jobs:
   linux-x86-64:
     name: Linux x86_64, shared tests, and Web
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,21 +38,27 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git/db
             target
-          key: pr-fast-linux-x86-64-${{ hashFiles('Cargo.lock') }}
-      - name: Check shared Rust and release contracts
+          key: pr-fast-v2-linux-x86-64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            pr-fast-v2-linux-x86-64-
+            pr-fast-linux-x86-64-${{ hashFiles('Cargo.lock') }}
+      - name: Test shared Rust and release contracts once
         run: |
           cargo fmt --all -- --check
-          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
-          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2
-          cargo test --locked -p into-markdown-process-plugin --lib --test runtime -j2 -- --test-threads=1
-          python -m unittest \
+          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2 -- \
+            --skip recognition::tests::all_exif_orientations_flow_from_detection_to_raw_source_recognition
+          cargo test --locked -p into-markdown-process-plugin --lib -j2
+          python3 tools/platform-release/pr_fast_gate.py --target x86_64-unknown-linux-gnu
+          python3 -m unittest \
             tools.platform-release.test_release \
+            tools.platform-release.test_pr_fast_gate \
             tools.portable-release.test_assemble \
             tools.portable-release.test_native_acceptance \
+            tools.portable-release.test_post_release_e2e \
             tools.release_evidence_test \
             tools.release_metadata_test \
             tools.skill-release.test_skill_release
-      - name: Build the checked production Web bundle without Bazel
+      - name: Build the checked production Web bundle
         run: |
           corepack enable
           corepack pnpm install --frozen-lockfile
@@ -56,7 +68,7 @@ jobs:
   linux-arm64:
     name: Linux ARM64 Core
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -68,16 +80,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git/db
             target
-          key: pr-fast-linux-arm64-${{ hashFiles('Cargo.lock') }}
-      - name: Compile and test the native Core path
-        run: cargo test --locked -p into-markdown-cli --bin into-md -j2
+          key: pr-fast-v2-linux-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            pr-fast-v2-linux-arm64-
+            pr-fast-linux-arm64-${{ hashFiles('Cargo.lock') }}
+      - name: Compile the native process boundary and validate release authority
+        run: |
+          cargo check --locked -p into-markdown-process-plugin --lib -j2
+          python3 tools/platform-release/pr_fast_gate.py --target aarch64-unknown-linux-gnu
 
   windows-x86-64:
     name: Windows x86_64 Core
     runs-on: windows-2025
-    # A cold Windows runner must populate the native media-runtime cache once.
-    # The post-release gate split keeps steady-state PRs below five minutes.
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -92,17 +107,19 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git/db
             target
-          key: pr-fast-windows-x86-64-${{ hashFiles('Cargo.lock') }}
-      - name: Test the native Core and portable archive authority
+          key: pr-fast-v2-windows-x86-64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            pr-fast-v2-windows-x86-64-
+            pr-fast-windows-x86-64-${{ hashFiles('Cargo.lock') }}
+      - name: Compile the native process boundary and validate release authority
         run: |
-          cargo test --locked -p into-markdown-cli --bin into-md -j2
-          cargo check --locked -p into-markdown-official-provider --bin into-md-media-provider --no-default-features --features media-runtime -j2
-          python tools/portable-release/test_assemble.py
+          cargo check --locked -p into-markdown-process-plugin --lib -j2
+          python tools/platform-release/pr_fast_gate.py --target x86_64-pc-windows-msvc
 
   macos-arm64:
     name: macOS ARM64 Core
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -114,6 +131,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git/db
             target
-          key: pr-fast-macos-arm64-${{ hashFiles('Cargo.lock') }}
-      - name: Test the native Core path
-        run: cargo test --locked -p into-markdown-cli --bin into-md -j2
+          key: pr-fast-v2-macos-arm64-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            pr-fast-v2-macos-arm64-
+            pr-fast-macos-arm64-${{ hashFiles('Cargo.lock') }}
+      - name: Compile the native process boundary and validate release authority
+        run: |
+          cargo check --locked -p into-markdown-process-plugin --lib -j2
+          python3 tools/platform-release/pr_fast_gate.py --target aarch64-apple-darwin

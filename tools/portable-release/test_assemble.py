@@ -167,10 +167,14 @@ class PortableReleaseTests(unittest.TestCase):
                 {},
                 root / "build",
                 root / "cache",
+                root / "timings.json",
             )
             self.assertEqual(result, root / "build/release")
             self.assertTrue((root / "cache").is_dir())
             self.assertFalse((root / "release").exists())
+            timings = json.loads((root / "timings.json").read_text(encoding="utf-8"))
+            self.assertEqual(timings["target"], self.TARGET)
+            self.assertIn("helper-provider-build", timings["phases"])
 
     def test_parallel_platform_input_failure_propagates_before_publication(self) -> None:
         with tempfile.TemporaryDirectory() as name:

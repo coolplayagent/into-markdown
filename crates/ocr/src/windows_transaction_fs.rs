@@ -48,8 +48,28 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows_sys::Win32::System::WindowsProgramming::DRIVE_FIXED;
 
-fn wide(value: &OsStr) -> Vec<u16> {
+fn wide_text(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
+}
+
+fn wide_path(path: &Path) -> Result<Vec<u16>, ModelManagerError> {
+    let absolute = std::path::absolute(path).map_err(ModelManagerError::Io)?;
+    let encoded = absolute.as_os_str().encode_wide().collect::<Vec<_>>();
+    let slash = u16::from(b'\\');
+    let verbatim = [slash, slash, u16::from(b'?'), slash];
+    let unc = [slash, slash];
+    let mut value = if encoded.starts_with(&verbatim) {
+        encoded
+    } else if encoded.starts_with(&unc) {
+        "\\\\?\\UNC\\".encode_utf16().chain(encoded.into_iter().skip(2)).collect()
+    } else {
+        "\\\\?\\".encode_utf16().chain(encoded).collect()
+    };
+    if value.contains(&0) {
+        return Err(ModelManagerError::UnsafePath);
+    }
+    value.push(0);
+    Ok(value)
 }
 
 fn last_error() -> ModelManagerError {
@@ -62,7 +82,7 @@ impl SecurityDescriptor {
     fn private() -> Result<Self, ModelManagerError> {
         let user = current_user_sid_string()?;
         let text = format!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{user})");
-        let sddl = wide(OsStr::new(&text));
+        let sddl = wide_text(OsStr::new(&text));
         let mut descriptor = null_mut();
         // SAFETY: NUL-terminated input and valid out pointer; LocalFree owns the returned buffer.
         if unsafe {
@@ -180,7 +200,7 @@ fn open_with_share(
     access: u32,
     share_mode: u32,
 ) -> Result<File, ModelManagerError> {
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
         | if directory { FILE_FLAG_BACKUP_SEMANTICS } else { FILE_ATTRIBUTE_NORMAL };
     // SAFETY: all pointers are valid for the duration of the call.
@@ -400,7 +420,7 @@ fn dacl_bytes(descriptor: PSECURITY_DESCRIPTOR) -> Result<Vec<u8>, ModelManagerE
 pub(crate) fn create_private_directory(path: &Path) -> Result<(), ModelManagerError> {
     let mut descriptor = SecurityDescriptor::private()?;
     let attributes = descriptor.attributes();
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     // SAFETY: pointers remain valid through the call.
     if unsafe { CreateDirectoryW(path_wide.as_ptr(), &attributes) } == 0 {
         return Err(last_error());
@@ -426,7 +446,7 @@ pub(crate) fn create_private_file(path: &Path) -> Result<File, ModelManagerError
 fn create_private_file_with_share(path: &Path, share_mode: u32) -> Result<File, ModelManagerError> {
     let mut descriptor = SecurityDescriptor::private()?;
     let attributes = descriptor.attributes();
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     // SAFETY: pointers remain valid through the call.
     let handle = unsafe {
         CreateFileW(
@@ -471,7 +491,7 @@ pub(crate) fn open_private_file_read(path: &Path) -> Result<File, ModelManagerEr
 pub(crate) fn open_authenticated_snapshot_file_read(
     path: &Path,
 ) -> Result<File, ModelManagerError> {
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     // The process host authenticated the complete private snapshot and installed
     // its exact current-user plus AppContainer read-only DACL before launch. The
     // worker therefore validates object type, reparse state, link count, and ADS,
@@ -496,7 +516,7 @@ pub(crate) fn open_authenticated_snapshot_file_read(
 }
 
 fn open_for_delete(path: &Path, directory: bool) -> Result<File, ModelManagerError> {
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     let flags = FILE_FLAG_OPEN_REPARSE_POINT
         | if directory { FILE_FLAG_BACKUP_SEMANTICS } else { FILE_ATTRIBUTE_NORMAL };
     // Omit FILE_SHARE_DELETE so the validated object cannot be renamed or
@@ -625,7 +645,7 @@ pub(crate) struct RootGuard {
 
 impl RootGuard {
     pub(crate) fn acquire(path: &Path) -> Result<Self, ModelManagerError> {
-        let path_wide = wide(path.as_os_str());
+        let path_wide = wide_path(path)?;
         // Deliberately omit FILE_SHARE_DELETE: while this guard is live Windows
         // prevents rename/delete/recreation of the transaction root.
         // SAFETY: NUL-terminated path and valid arguments.
@@ -692,7 +712,7 @@ fn hex_id(id: &FILE_ID_INFO) -> String {
 }
 
 fn validate_volume(path: &Path) -> Result<(), ModelManagerError> {
-    let path_wide = wide(path.as_os_str());
+    let path_wide = wide_path(path)?;
     let mut root = vec![0_u16; 1024];
     // SAFETY: valid input and writable output buffer.
     if unsafe {
@@ -735,8 +755,8 @@ fn validate_volume(path: &Path) -> Result<(), ModelManagerError> {
 }
 
 pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> Result<(), ModelManagerError> {
-    let from = wide(from.as_os_str());
-    let to = wide(to.as_os_str());
+    let from = wide_path(from)?;
+    let to = wide_path(to)?;
     // SAFETY: NUL-terminated path inputs remain valid through the call. Absence of
     // MOVEFILE_REPLACE_EXISTING and MOVEFILE_COPY_ALLOWED enforces same-volume no-replace.
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
@@ -777,7 +797,7 @@ pub(crate) fn harden_test_directory(path: &Path) -> Result<(), ModelManagerError
     let directory = match open(path, true, FILE_READ_ATTRIBUTES) {
         Ok(_) => return Ok(()),
         Err(ModelManagerError::DataDirectoryUnsafe) => {
-            let path_wide = wide(path.as_os_str());
+            let path_wide = wide_path(path)?;
             // SAFETY: NUL-terminated path and valid flags; this handle is immediately owned.
             let handle = unsafe {
                 CreateFileW(
@@ -902,6 +922,23 @@ mod tests {
             Err(ModelManagerError::DataDirectoryUnsafe)
         ));
         let file = open_authenticated_snapshot_file_read(&artifact).unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn authenticated_snapshot_file_accepts_long_unicode_absolute_path() {
+        let parent = tempfile::tempdir().unwrap();
+        let mut directory = parent.path().to_path_buf();
+        while directory.join("模型.onnx").as_os_str().encode_wide().count() <= 280 {
+            directory.push("很长的模型目录-0123456789");
+        }
+        std::fs::create_dir_all(&directory).unwrap();
+        let artifact = directory.join("模型.onnx");
+        std::fs::write(&artifact, b"model").unwrap();
+        assert!(artifact.as_os_str().encode_wide().count() > 260);
+
+        let file = open_authenticated_snapshot_file_read(&artifact).unwrap();
+
         assert_eq!(file.metadata().unwrap().len(), 5);
     }
 

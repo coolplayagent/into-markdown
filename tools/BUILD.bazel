@@ -1,10 +1,28 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
+exports_files([
+    "ffmpeg_runtime.py",
+    "release_timing.py",
+])
+
 py_library(
     name = "release_asset",
     srcs = ["release_asset.py"],
     imports = ["."],
     visibility = ["//tools:__subpackages__"],
+)
+
+py_library(
+    name = "release_subprocess",
+    srcs = ["release_subprocess.py"],
+    imports = ["."],
+    visibility = ["//tools:__subpackages__"],
+)
+
+py_test(
+    name = "release_subprocess_test",
+    srcs = ["release_subprocess_test.py"],
+    deps = [":release_subprocess"],
 )
 
 py_test(

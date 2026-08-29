@@ -32,7 +32,7 @@ const snapshot: AdminSnapshot = {
   configurationReadOnly: false,
   formats: [{ format: "pdf", family: "document", status: "available", source: "core", extensions: ["pdf"], runtimeComponent: "pdfium", installHint: "install runtime" }],
   capabilities: [
-    { id: "ocr", status: "ready", localStatus: "ready", currentSource: "plugin:official.ocr.ppocrv6/ocr", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: "1.0.0", localVersion: "1.0.0" },
+    { id: "ocr", status: "ready", localStatus: "ready", currentSource: "core:ocr", sources: ["core:ocr", "off"], version: "1.0.0", localVersion: "1.0.0" },
     { id: "transcription", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/transcription", sources: ["plugin:official.media.whisper/transcription", "off"], version: "1.0.0", localVersion: "1.0.0" },
     { id: "diarization", status: "ready", localStatus: "ready", currentSource: "plugin:official.media.whisper/diarization", sources: ["plugin:official.media.whisper/diarization", "off"], version: "1.0.0", localVersion: "1.0.0" },
   ],
@@ -72,9 +72,10 @@ test("admin DTO is bounded and never needs credential values", () => {
   for (const mutation of [
     { ...snapshot.capabilities[0]!, id: "unknown" },
     { ...snapshot.capabilities[0]!, status: "installed" },
-    { ...snapshot.capabilities[0]!, currentSource: "core:ocr" },
+    { ...snapshot.capabilities[0]!, currentSource: "core:media" },
     { ...snapshot.capabilities[0]!, sources: ["plugin:../escape/ocr"] },
   ]) assert.throws(() => parseAdminSnapshot({ ...snapshot, capabilities: [mutation, ...snapshot.capabilities.slice(1)] }), ApiError);
+  assert.doesNotThrow(() => parseAdminSnapshot(snapshot));
   for (const mutation of [
     { ...snapshot.providers[0]!, providerType: "shell" },
     { ...snapshot.providers[0]!, scope: "machine" },
@@ -187,19 +188,15 @@ test("administration responses share one exact one-MiB wire limit", async () => 
   await assert.rejects(rejected.adminAction({ schemaVersion: 1, action: "profile.show" }), (error: unknown) => error instanceof ApiError && error.code === "responseTooLarge");
 });
 
-test("administration pages are accessible, responsive, recoverable and require one-time grants", async () => {
+test("administration pages keep built-in OCR free of plugin lifecycle controls", async () => {
   const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
-  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
-  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions, missingOcr) }));
+  activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: api(actions) }));
   await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
-  const installButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Install")!;
-  assert.equal(installButton.disabled, false); installButton.click();
-  await waitFor(() => window.document.body.textContent.includes("Repair built-in OCR"));
+  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
+  assert.ok(ocrCard.textContent?.includes("Built-in OCR"));
+  assert.equal([...ocrCard.querySelectorAll("button")].some((button) => ["Install", "Repair", "Verify", "Remove"].includes(button.textContent ?? "")), false);
+  assert.equal(ocrCard.querySelector(".capability-install-dialog"), null);
   assert.equal(actions.length, 0);
-  const repairButton = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Repair")!;
-  repairButton.click(); repairButton.click(); await waitFor(() => actions.length === 1);
-  assert.equal(actions[0]!.authorizeNetwork, false);
-  assert.equal(actions[0]!.authorizeDangerous, true);
   assert.equal(window.document.body.textContent.includes("manifest"), false);
   assert.equal(window.document.body.textContent.includes("invocation capabilities"), false);
   const axe = (await import("axe-core")).default; const result = await axe.run(window.document); assert.deepEqual(result.violations.map((item) => item.id), []);
@@ -207,23 +204,17 @@ test("administration pages are accessible, responsive, recoverable and require o
   assert.equal(window.document.querySelector("main") !== null, true);
 });
 
-test("built-in OCR repair uses the Core package without a file picker or network", async () => {
+test("built-in OCR offers the compatible off route without plugin management", async () => {
   const window = install("/admin/capabilities"); const actions: AdminAction[] = [];
-  const missingOcr: AdminSnapshot = { ...snapshot, capabilities: snapshot.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "not-installed", localStatus: "not-installed", currentSource: "off", sources: ["plugin:official.ocr.ppocrv6/ocr", "off"], version: undefined, localVersion: undefined } : item) };
-  const client = api(actions, missingOcr);
+  const client = api(actions);
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
   await waitFor(() => window.document.body.textContent.includes("Read scanned PDFs and images"));
   const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
-  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Install")!.click();
-  await waitFor(() => window.document.body.textContent.includes("OCR is included with Core"));
-  const dialog = window.document.querySelector<HTMLElement>(".capability-install-dialog")!;
-  assert.equal(dialog.querySelector('input[type="file"]'), null);
-  [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Repair")!.click();
-  await waitFor(() => actions.length === 1);
-  assert.equal(actions[0]!.action, "capability.install");
-  assert.equal(actions[0]!.target, "ocr");
-  assert.equal(actions[0]!.authorizeDangerous, true);
-  assert.equal(actions[0]!.authorizeNetwork, false);
+  const select = ocrCard.querySelector<HTMLSelectElement>("select")!;
+  assert.deepEqual([...select.options].map((option) => [option.value, option.textContent]), [["core:ocr", "Built-in OCR"], ["off", "Off"]]);
+  assert.equal(select.options[1]!.disabled, false);
+  assert.equal(actions.length, 0);
+  assert.equal([...ocrCard.querySelectorAll("button")].some((button) => ["Install", "Repair", "Verify", "Remove"].includes(button.textContent ?? "")), false);
 });
 
 test("speech install chooser derives official trust and keeps package errors beside the picker", async () => {
@@ -333,34 +324,34 @@ test("local plugin installation reports backend rejection inside the unchanged i
 test("capability verification keeps progress and cancellation in one stable action slot", async () => {
   const window = install("/admin/capabilities"); let cancelled = false;
   const client = api();
-  const check = (status: "running" | "cancelled") => ({ schemaVersion: 1 as const, id: "check-1", capability: "ocr", capabilityName: "Image OCR", plugin: "official.ocr.ppocrv6", pluginName: "Local OCR", status, stage: "package" as const, progress: status === "running" ? 10 : 0 });
+  const check = (status: "running" | "cancelled") => ({ schemaVersion: 1 as const, id: "check-1", capability: "transcription", capabilityName: "Speech transcription", plugin: "official.media.whisper", pluginName: "Local speech", status, stage: "package" as const, progress: status === "running" ? 10 : 0 });
   client.startCapabilityCheck = async () => check("running");
   client.capabilityCheck = async () => check(cancelled ? "cancelled" : "running");
   client.cancelCapabilityCheck = async () => { cancelled = true; return check("cancelled"); };
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
-  await waitFor(() => window.document.body.textContent.includes("Image OCR"));
-  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
-  [...ocrCard.querySelectorAll("button")].find((button) => button.textContent === "Verify")!.click();
-  await waitFor(() => ocrCard.querySelector(".capability-verify button")?.textContent?.includes("10% · Cancel") === true);
-  assert.equal(ocrCard.querySelectorAll(".capability-verify button").length, 1);
-  assert.equal(ocrCard.querySelector(".capability-feedback"), null);
-  (ocrCard.querySelector(".capability-verify button") as HTMLButtonElement).click();
-  await waitFor(() => cancelled && ocrCard.querySelector(".capability-verify button")?.textContent === "Verify");
+  await waitFor(() => [...window.document.querySelectorAll<HTMLElement>(".capability-row")].some((card) => card.textContent?.includes("Speech transcription") && card.querySelector(".capability-verify")));
+  const speechCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Speech transcription"))!;
+  [...speechCard.querySelectorAll("button")].find((button) => button.textContent === "Verify")!.click();
+  await waitFor(() => speechCard.querySelector(".capability-verify button")?.textContent?.includes("10% · Cancel") === true);
+  assert.equal(speechCard.querySelectorAll(".capability-verify button").length, 1);
+  assert.equal(speechCard.querySelector(".capability-feedback"), null);
+  (speechCard.querySelector(".capability-verify button") as HTMLButtonElement).click();
+  await waitFor(() => cancelled && speechCard.querySelector(".capability-verify button")?.textContent === "Verify");
   await new Promise((resolve) => setTimeout(resolve, 400));
-  assert.equal(ocrCard.querySelectorAll(".capability-verify button").length, 1);
+  assert.equal(speechCard.querySelectorAll(".capability-verify button").length, 1);
 });
 
 test("capability verification confirms success without adding or moving controls", async () => {
   const window = install("/admin/capabilities");
   const client = api();
-  const running = { schemaVersion: 1 as const, id: "check-2", capability: "ocr", capabilityName: "Image OCR", plugin: "official.ocr.ppocrv6", pluginName: "Local OCR", status: "running" as const, stage: "package" as const, progress: 10 };
+  const running = { schemaVersion: 1 as const, id: "check-2", capability: "transcription", capabilityName: "Speech transcription", plugin: "official.media.whisper", pluginName: "Local speech", status: "running" as const, stage: "package" as const, progress: 10 };
   const completed = { ...running, status: "completed" as const, stage: "completed" as const, progress: 100 };
   client.startCapabilityCheck = async () => running;
   client.capabilityCheck = async () => completed;
   activeRoot = createRoot(window.document.getElementById("app")!); activeRoot.render(createElement(App, { api: client }));
-  await waitFor(() => window.document.body.textContent.includes("Image OCR"));
-  const ocrCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Image OCR"))!;
-  const slot = ocrCard.querySelector<HTMLElement>(".capability-verify")!;
+  await waitFor(() => [...window.document.querySelectorAll<HTMLElement>(".capability-row")].some((card) => card.textContent?.includes("Speech transcription") && card.querySelector(".capability-verify")));
+  const speechCard = [...window.document.querySelectorAll<HTMLElement>(".capability-row")].find((card) => card.textContent?.includes("Speech transcription"))!;
+  const slot = speechCard.querySelector<HTMLElement>(".capability-verify")!;
   const button = slot.querySelector<HTMLButtonElement>("button")!;
   button.click();
   await waitFor(() => button.textContent === "Verified");

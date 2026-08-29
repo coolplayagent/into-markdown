@@ -1,0 +1,1004 @@
+#!/usr/bin/env python3
+"""Run repeatable black-box E2E checks against published portable artifacts.
+
+On Windows, ``--platform all`` runs the Windows checks locally and the Linux
+x86_64 checks in the default WSL distribution.  The script accepts either an
+existing asset directory or downloads the required assets from a public GitHub
+release.  It never reads build outputs or Cargo/Bazel runfiles.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import pathlib
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import time
+import urllib.request
+import zipfile
+from dataclasses import dataclass
+from typing import Any
+
+
+REPOSITORY = "coolplayagent/into-markdown"
+TARGETS = {
+    "windows": {
+        "target": "x86_64-pc-windows-msvc",
+        "core": "into-md-windows-x86_64.zip",
+        "member": "into-md.exe",
+        "speech": "official.media.whisper-x86_64-pc-windows-msvc.imp",
+        "skill": "into-markdown/assets/windows-x86_64/into-md.exe",
+    },
+    "linux": {
+        "target": "x86_64-unknown-linux-gnu",
+        "core": "into-md-linux-x86_64.zip",
+        "member": "into-md",
+        "speech": "official.media.whisper-x86_64-unknown-linux-gnu.imp",
+        "skill": "into-markdown/assets/linux-x86_64/into-md",
+    },
+}
+SKILL_ARCHIVE = "into-markdown-skill.zip"
+MAX_CAPTURE_BYTES = 64 * 1024
+
+
+class E2EError(RuntimeError):
+    pass
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def _bounded(value: bytes) -> str:
+    return value[:MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
+
+
+def write_json(path: pathlib.Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def release_asset_url(repository: str, tag: str, name: str) -> str:
+    if not repository or any(part in repository for part in ("..", "\\", "?", "#")):
+        raise E2EError("repository must be an owner/name pair")
+    if repository.count("/") != 1 or not tag or "/" in tag or "\\" in tag:
+        raise E2EError("release repository or tag is invalid")
+    return f"https://github.com/{repository}/releases/download/{tag}/{name}"
+
+
+def acquire_assets(
+    assets: pathlib.Path, repository: str, tag: str, platforms: list[str]
+) -> dict[str, dict[str, Any]]:
+    assets.mkdir(parents=True, exist_ok=True)
+    required = {SKILL_ARCHIVE}
+    for platform in platforms:
+        required.update((TARGETS[platform]["core"], TARGETS[platform]["speech"]))
+    records: dict[str, dict[str, Any]] = {}
+    for name in sorted(required):
+        destination = assets / name
+        downloaded = False
+        if not destination.is_file():
+            temporary = assets / f".{name}.download"
+            if temporary.exists():
+                temporary.unlink()
+            request = urllib.request.Request(
+                release_asset_url(repository, tag, name),
+                headers={"User-Agent": "into-markdown-post-release-e2e"},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response, temporary.open(
+                    "xb"
+                ) as output:
+                    shutil.copyfileobj(response, output, length=1024 * 1024)
+                os.replace(temporary, destination)
+                downloaded = True
+            finally:
+                temporary.unlink(missing_ok=True)
+        if destination.is_symlink() or not destination.is_file():
+            raise E2EError(f"release asset is not a regular file: {name}")
+        records[name] = {
+            "path": str(destination.resolve()),
+            "bytes": destination.stat().st_size,
+            "sha256": sha256_file(destination),
+            "downloaded": downloaded,
+        }
+    return records
+
+
+def inspect_core(data: bytes, platform: str) -> dict[str, str]:
+    if platform == "windows":
+        if len(data) < 64 or data[:2] != b"MZ":
+            raise E2EError("Windows Core is not a PE executable")
+        offset = struct.unpack_from("<I", data, 0x3C)[0]
+        if offset + 6 > len(data) or data[offset : offset + 4] != b"PE\0\0":
+            raise E2EError("Windows Core has an invalid PE header")
+        if struct.unpack_from("<H", data, offset + 4)[0] != 0x8664:
+            raise E2EError("Windows Core is not x86_64")
+        return {"format": "PE", "architecture": "x86_64"}
+    if len(data) < 20 or data[:7] != b"\x7fELF\x02\x01\x01":
+        raise E2EError("Linux Core is not a 64-bit little-endian ELF executable")
+    if struct.unpack_from("<H", data, 18)[0] != 62:
+        raise E2EError("Linux Core is not x86_64")
+    return {"format": "ELF", "architecture": "x86_64"}
+
+
+def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathlib.Path) -> dict:
+    expected = TARGETS[platform]["member"]
+    with zipfile.ZipFile(archive_path) as archive:
+        infos = archive.infolist()
+        if len(infos) != 1 or infos[0].filename != expected or infos[0].is_dir():
+            raise E2EError(f"{archive_path.name} must contain only {expected}")
+        info = infos[0]
+        mode = (info.external_attr >> 16) & 0o177777
+        wanted = stat.S_IFREG | (0o644 if platform == "windows" else 0o755)
+        if mode != wanted:
+            raise E2EError(f"{archive_path.name} has an invalid member mode")
+        data = archive.read(info)
+    identity = inspect_core(data, platform)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+    output.chmod(0o700)
+    return {
+        "archive": archive_path.name,
+        "archiveSha256": sha256_file(archive_path),
+        "binarySha256": hashlib.sha256(data).hexdigest(),
+        "binaryBytes": len(data),
+        "memberCount": 1,
+        **identity,
+    }
+
+
+def extract_skill_binary(archive_path: pathlib.Path, platform: str, output: pathlib.Path) -> dict:
+    wanted = TARGETS[platform]["skill"]
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)) or wanted not in names:
+            raise E2EError(f"Skill does not contain {wanted} exactly once")
+        info = archive.getinfo(wanted)
+        if info.is_dir():
+            raise E2EError("Skill Core asset is a directory")
+        data = archive.read(info)
+    identity = inspect_core(data, platform)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+    output.chmod(0o700)
+    return {
+        "archiveSha256": sha256_file(archive_path),
+        "binarySha256": hashlib.sha256(data).hexdigest(),
+        "asset": wanted,
+        **identity,
+    }
+
+
+def protect_directory(path: pathlib.Path, platform: str) -> pathlib.Path:
+    path.mkdir(parents=True, exist_ok=False)
+    if platform == "windows":
+        whoami = subprocess.run(
+            ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if whoami.returncode != 0:
+            raise E2EError(f"cannot resolve Windows SID: {whoami.stderr.strip()}")
+        columns = next(__import__("csv").reader([whoami.stdout.strip()]))
+        if len(columns) < 2 or not columns[1].startswith("S-"):
+            raise E2EError("whoami returned an invalid Windows SID")
+        result = subprocess.run(
+            [
+                "icacls.exe",
+                str(path),
+                "/inheritance:r",
+                "/grant:r",
+                f"*{columns[1]}:(OI)(CI)F",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise E2EError(f"cannot protect Windows state: {result.stderr.strip()}")
+    else:
+        path.chmod(0o700)
+    return path.resolve(strict=True)
+
+
+@dataclass
+class CommandResult:
+    name: str
+    elapsed_ms: int
+    exit_code: int
+    stdout: bytes
+    stderr: bytes
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "elapsedMs": self.elapsed_ms,
+            "exitCode": self.exit_code,
+            "stdoutSha256": hashlib.sha256(self.stdout).hexdigest(),
+            "stderrSha256": hashlib.sha256(self.stderr).hexdigest(),
+        }
+
+
+class Runner:
+    def __init__(self, binary: pathlib.Path, environment: dict[str, str], work: pathlib.Path):
+        self.binary = binary
+        self.environment = environment
+        self.work = work
+        self.cases: list[dict[str, Any]] = []
+
+    def call(
+        self,
+        name: str,
+        arguments: list[str],
+        *,
+        succeed: bool = True,
+        timeout: int = 120,
+        environment: dict[str, str] | None = None,
+    ) -> CommandResult:
+        started = time.monotonic()
+        result = subprocess.run(
+            [str(self.binary), *arguments],
+            cwd=self.work,
+            env=environment or self.environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
+        )
+        command = CommandResult(
+            name,
+            round((time.monotonic() - started) * 1000),
+            result.returncode,
+            result.stdout,
+            result.stderr,
+        )
+        self.cases.append(command.record())
+        if (result.returncode == 0) != succeed:
+            detail = _bounded(result.stderr or result.stdout).strip()
+            expectation = "succeed" if succeed else "fail"
+            raise E2EError(f"{name} was expected to {expectation}: {detail}")
+        return command
+
+
+def runtime_directories(environment: dict[str, str], platform: str) -> list[pathlib.Path]:
+    if platform == "windows":
+        root = pathlib.Path(environment["LOCALAPPDATA"])
+    else:
+        root = pathlib.Path(environment["XDG_CACHE_HOME"])
+    runtime = root / "into-markdown" / "runtime"
+    if not runtime.exists():
+        return []
+    return sorted(path for path in runtime.iterdir() if path.is_dir())
+
+
+def dispatch_directories(environment: dict[str, str]) -> list[pathlib.Path]:
+    temporary = pathlib.Path(environment["TEMP"])
+    return sorted(
+        path
+        for path in temporary.rglob("into-md-plugin-dispatch-*")
+        if path.is_dir() and not path.is_symlink()
+    )
+
+
+def assert_dispatch_clean(environment: dict[str, str], label: str) -> None:
+    residual = dispatch_directories(environment)
+    if residual:
+        sizes = []
+        for path in residual:
+            size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+            sizes.append(f"{path.name} ({size} bytes)")
+        raise E2EError(f"{label} left plugin dispatch snapshots: {', '.join(sizes)}")
+
+
+def residual_records(environment: dict[str, str], pattern: str) -> list[dict[str, Any]]:
+    temporary = pathlib.Path(environment["TEMP"])
+    records = []
+    for path in sorted(temporary.rglob(pattern)):
+        if not path.is_dir() or path.is_symlink():
+            continue
+        size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+        records.append(
+            {
+                "path": str(path.relative_to(temporary)),
+                "bytes": size,
+            }
+        )
+    return records
+
+
+def record_and_clean_residuals(
+    environment: dict[str, str],
+    pattern: str,
+    stage: str,
+    report: list[dict[str, Any]],
+    errors: list[str],
+) -> None:
+    records = residual_records(environment, pattern)
+    report.append({"stage": stage, "directories": records})
+    if records:
+        errors.append(
+            f"{stage} left {len(records)} {pattern} directories "
+            f"({sum(record['bytes'] for record in records)} bytes)"
+        )
+        temporary = pathlib.Path(environment["TEMP"])
+        for record in records:
+            shutil.rmtree(temporary / record["path"])
+
+
+def conversion_arguments(source: pathlib.Path, output: pathlib.Path, extra: list[str]) -> list[str]:
+    return [
+        str(source),
+        "-o",
+        str(output),
+        "--conflict",
+        "error",
+        "--progress",
+        "never",
+        *extra,
+    ]
+
+
+def assert_output(path: pathlib.Path, label: str) -> None:
+    if not path.is_file() or not path.read_bytes():
+        raise E2EError(f"{label} output is missing or empty")
+
+
+def plugin_identity(package: pathlib.Path) -> dict[str, str]:
+    with zipfile.ZipFile(package) as archive:
+        infos = archive.infolist()
+        if len({info.filename for info in infos}) != len(infos):
+            raise E2EError("speech package contains duplicate paths")
+        forbidden = ("source/", "relink/", "sbom", "sources.json", "notice", "license")
+        lowered = [info.filename.lower() for info in infos]
+        if any(any(token in name for token in forbidden) for name in lowered):
+            raise E2EError("speech package contains audit-only material")
+        try:
+            manifest = json.loads(archive.read("plugin.json"))
+        except (KeyError, json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise E2EError("speech package has no valid plugin.json") from error
+    signature = manifest.get("signature", {})
+    if manifest.get("id") != "official.media.whisper":
+        raise E2EError("speech package has the wrong plugin identity")
+    key_id = signature.get("keyId")
+    fingerprint = signature.get("publicKeySha256")
+    if not isinstance(key_id, str) or not isinstance(fingerprint, str) or len(fingerprint) != 64:
+        raise E2EError("speech package has an invalid publisher identity")
+    return {"signingKeyId": key_id, "signingKeySha256": fingerprint}
+
+
+def install_plugin(runner: Runner, package: pathlib.Path, identity: dict[str, str], name: str) -> None:
+    runner.call(
+        name,
+        [
+            "plugins",
+            "install",
+            str(package),
+            "--sha256",
+            sha256_file(package),
+            "--signing-key-id",
+            identity["signingKeyId"],
+            "--signing-key-sha256",
+            identity["signingKeySha256"],
+            "--scope",
+            "global",
+        ],
+    )
+
+
+def corrupt_installed_plugin(user_data: pathlib.Path) -> pathlib.Path:
+    plugin_root = user_data / "into-markdown" / "plugins" / "official.media.whisper"
+    candidates = sorted(plugin_root.rglob("into-md-media-provider*"))
+    candidates = [path for path in candidates if path.is_file() and not path.is_symlink()]
+    if len(candidates) != 1:
+        raise E2EError("could not identify one installed speech provider to corrupt")
+    path = candidates[0]
+    path.chmod(path.stat().st_mode | stat.S_IWRITE | stat.S_IWUSR)
+    with path.open("r+b") as value:
+        byte = value.read(1)
+        if not byte:
+            raise E2EError("installed speech provider is empty")
+        value.seek(0)
+        value.write(bytes([byte[0] ^ 0x80]))
+    return path
+
+
+def corrupt_runtime(path: pathlib.Path) -> tuple[pathlib.Path, str]:
+    candidates = sorted(
+        item
+        for item in path.rglob("*")
+        if item.is_file() and not item.is_symlink() and item.stat().st_size > 0
+    )
+    if not candidates:
+        raise E2EError("OCR runtime contains no corruptible file")
+    candidate = candidates[0]
+    expected = sha256_file(candidate)
+    candidate.chmod(candidate.stat().st_mode | stat.S_IWRITE | stat.S_IWUSR)
+    with candidate.open("r+b") as value:
+        byte = value.read(1)
+        value.seek(0)
+        value.write(bytes([byte[0] ^ 0x80]))
+    return candidate, expected
+
+
+def _copy_fixture(fixtures: pathlib.Path, relative: str, destination: pathlib.Path) -> pathlib.Path:
+    source = fixtures / relative
+    if not source.is_file():
+        raise E2EError(f"fixture is unavailable: {relative}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    return destination
+
+
+def _isolated_environment(root: pathlib.Path, platform: str) -> tuple[dict[str, str], pathlib.Path]:
+    home = protect_directory(root / "home", platform)
+    cache = protect_directory(root / "cache", platform)
+    temporary = protect_directory(root / "tmp", platform)
+    user_data = protect_directory(root / "user-data", platform)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "LOCALAPPDATA": str(cache),
+            "APPDATA": str(root / "appdata"),
+            "XDG_CACHE_HOME": str(cache),
+            "XDG_CONFIG_HOME": str(root / "config"),
+            "TMP": str(temporary),
+            "TEMP": str(temporary),
+            "TMPDIR": str(temporary),
+            "INTO_MARKDOWN_USER_DATA_HOME": str(user_data),
+            "NO_PROXY": "*",
+            "no_proxy": "*",
+        }
+    )
+    return environment, user_data
+
+
+def run_concurrent_ocr(
+    binary: pathlib.Path,
+    fixtures: pathlib.Path,
+    root: pathlib.Path,
+    platform: str,
+) -> dict[str, Any]:
+    environment, _ = _isolated_environment(root, platform)
+    work = protect_directory(root / "work", platform)
+    source = _copy_fixture(fixtures, "small/ocr/ocr-english-clear-1.png", work / "ocr.png")
+    commands = []
+    started = time.monotonic()
+    for index in range(2):
+        process_work = protect_directory(work / f"process-{index}", platform)
+        output = process_work / "result.md"
+        commands.append(
+            (
+                output,
+                subprocess.Popen(
+                    [str(binary), *conversion_arguments(source, output, ["--ocr", "always", "--no-config"])],
+                    cwd=process_work,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                ),
+            )
+        )
+    results = []
+    for output, process in commands:
+        stdout, stderr = process.communicate(timeout=120)
+        if process.returncode != 0:
+            raise E2EError(f"concurrent OCR failed: {_bounded(stderr or stdout).strip()}")
+        assert_output(output, "concurrent OCR")
+        results.append({"exitCode": process.returncode, "outputSha256": sha256_file(output)})
+    directories = runtime_directories(environment, platform)
+    if len(directories) != 1:
+        raise E2EError("concurrent first OCR did not publish exactly one runtime")
+    return {"elapsedMs": round((time.monotonic() - started) * 1000), "processes": results}
+
+
+def create_runtime_reparse(path: pathlib.Path, target: pathlib.Path, platform: str) -> None:
+    target.mkdir(parents=True, exist_ok=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if platform == "windows":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(path), str(target)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise E2EError(f"cannot create Windows runtime reparse fixture: {result.stderr.strip()}")
+    else:
+        path.symlink_to(target, target_is_directory=True)
+
+
+def run_fallback_matrix(
+    binary: pathlib.Path,
+    fixtures: pathlib.Path,
+    root: pathlib.Path,
+    platform: str,
+    residual_report: list[dict[str, Any]],
+    invariant_errors: list[str],
+) -> list[dict[str, Any]]:
+    results = []
+    for scenario in ("unavailable-cache", "reparse-cache"):
+        scenario_root = protect_directory(root / scenario, platform)
+        environment, _ = _isolated_environment(scenario_root / "state", platform)
+        work = protect_directory(scenario_root / "work", platform)
+        source = _copy_fixture(
+            fixtures, "small/ocr/ocr-english-clear-1.png", work / "ocr.png"
+        )
+        cache = pathlib.Path(
+            environment["LOCALAPPDATA"]
+            if platform == "windows"
+            else environment["XDG_CACHE_HOME"]
+        )
+        if scenario == "unavailable-cache":
+            blocked = cache / "into-markdown" / "runtime"
+            blocked.parent.mkdir(parents=True, exist_ok=True)
+            blocked.write_bytes(b"not a directory")
+        else:
+            create_runtime_reparse(
+                cache / "into-markdown" / "runtime",
+                scenario_root / "reparse-target",
+                platform,
+            )
+        output = work / "result.md"
+        runner = Runner(binary, environment, work)
+        scenario_result: dict[str, Any] = {"scenario": scenario, "conclusion": "failed"}
+        try:
+            result = runner.call(
+                scenario,
+                conversion_arguments(source, output, ["--ocr", "always", "--no-config"]),
+            )
+            assert_output(output, scenario)
+            scenario_result.update({"elapsedMs": result.elapsed_ms, "conclusion": "passed"})
+        except Exception as error:
+            scenario_result["error"] = str(error)
+            invariant_errors.append(f"{scenario} did not preserve OCR availability: {error}")
+        finally:
+            record_and_clean_residuals(
+                environment,
+                "into-markdown-runtime-*",
+                scenario,
+                residual_report,
+                invariant_errors,
+            )
+        results.append(scenario_result)
+    return results
+
+
+def run_platform(
+    platform: str,
+    assets: pathlib.Path,
+    fixtures: pathlib.Path,
+    work_root: pathlib.Path,
+    version: str,
+) -> dict[str, Any]:
+    config = TARGETS[platform]
+    started = time.monotonic()
+    conclusion = "failed"
+    error = None
+    report: dict[str, Any] = {
+        "schemaVersion": 1,
+        "platform": platform,
+        "target": config["target"],
+        "version": version,
+        "cases": [],
+        "timingsMs": {},
+    }
+    try:
+        root = protect_directory(work_root, platform)
+        invariant_errors: list[str] = []
+        dispatch_residuals: list[dict[str, Any]] = []
+        fallback_residuals: list[dict[str, Any]] = []
+        binaries = protect_directory(root / "bin", platform)
+        work = protect_directory(root / "work", platform)
+        core = binaries / config["member"]
+        report["core"] = extract_single_core(assets / config["core"], platform, core)
+        skill = binaries / ("skill.exe" if platform == "windows" else "skill")
+        report["skill"] = extract_skill_binary(assets / SKILL_ARCHIVE, platform, skill)
+        package_source = assets / config["speech"]
+        package = work / config["speech"]
+        shutil.copyfile(package_source, package)
+        identity = plugin_identity(package)
+        report["speech"] = {
+            "asset": package_source.name,
+            "sha256": sha256_file(package_source),
+            "publisher": identity,
+        }
+        environment, user_data = _isolated_environment(root / "state", platform)
+        runner = Runner(core, environment, work)
+        help_result = runner.call("help", ["-h"])
+        if help_result.elapsed_ms > 1000:
+            raise E2EError(f"cold help exceeded 1000 ms: {help_result.elapsed_ms} ms")
+        version_result = runner.call("version", ["version", "--json", "--no-config"])
+        payload = json.loads(version_result.stdout)
+        if payload.get("name") != "into-md" or payload.get("version") != version:
+            raise E2EError("Core version does not match the requested release")
+        text = _copy_fixture(fixtures, "small/text/normal.txt", work / "normal.txt")
+        text_output = work / "normal.md"
+        runner.call(
+            "plain-text",
+            conversion_arguments(text, text_output, ["--no-config"]),
+        )
+        assert_output(text_output, "plain text")
+        for kind in ("docx", "pptx", "xlsx"):
+            source = _copy_fixture(fixtures, f"small/{kind}/normal.{kind}", work / f"normal.{kind}")
+            output = work / f"normal-{kind}.md"
+            runner.call(
+                f"ooxml-{kind}-ocr-off",
+                conversion_arguments(source, output, ["--ocr", "off", "--no-config"]),
+            )
+            assert_output(output, f"OOXML {kind}")
+        if runtime_directories(environment, platform):
+            raise E2EError("help/version/text/OOXML --ocr off created a runtime cache")
+
+        pdf = _copy_fixture(fixtures, "small/pdf/structures.pdf", work / "structures.pdf")
+        pdf_output = work / "structures.md"
+        pdf_case = runner.call(
+            "pdf-first-materialization",
+            conversion_arguments(pdf, pdf_output, ["--ocr", "off", "--no-config"]),
+        )
+        assert_output(pdf_output, "PDF")
+        pdf_runtimes = runtime_directories(environment, platform)
+        if len(pdf_runtimes) != 1:
+            raise E2EError("first PDF did not materialize exactly one runtime")
+        report["timingsMs"]["pdfFirstMaterialization"] = pdf_case.elapsed_ms
+
+        ocr = _copy_fixture(
+            fixtures,
+            "small/ocr/ocr-english-clear-1.png",
+            work / "ocr-english-clear-1.png",
+        )
+        ocr_output = work / "ocr.md"
+        cold = runner.call(
+            "ocr-cold",
+            conversion_arguments(ocr, ocr_output, ["--ocr", "always", "--no-config"]),
+        )
+        assert_output(ocr_output, "OCR")
+        if "clear scans verify document conversion quality" not in ocr_output.read_text(
+            encoding="utf-8"
+        ).lower():
+            raise E2EError("OCR output does not contain the fixture authority text")
+        all_runtimes = runtime_directories(environment, platform)
+        if len(all_runtimes) != 2:
+            raise E2EError("first OCR did not add exactly one runtime")
+        ocr_runtime = next(path for path in all_runtimes if path not in pdf_runtimes)
+        hot_output = work / "ocr-hot.md"
+        hot = runner.call(
+            "ocr-hot-cache-reuse",
+            conversion_arguments(ocr, hot_output, ["--ocr", "always", "--no-config"]),
+        )
+        if len(runtime_directories(environment, platform)) != 2:
+            raise E2EError("hot OCR created a redundant runtime")
+        corrupted, expected_hash = corrupt_runtime(ocr_runtime)
+        repaired_output = work / "ocr-repaired.md"
+        repair = runner.call(
+            "ocr-corrupt-cache-repair",
+            conversion_arguments(ocr, repaired_output, ["--ocr", "always", "--no-config"]),
+        )
+        if not corrupted.is_file() or sha256_file(corrupted) != expected_hash:
+            raise E2EError("OCR cache corruption was not repaired to its authenticated bytes")
+        report["timingsMs"].update(
+            {"ocrCold": cold.elapsed_ms, "ocrHot": hot.elapsed_ms, "ocrRepair": repair.elapsed_ms}
+        )
+        report["concurrentFirstOcr"] = run_concurrent_ocr(
+            core, fixtures, root / "concurrent", platform
+        )
+        report["fallbackCache"] = run_fallback_matrix(
+            core,
+            fixtures,
+            root / "fallback",
+            platform,
+            fallback_residuals,
+            invariant_errors,
+        )
+        report["fallbackRuntimeResiduals"] = fallback_residuals
+
+        install_plugin(runner, package, identity, "speech-install")
+        runner.call(
+            "speech-verify",
+            ["plugins", "verify", "official.media.whisper", "--scope", "global", "--json"],
+        )
+        audio = _copy_fixture(fixtures, "asr-quality/source/en-clear.wav", work / "en-clear.wav")
+        transcript = work / "transcript.md"
+        transcription = runner.call(
+            "speech-transcription",
+            conversion_arguments(audio, transcript, ["--ai", "audio-transcription=only"]),
+            timeout=180,
+        )
+        assert_output(transcript, "speech transcription")
+        record_and_clean_residuals(
+            environment,
+            "into-md-plugin-dispatch-*",
+            "speech-transcription",
+            dispatch_residuals,
+            invariant_errors,
+        )
+        diarized = work / "diarized.md"
+        diarization = runner.call(
+            "speech-diarization",
+            conversion_arguments(
+                audio, diarized, ["--ai", "audio-transcription=only", "--diarize"]
+            ),
+            timeout=180,
+        )
+        assert_output(diarized, "speech diarization")
+        if "speaker" not in diarized.read_text(encoding="utf-8").lower():
+            raise E2EError("diarization output has no speaker label")
+        record_and_clean_residuals(
+            environment,
+            "into-md-plugin-dispatch-*",
+            "speech-diarization",
+            dispatch_residuals,
+            invariant_errors,
+        )
+        runner.call(
+            "speech-disable",
+            ["plugins", "disable", "official.media.whisper", "--scope", "global"],
+        )
+        disabled = runner.call(
+            "speech-disabled-conversion",
+            conversion_arguments(audio, work / "disabled.md", ["--ai", "audio-transcription=only"]),
+            succeed=False,
+        )
+        if "componentunavailable" not in _bounded(disabled.stderr + disabled.stdout).lower().replace("_", ""):
+            raise E2EError("disabled speech did not return componentUnavailable")
+        runner.call(
+            "speech-enable",
+            ["plugins", "enable", "official.media.whisper", "--scope", "global"],
+        )
+        corrupt_installed_plugin(user_data)
+        runner.call(
+            "speech-damaged-verify",
+            ["plugins", "verify", "official.media.whisper", "--scope", "global", "--json"],
+            succeed=False,
+        )
+        install_plugin(runner, package, identity, "speech-repair")
+        runner.call(
+            "speech-repaired-verify",
+            ["plugins", "verify", "official.media.whisper", "--scope", "global", "--json"],
+        )
+        repaired_transcript = work / "repaired-transcript.md"
+        runner.call(
+            "speech-repaired-transcription",
+            conversion_arguments(
+                audio, repaired_transcript, ["--ai", "audio-transcription=only"]
+            ),
+            timeout=180,
+        )
+        assert_output(repaired_transcript, "repaired speech transcription")
+        record_and_clean_residuals(
+            environment,
+            "into-md-plugin-dispatch-*",
+            "speech-repaired-transcription",
+            dispatch_residuals,
+            invariant_errors,
+        )
+        runner.call(
+            "speech-remove",
+            ["plugins", "remove", "official.media.whisper", "--scope", "global"],
+        )
+        capabilities = runner.call("capabilities-after-remove", ["capabilities", "list", "--json"])
+        capabilities_json = json.loads(capabilities.stdout)
+        capability_text = json.dumps(capabilities_json, sort_keys=True).lower()
+        if "transcription" not in capability_text or "not-installed" not in capability_text:
+            raise E2EError("speech removal did not publish the not-installed capability state")
+        if sha256_file(core) != report["core"]["binarySha256"]:
+            raise E2EError("Core changed during the speech lifecycle")
+        report["timingsMs"].update(
+            {"speechTranscription": transcription.elapsed_ms, "speechDiarization": diarization.elapsed_ms}
+        )
+        report["dispatchResiduals"] = dispatch_residuals
+
+        skill_root = protect_directory(root / "skill-state", platform)
+        skill_work = protect_directory(skill_root / "work", platform)
+        skill_environment, _ = _isolated_environment(skill_root / "state", platform)
+        skill_environment["PATH"] = ""
+        skill_runner = Runner(skill, skill_environment, skill_work)
+        skill_runner.call("skill-version-empty-path", ["version", "--json", "--no-config"])
+        skill_text = _copy_fixture(fixtures, "small/text/normal.txt", skill_work / "normal.txt")
+        skill_runner.call(
+            "skill-text-empty-path",
+            conversion_arguments(skill_text, skill_work / "normal.md", ["--no-config"]),
+        )
+        skill_pdf = _copy_fixture(fixtures, "small/pdf/structures.pdf", skill_work / "structures.pdf")
+        skill_runner.call(
+            "skill-pdf-empty-path",
+            conversion_arguments(skill_pdf, skill_work / "structures.md", ["--ocr", "off", "--no-config"]),
+        )
+        skill_ocr = _copy_fixture(
+            fixtures, "small/ocr/ocr-english-clear-1.png", skill_work / "ocr.png"
+        )
+        skill_runner.call(
+            "skill-ocr-empty-path",
+            conversion_arguments(skill_ocr, skill_work / "ocr.md", ["--ocr", "always", "--no-config"]),
+        )
+        if len(runtime_directories(skill_environment, platform)) != 2:
+            raise E2EError("Skill empty-PATH PDF/OCR did not materialize its two runtimes")
+        report["skillCases"] = skill_runner.cases
+        report["cases"] = runner.cases
+        if invariant_errors:
+            raise E2EError("; ".join(invariant_errors))
+        conclusion = "passed"
+    except Exception as caught:
+        error = str(caught)
+        report["cases"] = locals().get("runner").cases if "runner" in locals() else []
+    report["elapsedMs"] = round((time.monotonic() - started) * 1000)
+    if "environment" in locals():
+        report["residualDispatchDirectories"] = [
+            str(path.relative_to(pathlib.Path(environment["TEMP"])))
+            for path in dispatch_directories(environment)
+        ]
+    report["conclusion"] = conclusion
+    report["error"] = error
+    return report
+
+
+def windows_to_wsl(path: pathlib.Path) -> str:
+    result = subprocess.run(
+        ["wsl.exe", "--exec", "wslpath", "-a", str(path.resolve())],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip().startswith("/"):
+        raise E2EError(f"cannot translate path for WSL: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def run_wsl(arguments: argparse.Namespace, assets: pathlib.Path, fixtures: pathlib.Path) -> dict:
+    script = windows_to_wsl(pathlib.Path(__file__))
+    assets_path = windows_to_wsl(assets)
+    fixtures_path = windows_to_wsl(fixtures)
+    report_path = arguments.work_root / "linux-x86_64.json"
+    report_wsl = windows_to_wsl(report_path)
+    command = [
+        "wsl.exe",
+        "--exec",
+        "python3",
+        script,
+        "--platform",
+        "linux",
+        "--assets-dir",
+        assets_path,
+        "--fixtures",
+        fixtures_path,
+        "--work-root",
+        f"/tmp/into-md-post-release-e2e-{os.getpid()}",
+        "--report",
+        report_wsl,
+        "--version",
+        arguments.version,
+        "--repository",
+        arguments.repository,
+        "--tag",
+        arguments.tag,
+    ]
+    started = time.monotonic()
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if not report_path.is_file():
+        detail = _bounded(result.stderr or result.stdout).strip()
+        raise E2EError(f"WSL Linux E2E did not write its report: {detail}")
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    reports = envelope.get("platforms", [])
+    if len(reports) != 1:
+        raise E2EError("WSL Linux E2E report does not contain one platform result")
+    report = reports[0]
+    report["wslInvocationElapsedMs"] = round((time.monotonic() - started) * 1000)
+    if result.returncode != 0 and report.get("conclusion") == "passed":
+        raise E2EError(f"WSL Linux E2E process failed: {_bounded(result.stderr or result.stdout).strip()}")
+    return report
+
+
+def parse_arguments() -> argparse.Namespace:
+    root = pathlib.Path(__file__).resolve().parents[2]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--platform", choices=("all", "windows", "linux"), default="all" if os.name == "nt" else "linux")
+    parser.add_argument("--repository", default=REPOSITORY)
+    parser.add_argument("--tag", default="0.0.3")
+    parser.add_argument("--version", default="0.0.3")
+    parser.add_argument("--assets-dir", type=pathlib.Path)
+    parser.add_argument("--fixtures", type=pathlib.Path, default=root / "fixtures")
+    parser.add_argument("--work-root", type=pathlib.Path, default=pathlib.Path.cwd() / "post-release-e2e")
+    parser.add_argument("--report", type=pathlib.Path)
+    return parser.parse_args()
+
+
+def main() -> int:
+    arguments = parse_arguments()
+    if arguments.platform in {"all", "windows"} and os.name != "nt":
+        raise E2EError("Windows E2E must be launched from Windows")
+    if arguments.platform == "linux" and os.name == "nt":
+        raise E2EError("use --platform all on Windows to run Linux through WSL")
+    fixtures = arguments.fixtures.resolve(strict=True)
+    arguments.work_root.mkdir(parents=True, exist_ok=True)
+    assets = (arguments.assets_dir or (arguments.work_root / "assets")).resolve()
+    platforms = ["windows", "linux"] if arguments.platform == "all" else [arguments.platform]
+    started = time.monotonic()
+    output: dict[str, Any] = {
+        "schemaVersion": 1,
+        "repository": arguments.repository,
+        "tag": arguments.tag,
+        "version": arguments.version,
+        "assets": {},
+        "platforms": [],
+        "conclusion": "failed",
+        "error": None,
+    }
+    report_path = arguments.report or (arguments.work_root / "post-release-e2e.json")
+    try:
+        platform_errors: list[str] = []
+        output["assets"] = acquire_assets(
+            assets, arguments.repository, arguments.tag, platforms
+        )
+        if arguments.platform in {"all", "windows"}:
+            windows_root = arguments.work_root / "windows"
+            if windows_root.exists():
+                raise E2EError(f"work root already exists: {windows_root}")
+            platform_report = run_platform(
+                "windows", assets, fixtures, windows_root, arguments.version
+            )
+            output["platforms"].append(platform_report)
+            if platform_report["conclusion"] != "passed":
+                platform_errors.append(
+                    str(platform_report["error"] or "Windows E2E failed")
+                )
+        if arguments.platform == "all":
+            platform_report = run_wsl(arguments, assets, fixtures)
+            output["platforms"].append(platform_report)
+            if platform_report["conclusion"] != "passed":
+                platform_errors.append(
+                    str(platform_report["error"] or "WSL Linux E2E failed")
+                )
+        elif arguments.platform == "linux":
+            linux_root = arguments.work_root / "linux"
+            if linux_root.exists():
+                raise E2EError(f"work root already exists: {linux_root}")
+            platform_report = run_platform(
+                "linux", assets, fixtures, linux_root, arguments.version
+            )
+            output["platforms"].append(platform_report)
+            if platform_report["conclusion"] != "passed":
+                platform_errors.append(
+                    str(platform_report["error"] or "Linux E2E failed")
+                )
+        if platform_errors:
+            raise E2EError(" | ".join(platform_errors))
+        output["conclusion"] = "passed"
+    except Exception as error:
+        output["error"] = str(error)
+    output["elapsedMs"] = round((time.monotonic() - started) * 1000)
+    write_json(report_path, output)
+    print(report_path.resolve())
+    if output["conclusion"] != "passed":
+        raise E2EError(str(output["error"] or "post-release E2E failed"))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (E2EError, OSError, subprocess.SubprocessError, zipfile.BadZipFile, json.JSONDecodeError) as error:
+        print(f"post-release-e2e: {error}", file=sys.stderr)
+        raise SystemExit(1)

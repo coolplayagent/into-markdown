@@ -36,6 +36,7 @@ py_library(
         "//tools/macos-release:library",
         "//tools:release_asset",
         "//tools/skill-release:library",
+        "//tools:release_subprocess",
     ],
 )
 
@@ -50,7 +51,10 @@ py_library(
         "//third_party/runtime-assets:models",
     ],
     imports = ["."],
-    deps = ["//tools:release_asset"],
+    deps = [
+        "//tools:release_asset",
+        "//tools:release_subprocess",
+    ],
 )
 
 py_test(
@@ -67,7 +71,11 @@ py_test(
         "//:Cargo.toml",
         "//:MODULE.bazel",
         "//:.github/workflows/platform-modular-release.yml",
+        "//:.github/workflows/ffmpeg-artifact-audit.yml",
         "//:.github/workflows/pr-fast-gate.yml",
+        "//third_party/ffmpeg:runtime-assets.json",
+        "//tools:ffmpeg_runtime.py",
+        "//tools:release_timing.py",
         "//tools/portable-release:native_acceptance.py",
         "Install.cmd",
         "Install.ps1",
@@ -87,6 +95,16 @@ py_library(
         "platform_acceptance.py",
     ],
     imports = ["."],
+    deps = ["//tools:release_subprocess"],
+)
+
+py_test(
+    name = "common_test",
+    srcs = ["common_test.py"],
+    deps = [
+        ":platform_tools_library",
+        "//tools:release_subprocess",
+    ],
 )
 
 py_test(

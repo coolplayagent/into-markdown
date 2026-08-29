@@ -2,10 +2,19 @@
 
 FFmpeg does not publish official platform binaries. This repository therefore
 pins the official 8.1.2 source tarball and detached signature, then builds one
-minimal, deterministic-configuration CLI per supported target in the opt-in
-`ffmpeg-artifact-audit` workflow. Compiler output is recorded; byte-for-byte
+minimal, deterministic-configuration CLI per supported target in the scheduled
+or manually dispatched `ffmpeg-artifact-audit` workflow. Compiler output is recorded; byte-for-byte
 reproducibility across toolchain changes is not claimed.
 Ordinary Cargo and Bazel builds do not download or execute FFmpeg.
+
+Normal product releases do not compile FFmpeg. They acquire the reviewed
+per-platform archives from this repository's reusable `runtime-assets`
+Release. `runtime-assets.json` pins each archive URL, byte count and SHA-256,
+plus the byte count and SHA-256 of every member. `tools/ffmpeg_runtime.py`
+applies the shared release downloader and rejects links, duplicates, extra
+entries and content that differs from that authority. Publishing replacement
+assets remains an explicit maintainer action after the source audit workflow;
+product release jobs never overwrite this reusable authority.
 
 The exact configuration disables GPL, nonfree, networking, autodetection,
 devices, and every component before allowlisting the CLI, audio decoders,

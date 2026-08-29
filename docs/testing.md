@@ -2,15 +2,27 @@
 
 ## PR 快速门禁与发布门禁
 
-普通 PR 固定只运行 `PR fast gate` 的四个并行检查：Linux Core/发布权威、Windows
-安装器/进程沙箱、macOS 安装器/进程沙箱，以及生产 Web/文档 smoke。每个检查有 15 分钟
-硬超时，目标墙钟为 10 分钟以内；同一 PR 的新提交会取消旧的快速门禁。PR 选择 Cargo
-作为 Rust 快速验证权威，不再在同一个提交中用 Cargo 与 Bazel 重复构建相同目标。
+普通 PR 固定只运行 `PR fast gate` 的四个并行检查：Linux x86_64 负责共享 Core/OCR/布局
+单测、发布契约与生产 Web，Linux ARM64、Windows x86_64 和 macOS ARM64 分别原生编译
+process-plugin 的平台边界并验证自身发布 authority。每个检查有 5 分钟硬超时；同一 PR 的
+新提交会取消旧门禁。缓存按平台与 `Cargo.lock` 复用，并在锁文件变化时恢复同平台最近的
+依赖闭包，避免把一次 PR 变更拆成多个串行 Cargo 图。
+
+PR 不编译 `media-runtime`、完整 CLI 或 whisper.cpp CPU 变体，也不运行耗时的真实进程矩阵；
+这些目标会重复构建大部分 Cargo 图，并且不能替代成品验证。四平台受保护发布 workflow
+继续构建完整 Core、OCR 与语音 provider，执行原生审计和真实 E2E；独立的手动/定时门禁
+继续运行完整 process-plugin、OCR 方向矩阵和 Cargo/Bazel 兼容性测试。
+
+正式发布固定为四个平台构建检查加一个聚合检查。每个平台检查的硬超时为 10 分钟，聚合
+检查为 5 分钟；构建从仓库的 `runtime-assets` Release 下载固定摘要、已审计的 FFmpeg
+运行时，不在发布任务中重新编译 FFmpeg。每个平台的 Job Summary 和机器可读报告分别记录
+FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E、发布件上传和缓存上传
+耗时，用于直接定位超过预算的阶段。
 
 四平台 Cargo/Bazel 全矩阵、WASI、语义质量、Web 安全压力和工具链拒绝矩阵仍保留为可手动
-触发的独立 workflow；Linux/Windows 与 macOS 正式发布 workflow 会在受保护的 main/tag
-上执行真实原生构建、安装、审计和 installed smoke。快速门禁用于尽早给出可操作错误，
-不能替代正式发布证据。
+触发的独立 workflow；Linux、Windows 与 macOS 正式发布 workflow 会在受保护的 main/tag
+上执行真实原生构建、审计和成品 smoke。快速门禁用于尽早给出可操作错误，不能替代正式
+发布证据。
 
 ## 可执行文档契约
 

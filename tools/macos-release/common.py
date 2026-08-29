@@ -7,16 +7,17 @@ import json
 import os
 import pathlib
 import stat
-import subprocess
-from typing import Iterable
+import sys
+
+_TOOLS_ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(_TOOLS_ROOT) not in sys.path:
+    sys.path.insert(0, str(_TOOLS_ROOT))
+
+from release_subprocess import ReleaseError, run  # noqa: E402
 
 TARGET = "aarch64-apple-darwin"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 AUTHORITY = pathlib.Path(__file__).with_name("authority.json")
-
-
-class ReleaseError(RuntimeError):
-    """Stable packaging failure."""
 
 
 def published_plugin_file(filename: str) -> str:
@@ -54,27 +55,6 @@ def regular_files(root: pathlib.Path) -> list[pathlib.Path]:
                 raise ReleaseError(f"non-regular archive entry is forbidden: {path.relative_to(root)}")
         result.extend(base / name for name in sorted(files))
     return sorted(result, key=lambda path: path.relative_to(root).as_posix())
-
-
-def run(arguments: Iterable[str], *, cwd: pathlib.Path | None = None, env: dict | None = None) -> str:
-    command = list(arguments)
-    completed = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        errors="replace",
-    )
-    if completed.returncode:
-        detail = completed.stderr.strip().splitlines()[-40:] or ["no diagnostic"]
-        rendered = "\n".join(detail)
-        raise ReleaseError(
-            f"command failed ({command[0]}, exit {completed.returncode}):\n{rendered}"
-        )
-    return completed.stdout
 
 
 def write_json(path: pathlib.Path, value: object) -> None:

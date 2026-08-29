@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "releaseTag": "runtime-assets",
+  "ffmpegVersion": "8.1.2",
+  "sourceRevision": "af8cca88c8997f2dec7c6f030e2fdbf7ebc731c2",
+  "sourceSha256": "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "url": "https://github.com/coolplayagent/into-markdown/releases/download/runtime-assets/ffmpeg-lgpl-8.1.2-aarch64-apple-darwin.zip",
+      "bytes": 3060394,
+      "sha256": "1c14a5eb88dbff1f1462f7588a7ba967163782a67edae8b5e242d18a737e9030",
+      "members": {
+        "COPYING.LGPLv2.1": {"bytes": 26517, "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"},
+        "ffmpeg-aarch64-apple-darwin": {"bytes": 2533008, "sha256": "32013227f5387c95edf67e54109d861413762e86361c740fe7a30b8f7451ea45"},
+        "ffmpeg-authority-aarch64-apple-darwin.json": {"bytes": 2292, "sha256": "d60b4f2bacf657308c9a3cd00d69eeb4dac52a6a48c0cfcf0f4521774f795354"},
+        "ffmpeg-inventory-aarch64-apple-darwin.json": {"bytes": 423, "sha256": "8f40b8c617c380b822a610d502b6018f4f9580dfb1c9c2ae9ef99a4baf63e595"},
+        "ffmpeg-relink-aarch64-apple-darwin.tar": {"bytes": 5357568, "sha256": "03f071ae5c55ba23e58066e9d299f9cc220870d9ac840e0192443c3f4bc09741"}
+      }
+    },
+    "aarch64-unknown-linux-gnu": {
+      "url": "https://github.com/coolplayagent/into-markdown/releases/download/runtime-assets/ffmpeg-lgpl-8.1.2-aarch64-unknown-linux-gnu.zip",
+      "bytes": 3156924,
+      "sha256": "1023427cef602bfc144e73602867596bca0fa9440baccae3733a199b879915c3",
+      "members": {
+        "COPYING.LGPLv2.1": {"bytes": 26517, "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"},
+        "ffmpeg-aarch64-unknown-linux-gnu": {"bytes": 2559984, "sha256": "ac34b4772bb5cd859edb4519087079af1be133251ab93d6fc751fd51c133a4bf"},
+        "ffmpeg-authority-aarch64-unknown-linux-gnu.json": {"bytes": 1982, "sha256": "c24c7852df7cbae8630049b90032fd7bb5b369a66ec7f0805ad9fed9d6838141"},
+        "ffmpeg-inventory-aarch64-unknown-linux-gnu.json": {"bytes": 443, "sha256": "0a010e06441ffcaffbbc85f257561d0d3fe22c4156daad037116ff460622539c"},
+        "ffmpeg-relink-aarch64-unknown-linux-gnu.tar": {"bytes": 5918720, "sha256": "abb2d485ab8a7f73a104a71851cb966636766bb866cd3b830f5c4da6a663836f"}
+      }
+    },
+    "x86_64-pc-windows-msvc": {
+      "url": "https://github.com/coolplayagent/into-markdown/releases/download/runtime-assets/ffmpeg-lgpl-8.1.2-x86_64-pc-windows-msvc.zip",
+      "bytes": 4406729,
+      "sha256": "a7f3c0049d46f2b8557eb081423d78bd2569eaa57028b3e1314a8782abc96c1e",
+      "members": {
+        "COPYING.LGPLv2.1": {"bytes": 26517, "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"},
+        "ffmpeg-authority-x86_64-pc-windows-msvc.json": {"bytes": 2067, "sha256": "60e42e4e3dd35020c2d7ca637aa1113edf16a7447bdfa42ac3031523ccf15a10"},
+        "ffmpeg-inventory-x86_64-pc-windows-msvc.json": {"bytes": 435, "sha256": "09e21ef6881e18bdc49f52584287a01adcd69463c50e5ea00d32037f6462a9fa"},
+        "ffmpeg-relink-x86_64-pc-windows-msvc.tar": {"bytes": 9390080, "sha256": "eadcc3f73609d088ca528908475ac9f2a3755a34a254615c25fc49d3bb54d8fa"},
+        "ffmpeg-x86_64-pc-windows-msvc.exe": {"bytes": 2571264, "sha256": "03646ab290aea43707227bcd55befadd4a95ee6bfb53b6e2f180920f76785e80"}
+      }
+    },
+    "x86_64-unknown-linux-gnu": {
+      "url": "https://github.com/coolplayagent/into-markdown/releases/download/runtime-assets/ffmpeg-lgpl-8.1.2-x86_64-unknown-linux-gnu.zip",
+      "bytes": 3171499,
+      "sha256": "dd3bd7320098824dc2a5aafbb16009d54a3776e96da84c27b6d70e56c0bb64e0",
+      "members": {
+        "COPYING.LGPLv2.1": {"bytes": 26517, "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"},
+        "ffmpeg-authority-x86_64-unknown-linux-gnu.json": {"bytes": 1980, "sha256": "405a4ecdc768b7e74e64332bc24cd27da4c7caa2a412a31c3d939e39c1267f9d"},
+        "ffmpeg-inventory-x86_64-unknown-linux-gnu.json": {"bytes": 439, "sha256": "7e5f88f1b598ddb57e3f619009077567bc5b2f028fd709db91bcaf8c5b0d5018"},
+        "ffmpeg-relink-x86_64-unknown-linux-gnu.tar": {"bytes": 6297600, "sha256": "7c71b2940124405277c9030d62715d732425a652f66a3230e4d2e230e79c8f06"},
+        "ffmpeg-x86_64-unknown-linux-gnu": {"bytes": 2813992, "sha256": "3eceb2a159672f966d3c4b8eb830a6759e5264722ab28a714f3d061e5e0da8e8"}
+      }
+    }
+  }
+}

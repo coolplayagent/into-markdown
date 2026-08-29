@@ -801,8 +801,7 @@ fn apply_inner(
         }
         "capability.install" => {
             if target == "ocr" && crate::embedded_runtime::enabled() {
-                let loaded = context.load(cwd)?;
-                crate::app::verify_capability_runtime("ocr", &loaded, cwd)?;
+                return Err(built_in_ocr_action_error("installed"));
             } else {
                 if !action.authorize_network {
                     return Err(policy("networkAuthorizationRequired"));
@@ -825,14 +824,14 @@ fn apply_inner(
                 .or(action.value.as_deref())
                 .ok_or_else(|| CliError::usage("capability.use requires a source"))?;
             let loaded = context.load(cwd)?;
-            crate::app::validate_admin_capability_source(target, source, &loaded)?;
-            config::set_capability_source(scope, cwd, target, source)?;
+            let config_source = crate::app::capability_config_source(target, source, &loaded)?;
+            config::set_capability_source(scope, cwd, target, &config_source)?;
         }
         "capability.verify" => {
-            let loaded = context.load(cwd)?;
             if target == "ocr" && crate::embedded_runtime::enabled() {
-                crate::app::verify_capability_runtime(target, &loaded, cwd)?;
+                return Err(built_in_ocr_action_error("verified as a plugin"));
             } else {
+                let loaded = context.load(cwd)?;
                 let plugin_id = capability_plugin_id(target)?;
                 verify_effective_plugin(&loaded, cwd, plugin_id)?;
             }
@@ -840,12 +839,15 @@ fn apply_inner(
         "capability.remove" => {
             require_dangerous(action)?;
             if target == "ocr" && crate::embedded_runtime::enabled() {
-                return Err(CliError::usage("OCR is built into into-md and cannot be removed"));
+                return Err(built_in_ocr_action_error("removed"));
             }
             let plugin_id = capability_plugin_id(target)?;
             run_plugin_command(context, cwd, scope, "remove", plugin_id, test_user_data_anchor)?;
         }
         "plugin.enable" | "plugin.disable" => {
+            if target == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+                return Err(built_in_ocr_action_error("managed as a plugin"));
+            }
             if action.action == "plugin.enable" {
                 require_dangerous(action)?;
             }
@@ -885,6 +887,9 @@ fn apply_inner(
             run_admin_cli(context, cwd, command, test_user_data_anchor)?;
         }
         "plugin.verify" => {
+            if target == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+                return Err(built_in_ocr_action_error("verified as a plugin"));
+            }
             let global_before = config::scope_snapshot(Scope::Global, cwd)?;
             let project_before = config::scope_snapshot(Scope::Project, cwd)?;
             let loaded = context.load(cwd)?;
@@ -901,6 +906,9 @@ fn apply_inner(
         }
         "plugin.remove" => {
             require_dangerous(action)?;
+            if target == "official.ocr.ppocrv6" && crate::embedded_runtime::enabled() {
+                return Err(built_in_ocr_action_error("removed"));
+            }
             run_plugin_command(context, cwd, scope, "remove", target, test_user_data_anchor)?;
         }
         "config.set" => {
@@ -1279,6 +1287,14 @@ fn validate_detection(output: &DetectionOutput) -> Result<(), CliError> {
 
 fn policy(code: &'static str) -> CliError {
     CliError::new(ExitClass::Policy, code, "explicit one-time authorization is required")
+}
+
+fn built_in_ocr_action_error(action: &str) -> CliError {
+    CliError::new(
+        ExitClass::Policy,
+        "capabilityBuiltIn",
+        format!("OCR is built into into-md Core and cannot be {action}"),
+    )
 }
 
 fn capability_plugin_id(capability: &str) -> Result<&'static str, CliError> {

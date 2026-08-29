@@ -71,8 +71,22 @@ jobs:
           FFMPEG_AUDIT_OUTPUT_DIR: ffmpeg-audit-output
           FFMPEG_AUDIT_PRODUCTION_SMOKE: "1"
         run: ./tools/ffmpeg-build-audit.sh
+      - name: Package reviewed runtime candidate
+        shell: bash
+        run: |
+          mkdir -p ffmpeg-runtime-candidate
+          python tools/ffmpeg_runtime.py package \
+            --target "${{ matrix.target }}" \
+            --source ffmpeg-audit-output \
+            --output "ffmpeg-runtime-candidate/ffmpeg-lgpl-8.1.2-${{ matrix.target }}.zip" \
+            > "ffmpeg-runtime-candidate/ffmpeg-lgpl-8.1.2-${{ matrix.target }}.authority.json"
       - uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-lgpl-${{ matrix.target }}
           path: ffmpeg-audit-output/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-runtime-candidate-${{ matrix.target }}
+          path: ffmpeg-runtime-candidate/*
           if-no-files-found: error

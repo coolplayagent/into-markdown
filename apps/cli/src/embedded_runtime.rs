@@ -12,6 +12,8 @@ const COMPLETE_MARKER: &str = ".complete";
 const MAX_CATALOG_BYTES: u64 = 64 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static MATERIALIZE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TEMPORARY_RUNTIME_ROOTS: std::sync::Mutex<BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(BTreeSet::new());
 
 #[derive(Debug)]
 pub(super) struct EmbeddedFile {
@@ -72,6 +74,20 @@ const fn ocr_payload() -> Payload {
 pub(super) fn register_pdfium_resolver() {
     if EMBEDDED_RUNTIME_ENABLED {
         let _ = into_markdown::install_pdfium_runtime_resolver(resolve_pdfium_library);
+    }
+}
+
+/// Remove process-private runtime fallbacks after all conversions and Web tasks have stopped.
+///
+/// The normal hash-addressed user cache is durable and is deliberately not registered here.
+/// Only roots created because that cache was unavailable or unsafe are removed.
+pub(super) fn release_temporary_runtimes() {
+    let roots = match TEMPORARY_RUNTIME_ROOTS.lock() {
+        Ok(mut roots) => std::mem::take(&mut *roots),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
+    };
+    for root in roots {
+        let _ = remove_verified_physical_tree(&root);
     }
 }
 
@@ -280,6 +296,10 @@ fn materialize(payload: Payload) -> Result<PathBuf, String> {
     let fallback = std::env::temp_dir()
         .join(format!("into-markdown-runtime-{}-{sequence}", std::process::id()));
     create_private_directory(&fallback)?;
+    TEMPORARY_RUNTIME_ROOTS
+        .lock()
+        .map_err(|_| format!("track temporary {} runtime", payload.label))?
+        .insert(fallback.clone());
     materialize_at(&fallback, payload)
 }
 
@@ -933,6 +953,22 @@ mod tests {
         let published = materialize_at(&base, payload).unwrap();
         assert!(!stale.exists());
         verify_tree(&published, payload).unwrap();
+    }
+
+    #[test]
+    fn process_temporary_runtime_roots_are_removed_explicitly() {
+        release_temporary_runtimes();
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("into-markdown-runtime-test");
+        create_private_directory(&root).unwrap();
+        fs::write(root.join("payload"), b"payload").unwrap();
+        private_file_permissions(&root.join("payload"), false).unwrap();
+        TEMPORARY_RUNTIME_ROOTS.lock().unwrap().insert(root.clone());
+
+        release_temporary_runtimes();
+
+        assert!(!root.exists());
+        assert!(TEMPORARY_RUNTIME_ROOTS.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]

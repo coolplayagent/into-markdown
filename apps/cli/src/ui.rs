@@ -845,6 +845,9 @@ async fn start_capability_check(
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
     }
+    if capability == "ocr" && crate::embedded_runtime::enabled() {
+        return rejection(StatusCode::CONFLICT, "capabilityBuiltIn");
+    }
     let Ok((plugin, shared)) = crate::app::capability_plugin(&capability) else {
         return rejection(StatusCode::NOT_FOUND, "unknownCapability");
     };
@@ -1075,6 +1078,9 @@ async fn install_capability(
     }
     if !request_body_is_empty(&headers) {
         return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
+    }
+    if id == "ocr" && crate::embedded_runtime::enabled() {
+        return rejection(StatusCode::CONFLICT, "capabilityBuiltIn");
     }
     let command = match id.as_str() {
         "ocr" => crate::args::SetupCommand::Ocr { insecure: false, allow_private_network: false },
@@ -1470,7 +1476,9 @@ fn capability_component(views: &[crate::app::CapabilityView], capability: &str) 
         return ComponentDto {
             available: true,
             code: "available",
-            detail: if view.current_source.starts_with("provider:") {
+            detail: if view.current_source == "core:ocr" {
+                "the OCR capability is built into Core and ready"
+            } else if view.current_source.starts_with("provider:") {
                 "the configured remote capability source is ready"
             } else {
                 "the signed local capability package metadata is ready"
@@ -2425,23 +2433,44 @@ mod tests {
     }
 
     #[test]
-    fn checking_capability_is_neutral_instead_of_an_install_failure() {
+    fn checking_plugin_capability_is_neutral_instead_of_an_install_failure() {
         let view = crate::app::CapabilityView {
-            id: "ocr".into(),
-            name: "图片 OCR".into(),
+            id: "transcription".into(),
+            name: "语音转写".into(),
             status: "checking".into(),
             local_status: "checking".into(),
-            current_source: "plugin:official.ocr.ppocrv6/ocr".into(),
-            current_source_name: "本地 OCR（PP-OCR）".into(),
-            sources: vec!["plugin:official.ocr.ppocrv6/ocr".into()],
+            current_source: "plugin:official.media.whisper/transcription".into(),
+            current_source_name: "本地语音（Whisper）".into(),
+            sources: vec!["plugin:official.media.whisper/transcription".into()],
             version: None,
             local_version: None,
             last_verified_at_ms: None,
         };
-        let component = capability_component(&[view], "ocr");
+        let component = capability_component(&[view], "transcription");
         assert!(!component.available);
         assert_eq!(component.code, "checking");
         assert!(!component.detail.contains("install"));
+    }
+
+    #[test]
+    fn built_in_ocr_status_does_not_describe_a_plugin() {
+        let view = crate::app::CapabilityView {
+            id: "ocr".into(),
+            name: "图片 OCR".into(),
+            status: "ready".into(),
+            local_status: "ready".into(),
+            current_source: "core:ocr".into(),
+            current_source_name: "内置 OCR".into(),
+            sources: vec!["core:ocr".into(), "off".into()],
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            local_version: Some(env!("CARGO_PKG_VERSION").into()),
+            last_verified_at_ms: None,
+        };
+        let component = capability_component(&[view], "ocr");
+        assert!(component.available);
+        assert_eq!(component.code, "available");
+        assert!(component.detail.contains("built into Core"));
+        assert!(!component.detail.contains("plugin"));
     }
 
     async fn request(port: u16, request: &str) -> String {
