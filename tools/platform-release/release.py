@@ -297,27 +297,34 @@ def stage_ggml_runtime(
     variants = GGML_CPU_VARIANTS.get(target)
     if variants is None:
         return []
-    candidates = [
-        path
-        for path in sorted((build_root / "release/build").glob("whisper-rs-sys-*/out"))
-        if (path / "bin" / variants[0]).is_file()
-    ]
-    if len(candidates) != 1:
-        raise ReleaseError(
-            f"GGML runtime output is absent or ambiguous for {target}: {candidates}"
-        )
-    root = candidates[0]
-    mapping = {name: root / "bin" / name for name in variants}
+    roots = sorted((build_root / "release/build").glob("whisper-rs-sys-*/out"))
+    names = list(variants)
     if target == "x86_64-pc-windows-msvc":
-        mapping.update({name: root / "bin" / name for name in ("whisper.dll", "ggml.dll", "ggml-base.dll")})
+        names.extend(("whisper.dll", "ggml.dll", "ggml-base.dll"))
+        relative = {name: pathlib.PurePosixPath("bin") / name for name in names}
     else:
-        mapping.update(
-            {
-                "libwhisper.so.1": root / "lib/libwhisper.so.1.8.3",
-                "libggml.so.0": root / "lib/libggml.so.0.9.5",
-                "libggml-base.so.0": root / "lib/libggml-base.so.0.9.5",
-            }
+        relative = {
+            **{name: pathlib.PurePosixPath("bin") / name for name in names},
+            "libwhisper.so.1": pathlib.PurePosixPath("lib/libwhisper.so.1.8.3"),
+            "libggml.so.0": pathlib.PurePosixPath("lib/libggml.so.0.9.5"),
+            "libggml-base.so.0": pathlib.PurePosixPath("lib/libggml-base.so.0.9.5"),
+        }
+    candidates = []
+    for root in roots:
+        mapping = {name: root / path for name, path in relative.items()}
+        if all(path.is_file() and not path.is_symlink() for path in mapping.values()):
+            candidates.append(mapping)
+    if not candidates:
+        raise ReleaseError(
+            f"GGML runtime output is absent for {target}: {roots}"
         )
+    fingerprints = {
+        tuple((name, sha256(path)) for name, path in sorted(mapping.items()))
+        for mapping in candidates
+    }
+    if len(fingerprints) != 1:
+        raise ReleaseError(f"GGML runtime outputs disagree for {target}: {roots}")
+    mapping = candidates[0]
     staged = []
     for name, source in sorted(mapping.items()):
         output = destination / name

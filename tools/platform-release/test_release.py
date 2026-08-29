@@ -504,23 +504,47 @@ class PlatformReleaseTests(unittest.TestCase):
     def test_stage_ggml_runtime_requires_and_copies_exact_windows_closure(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
-            output = root / "release/build/whisper-rs-sys-fixture/out"
             expected = {
                 *release_module.GGML_CPU_VARIANTS["x86_64-pc-windows-msvc"],
                 "whisper.dll",
                 "ggml.dll",
                 "ggml-base.dll",
             }
-            for filename in expected:
-                path = output / "bin" / filename
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(filename.encode())
+            for identity in ("fixture-a", "fixture-b"):
+                output = root / f"release/build/whisper-rs-sys-{identity}/out"
+                for filename in expected:
+                    path = output / "bin" / filename
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(filename.encode())
             destination = root / "speech/bin"
             staged = release_module.stage_ggml_runtime(
                 root, "x86_64-pc-windows-msvc", destination
             )
             self.assertEqual({path.name for path in staged}, expected)
             self.assertEqual({path.name for path in destination.iterdir()}, expected)
+
+    def test_stage_ggml_runtime_rejects_nonidentical_duplicate_closures(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            expected = {
+                *release_module.GGML_CPU_VARIANTS["x86_64-pc-windows-msvc"],
+                "whisper.dll",
+                "ggml.dll",
+                "ggml-base.dll",
+            }
+            for identity in ("fixture-a", "fixture-b"):
+                output = root / f"release/build/whisper-rs-sys-{identity}/out"
+                for filename in expected:
+                    path = output / "bin" / filename
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(filename.encode())
+            changed = root / "release/build/whisper-rs-sys-fixture-b/out/bin/ggml.dll"
+            changed.write_bytes(b"different")
+
+            with self.assertRaisesRegex(ReleaseError, "outputs disagree"):
+                release_module.stage_ggml_runtime(
+                    root, "x86_64-pc-windows-msvc", root / "speech/bin"
+                )
 
     def test_release_build_rejects_a_missing_helper_product(self) -> None:
         with tempfile.TemporaryDirectory() as name:
