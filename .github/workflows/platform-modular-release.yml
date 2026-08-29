@@ -122,17 +122,6 @@ jobs:
             ~/.cargo/git/db
           key: release-cargo-registry-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
       - uses: actions/cache/restore@v4
-        id: build-cache
-        if: inputs.signing_mode == 'unsigned'
-        with:
-          path: ${{ runner.temp }}/release-work/build
-          # whisper-rs-sys forwards GGML_* variables dynamically and does not
-          # declare them as Cargo rerun inputs. Put the explicit CPU policy
-          # ahead of the source hash so no target cache built under a different
-          # native-ISA policy can be restored.
-          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'third_party/whisper-rs-sys/**', 'tools/**/*.rs', 'Cargo.toml') }}
-          restore-keys: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-
-      - uses: actions/cache/restore@v4
         id: native-cache
         with:
           path: ${{ runner.temp }}/release-work/cache

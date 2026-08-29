@@ -182,10 +182,9 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertEqual(platform_release.count("stream_stdout=False"), 2)
         self.assertEqual(macos_release.count("stream_stdout=False"), 2)
         self.assertEqual(rust_package.count("stream_stdout=False"), 1)
+        self.assertEqual(workflow.count("uses: actions/cache/restore@v4"), 2)
         self.assertEqual(workflow.count("uses: actions/cache/save@v4"), 2)
-        self.assertEqual(
-            workflow.count("path: ${{ runner.temp }}/release-work/build"), 1
-        )
+        self.assertNotIn("path: ${{ runner.temp }}/release-work/build", workflow)
         for step in [
             "Start artifact upload timing",
             "Record artifact upload timing",
@@ -271,16 +270,13 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("| Out-Null", uninstall_ps1)
         self.assertEqual(uninstall_cmd.count("Into Markdown was removed successfully."), 0)
 
-    def test_native_release_reuses_fixed_toolchain_cargo_dependencies(self) -> None:
+    def test_native_release_caches_only_registry_and_immutable_inputs(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("${{ runner.temp }}/release-work/build", workflow)
-        self.assertIn(
-            "key: release-cargo-only-v2-${{ matrix.target }}-"
-            "${{ hashFiles('Cargo.lock') }}",
-            workflow,
-        )
+        self.assertNotIn("${{ runner.temp }}/release-work/build", workflow)
+        self.assertNotIn("release-cargo-only-", workflow)
+        self.assertIn("~/.cargo/registry", workflow)
         self.assertIn("${{ runner.temp }}/release-work/cache", workflow)
         self.assertIn(
             "key: release-native-inputs-v1-${{ matrix.target }}-"
@@ -625,16 +621,12 @@ class PlatformReleaseTests(unittest.TestCase):
         self.assertIn("-mamx-int8", workflow)
         self.assertNotIn("GGML_CPU_ALL_VARIANTS=OFF", workflow)
 
-    def test_release_cargo_cache_is_bound_to_native_cpu_policy(self) -> None:
+    def test_release_does_not_restore_stale_cargo_target_outputs(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("release-cargo-only-v2-", workflow)
-        self.assertIn(
-            "hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json')",
-            workflow,
-        )
-        self.assertNotIn("release-cargo-only-v1-", workflow)
+        self.assertNotIn("release-cargo-only-", workflow)
+        self.assertNotIn("id: build-cache", workflow)
 
     def test_linux_release_does_not_bootstrap_a_second_build_system(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
