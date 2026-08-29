@@ -165,12 +165,21 @@ class PlatformReleaseTests(unittest.TestCase):
         for forbidden in ["installed-smoke", "platform_acceptance.py", "into-md-installer"]:
             self.assertNotIn(forbidden, workflow)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
-        self.assertEqual(workflow.count("timeout_minutes: 10"), 4)
-        self.assertNotIn("timeout_minutes: 30", workflow)
+        self.assertEqual(workflow.count("timeout_minutes: 30"), 4)
         self.assertEqual(workflow.count("    timeout-minutes: 5"), 1)
         windows = workflow.index("target: x86_64-pc-windows-msvc")
-        self.assertIn("timeout_minutes: 10", workflow[windows : windows + 100])
+        self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
+        self.assertEqual(workflow.count("uses: actions/cache/save@v4"), 2)
+        self.assertEqual(
+            workflow.count("path: ${{ runner.temp }}/release-work/build"), 1
+        )
+        for step in [
+            "Record artifact upload timing",
+            "Record cache upload timing and publish summary",
+        ]:
+            position = workflow.index(f"- name: {step}")
+            self.assertIn("shell: bash", workflow[position : position + 180])
 
     def test_release_build_only_validates_without_mutating_github_release(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
@@ -357,7 +366,7 @@ class PlatformReleaseTests(unittest.TestCase):
                     output / "release",
                 )
             builds = [command for command in commands if command[:2] == ["cargo", "build"]]
-            self.assertEqual(len(builds), 3)
+            self.assertEqual(len(builds), 1)
             selections = [
                 builds[0][index : index + 4]
                 for index, value in enumerate(builds[0])
@@ -371,11 +380,22 @@ class PlatformReleaseTests(unittest.TestCase):
                         *RELEASE_BUILD_PRODUCTS,
                         WINDOWS_CORE_PREWARM_PRODUCT,
                     ]
+                    + [
+                        (
+                            "into-markdown-official-provider",
+                            release_module.PROVIDER_BUILD_PRODUCTS[0][0],
+                        )
+                    ]
                 ],
             )
+            provider_position = builds[0].index("into-markdown-official-provider")
             self.assertEqual(
-                [(build[build.index("--bin") + 1], build[build.index("--features") + 1]) for build in builds[1:]],
-                list(release_module.PROVIDER_BUILD_PRODUCTS),
+                builds[0][provider_position + 1 :],
+                [
+                    value
+                    for binary, _feature in release_module.PROVIDER_BUILD_PRODUCTS
+                    for value in ("--bin", binary)
+                ],
             )
 
     def test_release_build_disables_native_ggml_cpu_tuning(self) -> None:
@@ -397,7 +417,7 @@ class PlatformReleaseTests(unittest.TestCase):
 
             with mock.patch.object(release_module, "run", side_effect=fake_run):
                 release_module.build("x86_64-unknown-linux-gnu", output)
-            self.assertEqual(len(environments), 3)
+            self.assertEqual(len(environments), 1)
             self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
             self.assertEqual(environments[0]["GGML_CPU_ALL_VARIANTS"], "ON")
             for key in (

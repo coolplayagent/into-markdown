@@ -45,22 +45,22 @@ jobs:
             runner: ubuntu-24.04
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: x86_64-unknown-linux-gnu
-            timeout_minutes: 10
+            timeout_minutes: 30
           - label: Linux ARM64
             runner: ubuntu-24.04-arm
             container: docker.io/rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6
             target: aarch64-unknown-linux-gnu
-            timeout_minutes: 10
+            timeout_minutes: 30
           - label: Windows x86_64
             runner: windows-2025
             container: ''
             target: x86_64-pc-windows-msvc
-            timeout_minutes: 10
+            timeout_minutes: 30
           - label: macOS Apple Silicon
             runner: macos-14
             container: ''
             target: aarch64-apple-darwin
-            timeout_minutes: 10
+            timeout_minutes: 30
     steps:
       - name: Bootstrap fixed Linux container
         if: runner.os == 'Linux'
@@ -275,6 +275,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Record artifact upload timing
+        shell: bash
         run: |
           python tools/release_timing.py finish \
             --report "$RUNNER_TEMP/release-timings.json" \
@@ -292,17 +293,13 @@ jobs:
             ~/.cargo/git/db
           key: release-cargo-registry-v1-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
       - uses: actions/cache/save@v4
-        if: inputs.signing_mode == 'unsigned' && steps.build-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/release-work/build
-          key: release-cargo-only-v2-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/platform-release/cpu-policy.json') }}-${{ hashFiles('apps/**/*.rs', 'crates/**/*.rs', 'third_party/whisper-rs-sys/**', 'tools/**/*.rs', 'Cargo.toml') }}
-      - uses: actions/cache/save@v4
         if: steps.native-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}/release-work/cache
           key: release-native-inputs-v1-${{ matrix.target }}-${{ hashFiles('tools/platform-release/authority.json', 'tools/macos-release/authority.json') }}
       - name: Record cache upload timing and publish summary
         if: always()
+        shell: bash
         run: |
           python tools/release_timing.py finish \
             --report "$RUNNER_TEMP/release-timings.json" \
