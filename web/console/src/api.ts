@@ -123,7 +123,8 @@ function isFormatAdmin(value: unknown): value is FormatAdmin {
     && (value.installHint === undefined || safeText(value.installHint, 512));
 }
 function isCapabilityAdmin(value: unknown): value is CapabilityAdmin {
-  const sourceRef = (item: unknown) => item === "off" || typeof item === "string" && /^(plugin|provider):[A-Za-z0-9._-]+\/[a-z][a-z0-9-]{0,63}$/.test(item);
+  const sourceRef = (item: unknown) => item === "off" || item === "core:ocr"
+    || typeof item === "string" && /^(plugin|provider):[A-Za-z0-9._-]+\/[a-z][a-z0-9-]{0,63}$/.test(item);
   const status = (item: unknown) => ["not-installed", "downloading", "verifying", "ready", "update-available", "corrupt", "incompatible", "blocked", "disabled"].includes(String(item));
   return isObject(value) && ["ocr", "transcription", "diarization"].includes(String(value.id))
     && status(value.status) && status(value.localStatus)

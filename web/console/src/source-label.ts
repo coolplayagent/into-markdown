@@ -8,6 +8,7 @@ const pluginNames: Record<string, [string, string]> = {
 export function capabilitySourceLabel(source: string | undefined, locale: Locale,
   friendlyName?: string): string {
   if (!source || source === "off") return locale === "zh-CN" ? "未启用" : "Off";
+  if (source === "core:ocr") return locale === "zh-CN" ? "内置 OCR" : "Built-in OCR";
   if (friendlyName && friendlyName !== source && !friendlyName.startsWith("plugin:")
     && !friendlyName.startsWith("provider:")) return friendlyName;
   const [, identity = source] = source.split(":", 2);

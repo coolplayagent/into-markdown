@@ -54,6 +54,7 @@ jobs:
             tools.platform-release.test_pr_fast_gate \
             tools.portable-release.test_assemble \
             tools.portable-release.test_native_acceptance \
+            tools.portable-release.test_post_release_e2e \
             tools.release_evidence_test \
             tools.release_metadata_test \
             tools.skill-release.test_skill_release

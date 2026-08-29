@@ -46,6 +46,11 @@ fn main() {
             user_data_anchor: None,
         },
     );
+    // `app` retains verified process-plugin snapshots in a process-wide cache so one Web/CLI
+    // invocation never recopies a 500+ MiB speech runtime. Static `OnceLock` contents are not
+    // dropped automatically at process exit, so release them explicitly after all work stops.
+    app::release_process_snapshots();
+    embedded_runtime::release_temporary_runtimes();
     if let Err(error) = result {
         if error.is_broken_pipe() {
             return;

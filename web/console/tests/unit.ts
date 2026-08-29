@@ -185,8 +185,8 @@ const availableApi: ApiClient = {
 
 function capabilitySnapshot(ready: boolean) {
   const status = ready ? "ready" as const : "not-installed" as const;
-  const source = (id: "ocr" | "transcription" | "diarization") => ready ? `plugin:official.${id}/${id}` : "off";
-  return { schemaVersion: 2 as const, generation: 1, checking: false, checkedAtMs: 1, capabilities: (["ocr", "transcription", "diarization"] as const).map((id) => ({ id, name: id, status, localStatus: status, currentSource: source(id), currentSourceName: ready ? "Local plugin" : "Off", sources: [source(id), "off"] })) };
+  const source = (id: "ocr" | "transcription" | "diarization") => ready ? id === "ocr" ? "core:ocr" : `plugin:official.${id}/${id}` : "off";
+  return { schemaVersion: 2 as const, generation: 1, checking: false, checkedAtMs: 1, capabilities: (["ocr", "transcription", "diarization"] as const).map((id) => ({ id, name: id, status, localStatus: status, currentSource: source(id), currentSourceName: ready ? id === "ocr" ? "Built-in OCR" : "Local plugin" : "Off", sources: [source(id), "off"] })) };
 }
 
 test("session handoff clears every fragment and survives only in the current tab", () => {
@@ -664,7 +664,7 @@ test("workbench keeps OCR neutral while the fast capability snapshot is pending"
   assert.equal(window.document.body.textContent.includes("Install and verify"), false);
   assert.equal(legacyStatusRequests, 0, "the workbench must not block the fast snapshot on the legacy full status route");
   resolveSnapshot(capabilitySnapshot(true));
-  await waitForText(window, "Local plugin");
+  await waitForText(window, "Built-in OCR");
   assert.equal(window.document.body.textContent.includes("Install and verify"), false);
 });
 
@@ -808,9 +808,9 @@ test("remote OCR requires nearby network and provider authorization without enab
   const uploaded: WorkbenchOptions[] = [];
   const api: ApiClient = {
     ...availableApi,
-    async capabilitySnapshot() { const base = capabilitySnapshot(false); return { ...base, capabilities: base.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "ready", currentSource: "provider:bailian/ocr", currentSourceName: "Bailian", sources: ["provider:bailian/ocr", "plugin:official.ocr/ocr", "off"] } : item) }; },
+    async capabilitySnapshot() { const base = capabilitySnapshot(false); return { ...base, capabilities: base.capabilities.map((item) => item.id === "ocr" ? { ...item, status: "ready", localStatus: "ready", currentSource: "provider:bailian/ocr", currentSourceName: "Bailian", sources: ["provider:bailian/ocr", "core:ocr", "off"] } : item) }; },
     async status() { return { ...(await availableApi.status()), imageOcr: { available: true, code: "available", detail: "ready" } }; },
-    async admin() { return { ...(await availableApi.admin()), capabilities: [{ id: "ocr", status: "ready", localStatus: "ready", currentSource: "provider:bailian/ocr", sources: ["provider:bailian/ocr", "plugin:official.ocr/ocr", "off"] }] }; },
+    async admin() { return { ...(await availableApi.admin()), capabilities: [{ id: "ocr", status: "ready", localStatus: "ready", currentSource: "provider:bailian/ocr", sources: ["provider:bailian/ocr", "core:ocr", "off"] }] }; },
     async upload(_file, options) { uploaded.push(options); return task(); },
     async watchTask() {},
   };

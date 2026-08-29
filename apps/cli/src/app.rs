@@ -48,6 +48,22 @@ static PROCESS_SNAPSHOTS: OnceLock<
     Mutex<BTreeMap<String, into_markdown_plugin_manager::PreparedProcessPlugin>>,
 > = OnceLock::new();
 
+/// Drop every request-scoped immutable plugin snapshot before the CLI process exits.
+///
+/// `OnceLock` values are not destroyed during normal process teardown. Leaving the prepared
+/// plugins in this static cache would therefore strand one complete speech runtime in the
+/// operating-system temporary directory after every CLI invocation. The Web service still keeps
+/// the cache for its full lifetime; the binary calls this only after [`run`] has returned.
+pub(crate) fn release_process_snapshots() {
+    let Some(cache) = PROCESS_SNAPSHOTS.get() else {
+        return;
+    };
+    match cache.lock() {
+        Ok(mut snapshots) => snapshots.clear(),
+        Err(poisoned) => poisoned.into_inner().clear(),
+    }
+}
+
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CliPluginOperation {
@@ -710,6 +726,9 @@ pub(crate) struct CapabilityInspection {
     pub fingerprint: String,
 }
 
+const CORE_OCR_SOURCE: &str = "core:ocr";
+const INTERNAL_OCR_SOURCE: &str = "plugin:official.ocr.ppocrv6/ocr";
+
 fn run_capabilities(
     command: Option<CapabilitiesCommand>,
     json: bool,
@@ -786,8 +805,8 @@ fn run_capabilities(
             run_capability_verify(&id, json, loaded, context)
         }
         Some(CapabilitiesCommand::Use { id, source, scope }) => {
-            validate_capability_source(&id, &source, loaded)?;
-            let path = config::set_capability_source(scope, &context.cwd, &id, &source)?;
+            let config_source = capability_config_source(&id, &source, loaded)?;
+            let path = config::set_capability_source(scope, &context.cwd, &id, &config_source)?;
             writeln!(context.stdout, "{}\t{}\t{}", id, source, path.display())?;
             Ok(())
         }
@@ -950,8 +969,11 @@ fn capability_views_from_inspections(
         .into_iter()
         .map(|(id, plugin_id, plugin_capability)| {
             let route = capability_route(loaded, id);
-            let local = format!("plugin:{plugin_id}/{plugin_capability}");
             let inspection = &inspected[plugin_id];
+            let built_in_ocr = id == "ocr" && matches!(inspection, PluginInspection::BuiltIn);
+            let internal_local = format!("plugin:{plugin_id}/{plugin_capability}");
+            let local =
+                if built_in_ocr { CORE_OCR_SOURCE.to_owned() } else { internal_local.clone() };
             let (local_status, version) = match inspection {
                 PluginInspection::BuiltIn => ("ready", Some(env!("CARGO_PKG_VERSION").to_owned())),
                 PluginInspection::Ready(installed) => ("ready", Some(installed.version.clone())),
@@ -975,8 +997,13 @@ fn capability_views_from_inspections(
             }
             sources.push("off".into());
             let current_source = route.primary.clone().unwrap_or_else(|| {
-                if local_status == "not-installed" { "off".into() } else { local }
+                if local_status == "not-installed" { "off".into() } else { internal_local }
             });
+            let current_source = if built_in_ocr && current_source == INTERNAL_OCR_SOURCE {
+                CORE_OCR_SOURCE.to_owned()
+            } else {
+                current_source
+            };
             let remote_ready = current_source
                 .strip_prefix("provider:")
                 .and_then(|value| value.split_once('/'))
@@ -985,6 +1012,7 @@ fn capability_views_from_inspections(
             let status = match current_source.as_str() {
                 "off" if local_ready => "disabled",
                 "off" => "not-installed",
+                CORE_OCR_SOURCE if built_in_ocr => "ready",
                 value if value.starts_with("plugin:") && local_ready => "ready",
                 value if value.starts_with("plugin:") => local_status,
                 value if value.starts_with("provider:") && remote_ready => "ready",
@@ -1036,6 +1064,9 @@ pub(crate) fn capability_plugin_name(id: &str) -> &'static str {
 fn capability_source_name(source: &str) -> String {
     if source == "off" {
         return "关闭".into();
+    }
+    if source == CORE_OCR_SOURCE {
+        return "内置 OCR".into();
     }
     if let Some((plugin_id, _)) = source.strip_prefix("plugin:").and_then(|v| v.split_once('/')) {
         return capability_plugin_name(plugin_id).into();
@@ -1109,6 +1140,13 @@ fn validate_capability_source(
     use std::str::FromStr as _;
     let capability = CapabilityId::from_str(id)
         .map_err(|_| CliError::usage(format!("unknown capability '{id}'")))?;
+    if source == CORE_OCR_SOURCE {
+        return if capability == CapabilityId::Ocr && crate::embedded_runtime::enabled() {
+            Ok(())
+        } else {
+            Err(CliError::usage(format!("source '{source}' cannot provide '{id}'")))
+        };
+    }
     let parsed = CapabilitySourceRef::from_str(source)
         .map_err(|_| CliError::usage(format!("invalid capability source '{source}'")))?;
     match parsed {
@@ -1152,12 +1190,17 @@ fn validate_capability_source(
     }
 }
 
-pub(crate) fn validate_admin_capability_source(
+pub(crate) fn capability_config_source(
     id: &str,
     source: &str,
     loaded: &LoadedConfig,
-) -> Result<(), CliError> {
-    validate_capability_source(id, source, loaded)
+) -> Result<String, CliError> {
+    validate_capability_source(id, source, loaded)?;
+    Ok(if id == "ocr" && source == CORE_OCR_SOURCE {
+        INTERNAL_OCR_SOURCE.to_owned()
+    } else {
+        source.to_owned()
+    })
 }
 
 #[derive(Serialize)]
@@ -7541,6 +7584,26 @@ api_key_env = "MISSING_LOCAL_ASR_TEST_KEY"
             Some("audio-transcription")
         );
         assert_eq!(provider_capability_id(&capabilities, "diarization"), None);
+    }
+
+    #[test]
+    fn built_in_ocr_projects_a_core_authority_without_plugin_management() {
+        let temporary = tempfile::tempdir().unwrap();
+        let loaded = crate::config::load(temporary.path(), &[], true, None, None).unwrap();
+        let inspected = std::collections::BTreeMap::from([
+            ("official.ocr.ppocrv6", PluginInspection::BuiltIn),
+            ("official.media.whisper", PluginInspection::NotInstalled),
+        ]);
+        let capabilities = capability_views_from_inspections(&loaded, &inspected).unwrap();
+        let ocr = capabilities.iter().find(|item| item.id == "ocr").unwrap();
+        assert_eq!(ocr.status, "ready");
+        assert_eq!(ocr.local_status, "ready");
+        assert_eq!(ocr.current_source, CORE_OCR_SOURCE);
+        assert_eq!(ocr.current_source_name, "内置 OCR");
+        assert_eq!(ocr.sources, [CORE_OCR_SOURCE, "off"]);
+        assert!(ocr.sources.iter().all(|source| !source.starts_with("plugin:")));
+        assert_eq!(ocr.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(ocr.local_version, ocr.version);
     }
 
     #[test]
