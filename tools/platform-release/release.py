@@ -263,20 +263,19 @@ def build(target: str, output: pathlib.Path) -> pathlib.Path:
     products = list(RELEASE_BUILD_PRODUCTS)
     if target == "x86_64-pc-windows-msvc":
         products.append(WINDOWS_CORE_PREWARM_PRODUCT)
+    # Compile every helper and both provider entrypoints in one Cargo feature
+    # graph.  Building the OCR and media provider in separate invocations made
+    # Cargo rebuild their shared API/engine closure once per feature set (more
+    # than six minutes on the Windows release runner).  The provider package's
+    # default feature set intentionally contains both runtimes, matching the
+    # single-invocation macOS authority.
     command = ["cargo", "build", "--release", "--locked"]
     for package, binary in products:
         command.extend(["-p", package, "--bin", binary])
+    command.extend(["-p", "into-markdown-official-provider"])
+    for binary, _feature in PROVIDER_BUILD_PRODUCTS:
+        command.extend(["--bin", binary])
     run(command, cwd=ROOT, env=environment)
-    for binary, feature in PROVIDER_BUILD_PRODUCTS:
-        run(
-            [
-                "cargo", "build", "--release", "--locked", "-p",
-                "into-markdown-official-provider", "--bin", binary,
-                "--no-default-features", "--features", feature,
-            ],
-            cwd=ROOT,
-            env=environment,
-        )
     release_bin = output / "release"
     missing = [
         executable_name(binary, target)
