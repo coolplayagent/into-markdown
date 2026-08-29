@@ -469,7 +469,13 @@ def write_plugin_declarations(
             "components": components,
         },
     )
-    inputs = json.loads(run([str(projection_tool), "generate", str(request)], cwd=ROOT))
+    inputs = json.loads(
+        run(
+            [str(projection_tool), "generate", str(request)],
+            cwd=ROOT,
+            stream_stdout=False,
+        )
+    )
     for key in ["notice", "third_party_notices", "sbom", "sources"]:
         item = inputs[key]
         destination = declaration_root / item["path"]
@@ -657,7 +663,9 @@ def package_plugins(
 def write_release_inputs(output: pathlib.Path, projection: pathlib.Path, target: str) -> None:
     request = output.parent / "core-release-request.json"
     write_json(request, {"schema_version": 1, "target": target, "artifact": "core", "version": VERSION, "source_revision": source_revision(), "components": CORE_COMPONENTS})
-    inputs = json.loads(run([projection, "generate", request], cwd=ROOT))
+    inputs = json.loads(
+        run([projection, "generate", request], cwd=ROOT, stream_stdout=False)
+    )
     for key in ["notice", "third_party_notices", "sbom", "sources", "core_catalog"]:
         item = inputs[key]
         destination = output / item["path"]

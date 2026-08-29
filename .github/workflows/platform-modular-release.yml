@@ -267,6 +267,7 @@ jobs:
               --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" --wait
           done
       - name: Start artifact upload timing
+        shell: bash
         run: python tools/release_timing.py mark --marker "$RUNNER_TEMP/artifact-upload.started"
       - uses: actions/upload-artifact@v4
         with:
@@ -275,15 +276,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Record artifact upload timing
+        if: always()
         shell: bash
         run: |
-          python tools/release_timing.py finish \
-            --report "$RUNNER_TEMP/release-timings.json" \
-            --target "${{ matrix.target }}" \
-            --phase artifact-upload \
-            --marker "$RUNNER_TEMP/artifact-upload.started"
+          if test -f "$RUNNER_TEMP/artifact-upload.started"; then
+            python tools/release_timing.py finish \
+              --report "$RUNNER_TEMP/release-timings.json" \
+              --target "${{ matrix.target }}" \
+              --phase artifact-upload \
+              --marker "$RUNNER_TEMP/artifact-upload.started"
+          fi
       - name: Start cache upload timing
-        if: always()
+        if: success()
+        shell: bash
         run: python tools/release_timing.py mark --marker "$RUNNER_TEMP/cache-upload.started"
       - uses: actions/cache/save@v4
         if: steps.cargo-cache.outputs.cache-hit != 'true'
@@ -301,25 +306,29 @@ jobs:
         if: always()
         shell: bash
         run: |
-          python tools/release_timing.py finish \
-            --report "$RUNNER_TEMP/release-timings.json" \
-            --target "${{ matrix.target }}" \
-            --phase cache-upload \
-            --marker "$RUNNER_TEMP/cache-upload.started"
-          python tools/release_timing.py summary \
-            --report "$RUNNER_TEMP/release-timings.json" \
-            --target "${{ matrix.target }}" \
-            --output "$GITHUB_STEP_SUMMARY"
-          mkdir -p "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}"
-          cp "$RUNNER_TEMP/release-timings.json" \
-            "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}/release-timings.json"
+          if test -f "$RUNNER_TEMP/cache-upload.started"; then
+            python tools/release_timing.py finish \
+              --report "$RUNNER_TEMP/release-timings.json" \
+              --target "${{ matrix.target }}" \
+              --phase cache-upload \
+              --marker "$RUNNER_TEMP/cache-upload.started"
+          fi
+          if test -f "$RUNNER_TEMP/release-timings.json"; then
+            python tools/release_timing.py summary \
+              --report "$RUNNER_TEMP/release-timings.json" \
+              --target "${{ matrix.target }}" \
+              --output "$GITHUB_STEP_SUMMARY"
+            mkdir -p "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}"
+            cp "$RUNNER_TEMP/release-timings.json" \
+              "$RUNNER_TEMP/release-output/evidence/${{ matrix.target }}/release-timings.json"
+          fi
       - name: Upload machine-readable release timings
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: timing-${{ matrix.target }}
           path: ${{ runner.temp }}/release-timings.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
       - name: Remove Windows credentials
         if: always() && runner.os == 'Windows'

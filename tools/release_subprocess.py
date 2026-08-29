@@ -20,6 +20,7 @@ def run(
     *,
     cwd: pathlib.Path | None = None,
     env: Mapping[str, str] | None = None,
+    stream_stdout: bool = True,
 ) -> str:
     """Run a release subprocess and optionally stream both output channels live."""
     command = [str(argument) for argument in arguments]
@@ -48,14 +49,15 @@ def run(
             try:
                 for line in pipe:
                     lines.append(line)
-                    output.write(line)
-                    output.flush()
+                    if output is not None:
+                        output.write(line)
+                        output.flush()
             finally:
                 pipe.close()
 
         stdout_thread = threading.Thread(
             target=drain,
-            args=(process.stdout, stdout_lines, sys.stdout),
+            args=(process.stdout, stdout_lines, sys.stdout if stream_stdout else None),
         )
         stderr_thread = threading.Thread(
             target=drain,

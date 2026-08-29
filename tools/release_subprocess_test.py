@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import sys
 import threading
@@ -30,6 +31,26 @@ class ReleaseSubprocessTests(unittest.TestCase):
         self.assertIn("machine-readable-result", console.getvalue())
         self.assertIn("[release] start", console.getvalue())
         self.assertIn("[release] finish", console.getvalue())
+
+    def test_machine_stdout_is_captured_while_progress_remains_live(self) -> None:
+        console = io.StringIO()
+        diagnostics = io.StringIO()
+        script = (
+            "import json,sys; "
+            "print('projection-progress', file=sys.stderr, flush=True); "
+            "print(json.dumps({'value': 'x' * (128 * 1024)}, separators=(',', ':')))"
+        )
+        with contextlib.redirect_stdout(console), contextlib.redirect_stderr(diagnostics):
+            output = run(
+                [sys.executable, "-c", script],
+                stream_stdout=False,
+            )
+
+        self.assertEqual(len(json.loads(output)["value"]), 128 * 1024)
+        self.assertNotIn('"value"', console.getvalue())
+        self.assertIn("[release] start", console.getvalue())
+        self.assertIn("[release] finish", console.getvalue())
+        self.assertIn("projection-progress", diagnostics.getvalue())
 
     def test_stdout_and_stderr_are_forwarded_before_process_exit(self) -> None:
         class SignalingStream(io.StringIO):
