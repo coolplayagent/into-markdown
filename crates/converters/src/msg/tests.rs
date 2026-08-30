@@ -219,6 +219,20 @@ fn builtin_rtf_bodies_reuse_context_without_forging_decoded_byte_offsets() {
 }
 
 #[test]
+fn builtin_rtf_body_preserves_european_font_encodings() {
+    let raw = b"{\\rtf1\\ansi{\\fonttbl{\\f0\\fcharset238 CE;}{\\f1\\fcharset204 Cyrillic;}{\\f2\\fcharset999 Unused;}}\\f0 \\'bf\\f1 \\'d3\\uc1\\u1078?}";
+    for envelope in [lzfu_compressed_literals(raw), lzfu_uncompressed(raw)] {
+        let bytes = message(vec![], vec![], None, None, Some(&envelope));
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let output = convert_msg(&bytes, &options, &context, &BuiltinBodyAdapter).unwrap();
+        assert_eq!(output.document.metadata.properties["msg.body_kind"], "rtf");
+        assert!(paragraph_text(&output).contains("żУж"));
+        assert!(!paragraph_text(&output).contains('\u{fffd}'));
+    }
+}
+
+#[test]
 fn corrupt_and_adversarial_cfb_fail_closed_without_panics() {
     let valid = message(vec![], vec![], Some("body"), None, None);
     let mut cases = vec![valid[..valid.len() - 17].to_vec()];

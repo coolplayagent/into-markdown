@@ -61,6 +61,66 @@ fn codepages_font_charset_surrogates_and_unicode_fallback_are_deterministic() {
 }
 
 #[test]
+fn standard_european_and_utf8_codepages_preserve_raw_and_hex_text() {
+    for (codepage, encoding, expected) in [
+        (1250, encoding_rs::WINDOWS_1250, "zażółć gęślą jaźń"),
+        (1251, encoding_rs::WINDOWS_1251, "Уважаемый клиент!"),
+        (65001, encoding_rs::UTF_8, "Zażółć — Привет 中文"),
+    ] {
+        let (encoded, _, errors) = encoding.encode(expected);
+        assert!(!errors);
+        let prefix = format!("{{\\rtf1\\ansi\\ansicpg{codepage} ");
+        let mut raw = prefix.as_bytes().to_vec();
+        raw.extend_from_slice(&encoded);
+        raw.push(b'}');
+        let mut escaped = prefix;
+        for byte in encoded.iter() {
+            write!(&mut escaped, "\\'{byte:02x}").unwrap();
+        }
+        escaped.push('}');
+        for source in [raw.as_slice(), escaped.as_bytes()] {
+            let output = convert(source).unwrap();
+            assert_eq!(paragraph_text(&output), expected);
+            assert!(
+                !output
+                    .diagnostics
+                    .iter()
+                    .any(|item| { item.code == "rtf.invalidByteSequenceReplaced" })
+            );
+        }
+    }
+}
+
+#[test]
+fn european_font_switches_restore_encoding_and_skip_unicode_fallback() {
+    let output = convert(
+        b"{\\rtf1\\ansi{\\fonttbl{\\f0\\fcharset0 Arial;}{\\f1\\fcharset238 Arial CE;}{\\f2\\fcharset204 Arial Cyr;}}\\f1 \\'bf{\\f2 \\'d3\\uc1\\u1078?}\\'f3{\\f0 \\'e9}\\'b3}",
+    )
+    .unwrap();
+    assert_eq!(paragraph_text(&output), "żУжóéł");
+}
+
+#[test]
+fn unused_font_charsets_do_not_require_a_decoder() {
+    let output = convert(
+        b"{\\rtf1\\ansi{\\fonttbl{\\f0\\fcharset0 Arial;}{\\f1\\fcharset161 Greek;}{\\f2\\fcharset999 Unknown;}}\\f0 \\'e9{\\f2\\uc1\\u20013?} text}",
+    )
+    .unwrap();
+    assert_eq!(paragraph_text(&output), "é中 text");
+    assert!(
+        !output.diagnostics.iter().any(|item| { item.code == "rtf.invalidByteSequenceReplaced" })
+    );
+
+    for source in [
+        b"{\\rtf1\\ansi{\\fonttbl{\\f2\\fcharset999 Unknown;}}\\f2 \\'e9}".as_slice(),
+        b"{\\rtf1\\ansi{\\fonttbl{\\f2\\fcharset999 Unknown;}}\\f2 text}".as_slice(),
+        b"{\\rtf1\\ansi\\ansicpg999 text}".as_slice(),
+    ] {
+        assert_eq!(convert(source).unwrap_err().code(), ErrorCode::Malformed);
+    }
+}
+
+#[test]
 fn active_destinations_are_skipped() {
     let output =
         convert(b"{\\rtf1\\ansi before{\\object{\\*\\objdata 0102}{\\result BAD}}after\\par}")
