@@ -1504,6 +1504,23 @@ pub trait OcrEngine: Send + Sync {
     fn provenance_kind(&self) -> crate::ProvenanceKind {
         crate::ProvenanceKind::LocalOcr
     }
+    /// Record accepted text after merge. Request-local replay adapters may
+    /// suppress recounting the same normalized input, without changing its IR.
+    ///
+    /// # Errors
+    ///
+    /// Returns the existing request telemetry accounting error.
+    #[doc(hidden)]
+    fn record_contribution(
+        &self,
+        input: crate::OcrInputIdentity,
+        regions: u64,
+        characters: u64,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        let _ = input;
+        context.record_ocr_contribution(regions, characters)
+    }
     /// Recognize text and geometry.
     fn recognize<'a>(
         &'a self,

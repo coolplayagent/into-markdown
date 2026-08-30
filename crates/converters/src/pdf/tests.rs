@@ -678,7 +678,11 @@ fn scan_coverage_is_union_based_and_blank_or_overlapping_small_images_do_not_qua
 
 #[test]
 fn conversion_gate_wait_honors_cancellation() {
-    let held = PDF_CONVERSION_GATE.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let admission = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits::default(),
+    );
+    let held = lock_pdf_conversion(&admission).unwrap();
     let cancellation = into_markdown_core::CancellationToken::new();
     cancellation.cancel();
     let context = ExecutionContext::new(

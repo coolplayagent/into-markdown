@@ -1,7 +1,7 @@
 //! Request-local OCR contributions shared by transient PDF pages, never pixels.
 
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine, OcrEvidenceStep,
+    BoxFuture, ConversionError, ConversionOptions, ExecutionContext, OcrEngine, OcrInputIdentity,
     OcrOutputPlan, OcrRecognition, OcrRegion, OcrRequest, OcrResult, ProvenanceKind,
     ResourceReservation,
 };
@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 
 struct Entry {
     contribution: OcrRecognition,
+    normalized_sha256: [u8; 32],
+    counted: bool,
     _memory: ResourceReservation,
 }
 
@@ -32,6 +34,26 @@ impl OcrEngine for PageOcrCache {
 
     fn provenance_kind(&self) -> ProvenanceKind {
         self.provider.provenance_kind()
+    }
+
+    fn record_contribution(
+        &self,
+        input: OcrInputIdentity,
+        regions: u64,
+        characters: u64,
+        context: &ExecutionContext,
+    ) -> Result<(), ConversionError> {
+        let mut entries =
+            self.entries.lock().map_err(|_| cache_error("OCR contribution cache lock poisoned"))?;
+        let entry = entries
+            .values_mut()
+            .find(|entry| entry.normalized_sha256 == input.sha256())
+            .ok_or_else(|| cache_error("OCR contribution has no cached input identity"))?;
+        if !entry.counted {
+            self.provider.record_contribution(input, regions, characters, context)?;
+            entry.counted = true;
+        }
+        Ok(())
     }
 
     fn recognize<'a>(
@@ -93,7 +115,12 @@ impl OcrEngine for PageOcrCache {
                 .checked_add(entry_overhead())
                 .ok_or_else(|| cache_error("OCR contribution cache size overflow"))?;
             let memory = context.reserve_memory(bytes)?;
-            let cached = Entry { contribution: contribution.clone(), _memory: memory };
+            let cached = Entry {
+                contribution: contribution.clone(),
+                normalized_sha256: Sha256::digest(request.image).into(),
+                counted: false,
+                _memory: memory,
+            };
             self.entries
                 .lock()
                 .map_err(|_| cache_error("OCR contribution cache lock poisoned"))?
@@ -145,8 +172,8 @@ fn clone_bytes(value: &OcrRecognition) -> Result<u64, ConversionError> {
     let mut bytes = size_of::<OcrRecognition>() as u64;
     let result = match value {
         OcrRecognition::Bound(bound) => {
-            add(&mut bytes, bound.detection_confidences().len() * size_of::<f32>())?;
-            add(&mut bytes, bound.evidence_chain().len() * size_of::<OcrEvidenceStep>())?;
+            add(&mut bytes, size_of_val(bound.detection_confidences()))?;
+            add(&mut bytes, size_of_val(bound.evidence_chain()))?;
             for step in bound.evidence_chain() {
                 add(&mut bytes, step.provider.len())?;
                 add(&mut bytes, step.model.as_ref().map_or(0, String::len))?;

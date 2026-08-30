@@ -723,6 +723,7 @@ struct VisualRef {
 struct CachedContribution {
     nodes: Vec<BlockNode>,
     diagnostics: Vec<Diagnostic>,
+    telemetry: Option<(OcrInputIdentity, u64, u64)>,
 }
 
 struct NormalizedImage {
@@ -856,8 +857,6 @@ async fn enrich(
         resource("max_memory_bytes", format!("allocate OCR contribution cache: {error}"))
     })?;
     cache.resize_with(grouping.groups.len(), || None);
-    let mut recognized_regions = 0_u64;
-    let mut recognized_chars = 0_u64;
     for (ordinal, group_index) in grouping.digest_order.iter().copied().enumerate() {
         context.checkpoint()?;
         let candidate = &candidates[grouping.groups[group_index].representative];
@@ -871,6 +870,7 @@ async fn enrich(
                 cache[group_index] = Some(CachedContribution {
                     nodes: Vec::new(),
                     diagnostics: vec![visual_diagnostic(None, error.to_string())],
+                    telemetry: None,
                 });
                 continue;
             }
@@ -903,7 +903,11 @@ async fn enrich(
                     && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
             {
                 diagnostics.push(visual_diagnostic(None, error.to_string()));
-                cache[group_index] = Some(CachedContribution { nodes: Vec::new(), diagnostics });
+                cache[group_index] = Some(CachedContribution {
+                    nodes: Vec::new(),
+                    diagnostics,
+                    telemetry: None,
+                });
                 continue;
             }
             Err(error) => return Err(error),
@@ -923,14 +927,16 @@ async fn enrich(
         if let Some(memory) = contribution.memory.take() {
             output.attach_memory_reservation(context, memory)?;
         }
-        recognized_regions = recognized_regions
-            .checked_add(contribution.recognized_regions)
-            .ok_or_else(|| resource("max_archive_entries", "OCR region telemetry overflow"))?;
-        recognized_chars = recognized_chars
-            .checked_add(contribution.recognized_chars)
-            .ok_or_else(|| resource("max_field_bytes", "OCR character telemetry overflow"))?;
         diagnostics.append(&mut contribution.diagnostics);
-        cache[group_index] = Some(CachedContribution { nodes: contribution.nodes, diagnostics });
+        cache[group_index] = Some(CachedContribution {
+            nodes: contribution.nodes,
+            diagnostics,
+            telemetry: Some((
+                identity,
+                contribution.recognized_regions,
+                contribution.recognized_chars,
+            )),
+        });
     }
 
     let mut contributions_by_asset = BTreeMap::new();
@@ -972,7 +978,13 @@ async fn enrich(
     if input_format == InputFormat::Pdf && !contributions_by_asset.is_empty() {
         output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
     }
-    context.record_ocr_contribution(recognized_regions, recognized_chars)?;
+    if let Some(engine) = &services.ocr {
+        for contribution in cache.into_iter().flatten() {
+            if let Some((identity, regions, characters)) = contribution.telemetry {
+                engine.record_contribution(identity, regions, characters, context)?;
+            }
+        }
+    }
     Ok(output)
 }
 

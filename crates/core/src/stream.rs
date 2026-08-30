@@ -99,10 +99,10 @@ pub trait ConverterEventSink {
     /// Enrich one unpublished page using the enclosing converter's memory credit.
     /// The returned output owns its diagnostics and authenticated leases; the
     /// producer must consume it before extracting the next transient page.
-    fn enrich_page<'a>(
-        &'a mut self,
+    fn enrich_page(
+        &mut self,
         output: ConverterOutput,
-    ) -> LocalBoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+    ) -> LocalBoxFuture<'_, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
             drop(output);
             Err(ConversionError::Unsupported {

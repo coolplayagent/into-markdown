@@ -82,12 +82,12 @@ impl OcrEngine for Recognizer {
                     OcrEvidenceStep {
                         stage: OcrEvidenceStage::Detection,
                         provider: self.id().into(),
-                        model: None,
+                        model: Some("test-detector".into()),
                     },
                     OcrEvidenceStep {
                         stage: OcrEvidenceStage::Recognition,
                         provider: self.id().into(),
-                        model: None,
+                        model: Some("test-recognizer".into()),
                     },
                 ],
                 identity,
@@ -438,6 +438,8 @@ fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
     let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
     assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
     assert_eq!(result.markdown.matches("recognized body 1").count(), 4);
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 17);
     assert_eq!(result.document.blocks.len(), 4);
     assert!(result.assets.is_empty());
     for (index, node) in result.document.blocks.iter().enumerate() {

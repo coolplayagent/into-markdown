@@ -35,10 +35,10 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
         self.enricher.is_some() && self.format == InputFormat::Pdf
     }
 
-    fn enrich_page<'a>(
-        &'a mut self,
+    fn enrich_page(
+        &mut self,
         output: ConverterOutput,
-    ) -> LocalBoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+    ) -> LocalBoxFuture<'_, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
             self.context.checkpoint()?;
             let enricher = self.enricher.ok_or_else(|| ConversionError::Internal {
