@@ -1,11 +1,11 @@
 use super::{
-    BIFF4, BIFF5, BIFF8, BOF, BOF4, BOUND_SHEET, Block, BlockNode, CONTINUE, ConversionError,
-    ConverterOutput, DIMENSIONS, Diagnostic, DiagnosticSeverity, EOF, EXTERN_SHEET, ErrorPolicy,
-    FILE_PASS, FORMULA, LegacyBudget, MSO_DRAWING, MSO_DRAWING_GROUP, OBJ, PANE, SCL, SELECTION,
-    SHARED_FORMULA, STRING, SUP_BOOK, WINDOW1, WINDOW2, limit, locator, malformed, read_u16,
-    read_u32,
+    ARRAY, BIFF4, BIFF5, BIFF8, BOF, BOF4, BOUND_SHEET, Block, BlockNode, CONTINUE,
+    ConversionError, ConverterOutput, DIMENSIONS, Diagnostic, DiagnosticSeverity, EOF,
+    EXTERN_SHEET, ErrorPolicy, FILE_PASS, FORMULA, LegacyBudget, MSO_DRAWING, MSO_DRAWING_GROUP,
+    OBJ, PANE, SCL, SELECTION, SHARED_FORMULA, STRING, SUP_BOOK, TABLE, WINDOW1, WINDOW2, limit,
+    locator, malformed, read_u16, read_u32,
 };
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 pub(super) fn append_preflight_diagnostics(
     output: &mut ConverterOutput,
@@ -76,6 +76,24 @@ pub(super) fn append_preflight_diagnostics(
             locator: Some(locator(part)),
         });
     }
+    if preflight.has(PreflightFlag::SheetNameMetadata) {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.longSheetNameRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: "a complete, bounded sheet name exceeding the canonical 31-character limit was retained"
+                .into(),
+            locator: Some(locator(part)),
+        });
+    }
+    if preflight.has(PreflightFlag::NestedCharts) {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.chartCachesSkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "nested chart caches were excluded from worksheet cells and were not rendered"
+                .into(),
+            locator: Some(locator(part)),
+        });
+    }
 }
 
 pub(super) fn biff_record<'a>(
@@ -106,7 +124,8 @@ pub(super) fn decode_continued_formula_string(
     max_field_bytes: u64,
 ) -> Result<Option<String>, ConversionError> {
     let (mut kind, mut body, mut next) = biff_record(workbook, cursor, part)?;
-    if kind == SHARED_FORMULA {
+    if matches!(kind, SHARED_FORMULA | ARRAY | TABLE) {
+        validate_formula_attachment(kind, body, part)?;
         (kind, body, next) = biff_record(workbook, next, part)?;
     }
     if kind != STRING {
@@ -195,6 +214,53 @@ pub(super) fn decode_continued_formula_string(
         ));
     }
     Ok(Some(output))
+}
+
+fn validate_formula_attachment(kind: u16, body: &[u8], part: &str) -> Result<(), ConversionError> {
+    let minimum = match kind {
+        SHARED_FORMULA => 10,
+        ARRAY => 14, // Range, flags, calculation chain, token count.
+        TABLE => 16, // Range, flags, and two input-cell addresses.
+        _ => unreachable!(),
+    };
+    if body.len() < minimum {
+        return Err(malformed(part, "truncated Formula attachment"));
+    }
+    if kind == TABLE && body.len() != minimum {
+        return Err(malformed(part, "invalid Table attachment length"));
+    }
+    if kind != TABLE {
+        let token_bytes = usize::from(read_u16(body, minimum - 2, part)?);
+        if token_bytes > body.len() - minimum {
+            return Err(malformed(part, "truncated Formula attachment tokens"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn bound_sheet_substream(body: &[u8], part: &str) -> Result<u16, ConversionError> {
+    match body.get(5).ok_or_else(|| malformed(part, "truncated BoundSheet type"))? {
+        0 => Ok(0x0010),
+        1 => Ok(0x0040),
+        2 => Ok(0x0020),
+        kind => Err(ConversionError::Unsupported {
+            detail: format!("unsupported BoundSheet type 0x{kind:02x}"),
+        }),
+    }
+}
+
+pub(super) fn bound_sheet_name_length(
+    body: &[u8],
+    part: &str,
+    error_policy: ErrorPolicy,
+) -> Result<usize, ConversionError> {
+    let characters = usize::from(
+        *body.get(6).ok_or_else(|| malformed(part, "truncated BoundSheet name length"))?,
+    );
+    if characters == 0 || (characters > 31 && error_policy == ErrorPolicy::Strict) {
+        return Err(malformed(part, "invalid BoundSheet name length"));
+    }
+    Ok(characters)
 }
 
 pub(super) fn append_utf16_string_units(
@@ -289,6 +355,8 @@ pub(super) enum PreflightFlag {
     OptionalTailRecord,
     DimensionMetadata,
     FormulaCacheMetadata,
+    SheetNameMetadata,
+    NestedCharts,
 }
 
 #[derive(Default)]
@@ -323,8 +391,8 @@ struct PreflightState {
     biff_version: Option<u16>,
     at_substream_boundary: bool,
     zero_padding_start: Option<usize>,
-    bound_sheet_offsets: BTreeSet<u32>,
-    completed_sheet_offsets: BTreeSet<u32>,
+    bound_sheet_offsets: BTreeMap<u32, u16>,
+    completed_sheet_offsets: BTreeMap<u32, u16>,
     open_sheet_offset: Option<u32>,
     substreams: [u16; 16],
     substream_depth: usize,
@@ -361,7 +429,11 @@ impl PreflightState {
             EOF => self.close_biff_substream(part)?,
             BOUND_SHEET => {
                 let offset = read_u32(body, 0, part)?;
-                if !self.bound_sheet_offsets.insert(offset) {
+                let substream = bound_sheet_substream(body, part)?;
+                if bound_sheet_name_length(body, part, error_policy)? > 31 {
+                    self.result.flags.insert(PreflightFlag::SheetNameMetadata);
+                }
+                if self.bound_sheet_offsets.insert(offset, substream).is_some() {
                     return Err(malformed(part, "duplicate BoundSheet offset"));
                 }
             }
@@ -416,17 +488,20 @@ impl PreflightState {
             if parent != 0x0010 || substream != 0x0020 {
                 return Err(malformed(part, "unsupported nested BIFF substream"));
             }
+            self.result.flags.insert(PreflightFlag::NestedCharts);
         }
         self.substreams[self.substream_depth] = substream;
         self.substream_depth += 1;
-        if substream == 0x0010 {
-            if self.substream_depth != 1 {
-                return Err(malformed(part, "nested BIFF worksheet substream"));
-            }
+        if self.substream_depth == 1 && matches!(substream, 0x0010 | 0x0020 | 0x0040) {
             let offset = u32::try_from(cursor)
                 .map_err(|_| malformed(part, "worksheet BOF offset overflowed"))?;
-            if !self.bound_sheet_offsets.is_empty() && !self.bound_sheet_offsets.contains(&offset) {
-                return Err(malformed(part, "worksheet BOF is not authenticated by BoundSheet"));
+            if (!self.bound_sheet_offsets.is_empty() || substream != 0x0010)
+                && self.bound_sheet_offsets.get(&offset) != Some(&substream)
+            {
+                return Err(malformed(
+                    part,
+                    "sheet BOF offset/type is not authenticated by BoundSheet",
+                ));
             }
             self.open_sheet_offset = Some(offset);
         }
@@ -439,21 +514,20 @@ impl PreflightState {
         }
         self.substream_depth -= 1;
         let substream = self.substreams[self.substream_depth];
-        if substream == 0x0010 {
-            if self.substream_depth != 0 {
-                return Err(malformed(part, "worksheet substream closes inside another substream"));
-            }
+        if self.substream_depth == 0 && matches!(substream, 0x0010 | 0x0020 | 0x0040) {
             let offset = self
                 .open_sheet_offset
                 .take()
                 .ok_or_else(|| malformed(part, "worksheet EOF has no BOF offset"))?;
-            if !self.completed_sheet_offsets.insert(offset) {
+            if self.completed_sheet_offsets.insert(offset, substream).is_some() {
                 return Err(malformed(part, "duplicate worksheet substream"));
             }
-            self.completed_worksheets = self
-                .completed_worksheets
-                .checked_add(1)
-                .ok_or_else(|| malformed(part, "worksheet count overflowed"))?;
+            if substream == 0x0010 {
+                self.completed_worksheets = self
+                    .completed_worksheets
+                    .checked_add(1)
+                    .ok_or_else(|| malformed(part, "worksheet count overflowed"))?;
+            }
         } else if substream == 0x0005 {
             if self.substream_depth != 0 {
                 return Err(malformed(part, "workbook globals close inside another substream"));
@@ -550,8 +624,8 @@ pub(super) fn preflight(
 }
 
 fn final_substream_proven(
-    bound_sheet_offsets: &BTreeSet<u32>,
-    completed_sheet_offsets: &BTreeSet<u32>,
+    bound_sheet_offsets: &BTreeMap<u32, u16>,
+    completed_sheet_offsets: &BTreeMap<u32, u16>,
     open_substream: Option<u16>,
     completed_globals: usize,
     completed_worksheets: usize,

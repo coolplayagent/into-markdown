@@ -2850,34 +2850,60 @@ fn cfb_directory_stream_names(bytes: &[u8]) -> Result<Vec<String>, String> {
     let first_directory_sector = read_u32(bytes, 48)?;
     let mut directory_sector = first_directory_sector;
     let mut seen_directory = std::collections::BTreeSet::new();
-    let mut names = Vec::new();
+    let mut entries = Vec::new();
     while directory_sector != CFB_END_OF_CHAIN {
         if !seen_directory.insert(directory_sector) || seen_directory.len() > sector_count {
             return Err("CFB directory chain is cyclic or exceeds the inspection limit".into());
         }
         let sector = cfb_sector(bytes, directory_sector, sector_size, inspected_len)?;
-        for entry in sector.chunks_exact(128) {
-            if entry[66] != 2 {
-                continue;
-            }
-            let name_bytes = usize::from(u16::from_le_bytes([entry[64], entry[65]]));
-            if !(2..=64).contains(&name_bytes) || name_bytes % 2 != 0 {
-                return Err("CFB directory stream contains an invalid stream name".into());
-            }
-            let name = entry[..name_bytes - 2]
-                .chunks_exact(2)
-                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
-            let name = char::decode_utf16(name)
-                .collect::<Result<String, _>>()
-                .map_err(|_| "CFB directory stream contains invalid UTF-16")?;
-            names.push(name);
-        }
+        entries.extend(sector.chunks_exact(128));
         directory_sector = *fat
             .get(
                 usize::try_from(directory_sector)
                     .map_err(|_| "CFB directory sector is too large")?,
             )
             .ok_or("CFB directory sector has no FAT entry")?;
+    }
+    cfb_root_stream_names(&entries)
+}
+
+fn cfb_root_stream_names(entries: &[&[u8]]) -> Result<Vec<String>, String> {
+    let root = entries.first().ok_or("CFB directory has no root storage")?;
+    if root[66] != 5 {
+        return Err("CFB directory does not begin with root storage".into());
+    }
+    let mut pending = vec![read_u32(root, 76)?];
+    let mut visited = std::collections::BTreeSet::new();
+    let mut names = Vec::new();
+    while let Some(index) = pending.pop() {
+        if index == CFB_FREE_SECTOR {
+            continue;
+        }
+        if !visited.insert(index) {
+            return Err("CFB root directory tree is cyclic or aliased".into());
+        }
+        let entry = entries.get(index as usize).ok_or("CFB root child is out of range")?;
+        if !matches!(entry[66], 1 | 2) {
+            return Err("CFB root child has an invalid entry type".into());
+        }
+        pending.push(read_u32(entry, 68)?);
+        pending.push(read_u32(entry, 72)?);
+        // Follow siblings, never a storage's child tree: embedded streams cannot
+        // supply the enclosing document's format authority.
+        if entry[66] == 2 {
+            let name_bytes = usize::from(read_u16(entry, 64)?);
+            if !(2..=64).contains(&name_bytes) || name_bytes % 2 != 0 {
+                return Err("CFB directory stream contains an invalid stream name".into());
+            }
+            let name = entry[..name_bytes - 2]
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+            names.push(
+                char::decode_utf16(name)
+                    .collect::<Result<String, _>>()
+                    .map_err(|_| "CFB directory stream contains invalid UTF-16")?,
+            );
+        }
     }
     Ok(names)
 }
@@ -3420,9 +3446,12 @@ mod tests {
         bytes[516..520].copy_from_slice(&CFB_END_OF_CHAIN.to_le_bytes());
         let encoded =
             format!("{name}\0").encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
-        bytes[1024..1024 + encoded.len()].copy_from_slice(&encoded);
-        bytes[1088..1090].copy_from_slice(&u16::try_from(encoded.len()).unwrap().to_le_bytes());
-        bytes[1090] = 2;
+        bytes[1090] = 5;
+        bytes[1100..1104].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[1152..1152 + encoded.len()].copy_from_slice(&encoded);
+        bytes[1216..1218].copy_from_slice(&u16::try_from(encoded.len()).unwrap().to_le_bytes());
+        bytes[1218] = 2;
+        bytes[1220..1232].fill(0xff);
         bytes
     }
 
@@ -3948,6 +3977,41 @@ mod tests {
         .unwrap();
         assert_eq!(candidates[0].format, InputFormat::Ppt);
         assert!((candidates[0].confidence - 0.98).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn embedded_ole_streams_do_not_supply_root_format_authority() {
+        let mut bytes = cfb_with_stream("Workbook");
+        bytes[1224..1228].copy_from_slice(&2_u32.to_le_bytes());
+        bytes[1346] = 1; // Root sibling storage, with its own child tree.
+        bytes[1348..1356].fill(0xff);
+        bytes[1356..1360].copy_from_slice(&3_u32.to_le_bytes());
+        let encoded =
+            "WordDocument\0".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+        bytes[1408..1408 + encoded.len()].copy_from_slice(&encoded);
+        bytes[1472..1474].copy_from_slice(&u16::try_from(encoded.len()).unwrap().to_le_bytes());
+        bytes[1474] = 2;
+        bytes[1476..1488].fill(0xff);
+        let candidates = detect_ole(&bytes);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].format, InputFormat::Xls);
+
+        // Moving the same stream into the root sibling tree restores real ambiguity.
+        bytes[1352..1356].copy_from_slice(&3_u32.to_le_bytes());
+        let candidates = detect_ole(&bytes);
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().any(|candidate| candidate.format == InputFormat::Doc));
+        assert!(candidates.iter().any(|candidate| candidate.format == InputFormat::Xls));
+    }
+
+    #[test]
+    fn root_directory_cycles_and_bad_indices_never_supply_authority() {
+        for invalid in [0, 1, 4, u32::MAX - 1] {
+            let mut bytes = cfb_with_stream("Workbook");
+            bytes[1224..1228].copy_from_slice(&invalid.to_le_bytes());
+            let candidates = detect_ole(&bytes);
+            assert!(candidates.iter().all(|candidate| candidate.confidence < 0.5));
+        }
     }
 
     #[test]
