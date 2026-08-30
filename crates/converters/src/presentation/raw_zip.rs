@@ -1,20 +1,23 @@
 use super::budget::{PRESENTATION_ALLOCATION_BASE, ZIP_METADATA_BYTES_PER_ENTRY};
 use super::error::{limit, malformed};
 use super::model::PackageOpenPlan;
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
 
-#[allow(clippy::too_many_lines)]
-fn zip_central_plan(
+const EOCD_BYTES: usize = 22;
+const MAX_COMMENT_BYTES: usize = 65_535;
+const MAX_TRAILING_WHITESPACE_BYTES: usize = 64;
+
+fn end_record(
     bytes: &[u8],
+    policy: ErrorPolicy,
     context: &ExecutionContext,
-) -> Result<(u32, u64, u64), ConversionError> {
-    const EOCD_BYTES: usize = 22;
-    const MAX_COMMENT_BYTES: usize = 65_535;
+) -> Result<(usize, usize), ConversionError> {
     if bytes.len() < EOCD_BYTES {
         return Err(malformed(None, "ZIP end record is missing"));
     }
-    let search_start = bytes.len().saturating_sub(EOCD_BYTES + MAX_COMMENT_BYTES);
-    let mut end_record = None;
+    let tail_limit =
+        if policy == ErrorPolicy::BestEffort { MAX_TRAILING_WHITESPACE_BYTES } else { 0 };
+    let search_start = bytes.len().saturating_sub(EOCD_BYTES + MAX_COMMENT_BYTES + tail_limit);
     for position in (search_start..=bytes.len() - EOCD_BYTES).rev() {
         if position.is_multiple_of(4096) {
             context.checkpoint()?;
@@ -23,14 +26,27 @@ fn zip_central_plan(
             continue;
         }
         let comment = usize::from(zip_u16(bytes, position + 20)?);
-        if position.checked_add(EOCD_BYTES).and_then(|end| end.checked_add(comment))
-            == Some(bytes.len())
+        let Some(end) = position.checked_add(EOCD_BYTES).and_then(|end| end.checked_add(comment))
+        else {
+            continue;
+        };
+        if let Some(tail) = bytes.get(end..)
+            && tail.len() <= tail_limit
+            && tail.iter().all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
         {
-            end_record = Some(position);
-            break;
+            return Ok((position, end));
         }
     }
-    let end_record = end_record.ok_or_else(|| malformed(None, "ZIP end record is invalid"))?;
+    Err(malformed(None, "ZIP end record is invalid"))
+}
+
+#[allow(clippy::too_many_lines)]
+fn zip_central_plan(
+    bytes: &[u8],
+    policy: ErrorPolicy,
+    context: &ExecutionContext,
+) -> Result<(u32, u64, u64, usize), ConversionError> {
+    let (end_record, archive_len) = end_record(bytes, policy, context)?;
     if zip_u16(bytes, end_record + 4)? != 0 || zip_u16(bytes, end_record + 6)? != 0 {
         return Err(malformed(None, "multi-disk ZIP archives are not supported"));
     }
@@ -124,7 +140,7 @@ fn zip_central_plan(
         .unwrap_or(u64::MAX)
         .checked_add(u64::from(zip_u16(bytes, end_record + 20)?))
         .ok_or_else(|| limit("max_memory_bytes", "ZIP variable metadata plan overflow"))?;
-    Ok((entry_count, name_bytes, variable_bytes))
+    Ok((entry_count, name_bytes, variable_bytes, archive_len))
 }
 
 fn zip_u16(bytes: &[u8], offset: usize) -> Result<u16, ConversionError> {
@@ -164,7 +180,8 @@ pub(super) fn package_open_plan(
             format!("{input_size} > {}", options.limits.max_input_bytes),
         ));
     }
-    let (entry_count, name_bytes, variable_bytes) = zip_central_plan(bytes, context)?;
+    let (entry_count, name_bytes, variable_bytes, archive_len) =
+        zip_central_plan(bytes, options.error_policy, context)?;
     if entry_count > options.limits.max_archive_entries {
         return Err(limit(
             "max_archive_entries",
@@ -177,5 +194,5 @@ pub(super) fn package_open_plan(
         .and_then(|value| value.checked_add(variable_bytes.checked_mul(2)?))
         .and_then(|value| value.checked_add(PRESENTATION_ALLOCATION_BASE))
         .ok_or_else(|| limit("max_memory_bytes", "ZIP metadata budget overflow"))?;
-    Ok(PackageOpenPlan { entry_count, name_bytes, memory_charge })
+    Ok(PackageOpenPlan { entry_count, name_bytes, memory_charge, archive_len })
 }

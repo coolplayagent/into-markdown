@@ -27,6 +27,8 @@ impl<'a> Package<'a> {
             return Err(ConversionError::Encrypted);
         }
         let plan = package_open_plan(bytes, options, context)?;
+        let trailing_whitespace_bytes = bytes.len() - plan.archive_len;
+        let bytes = &bytes[..plan.archive_len];
         // This reservation intentionally precedes `ZipArchive::new`: the raw, allocation-free
         // central-directory plan above bounds zip-rs's internal metadata materialization.
         let mut memory = context.reserve_memory(plan.memory_charge)?;
@@ -175,6 +177,7 @@ impl<'a> Package<'a> {
         })?;
         Ok(Self {
             source: bytes,
+            trailing_whitespace_bytes,
             entries,
             parts,
             content_types,

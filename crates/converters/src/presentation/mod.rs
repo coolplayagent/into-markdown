@@ -212,6 +212,17 @@ fn convert_presentation(
     let main_relationships = package.relationships(&main_part, options, context)?;
     let main_relationship_part = relationship_part(&main_part)?;
     let mut state = ParseState::default();
+    if package.trailing_whitespace_bytes != 0 {
+        state.diagnostics.push(Diagnostic {
+            code: "presentation.zipTrailingWhitespaceIgnored".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "ignored {} whitespace byte(s) after ZIP end record and comment",
+                package.trailing_whitespace_bytes
+            ),
+            locator: None,
+        });
+    }
     if omitted_slide_references > 0 {
         state.diagnostics.try_reserve(1).map_err(|error| {
             limit("max_memory_bytes", format!("cannot reserve slide omission diagnostic: {error}"))

@@ -90,11 +90,13 @@ pub(super) struct PackageOpenPlan {
     pub(super) entry_count: u32,
     pub(super) name_bytes: u64,
     pub(super) memory_charge: u64,
+    pub(super) archive_len: usize,
 }
 
 #[derive(Debug)]
 pub(super) struct Package<'a> {
     pub(super) source: &'a [u8],
+    pub(super) trailing_whitespace_bytes: usize,
     pub(super) entries: Vec<(String, EntryMetadata)>,
     // Lookup-only indexes are never iterated into output, so hash randomization cannot affect
     // conversion order. Fallible capacity admission precedes every new key.
