@@ -8,7 +8,7 @@ use crate::workbook::output::{provenance, stable_id};
 use crate::workbook::xlsx::formulas::DisplayProfile;
 use crate::workbook::xlsx::regions::{MergeRange, SparseRegion, paginate_region};
 use crate::workbook::xlsx::sheet_index::CellToken;
-use crate::workbook::xlsx::staging::StagedCells;
+use crate::workbook::xlsx::staging::{StagedCells, StagedReader};
 use into_markdown_core::{
     Block, BlockNode, Cell, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity,
     Document, ExecutionContext, Inline, MAX_DOCUMENT_NODES, NodeId, SourceLocator, TableAlignment,
@@ -307,14 +307,9 @@ fn emit_tsv_regions(
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let staged =
         sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
-    let mut reader = staged.into_reader()?;
-    let mut tokens = Vec::new();
-    while let Some(token) = reader.next()? {
-        tokens.push(token);
-    }
     emit_tsv_tokens(
         sheet,
-        tokens.into_iter(),
+        TokenStream::new(staged.into_reader()?),
         display,
         shared_strings,
         sheet_index,
@@ -325,14 +320,14 @@ fn emit_tsv_regions(
 
 fn emit_tsv_tokens(
     sheet: &PreparedSheet,
-    mut tokens: std::vec::IntoIter<CellToken>,
+    mut tokens: TokenStream,
     display: &DisplayProfile,
     shared_strings: &BTreeMap<u64, String>,
     sheet_index: usize,
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<Vec<BlockNode>, ConversionError> {
-    let mut next_cell = tokens.next();
+    let mut next_cell = tokens.next()?;
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut chunk_start = None;
@@ -347,7 +342,7 @@ fn emit_tsv_tokens(
         let value = display.display(&token, shared_strings)?;
         let rendered = render_tsv_token(sheet, &token, &value, options)?;
         append_tsv_value(&mut row_text, &rendered)?;
-        next_cell = tokens.next();
+        next_cell = tokens.next()?;
         while next_cell.as_ref().is_some_and(|next| {
             next.coordinate.0 == start.0 && next.coordinate.1 == end.1.saturating_add(1)
         }) {
@@ -357,7 +352,7 @@ fn emit_tsv_tokens(
             let value = display.display(&token, shared_strings)?;
             let rendered = render_tsv_token(sheet, &token, &value, options)?;
             append_tsv_value(&mut row_text, &rendered)?;
-            next_cell = tokens.next();
+            next_cell = tokens.next()?;
         }
         row_text.push('\n');
         if !text.is_empty() && text.len().saturating_add(row_text.len()) >= TSV_CHUNK_TARGET_BYTES {
@@ -512,14 +507,9 @@ fn emit_hybrid_merge_regions(
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let staged =
         sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
-    let mut reader = staged.into_reader()?;
-    let mut tokens = Vec::new();
-    while let Some(token) = reader.next()? {
-        tokens.push(token);
-    }
     let mut blocks = emit_tsv_tokens(
         sheet,
-        tokens.into_iter(),
+        TokenStream::new(staged.into_reader()?),
         display,
         shared_strings,
         sheet_index,
@@ -591,13 +581,7 @@ fn emit_regions(
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let staged =
         sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
-    let mut reader = staged.into_reader()?;
-    let mut tokens = Vec::new();
-    while let Some(token) = reader.next()? {
-        tokens.push(token);
-    }
-    let mut merge_subordinates = extract_merge_subordinates(sheet, &mut tokens);
-    let mut next_tokens = tokens.into_iter().peekable();
+    let mut next_tokens = TokenStream::new(staged.into_reader()?);
     let total_area = regions_area(&sheet.regions)?;
     enforce_total_cells(total_area, options)?;
     let mut blocks = Vec::new();
@@ -606,21 +590,40 @@ fn emit_regions(
         .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX table regions"))?;
     let emission = TableEmission { sheet, display, shared_strings, sheet_index, options, context };
     for (region_index, region) in sheet.regions.iter().copied().enumerate() {
-        blocks.push(emit_region(
-            &emission,
-            region,
-            region_index,
-            &mut next_tokens,
-            &mut merge_subordinates,
-        )?);
+        blocks.push(emit_region(&emission, region, region_index, &mut next_tokens)?);
     }
-    if next_tokens.next().is_some() || !merge_subordinates.is_empty() {
+    if next_tokens.next()?.is_some() {
         return Err(malformed(None, "worksheet cell was not assigned to a data region"));
     }
     Ok(blocks)
 }
 
-type TokenStream = std::iter::Peekable<std::vec::IntoIter<CellToken>>;
+struct TokenStream {
+    reader: StagedReader,
+    peeked: Option<CellToken>,
+}
+
+impl TokenStream {
+    fn new(reader: StagedReader) -> Self {
+        Self { reader, peeked: None }
+    }
+
+    fn peek(&mut self) -> Result<Option<&CellToken>, ConversionError> {
+        if self.peeked.is_none() {
+            self.peeked = self.reader.next()?;
+        }
+        Ok(self.peeked.as_ref())
+    }
+
+    fn next(&mut self) -> Result<Option<CellToken>, ConversionError> {
+        if self.peeked.is_some() { Ok(self.peeked.take()) } else { self.reader.next() }
+    }
+
+    #[cfg(test)]
+    fn buffered_cells(&self) -> usize {
+        usize::from(self.peeked.is_some())
+    }
+}
 
 struct TableEmission<'a> {
     sheet: &'a PreparedSheet,
@@ -631,32 +634,11 @@ struct TableEmission<'a> {
     context: &'a ExecutionContext,
 }
 
-fn extract_merge_subordinates(
-    sheet: &PreparedSheet,
-    tokens: &mut Vec<CellToken>,
-) -> BTreeMap<CellCoordinate, Vec<CellToken>> {
-    let mut output = BTreeMap::<CellCoordinate, Vec<CellToken>>::new();
-    if sheet.populated_merge_subordinates {
-        tokens.retain(|token| {
-            let Some(merge) = merge_at(&sheet.merges, token.coordinate) else { return true };
-            let owner = (merge.first_row, merge.first_column);
-            if token.coordinate == owner {
-                true
-            } else {
-                output.entry(owner).or_default().push(token.clone());
-                false
-            }
-        });
-    }
-    output
-}
-
 fn emit_region(
     emission: &TableEmission<'_>,
     region: SparseRegion,
     region_index: usize,
     next_tokens: &mut TokenStream,
-    merge_subordinates: &mut BTreeMap<CellCoordinate, Vec<CellToken>>,
 ) -> Result<BlockNode, ConversionError> {
     emission.context.checkpoint()?;
     let width = u64::from(region.last_column - region.first_column) + 1;
@@ -676,9 +658,10 @@ fn emit_region(
     let mut rows = Vec::new();
     rows.try_reserve_exact(usize::try_from(height).unwrap_or(usize::MAX))
         .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX rows"))?;
+    let mut merge_owners = BTreeMap::<CellCoordinate, (usize, usize)>::new();
     for page in paginate_region(region, &emission.sheet.merges)? {
         for row in page.first_row..=page.last_row {
-            rows.push(emit_table_row(emission, region, row, next_tokens, merge_subordinates)?);
+            emit_table_row(emission, region, row, &mut rows, next_tokens, &mut merge_owners)?;
         }
     }
     Ok(BlockNode {
@@ -699,39 +682,63 @@ fn emit_table_row(
     emission: &TableEmission<'_>,
     region: SparseRegion,
     row: u32,
+    rows: &mut Vec<TableRow>,
     next_tokens: &mut TokenStream,
-    merge_subordinates: &mut BTreeMap<CellCoordinate, Vec<CellToken>>,
-) -> Result<TableRow, ConversionError> {
+    merge_owners: &mut BTreeMap<CellCoordinate, (usize, usize)>,
+) -> Result<(), ConversionError> {
     emission.context.checkpoint()?;
     let width = usize::try_from(region.last_column - region.first_column + 1).unwrap_or(usize::MAX);
     let mut cells = Vec::new();
     cells
         .try_reserve_exact(width)
         .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX cells"))?;
+    let row_index = rows.len();
+    rows.push(TableRow { cells });
     for column in region.first_column..=region.last_column {
         let coordinate = (row, column);
         let merge = merge_at(&emission.sheet.merges, coordinate);
         if merge.is_some_and(|range| (range.first_row, range.first_column) != coordinate) {
+            if next_tokens.peek()?.is_some_and(|cell| cell.coordinate < coordinate) {
+                return Err(malformed(None, "staged worksheet cells are out of region order"));
+            }
+            if next_tokens.peek()?.is_some_and(|cell| cell.coordinate == coordinate) {
+                let subordinate = next_tokens.next()?.expect("peeked staged merge subordinate");
+                let range = merge.expect("subordinate coordinate has a merge");
+                let owner = (range.first_row, range.first_column);
+                let (owner_row, owner_cell) =
+                    merge_owners.get(&owner).copied().ok_or_else(|| {
+                        malformed(None, "merged-cell owner precedes no staged region")
+                    })?;
+                append_merge_subordinate(
+                    emission,
+                    &mut rows[owner_row].cells[owner_cell].blocks,
+                    &subordinate,
+                )?;
+            }
             continue;
         }
-        if next_tokens.peek().is_some_and(|cell| cell.coordinate < coordinate) {
+        if next_tokens.peek()?.is_some_and(|cell| cell.coordinate < coordinate) {
             return Err(malformed(None, "staged worksheet cells are out of region order"));
         }
-        let token = next_tokens
-            .peek()
-            .is_some_and(|cell| cell.coordinate == coordinate)
-            .then(|| next_tokens.next().expect("peeked staged cell"));
-        let mut blocks = token.map_or_else(
+        let token = if next_tokens.peek()?.is_some_and(|cell| cell.coordinate == coordinate) {
+            next_tokens.next()?
+        } else {
+            None
+        };
+        let blocks = token.map_or_else(
             || Ok::<Vec<BlockNode>, ConversionError>(Vec::new()),
             |token| cell_blocks_for_emission(emission, &token),
         )?;
-        append_merge_subordinates(emission, &mut blocks, merge_subordinates.remove(&coordinate))?;
         let (row_span, column_span) = merge.map_or((1, 1), |range| {
             (range.last_row - range.first_row + 1, range.last_column - range.first_column + 1)
         });
-        cells.push(Cell { row_span, column_span, header: false, blocks });
+        let cell_index = rows[row_index].cells.len();
+        rows[row_index].cells.push(Cell { row_span, column_span, header: false, blocks });
+        if merge.is_some() {
+            merge_owners.insert(coordinate, (row_index, cell_index));
+        }
     }
-    Ok(TableRow { cells })
+    Ok(())
 }
 
 fn cell_blocks_for_emission(
@@ -748,27 +755,25 @@ fn cell_blocks_for_emission(
     )
 }
 
-fn append_merge_subordinates(
+fn append_merge_subordinate(
     emission: &TableEmission<'_>,
     blocks: &mut Vec<BlockNode>,
-    subordinates: Option<Vec<CellToken>>,
+    subordinate: &CellToken,
 ) -> Result<(), ConversionError> {
-    for subordinate in subordinates.unwrap_or_default() {
-        let mut retained = cell_blocks_for_emission(emission, &subordinate)?;
-        if let Some(BlockNode { block: Block::Paragraph(inlines), .. }) = retained.first_mut() {
-            inlines.insert(
-                0,
-                Inline::Text {
-                    value: format!(
-                        "{}: ",
-                        cell_name(subordinate.coordinate.0, subordinate.coordinate.1)
-                    ),
-                    marks: Vec::new(),
-                },
-            );
-        }
-        blocks.extend(retained);
+    let mut retained = cell_blocks_for_emission(emission, subordinate)?;
+    if let Some(BlockNode { block: Block::Paragraph(inlines), .. }) = retained.first_mut() {
+        inlines.insert(
+            0,
+            Inline::Text {
+                value: format!(
+                    "{}: ",
+                    cell_name(subordinate.coordinate.0, subordinate.coordinate.1)
+                ),
+                marks: Vec::new(),
+            },
+        );
     }
+    blocks.extend(retained);
     Ok(())
 }
 
@@ -861,8 +866,11 @@ fn regions_area(regions: &[SparseRegion]) -> Result<u64, ConversionError> {
 
 #[cfg(test)]
 mod tests {
-    use super::regions_are_stream_ordered;
+    use super::{TokenStream, regions_are_stream_ordered};
     use crate::workbook::xlsx::regions::SparseRegion;
+    use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
+    use crate::workbook::xlsx::staging::stage;
+    use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
 
     fn region(first_row: u32, last_row: u32, first_column: u32, last_column: u32) -> SparseRegion {
         SparseRegion {
@@ -879,5 +887,33 @@ mod tests {
     fn interleaved_rectangles_require_sparse_tsv_emission() {
         assert!(!regions_are_stream_ordered(&[region(0, 3, 0, 1), region(0, 3, 4, 5),]));
         assert!(regions_are_stream_ordered(&[region(0, 3, 0, 1), region(4, 7, 0, 1),]));
+    }
+
+    #[test]
+    fn staged_token_stream_keeps_only_one_lookahead_cell() {
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let cells = (0..4_096)
+            .map(|column| CellToken {
+                coordinate: (0, column),
+                value: CellValueToken::Raw(column.to_string()),
+                formula: String::new(),
+                cell_type: "n".into(),
+                style_index: None,
+            })
+            .collect::<Vec<_>>();
+        let staged = stage(&cells, &context).unwrap();
+        let telemetry = staged.telemetry_handle();
+        let mut stream = TokenStream::new(staged.into_reader().unwrap());
+
+        assert_eq!(stream.buffered_cells(), 0);
+        assert_eq!(stream.peek().unwrap().unwrap().coordinate, (0, 0));
+        assert_eq!(stream.peek().unwrap().unwrap().coordinate, (0, 0));
+        assert_eq!(stream.buffered_cells(), 1);
+        assert_eq!(telemetry.lock().unwrap().reads, 1);
+        assert_eq!(stream.next().unwrap().unwrap().coordinate, (0, 0));
+        assert_eq!(stream.buffered_cells(), 0);
+        assert_eq!(telemetry.lock().unwrap().reads, 1);
+        assert_eq!(stream.next().unwrap().unwrap().coordinate, (0, 1));
+        assert_eq!(telemetry.lock().unwrap().reads, 2);
     }
 }

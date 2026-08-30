@@ -1,5 +1,5 @@
 use crate::workbook::error::{limit, malformed};
-use crate::workbook::opc::relationships::is_spreadsheet_namespace;
+use crate::workbook::opc::relationships::{decode_xml_reference, is_spreadsheet_namespace};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 use quick_xml::events::Event;
 use std::collections::{BTreeMap, BTreeSet};
@@ -41,6 +41,19 @@ pub(in crate::workbook) fn read_selected<R: BufRead>(
                     output.insert(index, String::new());
                 }
                 index = index.saturating_add(1);
+            }
+            Event::GeneralRef(reference) => {
+                let decoded = decode_xml_reference(reference.as_ref(), part)?;
+                if in_item {
+                    let next = item
+                        .len()
+                        .checked_add(decoded.len_utf8())
+                        .ok_or_else(|| limit("max_field_bytes", "shared string length overflow"))?;
+                    if u64::try_from(next).unwrap_or(u64::MAX) > options.limits.max_field_bytes {
+                        return Err(limit("max_field_bytes", "shared string is too large"));
+                    }
+                    item.push(decoded);
+                }
             }
             Event::Text(text) if in_item => {
                 let decoded = text.xml_content().map_err(|error| {
@@ -121,5 +134,20 @@ mod tests {
         .unwrap();
         assert_eq!(values.get(&1).map(String::as_str), Some("hot value"));
         assert_eq!(values.get(&2).map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn selected_shared_strings_restore_xml_references() {
+        let xml = br#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>R&amp;D</t></si></sst>"#;
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let values = read_selected(
+            Cursor::new(xml),
+            &BTreeSet::from([0]),
+            "xl/sharedStrings.xml",
+            &ConversionOptions::default(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(values.get(&0).map(String::as_str), Some("R&D"));
     }
 }

@@ -29,29 +29,46 @@ pub(in crate::workbook) fn validate_xml_reference(
     reference: &[u8],
     part: &str,
 ) -> Result<(), ConversionError> {
-    if matches!(reference, b"amp" | b"lt" | b"gt" | b"apos" | b"quot") {
-        return Ok(());
-    }
-    let value = if let Some(hex) = reference.strip_prefix(b"#x") {
-        (1..=6)
-            .contains(&hex.len())
-            .then(|| std::str::from_utf8(hex).ok())
-            .flatten()
-            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
-    } else if let Some(decimal) = reference.strip_prefix(b"#") {
-        (1..=7)
-            .contains(&decimal.len())
-            .then(|| std::str::from_utf8(decimal).ok())
-            .flatten()
-            .and_then(|digits| digits.parse::<u32>().ok())
-    } else {
-        None
+    decode_xml_reference(reference, part).map(|_| ())
+}
+
+pub(in crate::workbook) fn decode_xml_reference(
+    reference: &[u8],
+    part: &str,
+) -> Result<char, ConversionError> {
+    let value = match reference {
+        b"amp" => Some('&'),
+        b"lt" => Some('<'),
+        b"gt" => Some('>'),
+        b"apos" => Some('\''),
+        b"quot" => Some('"'),
+        _ => {
+            let numeric = if let Some(hex) = reference.strip_prefix(b"#x") {
+                (1..=6)
+                    .contains(&hex.len())
+                    .then(|| std::str::from_utf8(hex).ok())
+                    .flatten()
+                    .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            } else if let Some(decimal) = reference.strip_prefix(b"#") {
+                (1..=7)
+                    .contains(&decimal.len())
+                    .then(|| std::str::from_utf8(decimal).ok())
+                    .flatten()
+                    .and_then(|digits| digits.parse::<u32>().ok())
+            } else {
+                None
+            };
+            numeric.and_then(char::from_u32)
+        }
     };
-    if value.and_then(char::from_u32).is_some() {
-        Ok(())
-    } else {
-        Err(malformed(Some(part), "entity reference is forbidden"))
-    }
+    value
+        .filter(|value| {
+            matches!(
+                *value as u32,
+                0x9 | 0xa | 0xd | 0x20..=0xd7ff | 0xe000..=0xfffd | 0x1_0000..=0x10_ffff
+            )
+        })
+        .ok_or_else(|| malformed(Some(part), "entity reference is forbidden"))
 }
 
 #[allow(clippy::too_many_lines)] // Relationship authority and hierarchy remain one fail-closed pass.

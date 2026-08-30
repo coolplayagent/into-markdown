@@ -2,7 +2,7 @@ use crate::workbook::cell::{parse_cell_range, parse_cell_ref};
 use crate::workbook::error::{limit, malformed, warning};
 use crate::workbook::model::CellCoordinate;
 use crate::workbook::opc::relationships::{
-    decode_attr, is_spreadsheet_namespace, validate_xml_reference,
+    decode_attr, decode_xml_reference, is_spreadsheet_namespace,
 };
 use into_markdown_core::{
     CellRef, ConversionError, ConversionOptions, Diagnostic, ErrorPolicy, ExecutionContext,
@@ -108,7 +108,12 @@ fn parse_sheet<R: BufRead>(
         let core = is_spreadsheet_namespace(&namespace);
         match event {
             Event::DocType(_) => return Err(malformed(Some(part), "DTD is forbidden")),
-            Event::GeneralRef(reference) => validate_xml_reference(reference.as_ref(), part)?,
+            Event::GeneralRef(reference) => {
+                let decoded = decode_xml_reference(reference.as_ref(), part)?;
+                if opaque_depth == 0 && state.in_cell {
+                    state.text(&decoded.to_string());
+                }
+            }
             Event::Start(_) if opaque_depth > 0 => {
                 opaque_depth = opaque_depth
                     .checked_add(1)
@@ -659,6 +664,39 @@ mod tests {
         };
         assert!(
             read_layout(Cursor::new(xml), "xl/worksheets/sheet1.xml", &strict, &context,).is_err()
+        );
+    }
+
+    #[test]
+    fn worksheet_references_reassemble_inline_formula_and_cached_text() {
+        let xml = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>R&amp;D</t></is></c><c r="B1" t="str"><f>A1&amp;&quot;x&quot;</f><v>R&amp;D</v></c><c r="C1" t="inlineStr"><is><t>&#38;&#x26;&lt;</t></is></c></row></sheetData></worksheet>"#;
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let mut cells = Vec::new();
+        read_cells_into(
+            Cursor::new(xml),
+            "xl/worksheets/sheet1.xml",
+            &ConversionOptions::default(),
+            &context,
+            &mut |cell| {
+                cells.push(cell);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(matches!(&cells[0].value, super::CellValueToken::Raw(value) if value == "R&D"));
+        assert_eq!(cells[1].formula, "A1&\"x\"");
+        assert!(matches!(&cells[1].value, super::CellValueToken::Raw(value) if value == "R&D"));
+        assert!(matches!(&cells[2].value, super::CellValueToken::Raw(value) if value == "&&<"));
+
+        let custom = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>&custom;</v></c></row></sheetData></worksheet>"#;
+        assert!(
+            read_layout(
+                Cursor::new(custom),
+                "xl/worksheets/sheet1.xml",
+                &ConversionOptions::default(),
+                &context,
+            )
+            .is_err()
         );
     }
 }

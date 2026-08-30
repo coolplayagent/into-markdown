@@ -10,69 +10,103 @@ pub(super) fn translate_shared_formula(
     anchor: (u32, u32),
     target: (u32, u32),
 ) -> String {
-    if !formula.is_ascii() {
-        return formula.to_owned();
-    }
     let row_delta = i64::from(target.0) - i64::from(anchor.0);
     let column_delta = i64::from(target.1) - i64::from(anchor.1);
     let bytes = formula.as_bytes();
     let mut output = String::with_capacity(formula.len());
     let mut index = 0;
     while index < bytes.len() {
-        let start = index;
-        let column_absolute = bytes.get(index) == Some(&b'$');
-        if column_absolute {
-            index += 1;
+        if matches!(bytes[index], b'"' | b'\'') {
+            let end = quoted_token_end(bytes, index, bytes[index]);
+            output.push_str(&formula[index..end]);
+            index = end;
+            continue;
         }
-        let letters_start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_alphabetic) {
-            index += 1;
-        }
-        let letters_end = index;
-        let row_absolute = bytes.get(index) == Some(&b'$');
-        if row_absolute {
-            index += 1;
-        }
-        let digits_start = index;
-        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
-            index += 1;
-        }
-        let boundary_before =
-            start == 0 || !bytes[start - 1].is_ascii_alphanumeric() && bytes[start - 1] != b'_';
-        let boundary_after =
-            index == bytes.len() || !bytes[index].is_ascii_alphanumeric() && bytes[index] != b'_';
-        let candidate = letters_end > letters_start
-            && letters_end - letters_start <= 3
-            && index > digits_start
-            && boundary_before
-            && boundary_after;
-        if candidate
-            && let Some(column) = parse_column(&bytes[letters_start..letters_end])
-            && let Ok(row_one_based) = formula[digits_start..index].parse::<i64>()
+        if let Some((end, translated)) =
+            translated_reference_at(formula, index, row_delta, column_delta)
         {
-            let row = row_one_based - 1;
-            let translated_row = if row_absolute { row } else { row + row_delta };
-            let translated_column =
-                if column_absolute { i64::from(column) } else { i64::from(column) + column_delta };
-            if (0..1_048_576).contains(&translated_row) && (0..16_384).contains(&translated_column)
-            {
-                if column_absolute {
-                    output.push('$');
-                }
-                output.push_str(&column_name(u32::try_from(translated_column).unwrap_or_default()));
-                if row_absolute {
-                    output.push('$');
-                }
-                output.push_str(&(translated_row + 1).to_string());
-                continue;
-            }
+            output.push_str(&translated);
+            index = end;
+            continue;
         }
-        output.push_str(&formula[start..index.max(start + 1)]);
-        if index == start {
-            index += 1;
-        }
+        let character = formula[index..].chars().next().expect("formula index is a UTF-8 boundary");
+        output.push(character);
+        index += character.len_utf8();
     }
     output
+}
+
+fn quoted_token_end(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        if bytes[index] != quote {
+            index += 1;
+        } else if bytes.get(index + 1) == Some(&quote) {
+            index += 2;
+        } else {
+            return index + 1;
+        }
+    }
+    bytes.len()
+}
+
+fn translated_reference_at(
+    formula: &str,
+    start: usize,
+    row_delta: i64,
+    column_delta: i64,
+) -> Option<(usize, String)> {
+    let bytes = formula.as_bytes();
+    let boundary_before = start == 0 || !is_formula_identifier_byte(bytes[start - 1]);
+    if !boundary_before {
+        return None;
+    }
+    let column_absolute = bytes.get(start) == Some(&b'$');
+    let mut index = start + usize::from(column_absolute);
+    let letters_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_alphabetic) {
+        index += 1;
+    }
+    let letters_end = index;
+    if letters_end == letters_start || letters_end - letters_start > 3 {
+        return None;
+    }
+    let row_absolute = bytes.get(index) == Some(&b'$');
+    index += usize::from(row_absolute);
+    let digits_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    let next = bytes.get(index).copied();
+    let boundary_after = next.is_none_or(|byte| !is_formula_identifier_byte(byte));
+    if index == digits_start || !boundary_after || matches!(next, Some(b'(' | b'!')) {
+        return None;
+    }
+    let column = parse_column(&bytes[letters_start..letters_end])?;
+    let row = formula[digits_start..index].parse::<i64>().ok()?.checked_sub(1)?;
+    let translated_row = if row_absolute { row } else { row.checked_add(row_delta)? };
+    let translated_column = if column_absolute {
+        i64::from(column)
+    } else {
+        i64::from(column).checked_add(column_delta)?
+    };
+    if !(0..1_048_576).contains(&translated_row) || !(0..16_384).contains(&translated_column) {
+        return None;
+    }
+    let mut translated = String::new();
+    if column_absolute {
+        translated.push('$');
+    }
+    translated.push_str(&column_name(u32::try_from(translated_column).ok()?));
+    if row_absolute {
+        translated.push('$');
+    }
+    translated.push_str(&(translated_row + 1).to_string());
+    Some((index, translated))
+}
+
+fn is_formula_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || !byte.is_ascii()
 }
 
 fn parse_column(bytes: &[u8]) -> Option<u32> {
@@ -179,7 +213,7 @@ pub(in crate::workbook) fn detect_number_kind(format: &str) -> Option<NumberKind
 
 #[cfg(test)]
 mod tests {
-    use super::DisplayProfile;
+    use super::{DisplayProfile, translate_shared_formula};
     use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
     use std::collections::BTreeMap;
 
@@ -196,5 +230,22 @@ mod tests {
             };
             assert_eq!(profile.display(&cell, &BTreeMap::new()).unwrap(), raw);
         }
+    }
+
+    #[test]
+    fn shared_formula_translation_skips_functions_literals_and_sheet_names() {
+        assert_eq!(translate_shared_formula("LOG10(A1)", (0, 0), (1, 0)), "LOG10(A2)");
+        assert_eq!(
+            translate_shared_formula(r#"IF(A1="A1",A1,"A1""B2")"#, (0, 0), (1, 0)),
+            r#"IF(A2="A1",A2,"A1""B2")"#
+        );
+        assert_eq!(
+            translate_shared_formula("'$A1 Data'!$A1+Sheet1!B$2+$C$3+A1:B2+A1!B2", (0, 0), (1, 2),),
+            "'$A1 Data'!$A2+Sheet1!D$2+$C$3+C2:D3+A1!D3"
+        );
+        assert_eq!(
+            translate_shared_formula("SUM(数据!A1,数据A1,A1)", (0, 0), (1, 0)),
+            "SUM(数据!A2,数据A1,A2)"
+        );
     }
 }
