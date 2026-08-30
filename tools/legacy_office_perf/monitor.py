@@ -284,4 +284,3 @@ def observe_xls(
         report=report,
         stderr=stderr.decode("utf-8", errors="replace")[-2048:],
     )
-

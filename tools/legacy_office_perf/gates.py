@@ -44,4 +44,3 @@ def gate(candidate: dict[str, object], baseline: dict[str, object]) -> tuple[lis
         f"parallel={parallel:.3f}ms, serial={serial:.3f}ms, limit={serial * 2:.3f}ms",
     )
     return checks, all(check["passed"] for check in checks)
-

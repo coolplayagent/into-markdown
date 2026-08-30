@@ -281,4 +281,3 @@ def verify_xls_oracle(
         "mergedRanges": merges_match,
         "errors": errors[:32],
     }
-

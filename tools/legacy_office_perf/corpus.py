@@ -270,4 +270,3 @@ def xls_corpus_report(
         },
         checks,
     )
-

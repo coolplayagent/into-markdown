@@ -138,4 +138,3 @@ def baseline_report(
         "legacyConversionAvailability": formats,
         "note": note,
     }
-

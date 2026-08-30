@@ -2,7 +2,9 @@ use super::binary::{
     le16, le32, read_sector, to_usize, try_sized_vec, try_vec_capacity, validate_physical,
 };
 use super::chain::walk_chain;
-use super::directory::{assign_paths, cfb_directory_memory_plan, parse_directory, stable_path};
+use super::directory::{
+    DirectoryEntry, assign_paths, cfb_directory_memory_plan, parse_directory, stable_path,
+};
 use super::ownership::{
     claim, fat_target_is_out_of_bounds, validate_fat_targets, validate_pending_tails,
 };
@@ -37,6 +39,24 @@ pub(super) struct Header {
     minifat_sectors: u32,
     first_difat: u32,
     difat_sectors: u32,
+}
+
+struct AllocationState {
+    sector_count: usize,
+    stream_sector_count: usize,
+    partial_stream_sector: Option<usize>,
+    memory: CompoundMemory,
+    recoveries: CompoundRecoveries,
+    owners: Vec<bool>,
+    fat: Vec<u32>,
+}
+
+struct StreamState {
+    minifat: Vec<u32>,
+    root_mini_stream: Vec<u8>,
+    regular_tail_targets: Vec<u32>,
+    mini_owners: Vec<bool>,
+    mini_tail_targets: Vec<u32>,
 }
 
 impl Header {
@@ -86,13 +106,45 @@ impl Header {
         })
     }
 
-    #[allow(clippy::too_many_lines)] // Sector ownership stays adjacent to every chain read.
     fn open<B: CompoundBudget + ?Sized>(
         self,
         bytes: &[u8],
         budget: &mut B,
         compatibility: CompoundCompatibility,
     ) -> Result<CompoundFile, ConversionError> {
+        let mut allocation = self.read_allocation_tables(bytes, budget, compatibility)?;
+        let entries = self.read_directory(bytes, budget, compatibility, &mut allocation)?;
+        let minifat = self.read_minifat(bytes, budget, &entries, &mut allocation)?;
+        let mut stream_state = self.read_root_stream(
+            bytes,
+            budget,
+            compatibility,
+            &entries,
+            minifat,
+            &mut allocation,
+        )?;
+        let streams = self.read_streams(
+            bytes,
+            budget,
+            compatibility,
+            &entries,
+            &mut allocation,
+            &mut stream_state,
+        )?;
+        Ok(CompoundFile {
+            entries,
+            streams,
+            recoveries: allocation.recoveries,
+            _memory: allocation.memory.into_leases(),
+        })
+    }
+
+    fn read_allocation_tables<B: CompoundBudget + ?Sized>(
+        self,
+        bytes: &[u8],
+        budget: &mut B,
+        compatibility: CompoundCompatibility,
+    ) -> Result<AllocationState, ConversionError> {
         if bytes.len() < self.sector_size {
             return Err(malformed("cfb/header", "CFB file length is not sector aligned"));
         }
@@ -104,20 +156,14 @@ impl Header {
             return Err(malformed("cfb/header", "non-zero version 4 header padding"));
         }
         let sector_count = bytes.len() / self.sector_size - 1;
-        let partial_stream_sector = (compatibility
-            == CompoundCompatibility::LegacyOfficeBestEffort
-            && !bytes.len().is_multiple_of(self.sector_size))
-        .then_some(sector_count);
+        let partial_stream_sector =
+            (compatibility == CompoundCompatibility::LegacyOfficeBestEffort && trailing_recovery)
+                .then_some(sector_count);
         let stream_sector_count = sector_count + usize::from(partial_stream_sector.is_some());
-        // CFB parsing accounts the concrete logical capacities it is about to allocate in both
-        // compatibility modes. The lifetime lease grows only when authenticated structure
-        // reveals another retained allocation; phase scratch has a separate short-lived lease.
-        let mut memory =
+        let memory =
             CompoundMemory::new(cfb_initial_memory_plan(self, stream_sector_count)?, budget)?;
         let mut recoveries = CompoundRecoveries::default();
         if trailing_recovery {
-            // Sector identifiers can only address complete sectors. A short physical tail is
-            // unreachable by every authenticated chain and can therefore be ignored safely.
             recoveries.insert(CompoundRecovery::TrailingFileBytes);
         }
         let mut owners = try_sized_vec(stream_sector_count, false, "CFB sector owner table")?;
@@ -140,40 +186,37 @@ impl Header {
                     .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
             );
         }
-        if fat.len() < sector_count {
-            return Err(malformed("cfb/fat", "FAT does not address every physical sector"));
-        }
-        for id in &fat_sector_ids {
-            if fat.get(to_usize(*id)?).copied() != Some(FAT) {
-                if compatibility == CompoundCompatibility::Strict {
-                    return Err(malformed("cfb/fat", "FAT sector is not marked FATSECT"));
-                }
-                // DIFAT is the authoritative, bounded list of FAT sectors.  `claim` below still
-                // prevents any stream or metadata chain from reusing this physical sector.
-                recoveries.insert(CompoundRecovery::FatSectorMarker);
-            }
-        }
-        for id in &difat_sector_ids {
-            if fat.get(to_usize(*id)?).copied() != Some(DIFAT) {
-                return Err(malformed("cfb/difat", "DIFAT sector is not marked DIFSECT"));
-            }
-        }
-        if compatibility == CompoundCompatibility::Strict {
-            validate_fat_targets(&fat[..sector_count], sector_count)?;
-        } else if fat[..sector_count]
-            .iter()
-            .any(|value| fat_target_is_out_of_bounds(*value, sector_count))
-        {
-            // Every reachable chain is still walked with `sector_count` and fails on an invalid
-            // transition.  Stale targets belonging only to unreachable sectors are inert.
-            recoveries.insert(CompoundRecovery::UnreachableFatTarget);
-        }
+        validate_fat(
+            &fat,
+            &fat_sector_ids,
+            &difat_sector_ids,
+            sector_count,
+            compatibility,
+            &mut recoveries,
+        )?;
+        Ok(AllocationState {
+            sector_count,
+            stream_sector_count,
+            partial_stream_sector,
+            memory,
+            recoveries,
+            owners,
+            fat,
+        })
+    }
 
+    fn read_directory<B: CompoundBudget + ?Sized>(
+        self,
+        bytes: &[u8],
+        budget: &mut B,
+        compatibility: CompoundCompatibility,
+        allocation: &mut AllocationState,
+    ) -> Result<Vec<DirectoryEntry>, ConversionError> {
         let directory_expected = (self.major == 4).then_some(self.directory_sectors);
         let directory_chain = walk_chain(
             self.first_directory,
-            &fat,
-            stream_sector_count,
+            &allocation.fat,
+            allocation.stream_sector_count,
             directory_expected,
             "cfb/directory",
         )?;
@@ -181,24 +224,36 @@ impl Header {
             return Err(malformed("cfb/directory", "CFB has no directory sector"));
         }
         for id in &directory_chain {
-            claim(&mut owners, *id, "cfb/directory")?;
+            claim(&mut allocation.owners, *id, "cfb/directory")?;
         }
         let directory_capacity = directory_chain
             .len()
             .checked_mul(self.sector_size)
             .ok_or_else(|| limit("max_memory_bytes", "CFB directory capacity overflowed"))?;
-        let directory_entries = directory_capacity / 128;
-        memory.grow(cfb_directory_memory_plan(directory_entries)?, budget)?;
-        let directory_scratch =
-            budget.cfb_memory(u64::try_from(directory_capacity).unwrap_or(u64::MAX))?;
+        allocation.memory.grow(cfb_directory_memory_plan(directory_capacity / 128)?, budget)?;
+        let scratch = budget.cfb_memory(u64::try_from(directory_capacity).unwrap_or(u64::MAX))?;
         let directory_bytes = concatenate(bytes, self.sector_size, &directory_chain)?;
-        let mut entries =
-            parse_directory(&directory_bytes, self.major, budget, compatibility, &mut recoveries)?;
+        let mut entries = parse_directory(
+            &directory_bytes,
+            self.major,
+            budget,
+            compatibility,
+            &mut allocation.recoveries,
+        )?;
         drop(directory_bytes);
-        drop(directory_scratch);
+        drop(scratch);
         assign_paths(&mut entries, budget)?;
+        Ok(entries)
+    }
 
-        let minifat_chain = if self.minifat_sectors == 0 {
+    fn read_minifat<B: CompoundBudget + ?Sized>(
+        self,
+        bytes: &[u8],
+        budget: &mut B,
+        entries: &[DirectoryEntry],
+        allocation: &mut AllocationState,
+    ) -> Result<Vec<u32>, ConversionError> {
+        let chain = if self.minifat_sectors == 0 {
             if !matches!(self.first_minifat, END | FREE) {
                 return Err(malformed("cfb/minifat", "empty miniFAT has a start sector"));
             }
@@ -206,44 +261,55 @@ impl Header {
         } else {
             walk_chain(
                 self.first_minifat,
-                &fat,
-                sector_count,
+                &allocation.fat,
+                allocation.sector_count,
                 Some(self.minifat_sectors),
                 "cfb/minifat",
             )?
         };
-        for id in &minifat_chain {
-            claim(&mut owners, *id, "cfb/minifat")?;
+        for id in &chain {
+            claim(&mut allocation.owners, *id, "cfb/minifat")?;
         }
-        let root =
-            entries.first().ok_or_else(|| malformed("cfb/directory", "missing root entry"))?;
-        memory.grow(
+        allocation.memory.grow(
             cfb_stream_memory_plan(
-                &entries,
-                minifat_chain.len(),
+                entries,
+                chain.len(),
                 self.sector_size,
                 self.mini_sector_size,
                 self.mini_cutoff,
             )?,
             budget,
         )?;
-        let minifat_capacity = minifat_chain
+        let capacity = chain
             .len()
             .checked_mul(self.sector_size / 4)
             .ok_or_else(|| limit("max_memory_bytes", "CFB miniFAT capacity overflowed"))?;
-        let mut minifat = try_vec_capacity(minifat_capacity, "CFB miniFAT")?;
-        for id in &minifat_chain {
+        let mut minifat = try_vec_capacity(capacity, "CFB miniFAT")?;
+        for id in &chain {
             minifat.extend(
                 read_sector(bytes, self.sector_size, *id)?
                     .chunks_exact(4)
                     .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
             );
         }
+        Ok(minifat)
+    }
 
+    fn read_root_stream<B: CompoundBudget + ?Sized>(
+        self,
+        bytes: &[u8],
+        budget: &mut B,
+        compatibility: CompoundCompatibility,
+        entries: &[DirectoryEntry],
+        minifat: Vec<u32>,
+        allocation: &mut AllocationState,
+    ) -> Result<StreamState, ConversionError> {
+        let root =
+            entries.first().ok_or_else(|| malformed("cfb/directory", "missing root entry"))?;
         let (root_chain, root_tail) = regular_stream_chain(
             root,
-            &fat,
-            sector_count,
+            &allocation.fat,
+            allocation.sector_count,
             self.sector_size,
             "cfb/root",
             compatibility,
@@ -252,83 +318,111 @@ impl Header {
             try_vec_capacity(entries.len(), "CFB regular stream tail targets")?;
         regular_tail_targets.extend(root_tail);
         for id in &root_chain {
-            claim(&mut owners, *id, "cfb/root-mini-stream")?;
+            claim(&mut allocation.owners, *id, "cfb/root-mini-stream")?;
         }
-        let (root_mini_stream, root_partial_tail_consumed) = materialize_regular_stream(
+        let (root_mini_stream, partial_tail) = materialize_regular_stream(
             bytes,
             self.sector_size,
             &root_chain,
             root.size,
-            partial_stream_sector,
+            allocation.partial_stream_sector,
             "cfb/root",
             budget,
         )?;
-        if let Some(consumed_all_tail) = root_partial_tail_consumed {
-            if consumed_all_tail {
-                recoveries.remove(CompoundRecovery::TrailingFileBytes);
-            }
-            recoveries.insert(CompoundRecovery::PartialStreamSector);
-        }
-        let mut mini_owners = try_sized_vec(
+        record_partial_tail(partial_tail, &mut allocation.recoveries);
+        let mini_owners = try_sized_vec(
             root_mini_stream.len().div_ceil(self.mini_sector_size),
             false,
             "CFB mini-sector owner table",
         )?;
-        let mut mini_tail_targets =
-            try_vec_capacity(entries.len(), "CFB mini stream tail targets")?;
+        Ok(StreamState {
+            minifat,
+            root_mini_stream,
+            regular_tail_targets,
+            mini_owners,
+            mini_tail_targets: try_vec_capacity(entries.len(), "CFB mini stream tail targets")?,
+        })
+    }
+
+    fn read_streams<B: CompoundBudget + ?Sized>(
+        self,
+        bytes: &[u8],
+        budget: &mut B,
+        compatibility: CompoundCompatibility,
+        entries: &[DirectoryEntry],
+        allocation: &mut AllocationState,
+        state: &mut StreamState,
+    ) -> Result<Vec<Option<Vec<u8>>>, ConversionError> {
         let mut streams = try_sized_vec(entries.len(), None, "CFB stream slots")?;
         for (index, entry) in
             entries.iter().enumerate().filter(|(_, entry)| entry.kind == EntryKind::Stream)
         {
             budget.cfb_expanded(entry.size)?;
-            let part = stable_path(&entries, index);
+            let part = stable_path(entries, index);
             let data = if entry.size < u64::from(self.mini_cutoff) {
-                let mut mini_context = MiniStreamContext {
-                    minifat: &minifat,
-                    root: &root_mini_stream,
-                    owners: &mut mini_owners,
+                let mut context = MiniStreamContext {
+                    minifat: &state.minifat,
+                    root: &state.root_mini_stream,
+                    owners: &mut state.mini_owners,
                     mini_size: self.mini_sector_size,
                     compatibility,
-                    pending_tails: &mut mini_tail_targets,
+                    pending_tails: &mut state.mini_tail_targets,
                 };
-                read_mini_stream(entry, &part, &mut mini_context)?
+                read_mini_stream(entry, &part, &mut context)?
             } else {
-                let (chain, pending_tail) = regular_stream_chain(
-                    entry,
-                    &fat,
-                    stream_sector_count,
-                    self.sector_size,
-                    &part,
-                    compatibility,
-                )?;
-                regular_tail_targets.extend(pending_tail);
-                for id in &chain {
-                    claim(&mut owners, *id, &part)?;
-                }
-                let (data, partial_tail_consumed) = concatenate_regular_stream(
-                    bytes,
-                    self.sector_size,
-                    &chain,
-                    entry.size,
-                    partial_stream_sector,
-                    &part,
-                )?;
-                if let Some(consumed_all_tail) = partial_tail_consumed {
-                    if consumed_all_tail {
-                        recoveries.remove(CompoundRecovery::TrailingFileBytes);
-                    }
-                    recoveries.insert(CompoundRecovery::PartialStreamSector);
-                }
-                data
+                self.read_regular_stream(bytes, entry, &part, compatibility, allocation, state)?
             };
             streams[index] = Some(data);
         }
-        validate_pending_tails(&regular_tail_targets, &owners, &fat, "cfb/stream-tail")?;
-        validate_pending_tails(&mini_tail_targets, &mini_owners, &minifat, "cfb/mini-stream-tail")?;
-        if !regular_tail_targets.is_empty() || !mini_tail_targets.is_empty() {
-            recoveries.insert(CompoundRecovery::StreamChainTail);
+        validate_pending_tails(
+            &state.regular_tail_targets,
+            &allocation.owners,
+            &allocation.fat,
+            "cfb/stream-tail",
+        )?;
+        validate_pending_tails(
+            &state.mini_tail_targets,
+            &state.mini_owners,
+            &state.minifat,
+            "cfb/mini-stream-tail",
+        )?;
+        if !state.regular_tail_targets.is_empty() || !state.mini_tail_targets.is_empty() {
+            allocation.recoveries.insert(CompoundRecovery::StreamChainTail);
         }
-        Ok(CompoundFile { entries, streams, recoveries, _memory: memory.into_leases() })
+        Ok(streams)
+    }
+
+    fn read_regular_stream(
+        self,
+        bytes: &[u8],
+        entry: &DirectoryEntry,
+        part: &str,
+        compatibility: CompoundCompatibility,
+        allocation: &mut AllocationState,
+        state: &mut StreamState,
+    ) -> Result<Vec<u8>, ConversionError> {
+        let (chain, pending_tail) = regular_stream_chain(
+            entry,
+            &allocation.fat,
+            allocation.stream_sector_count,
+            self.sector_size,
+            part,
+            compatibility,
+        )?;
+        state.regular_tail_targets.extend(pending_tail);
+        for id in &chain {
+            claim(&mut allocation.owners, *id, part)?;
+        }
+        let (data, partial_tail) = concatenate_regular_stream(
+            bytes,
+            self.sector_size,
+            &chain,
+            entry.size,
+            allocation.partial_stream_sector,
+            part,
+        )?;
+        record_partial_tail(partial_tail, &mut allocation.recoveries);
+        Ok(data)
     }
 
     fn read_difat<B: CompoundBudget + ?Sized>(
@@ -374,6 +468,50 @@ impl Header {
             return Err(malformed("cfb/difat", "declared FAT sector count does not match DIFAT"));
         }
         Ok((fat_ids, difat_ids))
+    }
+}
+
+fn validate_fat(
+    fat: &[u32],
+    fat_sector_ids: &[u32],
+    difat_sector_ids: &[u32],
+    sector_count: usize,
+    compatibility: CompoundCompatibility,
+    recoveries: &mut CompoundRecoveries,
+) -> Result<(), ConversionError> {
+    if fat.len() < sector_count {
+        return Err(malformed("cfb/fat", "FAT does not address every physical sector"));
+    }
+    for id in fat_sector_ids {
+        if fat.get(to_usize(*id)?).copied() != Some(FAT) {
+            if compatibility == CompoundCompatibility::Strict {
+                return Err(malformed("cfb/fat", "FAT sector is not marked FATSECT"));
+            }
+            recoveries.insert(CompoundRecovery::FatSectorMarker);
+        }
+    }
+    for id in difat_sector_ids {
+        if fat.get(to_usize(*id)?).copied() != Some(DIFAT) {
+            return Err(malformed("cfb/difat", "DIFAT sector is not marked DIFSECT"));
+        }
+    }
+    if compatibility == CompoundCompatibility::Strict {
+        validate_fat_targets(&fat[..sector_count], sector_count)
+    } else {
+        if fat[..sector_count].iter().any(|value| fat_target_is_out_of_bounds(*value, sector_count))
+        {
+            recoveries.insert(CompoundRecovery::UnreachableFatTarget);
+        }
+        Ok(())
+    }
+}
+
+fn record_partial_tail(consumed: Option<bool>, recoveries: &mut CompoundRecoveries) {
+    if let Some(consumed_all_tail) = consumed {
+        if consumed_all_tail {
+            recoveries.remove(CompoundRecovery::TrailingFileBytes);
+        }
+        recoveries.insert(CompoundRecovery::PartialStreamSector);
     }
 }
 
