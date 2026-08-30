@@ -208,6 +208,8 @@ fn ordinary_names_preserve_identifiers_and_scope_without_expanding_definitions()
     assert_eq!(references.defined_name(1, 0), Err("shadowed-global-name"));
     assert_eq!(references.defined_name(5, 0).unwrap(), "A");
     assert_eq!(references.defined_name(1, 1).unwrap(), "A");
+    references.record(0x0018, &label("On2", 0, 0));
+    assert_eq!(references.defined_name(6, 0).unwrap(), "On2");
 }
 
 #[test]

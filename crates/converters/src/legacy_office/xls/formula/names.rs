@@ -92,7 +92,11 @@ fn identifier(name: &str) -> bool {
         && characters
             .all(|character| character.is_alphanumeric() || matches!(character, '_' | '.' | '\\'))
         && !matches!(name.to_ascii_uppercase().as_str(), "R" | "C" | "TRUE" | "FALSE")
-        && parse_cell_ref(name).is_err()
+        // BIFF8 names may look like addresses outside its 256-column/65536-row grid
+        // (for example On2); applying the larger XLSX grid would lose legal names.
+        && !parse_cell_ref(name).is_ok_and(|(row, column)| {
+            u16::try_from(row).is_ok() && u8::try_from(column).is_ok()
+        })
         && !r1c1_reference(name)
 }
 
