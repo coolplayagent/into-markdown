@@ -10,13 +10,13 @@ mod doc;
 mod ppt;
 mod xls;
 
-use crate::msg::ole::CompoundFile;
+use crate::msg::ole::{CompoundCompatibility, CompoundFile, CompoundRecovery};
 use budget::{LegacyBudget, malformed};
 use builder::PROVIDER_ID;
 use into_markdown_core::{
     Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome,
-    ProvenanceKind, ResolvedInput, Services, SourceLocator,
+    Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionContext, FormatCandidate, InputFormat,
+    ProbeOutcome, ProvenanceKind, ResolvedInput, Services, SourceLocator,
 };
 
 const FORMATS: &[InputFormat] = &[InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls];
@@ -47,7 +47,13 @@ impl Converter for LegacyOfficeConverter {
     ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            if !FORMATS.contains(&candidate.format) || !input.bytes.starts_with(CFB_MAGIC) {
+            if !FORMATS.contains(&candidate.format) {
+                return Ok(ProbeOutcome::NotApplicable);
+            }
+            let compound = input.bytes.starts_with(CFB_MAGIC);
+            let raw_xls =
+                candidate.format == InputFormat::Xls && xls::looks_like_raw_biff(&input.bytes);
+            if !compound && !raw_xls {
                 return Ok(ProbeOutcome::NotApplicable);
             }
             Ok(ProbeOutcome::Match { confidence: 1.0 })
@@ -95,7 +101,18 @@ fn convert_native(
         });
     }
     let mut budget = LegacyBudget::new(bytes.len(), options, context)?;
-    let compound = CompoundFile::open(bytes, &mut budget)?;
+    if requested == InputFormat::Xls && xls::looks_like_raw_biff(bytes) {
+        return xls::convert_raw(bytes, &mut budget, options, context);
+    }
+    let compatibility =
+        if requested == InputFormat::Xls && options.error_policy == ErrorPolicy::BestEffort {
+            CompoundCompatibility::LegacyOfficeBestEffort
+        } else {
+            CompoundCompatibility::Strict
+        };
+    let compound = CompoundFile::open_with_compatibility(bytes, &mut budget, compatibility)?;
+    let compound_recoveries = compound.recoveries().collect::<Vec<_>>();
+    let container_view_required = !compound_recoveries.is_empty();
     let root = compound.root();
     let detected = detect_family(root)?;
     if detected != requested {
@@ -105,11 +122,73 @@ fn convert_native(
             ),
         });
     }
-    match detected {
+    let mut output = match detected {
         InputFormat::Doc => doc::convert(root, &mut budget),
         InputFormat::Ppt => ppt::convert(root, &mut budget),
-        InputFormat::Xls => xls::convert(bytes, root, &mut budget, options, context),
+        InputFormat::Xls => {
+            xls::convert(bytes, root, &mut budget, options, context, container_view_required)
+        }
         _ => unreachable!("family detector returns only legacy Office formats"),
+    }?;
+    for recovery in compound_recoveries {
+        output.diagnostics.push(compound_recovery_diagnostic(recovery));
+    }
+    Ok(output)
+}
+
+fn compound_recovery_diagnostic(recovery: CompoundRecovery) -> Diagnostic {
+    let severity = if recovery == CompoundRecovery::StorageStreamMetadata {
+        DiagnosticSeverity::Warning
+    } else {
+        DiagnosticSeverity::Info
+    };
+    let (code, message, part) = match recovery {
+        CompoundRecovery::TrailingFileBytes => (
+            "legacyOffice.cfb.trailingBytesIgnored",
+            "unaddressable bytes after the final complete CFB sector were ignored",
+            "cfb/header",
+        ),
+        CompoundRecovery::FatSectorMarker => (
+            "legacyOffice.cfb.fatMarkerRecovered",
+            "a FAT sector marker disagreed with the bounded DIFAT and was recovered",
+            "cfb/fat",
+        ),
+        CompoundRecovery::UnreachableFatTarget => (
+            "legacyOffice.cfb.unreachableFatTargetIgnored",
+            "an out-of-bounds FAT target belonging to no reachable chain was ignored",
+            "cfb/fat",
+        ),
+        CompoundRecovery::DirectoryNameTerminator => (
+            "legacyOffice.cfb.directoryNameRecovered",
+            "a directory name used a non-canonical but unambiguous NUL terminator",
+            "cfb/directory",
+        ),
+        CompoundRecovery::RootStorageName => (
+            "legacyOffice.cfb.rootNameRecovered",
+            "the type-5 root storage used a non-canonical display name",
+            "cfb/directory",
+        ),
+        CompoundRecovery::StorageStreamMetadata => (
+            "legacyOffice.cfb.storageMetadataIgnored",
+            "stream-only metadata on a storage directory entry was ignored",
+            "cfb/directory",
+        ),
+        CompoundRecovery::StreamChainTail => (
+            "legacyOffice.cfb.streamTailIgnored",
+            "a stale allocation pointer after the declared end of a complete stream was ignored",
+            "cfb/stream",
+        ),
+        CompoundRecovery::PartialStreamSector => (
+            "legacyOffice.cfb.partialStreamSectorRecovered",
+            "the available prefix of a terminal partial sector satisfied the declared stream size",
+            "cfb/stream",
+        ),
+    };
+    Diagnostic {
+        code: code.into(),
+        severity,
+        message: message.into(),
+        locator: Some(SourceLocator { part: Some(part.into()), ..Default::default() }),
     }
 }
 
@@ -121,14 +200,6 @@ pub(super) fn normalize_xls_output(output: &mut ConverterOutput) {
         .properties
         .insert("legacyOffice.parser".into(), "into-markdown-native".into());
     rewrite_provenance(&mut output.document.blocks);
-    output.diagnostics.push(Diagnostic {
-        code: "legacyOffice.xls.inertObjectsSkipped".into(),
-        severity: DiagnosticSeverity::Warning,
-        message:
-            "macros, external workbook bindings, and executable embedded objects were not executed"
-                .into(),
-        locator: Some(SourceLocator { part: Some("Workbook".into()), ..SourceLocator::default() }),
-    });
 }
 
 fn rewrite_provenance(nodes: &mut [BlockNode]) {
@@ -224,6 +295,19 @@ mod native_tests {
                     && u16::from_le_bytes(window[2..4].try_into().unwrap()) >= 0x00c1
             })
             .unwrap()
+    }
+
+    fn options(policy: ErrorPolicy) -> ConversionOptions {
+        ConversionOptions { error_policy: policy, ..ConversionOptions::default() }
+    }
+
+    fn convert_with_options(
+        bytes: &[u8],
+        format: InputFormat,
+        options: &ConversionOptions,
+    ) -> Result<ConverterOutput, ConversionError> {
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        convert_native(bytes, format, options, &context)
     }
 
     #[test]
@@ -330,6 +414,160 @@ mod native_tests {
             convert_native(DOC, InputFormat::Doc, &limited, &limited_context),
             Err(ConversionError::ResourceLimit { limit: "max_archive_entries", .. })
         ));
+    }
+
+    #[test]
+    fn xls_best_effort_recovers_only_redundant_cfb_metadata() {
+        let strict = options(ErrorPolicy::Strict);
+        let best_effort = options(ErrorPolicy::BestEffort);
+
+        let mut storage_metadata = XLS.to_vec();
+        let comp_obj = directory_entry(&storage_metadata, "\u{1}CompObj");
+        storage_metadata[comp_obj + 66] = 1;
+        assert!(matches!(
+            convert_with_options(&storage_metadata, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered =
+            convert_with_options(&storage_metadata, InputFormat::Xls, &best_effort).unwrap();
+        assert!(recovered.diagnostics.iter().any(|item| {
+            item.code == "legacyOffice.cfb.storageMetadataIgnored"
+                && item.severity == DiagnosticSeverity::Warning
+        }));
+        assert!(matches!(
+            convert_with_options(&storage_metadata, InputFormat::Doc, &best_effort),
+            Err(ConversionError::Malformed { .. })
+        ));
+        assert!(matches!(
+            convert_with_options(&storage_metadata, InputFormat::Doc, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let mut name_terminator = XLS.to_vec();
+        let comp_obj = directory_entry(&name_terminator, "\u{1}CompObj");
+        let declared =
+            u16::from_le_bytes(name_terminator[comp_obj + 64..comp_obj + 66].try_into().unwrap());
+        name_terminator[comp_obj + 64..comp_obj + 66]
+            .copy_from_slice(&(declared + 2).to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&name_terminator, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered =
+            convert_with_options(&name_terminator, InputFormat::Xls, &best_effort).unwrap();
+        assert!(recovered.diagnostics.iter().any(|item| {
+            item.code == "legacyOffice.cfb.directoryNameRecovered"
+                && item.severity == DiagnosticSeverity::Info
+        }));
+
+        let mut trailing_bytes = XLS.to_vec();
+        trailing_bytes.extend_from_slice(&[0xaa, 0xbb, 0xcc]);
+        assert!(matches!(
+            convert_with_options(&trailing_bytes, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered =
+            convert_with_options(&trailing_bytes, InputFormat::Xls, &best_effort).unwrap();
+        assert!(recovered.diagnostics.iter().any(|item| {
+            item.code == "legacyOffice.cfb.trailingBytesIgnored"
+                && item.severity == DiagnosticSeverity::Info
+        }));
+
+        let mut fat_marker = XLS.to_vec();
+        let fat_sector = read_u32(&fat_marker, 76);
+        let marker =
+            sector_offset(&fat_marker, fat_sector) + usize::try_from(fat_sector).unwrap() * 4;
+        fat_marker[marker..marker + 4].copy_from_slice(&0xffff_fffe_u32.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&fat_marker, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered = convert_with_options(&fat_marker, InputFormat::Xls, &best_effort).unwrap();
+        assert!(
+            recovered
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "legacyOffice.cfb.fatMarkerRecovered")
+        );
+
+        let mut stale_fat = XLS.to_vec();
+        let fat_sector = read_u32(&stale_fat, 76);
+        let unused_marker = sector_offset(&stale_fat, fat_sector) + 4;
+        let out_of_bounds = u32::try_from(stale_fat.len() / 512 + 10).unwrap();
+        stale_fat[unused_marker..unused_marker + 4].copy_from_slice(&out_of_bounds.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&stale_fat, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered = convert_with_options(&stale_fat, InputFormat::Xls, &best_effort).unwrap();
+        assert!(
+            recovered
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "legacyOffice.cfb.unreachableFatTargetIgnored")
+        );
+
+        let mut root_name = XLS.to_vec();
+        let root = sector_offset(&root_name, read_u32(&root_name, 48));
+        root_name[root..root + 64].fill(0);
+        root_name[root..root + 2].copy_from_slice(&('R' as u16).to_le_bytes());
+        root_name[root + 64..root + 66].copy_from_slice(&2_u16.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&root_name, InputFormat::Xls, &strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+        let recovered = convert_with_options(&root_name, InputFormat::Xls, &best_effort).unwrap();
+        assert!(
+            recovered
+                .diagnostics
+                .iter()
+                .any(|item| item.code == "legacyOffice.cfb.rootNameRecovered")
+        );
+    }
+
+    #[test]
+    fn xls_best_effort_still_rejects_mini_chain_cycles_and_overlaps() {
+        let best_effort = options(ErrorPolicy::BestEffort);
+        let mut cycle = XLS.to_vec();
+        let workbook_entry = directory_entry(&cycle, "Workbook");
+        let workbook_sector = read_u32(&cycle, workbook_entry + 116);
+        let minifat_sector = read_u32(&cycle, 60);
+        let minifat_entry =
+            sector_offset(&cycle, minifat_sector) + usize::try_from(workbook_sector).unwrap() * 4;
+        cycle[minifat_entry..minifat_entry + 4].copy_from_slice(&workbook_sector.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&cycle, InputFormat::Xls, &best_effort),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let mut overlap = XLS.to_vec();
+        let comp_obj = directory_entry(&overlap, "\u{1}CompObj");
+        overlap[comp_obj + 116..comp_obj + 120].copy_from_slice(&workbook_sector.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&overlap, InputFormat::Xls, &best_effort),
+            Err(ConversionError::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn doc_and_ppt_keep_strict_cfb_validation_in_best_effort() {
+        let best_effort = options(ErrorPolicy::BestEffort);
+        for (fixture, format) in [(DOC, InputFormat::Doc), (PPT, InputFormat::Ppt)] {
+            let mut storage_metadata = fixture.to_vec();
+            let comp_obj = directory_entry(&storage_metadata, "\u{1}CompObj");
+            storage_metadata[comp_obj + 66] = 1;
+            assert!(matches!(
+                convert_with_options(&storage_metadata, format, &best_effort),
+                Err(ConversionError::Malformed { .. })
+            ));
+
+            let mut trailing_bytes = fixture.to_vec();
+            trailing_bytes.extend_from_slice(&[0xaa, 0xbb, 0xcc]);
+            assert!(matches!(
+                convert_with_options(&trailing_bytes, format, &best_effort),
+                Err(ConversionError::Malformed { .. })
+            ));
+        }
     }
 
     #[test]

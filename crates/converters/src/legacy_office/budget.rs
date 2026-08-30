@@ -1,6 +1,8 @@
 use crate::msg::ole::CompoundBudget;
 use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits as ImageLimits};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{
+    ConversionError, ConversionOptions, ExecutionContext, ResourceReservation,
+};
 use std::io::Cursor;
 
 const MAX_RASTER_DIMENSION: u32 = 32_768;
@@ -198,6 +200,10 @@ impl<'a> LegacyBudget<'a> {
 }
 
 impl CompoundBudget for LegacyBudget<'_> {
+    fn cfb_memory(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
+        self.context.reserve_memory(bytes)
+    }
+
     fn cfb_entry(&mut self) -> Result<(), ConversionError> {
         self.entries = self
             .entries

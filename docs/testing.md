@@ -122,6 +122,11 @@ real parser evidence as well as common-enricher evidence:
   Core 可执行文件大小、冷启动、逐格式转换、串行/并发批量吞吐及峰值 RSS。旧基线缺少可选
   runtime 时只记录不可用状态，候选仍须通过绝对资源上限与可解释的相对回退门禁；JSON 报告
   作为 `legacy-office-performance-linux-x86_64` artifact 上传。
+- 对外部真实 XLS corpus 的复核可追加 `--xls-corpus` 与
+  `--xls-authority tools/legacy-xls-corpus-authority.json`。authority 固定 60 个输入的 SHA-256，
+  并保存 `xlrd 2.0.2` 独立完成的 56 个有效结构分类；扩展报告逐文件记录耗时、峰值 RSS、
+  进程退出后的临时字节、重复读取输出摘要及硬限制证据，并在 PR base 与候选共同成功集合的
+  平均耗时回退达到 50% 时失败。该外部 corpus 不进入发布物或单元测试。
 - RecoveryStore tests (Unix filesystem semantics) prove enriched converter
   output is atomically checkpointed before rendering and is not enriched again
   after a process restart. Windows gates compile that path; Unix CI executes it.

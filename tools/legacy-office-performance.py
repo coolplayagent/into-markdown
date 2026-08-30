@@ -30,6 +30,17 @@ class Observation:
     stderr_sha256: str
 
 
+@dataclass(frozen=True)
+class XlsObservation:
+    elapsed_ms: float
+    peak_rss_bytes: int | None
+    returncode: int
+    output_bytes: int
+    output_sha256: str | None
+    temporary_bytes_after: int
+    stderr: str
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-cli", type=pathlib.Path, required=True)
@@ -38,6 +49,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=pathlib.Path, required=True)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--parallelism", type=int, default=3)
+    parser.add_argument("--xls-corpus", type=pathlib.Path)
+    parser.add_argument("--xls-authority", type=pathlib.Path)
+    parser.add_argument("--xls-regression-limit", type=float, default=0.5)
     return parser.parse_args()
 
 
@@ -159,6 +173,81 @@ def observe(
         returncode=process.returncode,
         stdout_sha256=hashlib.sha256(stdout).hexdigest(),
         stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+    )
+
+
+def file_sha256(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def directory_file_bytes(root: pathlib.Path) -> int:
+    return sum(
+        path.stat().st_size
+        for path in root.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    )
+
+
+def observe_xls(
+    cli: pathlib.Path,
+    source: pathlib.Path,
+    current_dir: pathlib.Path,
+    run_root: pathlib.Path,
+) -> XlsObservation:
+    home = run_root / "home"
+    output = run_root / "output.md"
+    run_root.mkdir(parents=True)
+    started = time.perf_counter()
+    process = subprocess.Popen(
+        [
+            str(cli),
+            "--no-config",
+            str(source),
+            "--format",
+            "xls",
+            "--asset-mode",
+            "embed",
+            "--quiet",
+            "--output",
+            str(output),
+            "--conflict",
+            "error",
+        ],
+        cwd=current_dir,
+        env=private_environment(home),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    peak = 0
+    deadline = time.monotonic() + 30
+    while True:
+        sample = resident_bytes(process)
+        peak = max(peak, sample or 0)
+        if process.poll() is not None:
+            break
+        if time.monotonic() >= deadline:
+            process.kill()
+            process.wait()
+            raise RuntimeError(f"XLS benchmark command exceeded 30 seconds: {source.name}")
+        time.sleep(0.002)
+    _, stderr = process.communicate()
+    sample = resident_bytes(process)
+    peak = max(peak, sample or 0)
+    output_bytes = output.stat().st_size if output.is_file() else 0
+    temporary = home / "tmp"
+    return XlsObservation(
+        elapsed_ms=(time.perf_counter() - started) * 1000,
+        peak_rss_bytes=peak or None,
+        returncode=process.returncode,
+        output_bytes=output_bytes,
+        output_sha256=file_sha256(output) if output_bytes else None,
+        temporary_bytes_after=directory_file_bytes(temporary),
+        stderr=stderr.decode("utf-8", errors="replace")[-2048:],
     )
 
 
@@ -293,6 +382,190 @@ def baseline_report(
     }
 
 
+def load_xls_authority(
+    authority_path: pathlib.Path,
+    corpus: pathlib.Path,
+) -> list[dict[str, object]]:
+    authority = json.loads(authority_path.read_text(encoding="utf-8"))
+    if authority.get("schemaVersion") != 1:
+        raise SystemExit("XLS authority schemaVersion must be 1")
+    classifier = authority.get("classifier", {})
+    if classifier.get("name") != "xlrd" or classifier.get("version") != "2.0.2":
+        raise SystemExit("XLS authority must record the independent xlrd 2.0.2 classifier")
+    items = authority.get("items")
+    if not isinstance(items, list) or len(items) != 60:
+        raise SystemExit("XLS authority must contain exactly 60 items")
+    names = [item.get("file") for item in items]
+    if len(set(names)) != len(names) or any(
+        not isinstance(name, str)
+        or pathlib.PurePath(name).name != name
+        or not name.endswith(".xls")
+        for name in names
+    ):
+        raise SystemExit("XLS authority contains duplicate or unsafe file names")
+    actual = sorted(path.name for path in corpus.iterdir() if path.is_file())
+    if actual != sorted(names):
+        raise SystemExit("XLS corpus file set does not exactly match the authority")
+    valid_count = 0
+    raw_count = 0
+    for item in items:
+        source = corpus / str(item["file"])
+        if source.is_symlink() or not source.is_file():
+            raise SystemExit(f"XLS corpus item is not a regular file: {source.name}")
+        if source.stat().st_size != item.get("bytes") or file_sha256(source) != item.get("sha256"):
+            raise SystemExit(f"XLS corpus item differs from the authority: {source.name}")
+        valid_count += int(item.get("valid") is True)
+        raw_count += int(item.get("container") == "raw")
+    if valid_count != 56 or raw_count != 1:
+        raise SystemExit("XLS authority must classify exactly 56 valid files and one raw BIFF file")
+    return items
+
+
+def summarize_xls_file(
+    item: dict[str, object],
+    observations: list[XlsObservation],
+) -> dict[str, object]:
+    successful = [
+        observation
+        for observation in observations
+        if observation.returncode == 0 and observation.output_bytes > 0
+    ]
+    output_hashes = sorted(
+        {observation.output_sha256 for observation in successful if observation.output_sha256}
+    )
+    hard_limit = not successful and all(
+        "resourceLimit" in observation.stderr for observation in observations
+    )
+    return {
+        "file": item["file"],
+        "valid": item["valid"],
+        "container": item["container"],
+        "runs": len(observations),
+        "successfulRuns": len(successful),
+        "nonEmptyRuns": sum(observation.output_bytes > 0 for observation in observations),
+        "deterministic": len(successful) == len(observations) and len(output_hashes) == 1,
+        "hardLimit": hard_limit,
+        "meanMillis": round(statistics.mean(o.elapsed_ms for o in observations), 3),
+        "maximumMillis": round(max(o.elapsed_ms for o in observations), 3),
+        "peakRssBytes": max((o.peak_rss_bytes or 0) for o in observations) or None,
+        "temporaryBytesAfter": max(o.temporary_bytes_after for o in observations),
+        "exitCodes": sorted({o.returncode for o in observations}),
+        "outputSha256": output_hashes,
+        "failureEvidence": sorted(
+            {o.stderr.strip() for o in observations if o.returncode != 0 and o.stderr.strip()}
+        ),
+    }
+
+
+def measure_xls_corpus(
+    cli: pathlib.Path,
+    corpus: pathlib.Path,
+    authority: list[dict[str, object]],
+    root: pathlib.Path,
+    iterations: int,
+) -> dict[str, object]:
+    items = []
+    for item in authority:
+        name = str(item["file"])
+        observations = [
+            observe_xls(cli, corpus / name, corpus, root / name / str(iteration))
+            for iteration in range(iterations)
+        ]
+        items.append(summarize_xls_file(item, observations))
+    passed = {item["file"] for item in items if item["deterministic"]}
+    valid = {str(item["file"]) for item in authority if item["valid"] is True}
+    hard_limits = {item["file"] for item in items if item["valid"] and item["hardLimit"]}
+    return {
+        "binary": str(cli),
+        "binarySha256": file_sha256(cli),
+        "rawPass": {"passed": len(passed), "total": len(items)},
+        "validPass": {"passed": len(passed & valid), "total": len(valid)},
+        "validHardLimits": sorted(hard_limits),
+        "maximumPeakRssBytes": max((item["peakRssBytes"] or 0) for item in items) or None,
+        "maximumTemporaryBytesAfter": max(item["temporaryBytesAfter"] for item in items),
+        "items": items,
+    }
+
+
+def xls_corpus_report(
+    baseline_cli: pathlib.Path,
+    candidate_cli: pathlib.Path,
+    corpus: pathlib.Path,
+    authority: list[dict[str, object]],
+    root: pathlib.Path,
+    iterations: int,
+    regression_limit: float,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    baseline = measure_xls_corpus(baseline_cli, corpus, authority, root / "baseline", iterations)
+    candidate = measure_xls_corpus(candidate_cli, corpus, authority, root / "candidate", iterations)
+    baseline_items = {item["file"]: item for item in baseline["items"]}
+    candidate_items = {item["file"]: item for item in candidate["items"]}
+    common = sorted(
+        name
+        for name in baseline_items.keys() & candidate_items.keys()
+        if baseline_items[name]["deterministic"] and candidate_items[name]["deterministic"]
+    )
+    baseline_mean = statistics.mean(baseline_items[name]["meanMillis"] for name in common)
+    candidate_mean = statistics.mean(candidate_items[name]["meanMillis"] for name in common)
+    regression = candidate_mean / baseline_mean - 1
+    valid_passed = int(candidate["validPass"]["passed"])
+    valid_total = int(candidate["validPass"]["total"])
+    hard_limits = len(candidate["validHardLimits"])
+    checks = [
+        {
+            "name": "xls-valid-accounted",
+            "passed": valid_passed + hard_limits == valid_total,
+            "detail": f"passed={valid_passed}, hardLimits={hard_limits}, total={valid_total}",
+        },
+        {
+            "name": "xls-valid-coverage-not-regressed",
+            "passed": valid_passed >= int(baseline["validPass"]["passed"]),
+            "detail": (
+                f"candidate={valid_passed}, baseline={baseline['validPass']['passed']}, "
+                f"total={valid_total}"
+            ),
+        },
+        {
+            "name": "xls-common-success-mean-regression",
+            "passed": regression < regression_limit,
+            "detail": (
+                f"common={len(common)}, baseline={baseline_mean:.3f}ms, "
+                f"candidate={candidate_mean:.3f}ms, regression={regression:.3%}, "
+                f"limit={regression_limit:.3%}"
+            ),
+        },
+        {
+            "name": "xls-peak-rss",
+            "passed": candidate["maximumPeakRssBytes"] is not None
+            and int(candidate["maximumPeakRssBytes"]) <= 2560 * MIB,
+            "detail": (
+                f"peak={candidate['maximumPeakRssBytes']}, "
+                f"limit={2560 * MIB} (2 GiB shared budget + 512 MiB margin)"
+            ),
+        },
+        {
+            "name": "xls-temporary-cleanup",
+            "passed": candidate["maximumTemporaryBytesAfter"] == 0,
+            "detail": f"maximumTemporaryBytesAfter={candidate['maximumTemporaryBytesAfter']}",
+        },
+    ]
+    return (
+        {
+            "authority": "xlrd-2.0.2-eager-cell-read",
+            "iterations": iterations,
+            "baseline": baseline,
+            "candidate": candidate,
+            "commonSuccess": {
+                "files": common,
+                "baselineMeanMillis": round(baseline_mean, 3),
+                "candidateMeanMillis": round(candidate_mean, 3),
+                "regressionFraction": round(regression, 6),
+            },
+        },
+        checks,
+    )
+
+
 def gate(candidate: dict[str, object], baseline: dict[str, object]) -> tuple[list[dict[str, object]], bool]:
     checks: list[dict[str, object]] = []
 
@@ -338,6 +611,10 @@ def main() -> int:
     args = parse_args()
     if args.iterations < 3 or not 2 <= args.parallelism <= len(FORMATS):
         raise SystemExit("iterations must be >= 3 and parallelism must be between 2 and 3")
+    if (args.xls_corpus is None) != (args.xls_authority is None):
+        raise SystemExit("--xls-corpus and --xls-authority must be supplied together")
+    if not 0 <= args.xls_regression_limit < 1:
+        raise SystemExit("--xls-regression-limit must be in the range 0..1")
     baseline = args.baseline_cli.resolve(strict=True)
     candidate = args.candidate_cli.resolve(strict=True)
     fixtures = args.fixtures.resolve(strict=True)
@@ -347,18 +624,41 @@ def main() -> int:
     for format_name in FORMATS:
         if not (fixtures / f"normal.{format_name}").is_file():
             raise SystemExit(f"missing normal.{format_name}")
+    xls_corpus = args.xls_corpus.resolve(strict=True) if args.xls_corpus else None
+    xls_authority = args.xls_authority.resolve(strict=True) if args.xls_authority else None
+    authority = (
+        load_xls_authority(xls_authority, xls_corpus)
+        if xls_authority is not None and xls_corpus is not None
+        else None
+    )
     with tempfile.TemporaryDirectory(prefix="into-md-office-performance-") as temporary:
         root = pathlib.Path(temporary)
         baseline_metrics = baseline_report(baseline, fixtures, root / "baseline", args.iterations)
         candidate_metrics, failures = executable_report(
             candidate, fixtures, root / "candidate", args.iterations, args.parallelism
         )
+        xls_metrics, xls_checks = (
+            xls_corpus_report(
+                baseline,
+                candidate,
+                xls_corpus,
+                authority,
+                root / "xls-corpus",
+                args.iterations,
+                args.xls_regression_limit,
+            )
+            if xls_corpus is not None and authority is not None
+            else (None, [])
+        )
     checks, checks_passed = gate(candidate_metrics, baseline_metrics)
+    checks.extend(xls_checks)
+    checks_passed = checks_passed and all(check["passed"] for check in xls_checks)
     report = {
         "schemaVersion": 1,
         "corpus": "repository-authored-office-97-2003",
         "baseline": baseline_metrics,
         "candidate": candidate_metrics,
+        "xlsCorpus": xls_metrics,
         "gates": checks,
         "failures": failures,
         "passed": checks_passed and not failures,

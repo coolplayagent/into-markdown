@@ -26,6 +26,9 @@ Core 内置实现必须复用统一的 Document IR、source locator、Asset、�
 - DOC 解析 Word 97–2003 FIB 与 piece table；PPT 按 CurrentUser、UserEdit 与 persist authority
   恢复 slide/notes 顺序；XLS 在共享 CFB 预检后使用已审核的 Calamine BIFF8 reader 和统一
   Workbook IR 组装。
+- CFB 默认入口以及 DOC、PPT、MSG 始终使用严格语义。只有调用方已选择 XLS 且错误策略为
+  `best-effort` 时，reader 才可忽略不会改变 Workbook/Book 可寻址性或链所有权的冗余元数据；
+  循环、越界、重叠、歧义、加密和资源超限在两种策略下都失败。
 - 公式、宏、ActiveX、外部工作簿和嵌入式可执行对象永不执行，也不触发网络、OCR、AI 或外部
   进程。安全图片载荷在资源限额内作为 Asset 返回；恢复与跳过必须产生结构化 diagnostic。
 - 兼容边界固定为 Office 97–2003。更早二进制版本返回稳定 `unsupported`，加密、损坏和超限

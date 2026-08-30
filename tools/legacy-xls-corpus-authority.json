@@ -1,0 +1,607 @@
+{
+  "classifier": {
+    "method": "open_workbook eagerly loaded every sheet and addressed every declared cell slot",
+    "name": "xlrd",
+    "version": "2.0.2"
+  },
+  "items": [
+    {
+      "bytes": 23040,
+      "cellSlots": 3,
+      "container": "cfb",
+      "file": "036bd2b9907fa7d8.xls",
+      "mergedRanges": 0,
+      "sha256": "bcc4efabd1d9c53a9549551b090e417d86e4d89f065d67bef9df238e660f2c50",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 48640,
+      "cellSlots": 39,
+      "container": "cfb",
+      "file": "0391e3012170db5e.xls",
+      "mergedRanges": 0,
+      "sha256": "6a8259b6a682b0bbb26bb75509e1f5914882f82edab4182d0ad6667d6041e89f",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 69120,
+      "cellSlots": 717,
+      "container": "cfb",
+      "file": "057cd5b066ce82bd.xls",
+      "mergedRanges": 0,
+      "sha256": "39fbf77925b835096397fe58c0a9bfb1ae3d6f91c0dcaab3a346fa066b0f8867",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 109056,
+      "cellSlots": 5440,
+      "container": "cfb",
+      "file": "0a6f99c5791b2ea0.xls",
+      "mergedRanges": 0,
+      "sha256": "653a49926c3aa25e330ef35d81af4559f82542a77ac56e100e8656629cbf9a0e",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 4746305,
+      "cellSlots": 325199,
+      "container": "cfb",
+      "file": "0b204c33031ba358.xls",
+      "mergedRanges": 0,
+      "sha256": "ae2e23c31546b6aad7b63a81d05c8b1ec6206fa2657869ee1e046c6a1b557a75",
+      "sheetCount": 7,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 4,
+      "container": "cfb",
+      "file": "11e938ce955f1be6.xls",
+      "mergedRanges": 0,
+      "sha256": "82d3c9751cae9c94bd6536d6208f165b0e4768d9730282d60930cd192899d3ec",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 25088,
+      "cellSlots": 8,
+      "container": "cfb",
+      "file": "14eccbae2796ebc2.xls",
+      "mergedRanges": 0,
+      "sha256": "c0e23603971ec19a2938423644f53cea49dfef5a9218ad1ef4cff3f8c0160ccf",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 19456,
+      "cellSlots": 240,
+      "container": "cfb",
+      "file": "180d80877c7daca1.xls",
+      "mergedRanges": 0,
+      "sha256": "a48d5fc40204c39f49f534e312a727d4e16820ee560ec9e3fbcbf8e0c6a89ce5",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 1182208,
+      "cellSlots": 16711,
+      "container": "cfb",
+      "file": "219554db140ecd05.xls",
+      "mergedRanges": 0,
+      "sha256": "17a24ffbd0ee3124216885cd869a61140245cf8474bbec6a3f15f49179836225",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 7680,
+      "cellSlots": 110,
+      "container": "cfb",
+      "file": "21be3a0a09803a49.xls",
+      "mergedRanges": 0,
+      "sha256": "ac0ce3a2eff43e32e56d6b789df6aaa1645ae846d22fa3a2fe3057391d0f1cae",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 96256,
+      "cellSlots": 2,
+      "container": "cfb",
+      "file": "2330493f4f0bcba0.xls",
+      "mergedRanges": 0,
+      "sha256": "82e636399964e89332fb97c1630e3d521542e7d4d86670001e761a395a75a684",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 66048,
+      "cellSlots": 276,
+      "container": "cfb",
+      "file": "278251d7472629e2.xls",
+      "mergedRanges": 0,
+      "sha256": "3465d419e1f64dc30ef6478a733fedb4f94319a8f1c8bb31d10405d905063208",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 58368,
+      "cellSlots": 48,
+      "container": "cfb",
+      "file": "2a021a80314d09d9.xls",
+      "mergedRanges": 0,
+      "sha256": "091d2c548a740f1fea95753eabfe43021692e983e301e9aaa264eb70886c8ac7",
+      "sheetCount": 4,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 8,
+      "container": "cfb",
+      "file": "2c2caebc8889403b.xls",
+      "mergedRanges": 0,
+      "sha256": "7b948645e0467e8e4a59f3e58de7c0b32c2252a451378959fa817d0854ff306e",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 47616,
+      "cellSlots": 6,
+      "container": "cfb",
+      "file": "315072d42710e767.xls",
+      "mergedRanges": 0,
+      "sha256": "07beccd56fbaccbdf3bd5146ab1d13e76337243d4031219b20e0ff95f1b13a4c",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 143872,
+      "cellSlots": 8548,
+      "container": "cfb",
+      "file": "36befeb392f5445c.xls",
+      "mergedRanges": 0,
+      "sha256": "5d70dbb3744abd41c543aba4064fd8bbf1c2961ac4c1de0c9e9a7aa4e6372f59",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 18432,
+      "cellSlots": 3,
+      "container": "cfb",
+      "file": "3a2046d4bfc8e26c.xls",
+      "mergedRanges": 0,
+      "sha256": "efa16837af5bda3d7e28a4ae24a0d428a23e9393b6cff7657d31435dc51235f2",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 26112,
+      "cellSlots": 4,
+      "container": "cfb",
+      "file": "3d868a5a37bc3517.xls",
+      "mergedRanges": 0,
+      "sha256": "9ca5cbf77b71c2a6e22f7d40269b861726f2cf06b8884a3afa47d48c13ab6445",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 23552,
+      "container": "cfb",
+      "error": "XLRDError: Workbook is encrypted",
+      "file": "58debe2c3dca5e34.xls",
+      "sha256": "20bedf59942b86ead6f6fdf1dc4db5b474d8be9c09ee837f445a3131966ad90f",
+      "valid": false
+    },
+    {
+      "bytes": 16384,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "5d08e32b1623cb84.xls",
+      "mergedRanges": 0,
+      "sha256": "7297966f7d893339651b56f58c380fec75d094f5eb571f6c18aa70c714363f2e",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 33792,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "64b4742d2e7e24fe.xls",
+      "mergedRanges": 0,
+      "sha256": "d7d839bac7bb672643dc684a935deabbc2f08259f098b033a1985966f7a4cb22",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 27053,
+      "container": "cfb",
+      "error": "UnicodeDecodeError: 'utf-16-le' codec can't decode byte 0x3b in position 32: truncated data",
+      "file": "697e7e3271827e74.xls",
+      "sha256": "8157e14dbf2dbd376602ae44a000c15c552495daf0b188301b089ec5ea2c9cd2",
+      "valid": false
+    },
+    {
+      "bytes": 18432,
+      "cellSlots": 25,
+      "container": "cfb",
+      "file": "6b67497b4128d6d1.xls",
+      "mergedRanges": 0,
+      "sha256": "777a5b870a2b49def9991198de7ea64df375d575c044f67ab23760c44104002a",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 29696,
+      "cellSlots": 111,
+      "container": "cfb",
+      "file": "6eb88e2afb7d98de.xls",
+      "mergedRanges": 0,
+      "sha256": "9b9a2f462e918bd9f89d98d46176b9c59b8a58973cef1c32f280a1a82729c7ea",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 82944,
+      "cellSlots": 2730,
+      "container": "cfb",
+      "file": "72439cb9f6714496.xls",
+      "mergedRanges": 0,
+      "sha256": "432dbf2d81510bdf42eb3fe736fe62fcebbb444d8e7bed16f2dfb047064ff74b",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 36352,
+      "cellSlots": 246,
+      "container": "cfb",
+      "file": "7de63a9d21cbfbf6.xls",
+      "mergedRanges": 0,
+      "sha256": "ed34698a6c9bd269acb80874e820edd8cdbd246a3f939544a44ebeb3d2cb888c",
+      "sheetCount": 5,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 9,
+      "container": "cfb",
+      "file": "7fb9b4b034019219.xls",
+      "mergedRanges": 0,
+      "sha256": "339275286451b9b0c5e60ab5977058ea7be27e8713fa5481b1ef13e9f7df6d9d",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 28160,
+      "cellSlots": 79,
+      "container": "cfb",
+      "file": "837afb32d0ffd2a1.xls",
+      "mergedRanges": 0,
+      "sha256": "e64097dffec5a2c7ce9226efc204aa1187430a2e6bea57d0aa40deee60006bcd",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 13362,
+      "container": "cfb",
+      "error": "CompDocError: MSAT: invalid sector id: -16777216",
+      "file": "8953ddf635fc7018.xls",
+      "sha256": "27eb49a690e238f59afd085c952c8eeebd937bf2f043a62f629c19703d3d4748",
+      "valid": false
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 1,
+      "container": "cfb",
+      "file": "8ceefe19869d94d2.xls",
+      "mergedRanges": 0,
+      "sha256": "46f9eb234edc8c3803742415ad3e6906ec96f3de3de299fdd2ac4202f0652413",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 3,
+      "container": "cfb",
+      "file": "8e649308c4ab7d2f.xls",
+      "mergedRanges": 0,
+      "sha256": "93c39e5a1083f337f744850180317319e50eee17d66d4753b3ec1f7cfa40cff4",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 32768,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "95f3f4acaf2626f9.xls",
+      "mergedRanges": 0,
+      "sha256": "300139f4c7cb3d0306281be41b21cefdd3eddefd250a3e40b53927b6c3d45e53",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 16896,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "97b06038fde5f9c5.xls",
+      "mergedRanges": 0,
+      "sha256": "310ec282c1fb1256a6cd79e6ac249d8281dab3a1e26b769b8380b3df1cf76893",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 18,
+      "container": "cfb",
+      "file": "9fccfd57cef1ad99.xls",
+      "mergedRanges": 0,
+      "sha256": "c6c220d60f7037b79d71cfb7b9088c276bf256e0e1e0d1b6bb28e740c7dfc9dd",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 17408,
+      "cellSlots": 10,
+      "container": "cfb",
+      "file": "a102276edb28d008.xls",
+      "mergedRanges": 0,
+      "sha256": "4ad5856035aadace3ee46bfe0ad8e26e8a31f1f39eb67f28e4524a84276976cd",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 31232,
+      "cellSlots": 488,
+      "container": "cfb",
+      "file": "a10edb744ae75b21.xls",
+      "mergedRanges": 0,
+      "sha256": "7d7da618d04515b16f718654f9315473138dfe17ff84dbb91c84a1b33b25ec02",
+      "sheetCount": 5,
+      "valid": true
+    },
+    {
+      "bytes": 742912,
+      "cellSlots": 56000,
+      "container": "cfb",
+      "file": "a1e4f5d0343d7972.xls",
+      "mergedRanges": 0,
+      "sha256": "ac16fc92770efe5090ce4f1761e9f128317d796a2000d2ba683905bce6b55371",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 15360,
+      "cellSlots": 5,
+      "container": "cfb",
+      "file": "a6f9c8bbb3d5aa7f.xls",
+      "mergedRanges": 0,
+      "sha256": "db0f429e708e1b263df6fdd8219fff9f309e7cf0cc988033c99bc9e7c73e2eed",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 425984,
+      "cellSlots": 259,
+      "container": "cfb",
+      "file": "b04f6234f6fa2679.xls",
+      "mergedRanges": 0,
+      "sha256": "9b973e61bfc2bff2f73382f7c4e45ef48454cf66298a0d6ceea0ede5bdcde531",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 4096,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "b3dd15118ad6516c.xls",
+      "mergedRanges": 0,
+      "sha256": "0e2c83241bd5ddf617d63b384c84ad3667600181dd3aba25cc803f3ae9b48af2",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 54784,
+      "cellSlots": 2207,
+      "container": "cfb",
+      "file": "b4553c376231d938.xls",
+      "mergedRanges": 0,
+      "sha256": "2023e3c97c8e80d733a29c367104653a1d8fa6da9d87049a630d3876cc410778",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 13824,
+      "cellSlots": 134,
+      "container": "cfb",
+      "file": "b721a43402a87a1a.xls",
+      "mergedRanges": 0,
+      "sha256": "d639a8b4d5d41150548564d9d331822ce2455a3824d45b0216e73c1cafa54072",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 20992,
+      "cellSlots": 117,
+      "container": "cfb",
+      "file": "bb4607634be16b22.xls",
+      "mergedRanges": 0,
+      "sha256": "8f370fc03672eafa10eb2eed026b1c6e05464e27849076cf0b6d95d167c9a732",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 180224,
+      "cellSlots": 4615,
+      "container": "cfb",
+      "file": "bd2cfbe0053437d9.xls",
+      "mergedRanges": 0,
+      "sha256": "88b3089f0fa5bf62d61fb8ead866f4b55b2f073bf23dcf1ca8772c619c326551",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 27648,
+      "cellSlots": 196,
+      "container": "cfb",
+      "file": "bdaf5720a4a749c6.xls",
+      "mergedRanges": 0,
+      "sha256": "9cfaff5108d8e91f0ab8466fd81d31bfc999730b67fd4150481c3fb70e065780",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 24064,
+      "cellSlots": 64,
+      "container": "cfb",
+      "file": "bf46680e73281740.xls",
+      "mergedRanges": 0,
+      "sha256": "2e9a4f77db8f72b9b129c969899b92dd601d4cc20348919652190c52a5435d39",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 43520,
+      "cellSlots": 54,
+      "container": "cfb",
+      "file": "c28a21386e056e65.xls",
+      "mergedRanges": 0,
+      "sha256": "7090a0e8dcde4096621292e2a4c6a068695629491a668441269c252fcd5995d1",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 16896,
+      "cellSlots": 2,
+      "container": "cfb",
+      "file": "c56a81795a675086.xls",
+      "mergedRanges": 0,
+      "sha256": "8281c55a88a92644525c1fa45540897c15097cdfcca1176e5edae7618a0421ab",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 22528,
+      "cellSlots": 126,
+      "container": "cfb",
+      "file": "c63b3bf28f789e86.xls",
+      "mergedRanges": 0,
+      "sha256": "3fc30cabb99a221cab1b7d8b6ca8ccdb498c3593ae6d431ede3ee60b0a656dc2",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 28672,
+      "cellSlots": 67,
+      "container": "cfb",
+      "file": "cc8befe952d0fa92.xls",
+      "mergedRanges": 0,
+      "sha256": "4ef3ea13f41d3866e6cd91d1d065fa0408e9e6e4ba76e2b3d08de0757a572790",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 6656,
+      "cellSlots": 42,
+      "container": "cfb",
+      "file": "cf1df2fda801d211.xls",
+      "mergedRanges": 0,
+      "sha256": "532803a4426ac03a3bf5ca0fd36f9d14f7c8183fc5a66ac79aeb0198ff647b6f",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 38331,
+      "cellSlots": 1688,
+      "container": "cfb",
+      "file": "d42ca4f5cff9dea6.xls",
+      "mergedRanges": 0,
+      "sha256": "6e6d5453680757eb56c809fabc2dae83e7e098ceb57553b4c17c6b2a3955c92f",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 14848,
+      "cellSlots": 1,
+      "container": "cfb",
+      "file": "d72b09001607b29c.xls",
+      "mergedRanges": 0,
+      "sha256": "bc2031c9875ca023a93296f3c8c93303c2df6e0281f974679b11ed5bdf6823ad",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 1663,
+      "container": "cfb",
+      "error": "CompDocError: MSAT: invalid sector id: -16252928",
+      "file": "e778438a772eaf08.xls",
+      "sha256": "e0103d7adf370be2063d4375e8bbaa74dc5f28a99ea1053471bf0b55ee3cc1d6",
+      "valid": false
+    },
+    {
+      "bytes": 229888,
+      "cellSlots": 0,
+      "container": "cfb",
+      "file": "f68f64095c133d16.xls",
+      "mergedRanges": 0,
+      "sha256": "d96a564495fe65b273ade75023497a01a992493693896bf49f81c7586dd78507",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 14336,
+      "cellSlots": 50,
+      "container": "cfb",
+      "file": "f7a0b081634b372f.xls",
+      "mergedRanges": 0,
+      "sha256": "1e0476e67c024c6f38b1621093274869b8a55d8786a2ff7176e6f5932fc63b34",
+      "sheetCount": 2,
+      "valid": true
+    },
+    {
+      "bytes": 6144,
+      "cellSlots": 3,
+      "container": "cfb",
+      "file": "f7ea5b0656125ed0.xls",
+      "mergedRanges": 0,
+      "sha256": "263b6be7f66a069992a383d7fb9ea0c0b342e59cbe04206758eb4374f7c8b74b",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 21504,
+      "cellSlots": 507,
+      "container": "cfb",
+      "file": "f9fbec5df61cce91.xls",
+      "mergedRanges": 0,
+      "sha256": "ef4e8ebf31bd1fb82737dda5fd9cb45c4e70d8a0c7af3836bdaa2c56257d91fe",
+      "sheetCount": 3,
+      "valid": true
+    },
+    {
+      "bytes": 39942,
+      "cellSlots": 1956,
+      "container": "raw",
+      "file": "fe42d1ebc2f2db78.xls",
+      "mergedRanges": 0,
+      "sha256": "97bc2987cdca76eabff155566db9c9a1b474b1e8803ef8c4f97faa758310bccf",
+      "sheetCount": 1,
+      "valid": true
+    },
+    {
+      "bytes": 10752,
+      "cellSlots": 540,
+      "container": "cfb",
+      "file": "fef9df72f723dbce.xls",
+      "mergedRanges": 0,
+      "sha256": "bac65bcb47aee8c9153935fbffbd8c9748fef32adf7fec3eed54b0355cf68a4b",
+      "sheetCount": 1,
+      "valid": true
+    }
+  ],
+  "schemaVersion": 1,
+  "summary": {
+    "rawBiffFiles": 1,
+    "rawFiles": 60,
+    "validFiles": 56
+  }
+}
