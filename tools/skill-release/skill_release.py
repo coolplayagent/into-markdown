@@ -126,6 +126,14 @@ ASSET_SPECS = (
 WINDOWS_PDFIUM_RELATIVE = pathlib.PurePosixPath(
     "assets/windows-x86_64/lib/pdfium/pdfium.dll"
 )
+OPTIONAL_SPEECH_COMPONENT_IDS = frozenset(
+    {
+        "ffmpeg",
+        "whisper-small",
+        "silero-vad-half-onnx-model",
+        "3dspeaker-eres2net-base-onnx-model",
+    }
+)
 WINDOWS_PDFIUM_AUTHORITY = json.loads(
     (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
 )["targets"]["x86_64-pc-windows-msvc"]
@@ -376,8 +384,19 @@ def _validated_cores(
                     structured = json.loads(path.read_text(encoding="utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError) as error:
                     raise SkillReleaseError(f"{relative} is not valid JSON") from error
-                serialized = json.dumps(structured, sort_keys=True).lower()
-                if "whisper" in serialized or "ffmpeg" in serialized:
+                if member == "SBOM.spdx.json":
+                    component_ids = {
+                        package.get("name")
+                        for package in structured.get("packages", [])
+                        if isinstance(package, dict)
+                    }
+                else:
+                    component_ids = {
+                        component.get("id")
+                        for component in structured.get("components", [])
+                        if isinstance(component, dict)
+                    }
+                if component_ids & OPTIONAL_SPEECH_COMPONENT_IDS:
                     raise SkillReleaseError("Skill target evidence must not include optional speech components")
                 if member == "SOURCES.json" and (
                     structured.get("target") != target

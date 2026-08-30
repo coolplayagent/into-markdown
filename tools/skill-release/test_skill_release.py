@@ -97,7 +97,11 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
                         "spdxVersion": "SPDX-2.3",
                         "dataLicense": "CC0-1.0",
                         "creationInfo": {},
-                        "packages": [{"name": f"fixture-{target}"}],
+                        "packages": [
+                            {"name": f"fixture-{target}"},
+                            {"name": "cargo:whisper-rs-sys@0.15.0"},
+                            {"name": "cargo:whisper-rs@0.16.0"},
+                        ],
                     }
                 ).encode()
             elif relative.as_posix() == "SOURCES.json":
@@ -108,7 +112,11 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
                         "artifact": "into-markdown-core",
                         "version": "0.0.3",
                         "source_revision": "fixture",
-                        "components": [{"id": f"fixture-{target}"}],
+                        "components": [
+                            {"id": f"fixture-{target}"},
+                            {"id": "cargo:whisper-rs-sys@0.15.0"},
+                            {"id": "cargo:whisper-rs@0.16.0"},
+                        ],
                     }
                 ).encode()
             else:
@@ -302,6 +310,22 @@ class SkillReleaseTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(SkillReleaseError, "differs from authority"):
                 verify_release(replaced_binary)
+
+    def test_optional_speech_components_are_rejected_by_structured_identity(self) -> None:
+        cases = (
+            ("SOURCES.json", "components", {"id": "ffmpeg"}),
+            ("SBOM.spdx.json", "packages", {"name": "whisper-small"}),
+        )
+        for member, collection, component in cases:
+            with self.subTest(member=member), tempfile.TemporaryDirectory() as name:
+                root = pathlib.Path(name)
+                cores = write_cores(root)
+                relative = evidence_relative("x86_64-pc-windows-msvc", member)
+                structured = json.loads(cores[relative].read_text(encoding="utf-8"))
+                structured[collection].append(component)
+                cores[relative].write_text(json.dumps(structured), encoding="utf-8")
+                with self.assertRaisesRegex(SkillReleaseError, "optional speech components"):
+                    create_archive(root / "skill.zip", cores)
 
     def test_skill_authority_rejects_namespace_missing_duplicate_and_unsorted_targets(self) -> None:
         with tempfile.TemporaryDirectory() as name:
