@@ -7,6 +7,7 @@ mod models_fixtures;
 mod native;
 mod npm;
 pub mod release;
+mod release_authority;
 mod rust;
 mod sbom;
 pub mod schema;
@@ -1480,7 +1481,10 @@ fn validate_license_conclusion(
     }
 }
 
-fn parse_approvals(text: &str, errors: &mut Vec<String>) -> BTreeMap<(String, String), String> {
+pub(crate) fn parse_approvals(
+    text: &str,
+    errors: &mut Vec<String>,
+) -> BTreeMap<(String, String), String> {
     let mut approvals = BTreeMap::new();
     for (index, line) in text.lines().enumerate() {
         if line.is_empty() || line.starts_with('#') {
@@ -1490,6 +1494,10 @@ fn parse_approvals(text: &str, errors: &mut Vec<String>) -> BTreeMap<(String, St
         if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
             errors
                 .push(format!("rust-lock.tsv:{} must have three tab-separated fields", index + 1));
+            continue;
+        }
+        if fields.iter().any(|field| field.contains(['*', '?', '[', ']', '{', '}'])) {
+            errors.push(format!("rust-lock.tsv:{} must not contain wildcards", index + 1));
             continue;
         }
         let key = (fields[0].to_owned(), fields[1].to_owned());
@@ -1809,8 +1817,8 @@ fn validate_asr_quality(root: &Path, authority: &AsrQualityAuthority, errors: &m
 
 fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
     const AUTHORITY_SHA256: &str =
-        "b1394e767280cfd68605e11353d76a6bd2b0134c192f80d7d7dbe4fb582a4e10";
-    const TREE_SHA256: &str = "4a836ad69e36ca9061cf14887294bf44ec8037cb29e28a60cfa24bee1b0f95a0";
+        "9d81393379f2c11908cb2553b7813d5ce8fe4831be8f5111a34e98f39f6bcdca";
+    const TREE_SHA256: &str = "8ccfbbad32d501d7c919204373f9c165ed47afe4190ac00eced97f25329d53e8";
     let directory = root.join("third_party/whisper-rs-0.16.0");
     let authority_path = directory.join("PATCH-AUTHORITY.json");
     let bytes = match fs::read(&authority_path) {
@@ -1844,7 +1852,7 @@ fn validate_whisper_rs_patch(root: &Path, errors: &mut Vec<String>) {
         || authority.patch_scope
             != "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0, enable authenticated x86 CPU runtime dispatch with a deterministic shared-library install directory, and report dynamic-mode SystemInfo through OS-aware x86 feature detection"
         || authority.tree_digest_algorithm
-            != "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)"
+            != "sha256(sorted(relative_path NUL sha256(raw_bytes) LF), excluding PATCH-AUTHORITY.json)"
         || authority.tree_sha256 != TREE_SHA256
     {
         errors.push("whisper-rs patch source authority is not reviewed".to_owned());
@@ -1881,25 +1889,30 @@ fn whisper_rs_tree_digest(directory: &Path) -> std::io::Result<String> {
             }
             if kind.is_dir() {
                 pending.push(entry.path());
-            } else if kind.is_file() && entry.file_name() != "PATCH-AUTHORITY.json" {
+            } else if kind.is_file() && entry.path() != directory.join("PATCH-AUTHORITY.json") {
                 files.push(entry.path());
             }
         }
     }
-    files.sort_by_key(|path| path.strip_prefix(directory).unwrap_or(path).to_path_buf());
+    let mut files: Vec<_> = files
+        .into_iter()
+        .map(|path| {
+            let relative = path
+                .strip_prefix(directory)
+                .map_err(std::io::Error::other)?
+                .to_str()
+                .ok_or_else(|| std::io::Error::other("non-UTF-8 file in vendored tree"))?
+                .replace('\\', "/");
+            Ok((relative, path))
+        })
+        .collect::<std::io::Result<_>>()?;
+    files.sort_by(|left, right| left.0.cmp(&right.0));
     let mut tree = Sha256::new();
-    for path in files {
-        let relative = path
-            .strip_prefix(directory)
-            .map_err(std::io::Error::other)?
-            .to_string_lossy()
-            .replace('\\', "/");
+    for (relative, path) in files {
         let bytes = fs::read(&path)?;
-        let canonical = lf_normalized_utf8(&bytes)
-            .ok_or_else(|| std::io::Error::other("non-UTF-8 file in vendored tree"))?;
         tree.update(relative.as_bytes());
         tree.update([0]);
-        tree.update(sha256_hex(canonical.as_bytes()).as_bytes());
+        tree.update(sha256_hex(&bytes).as_bytes());
         tree.update(b"\n");
     }
     Ok(format!("{:x}", tree.finalize()))
@@ -5155,6 +5168,41 @@ version = "9.9.9"
         );
         assert!(errors.iter().any(|error| error.contains("is missing")));
         assert!(errors.iter().any(|error| error.contains("has drifted")));
+    }
+
+    #[test]
+    fn whisper_rs_tree_digest_rejects_every_byte_change() {
+        let nonce =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("whisper-tree-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested/source.cc"), b"line\n").unwrap();
+        fs::write(root.join("PATCH-AUTHORITY.json"), b"excluded").unwrap();
+        let baseline = whisper_rs_tree_digest(&root).unwrap();
+
+        fs::write(root.join("nested/source.cc"), b"mine\n").unwrap();
+        assert_ne!(whisper_rs_tree_digest(&root).unwrap(), baseline);
+
+        fs::write(root.join("nested/source.cc"), b"line\r\n").unwrap();
+        assert_ne!(whisper_rs_tree_digest(&root).unwrap(), baseline);
+
+        fs::write(root.join("nested/source.cc"), b"line\n").unwrap();
+        fs::write(root.join("PATCH-AUTHORITY.json"), b"changed but excluded").unwrap();
+        assert_eq!(whisper_rs_tree_digest(&root).unwrap(), baseline);
+
+        fs::write(root.join("nested/PATCH-AUTHORITY.json"), b"nested source").unwrap();
+        assert_ne!(whisper_rs_tree_digest(&root).unwrap(), baseline);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn whisper_rs_tree_digest_matches_reviewed_authority() {
+        let root = repository_root().unwrap().join("third_party/whisper-rs-0.16.0");
+        assert_eq!(
+            whisper_rs_tree_digest(&root).unwrap(),
+            "8ccfbbad32d501d7c919204373f9c165ed47afe4190ac00eced97f25329d53e8"
+        );
     }
 
     #[test]

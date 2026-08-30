@@ -97,6 +97,9 @@ fn covers_component(
                 && item.contents.as_deref() == Some(expected.as_str())
         });
     }
+    if component.id == "cargo:whisper-rs-sys@0.15.0" {
+        return exact_whisper_rs_sys_materials(repository, projection, component, errors);
+    }
     if component.id.starts_with("cargo:") {
         let checksum = component
             .integrity
@@ -146,6 +149,56 @@ fn covers_component(
             && item.contents.as_deref() == Some(expected.as_str())
             && declared == terms
     })
+}
+
+fn exact_whisper_rs_sys_materials(
+    repository: &Path,
+    projection: &ArchiveProjection,
+    component: &Component,
+    errors: &mut Vec<String>,
+) -> bool {
+    let Some(authority) = crate::release_authority::whisper_rs_sys(repository, errors) else {
+        return false;
+    };
+    let unlicense = fs::read_to_string(repository.join("third_party/whisper-rs-0.16.0/LICENSE"))
+        .unwrap_or_default();
+    let whisper_cpp = fs::read_to_string(
+        repository.join("third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE"),
+    )
+    .unwrap_or_default();
+    let source = projection.license_materials.iter().any(|item| {
+        item.kind == LicenseMaterialKind::UpstreamSourceArchive
+            && item.component_ids == [component.id.as_str()]
+            && item.path == authority.archive_path
+            && item.bytes == authority.bytes
+            && item.sha256 == authority.sha256
+            && item.contents.is_none()
+    });
+    let license = |path: &str, spdx: &str, expected: &str| {
+        projection.license_materials.iter().any(|item| {
+            item.kind == LicenseMaterialKind::LicenseText
+                && item.component_ids == [component.id.as_str()]
+                && item.path == path
+                && item.spdx_expressions == [spdx]
+                && item.contents.as_deref() == Some(expected)
+        })
+    };
+    let integrity: BTreeSet<_> = component
+        .integrity
+        .iter()
+        .filter(|item| item.algorithm == "SHA-256")
+        .map(|item| item.digest.as_str())
+        .collect();
+    source
+        && component.license.as_deref() == Some("Unlicense AND MIT")
+        && integrity
+            == BTreeSet::from([authority.crates_io_sha256.as_str(), authority.sha256.as_str()])
+        && license(
+            "share/into-markdown/licenses/whisper-rs-sys-Unlicense.txt",
+            "Unlicense",
+            &unlicense,
+        )
+        && license("share/into-markdown/licenses/whisper.cpp-MIT.txt", "MIT", &whisper_cpp)
 }
 
 fn exact_source_material(repository: &Path, projection: &ArchiveProjection) -> bool {

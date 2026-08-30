@@ -39,16 +39,36 @@ struct MetadataPackage {
     publish: Option<Vec<String>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct LocalRuntimePackage {
     pub(crate) license: String,
 }
 
+#[derive(Clone)]
 pub(crate) struct RuntimeClosure {
     pub(crate) registry: BTreeSet<(String, String)>,
     pub(crate) local: BTreeMap<(String, String), LocalRuntimePackage>,
 }
 
 pub(crate) fn packages(
+    repository: &Path,
+    lock_text: &str,
+    locked: &BTreeSet<(String, String)>,
+    authority_text: &str,
+    errors: &mut Vec<String>,
+) -> RuntimeClosure {
+    #[cfg(test)]
+    if let Some(key) =
+        test_cache_key(repository, &format!("normal:{locked:?}"), lock_text, authority_text)
+    {
+        return cached_runtime_closure(key, errors, |local_errors| {
+            packages_uncached(repository, lock_text, locked, authority_text, local_errors)
+        });
+    }
+    packages_uncached(repository, lock_text, locked, authority_text, errors)
+}
+
+fn packages_uncached(
     repository: &Path,
     lock_text: &str,
     locked: &BTreeSet<(String, String)>,
@@ -117,6 +137,20 @@ pub(crate) fn packages_for_root(
     root: &str,
     errors: &mut Vec<String>,
 ) -> RuntimeClosure {
+    #[cfg(test)]
+    if let Some(key) = test_cache_key_from_repository(repository, root) {
+        return cached_runtime_closure(key, errors, |local_errors| {
+            packages_for_root_uncached(repository, root, local_errors)
+        });
+    }
+    packages_for_root_uncached(repository, root, errors)
+}
+
+fn packages_for_root_uncached(
+    repository: &Path,
+    root: &str,
+    errors: &mut Vec<String>,
+) -> RuntimeClosure {
     let Some(metadata) = cargo_metadata(repository, errors) else {
         return RuntimeClosure { registry: BTreeSet::new(), local: BTreeMap::new() };
     };
@@ -128,12 +162,101 @@ pub(crate) fn workspace_normal_packages(
     repository: &Path,
     errors: &mut Vec<String>,
 ) -> BTreeSet<String> {
+    #[cfg(test)]
+    if let Some(key) = test_cache_key_from_repository(repository, "workspace-normal") {
+        return cached_workspace_packages(key, errors, |local_errors| {
+            workspace_normal_packages_uncached(repository, local_errors)
+        });
+    }
+    workspace_normal_packages_uncached(repository, errors)
+}
+
+fn workspace_normal_packages_uncached(
+    repository: &Path,
+    errors: &mut Vec<String>,
+) -> BTreeSet<String> {
     let Some(metadata) = cargo_metadata(repository, errors) else {
         return BTreeSet::new();
     };
     let (_, _, workspace) =
         cargo_tree_normal_packages(repository, &metadata, "into-markdown-cli", errors);
     workspace
+}
+
+#[cfg(test)]
+fn test_cache_key_from_repository(repository: &Path, purpose: &str) -> Option<String> {
+    let lock = std::fs::read_to_string(repository.join("Cargo.lock")).ok()?;
+    let authority =
+        std::fs::read_to_string(repository.join("third_party/licenses/cargo-normal-runtime.json"))
+            .ok()?;
+    test_cache_key(repository, purpose, &lock, &authority)
+}
+
+#[cfg(test)]
+fn test_cache_key(
+    repository: &Path,
+    purpose: &str,
+    lock_text: &str,
+    authority_text: &str,
+) -> Option<String> {
+    let authority: NormalRuntimeAuthority = serde_json::from_str(authority_text).ok()?;
+    let mut digest = Sha256::new();
+    digest.update(repository.canonicalize().ok()?.to_string_lossy().as_bytes());
+    digest.update([0]);
+    digest.update(purpose.as_bytes());
+    digest.update([0]);
+    digest.update(lock_text.as_bytes());
+    digest.update([0]);
+    digest.update(authority_text.as_bytes());
+    for relative in authority.workspace_manifest_sha256.keys() {
+        digest.update([0]);
+        digest.update(relative.as_bytes());
+        digest.update([0]);
+        digest.update(std::fs::read(repository.join(relative)).ok()?);
+    }
+    Some(format!("{:x}", digest.finalize()))
+}
+
+#[cfg(test)]
+fn cached_runtime_closure(
+    key: String,
+    errors: &mut Vec<String>,
+    compute: impl FnOnce(&mut Vec<String>) -> RuntimeClosure,
+) -> RuntimeClosure {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<BTreeMap<String, RuntimeClosure>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock().unwrap();
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    let mut local_errors = Vec::new();
+    let computed = compute(&mut local_errors);
+    if local_errors.is_empty() {
+        cache.insert(key, computed.clone());
+    }
+    errors.append(&mut local_errors);
+    computed
+}
+
+#[cfg(test)]
+fn cached_workspace_packages(
+    key: String,
+    errors: &mut Vec<String>,
+    compute: impl FnOnce(&mut Vec<String>) -> BTreeSet<String>,
+) -> BTreeSet<String> {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<BTreeMap<String, BTreeSet<String>>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock().unwrap();
+    if let Some(cached) = cache.get(&key) {
+        return cached.clone();
+    }
+    let mut local_errors = Vec::new();
+    let computed = compute(&mut local_errors);
+    if local_errors.is_empty() {
+        cache.insert(key, computed.clone());
+    }
+    errors.append(&mut local_errors);
+    computed
 }
 
 fn cargo_metadata(repository: &Path, errors: &mut Vec<String>) -> Option<CargoMetadata> {
@@ -295,19 +418,19 @@ fn cargo_tree_normal_packages(
         } else if let Some(package) = workspace.get(&(name, version)) {
             workspace_normal.insert(package.name.clone());
             let manifest = Path::new(&package.manifest_path);
-            if let Some(relative) = repository_relative(repository, manifest) {
-                if relative.starts_with("third_party/") {
-                    let key = (package.name.clone(), package.version.clone());
-                    let license = package.license.clone().unwrap_or_default();
-                    if license.is_empty() || package.publish.as_deref() != Some(&[]) {
-                        errors.push(format!(
-                            "local runtime package {}@{} must declare a license and publish=false",
-                            key.0, key.1
-                        ));
-                    }
-                    if local.insert(key.clone(), LocalRuntimePackage { license }).is_some() {
-                        errors.push(format!("duplicate local runtime package {}@{}", key.0, key.1));
-                    }
+            if let Some(relative) = repository_relative(repository, manifest)
+                && relative.starts_with("third_party/")
+            {
+                let key = (package.name.clone(), package.version.clone());
+                let license = package.license.clone().unwrap_or_default();
+                if license.is_empty() || package.publish.as_deref() != Some(&[]) {
+                    errors.push(format!(
+                        "local runtime package {}@{} must declare a license and publish=false",
+                        key.0, key.1
+                    ));
+                }
+                if local.insert(key.clone(), LocalRuntimePackage { license }).is_some() {
+                    errors.push(format!("duplicate local runtime package {}@{}", key.0, key.1));
                 }
             }
         } else {

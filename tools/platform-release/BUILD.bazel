@@ -3,6 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 exports_files([
     "authority.json",
+    "release.py",
 ])
 
 rust_binary(
@@ -33,6 +34,7 @@ py_library(
     ],
     imports = ["."],
     deps = [
+        "//tools:deterministic_zip",
         "//tools/macos-release:library",
         "//tools:release_asset",
         "//tools/skill-release:library",

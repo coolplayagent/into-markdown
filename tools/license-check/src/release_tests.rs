@@ -1,6 +1,9 @@
 use crate::release::{
-    aggregate_release_set, finalize_artifact_metadata, generate_release_inputs,
-    generate_release_inputs_unchecked, verify_archive_projection,
+    aggregate_release_set, finalize_artifact_metadata,
+    generate_release_inputs as generate_release_inputs_audited,
+    generate_release_inputs_unchecked as generate_release_inputs,
+    generate_release_inputs_unchecked,
+    verify_archive_projection_unchecked as verify_archive_projection,
 };
 use crate::schema::{
     ArchiveFile, ArchiveFileKind, ArchiveProjection, FfmpegEvidence, LicenseMaterial,
@@ -458,6 +461,29 @@ fn install_base_materials(
                 vec![id.clone()],
                 &["Unlicense"],
             );
+        } else if id == "cargo:whisper-rs-sys@0.15.0" {
+            push_external_material(
+                projection,
+                "share/into-markdown/licenses/cargo/whisper-rs-sys-0.15.0-vendored.zip",
+                12_126_998,
+                "1e533cde480d3ff526e69773d7ff9724a3781ddc2447704e99a6fc8e9ad1514e",
+                LicenseMaterialKind::UpstreamSourceArchive,
+                id,
+            );
+            for (path, authority, spdx) in [
+                (
+                    "share/into-markdown/licenses/whisper-rs-sys-Unlicense.txt",
+                    "third_party/whisper-rs-0.16.0/LICENSE",
+                    "Unlicense",
+                ),
+                (
+                    "share/into-markdown/licenses/whisper.cpp-MIT.txt",
+                    "third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE",
+                    "MIT",
+                ),
+            ] {
+                push_text_material(projection, path, authority, vec![id.clone()], &[spdx]);
+            }
         } else if id.starts_with("cargo:") {
             let component = sbom["components"]
                 .as_array()
@@ -687,6 +713,17 @@ fn four_platform_requests_use_one_license_conclusion() {
 }
 
 #[test]
+fn public_release_api_audits_the_complete_repository_contract() {
+    let repository = root();
+    let fixture =
+        repository.join("tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json");
+    let generated =
+        generate_release_inputs_audited(&repository, &fs::read_to_string(fixture).unwrap())
+            .unwrap();
+    assert_eq!(generated.target, "x86_64-pc-windows-msvc");
+}
+
+#[test]
 fn empty_projection_contract_is_valid_on_every_platform() {
     for target in crate::schema::SUPPORTED_TARGETS {
         let projection = serde_json::to_string(&minimal_projection(target)).unwrap();
@@ -754,6 +791,161 @@ fn full_offline_whisper_projection_is_hash_and_license_bound() {
     let mut errors = Vec::new();
     crate::models_fixtures::validate(&root(), &selected, &files, &mut errors);
     assert!(errors.iter().any(|error| error.contains("whisper-small model")));
+}
+
+#[test]
+fn whisper_sys_source_and_dual_license_authority_are_exact() {
+    let mut component = crate::schema::Component {
+        id: "cargo:whisper-rs-sys@0.15.0".into(),
+        kind: "rust-library".into(),
+        status: "reviewed".into(),
+        included_in_release: false,
+        release_eligible: true,
+        manual_only: false,
+        required_in_core: false,
+        version: Some("0.15.0".into()),
+        source: Some(
+            "https://codeberg.org/tazz4843/whisper-rs/src/commit/7558e1b72f54f2f22a53589afb77e65681834c36/sys"
+                .into(),
+        ),
+        license: Some("Unlicense AND MIT".into()),
+        obligations: Some("preserve source and both licenses".into()),
+        integrity: vec![
+            crate::schema::IntegrityEvidence {
+                algorithm: "SHA-256".into(),
+                digest: "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f"
+                    .into(),
+                subject: "crates.io archive whisper-rs-sys@0.15.0".into(),
+                target: None,
+            },
+            crate::schema::IntegrityEvidence {
+                algorithm: "SHA-256".into(),
+                digest: "1e533cde480d3ff526e69773d7ff9724a3781ddc2447704e99a6fc8e9ad1514e"
+                    .into(),
+                subject: "reviewed deterministic vendored source archive whisper-rs-sys@0.15.0"
+                    .into(),
+                target: None,
+            },
+        ],
+        authority: "third_party/licenses/release-material-authority.json".into(),
+    };
+    let mut projection = ArchiveProjection {
+        schema_version: 1,
+        target: "x86_64-pc-windows-msvc".into(),
+        version: "0.0.0".into(),
+        source_revision: "0".repeat(40),
+        components: vec![component.id.clone()],
+        files: vec![],
+        license_materials: vec![],
+        ffmpeg_evidence: None,
+        native_transformations: vec![],
+    };
+    push_external_material(
+        &mut projection,
+        "share/into-markdown/licenses/cargo/whisper-rs-sys-0.15.0-vendored.zip",
+        12_126_998,
+        "1e533cde480d3ff526e69773d7ff9724a3781ddc2447704e99a6fc8e9ad1514e",
+        LicenseMaterialKind::UpstreamSourceArchive,
+        &component.id,
+    );
+    for (path, authority, spdx) in [
+        (
+            "share/into-markdown/licenses/whisper-rs-sys-Unlicense.txt",
+            "third_party/whisper-rs-0.16.0/LICENSE",
+            "Unlicense",
+        ),
+        (
+            "share/into-markdown/licenses/whisper.cpp-MIT.txt",
+            "third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE",
+            "MIT",
+        ),
+    ] {
+        push_text_material(&mut projection, path, authority, vec![component.id.clone()], &[spdx]);
+    }
+    let mut errors = Vec::new();
+    crate::materials::validate(&root(), &projection, &[&component], &mut errors);
+    assert!(errors.is_empty(), "baseline authority: {errors:?}");
+
+    let replacement = "f".repeat(64);
+    component.integrity[1].digest.clone_from(&replacement);
+    let material = projection
+        .license_materials
+        .iter_mut()
+        .find(|item| item.kind == LicenseMaterialKind::UpstreamSourceArchive)
+        .unwrap();
+    material.sha256.clone_from(&replacement);
+    let file = projection.files.iter_mut().find(|item| item.path == material.path).unwrap();
+    file.sha256 = replacement;
+    let mut errors = Vec::new();
+    crate::materials::validate(&root(), &projection, &[&component], &mut errors);
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("cryptographically fixed complete license material")),
+        "synchronized material and manifest replacement was accepted: {errors:?}"
+    );
+}
+
+#[test]
+fn generated_declaration_replacement_cannot_self_authorize() {
+    let mut projection = minimal_projection("aarch64-apple-darwin");
+    let replacement = b"attacker-controlled notice";
+    let notice = projection.files.iter_mut().find(|file| file.path == "NOTICE").unwrap();
+    notice.bytes = replacement.len() as u64;
+    notice.sha256 = hash(replacement);
+    let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
+        .unwrap_err();
+    assert!(
+        errors.iter().any(|error| error.contains("does not match generated input")),
+        "recomputed package manifest replaced external declaration authority: {errors:?}"
+    );
+}
+
+#[test]
+fn media_sources_publish_whisper_sys_dual_license_and_integrity() {
+    let request = fs::read_to_string(root().join(
+        "tools/license-check/fixtures/release-request-media-plugin-x86_64-pc-windows-msvc.json",
+    ))
+    .unwrap();
+    let inputs = generate_release_inputs_unchecked(&root(), &request).unwrap();
+    let sources: serde_json::Value = serde_json::from_str(&inputs.sources.contents).unwrap();
+    let component = sources["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|component| component["id"] == "cargo:whisper-rs-sys@0.15.0")
+        .unwrap();
+    assert_eq!(component["license"], "Unlicense AND MIT");
+    let digests: std::collections::BTreeSet<_> = component["integrity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["digest"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        digests,
+        std::collections::BTreeSet::from([
+            "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f",
+            "1e533cde480d3ff526e69773d7ff9724a3781ddc2447704e99a6fc8e9ad1514e",
+        ])
+    );
+
+    let sbom: serde_json::Value = serde_json::from_str(&inputs.sbom.contents).unwrap();
+    let package = sbom["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"] == "cargo:whisper-rs-sys@0.15.0")
+        .unwrap();
+    assert_eq!(package["licenseDeclared"], "Unlicense AND MIT");
+    assert_eq!(package["licenseConcluded"], "Unlicense AND MIT");
+    let checksums: std::collections::BTreeSet<_> = package["checksums"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["checksumValue"].as_str().unwrap())
+        .collect();
+    assert_eq!(checksums, digests);
 }
 
 #[test]
