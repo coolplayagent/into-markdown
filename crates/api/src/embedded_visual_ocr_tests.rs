@@ -21,6 +21,79 @@ struct PdfGeometryOcr(AtomicUsize);
 
 struct RemoteEmbeddedOcr(AtomicUsize);
 
+struct DanglingDocxConverter;
+
+impl Converter for DanglingDocxConverter {
+    fn id(&self) -> &'static str {
+        "test.api.dangling-docx"
+    }
+
+    fn priority(&self) -> i32 {
+        i32::MAX
+    }
+
+    fn supported_formats(&self) -> &'static [InputFormat] {
+        &[InputFormat::Docx]
+    }
+
+    fn probe<'a>(
+        &'a self,
+        _: &'a ResolvedInput,
+        _: &'a FormatCandidate,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
+        Box::pin(async { Ok(ProbeOutcome::Match { confidence: 1.0 }) })
+    }
+
+    fn planned_output_bytes(
+        &self,
+        _: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        _: &ExecutionContext,
+    ) -> Result<u64, ConversionError> {
+        Ok(96 * 1024)
+    }
+
+    fn convert<'a>(
+        &'a self,
+        _: &'a ResolvedInput,
+        _: &'a FormatCandidate,
+        _: &'a ConversionOptions,
+        _: &'a Services,
+        _: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+        Box::pin(async {
+            let provenance = || Provenance {
+                kind: ProvenanceKind::NativeParser,
+                provider: "test.api.dangling-docx".into(),
+                locator: SourceLocator::default(),
+                confidence: Some(1.0),
+            };
+            let blocks = vec![
+                BlockNode {
+                    id: NodeId("image-first".into()),
+                    block: Block::Image { asset: AssetId("z-missing".into()), alt: None },
+                    provenance: provenance(),
+                },
+                BlockNode {
+                    id: NodeId("image-second".into()),
+                    block: Block::Image {
+                        asset: AssetId(format!("a-missing-{}", "x".repeat(64 * 1024))),
+                        alt: None,
+                    },
+                    provenance: provenance(),
+                },
+            ];
+            Ok(ConverterOutput::new(
+                Document { blocks, ..Document::default() },
+                Vec::new(),
+                Vec::new(),
+            ))
+        })
+    }
+}
+
 impl OcrEngine for RemoteEmbeddedOcr {
     fn id(&self) -> &'static str {
         "provider.fixture.vision-ocr"
@@ -74,6 +147,30 @@ impl OcrEngine for RemoteEmbeddedOcr {
         self.0.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { self.recognize(request, context).await.map(OcrRecognition::Remote) })
     }
+}
+
+#[test]
+fn best_effort_auto_keeps_low_memory_dangling_reference_as_a_hard_error() {
+    let mut builder = default_engine_builder();
+    builder.registry_mut().register_converter(Arc::new(DanglingDocxConverter));
+    let engine = builder.build().unwrap();
+    let mut request =
+        ConversionRequest::new(InputRef::bytes(b"fixture".to_vec(), Some("dangling.docx")));
+    request.hint.format = Some(InputFormat::Docx);
+    request.options.error_policy = ErrorPolicy::BestEffort;
+    request.options.ocr.policy = OcrPolicy::Auto;
+    request.options.output.asset_mode = AssetMode::Omit;
+    request.options.limits.max_memory_bytes = 100 * 1024;
+
+    let error = block_on(engine.convert(request)).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            ConversionError::Internal { detail }
+                if detail == "image node references missing asset z-missing"
+        ),
+        "unexpected engine error: {error:?}"
+    );
 }
 
 impl OcrEngine for PdfGeometryOcr {

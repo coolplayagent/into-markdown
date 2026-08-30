@@ -12,6 +12,12 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
 
+mod candidate_index;
+use candidate_index::{
+    CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
+    validate_visual_references_without_index,
+};
+
 const PROVIDER: &str = "builtin.enricher.embedded-visual-ocr";
 const UNSUPPORTED_CODE: &str = "embeddedVisualOcr.unsupportedVisual";
 
@@ -204,24 +210,43 @@ fn plan_enrichment(
     {
         return Ok(EnrichmentPlan::Skip);
     }
-    // Inventory references once. Candidate envelope parsing and hashing below
-    // are then performed once per referenced AssetId, never once per node.
-    let mut reference_counts = BTreeMap::<AssetId, u64>::new();
+    // Measure without allocation, reserve the complete reference inventory,
+    // then build it. Preflight runs before the engine owns the returned plan,
+    // so this temporary index must carry its own request-scoped lease.
+    let mut reference_count = 0_usize;
+    let mut reference_id_bytes = 0_u64;
     for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        if find_asset(&output.assets, asset_id, context)?.is_none() {
-            return Err(ConversionError::Internal {
-                detail: format!("image node references missing asset {}", asset_id.0),
-            });
-        }
-        let count = reference_counts.entry(asset_id.clone()).or_default();
-        *count = count.checked_add(1).ok_or_else(|| {
+        reference_count = reference_count.checked_add(1).ok_or_else(|| {
             resource("max_archive_entries", "embedded visual reference count is not representable")
         })?;
+        reference_id_bytes = reference_id_bytes
+            .checked_add(u64::try_from(asset_id.0.len()).map_err(|_| {
+                resource(
+                    "max_memory_bytes",
+                    "embedded visual reference ID length is not representable",
+                )
+            })?)
+            .ok_or_else(|| {
+                resource("max_memory_bytes", "embedded visual reference ID bytes overflow")
+            })?;
         Ok(())
     })?;
-    if reference_counts.is_empty() {
+    if reference_count == 0 {
         return Ok(EnrichmentPlan::Skip);
     }
+    let mut reference_counts =
+        match ReferenceIndex::new(reference_count, reference_id_bytes, context) {
+            Ok(index) => index,
+            Err(error @ ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }) => {
+                validate_visual_references_without_index(output, context)?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
+        reference_counts.record(asset_id)
+    })?;
+    reference_counts.validate_assets(&output.assets, context)?;
     if effective_ocr_policy(options) == OcrPolicy::Always {
         let mut supported_references = 0_u64;
         for asset in &output.assets {
@@ -229,7 +254,7 @@ fn plan_enrichment(
                 continue;
             }
             supported_references = supported_references
-                .checked_add(reference_counts.get(&asset.id).copied().unwrap_or(0))
+                .checked_add(reference_counts.count(&asset.id).unwrap_or(0))
                 .ok_or_else(|| {
                     resource(
                         "max_archive_entries",
@@ -245,11 +270,15 @@ fn plan_enrichment(
         }
     }
 
-    // (asset index, reference count, dimensions, exact-byte digest)
-    let mut candidates = Vec::<(usize, u64, (u32, u32), [u8; 32])>::new();
+    let mut candidates = CandidateBuffer::new(reference_counts.unique_len(), context)?;
     let mut references = 0_u64;
     let mut candidate_bytes = 0_u64;
-    let mut total = 0_u64;
+    let mut total = reference_counts.planned_bytes();
+    checked_add(
+        &mut total,
+        candidates.planned_bytes(),
+        "OCR candidate buffer retained plan overflow",
+    )?;
     for asset in &output.assets {
         context.checkpoint()?;
         checked_add(
@@ -263,7 +292,7 @@ fn plan_enrichment(
     }
     for (index, asset) in output.assets.iter().enumerate() {
         context.checkpoint()?;
-        let Some(reference_count) = reference_counts.get(&asset.id).copied() else { continue };
+        let Some(reference_count) = reference_counts.count(&asset.id) else { continue };
         if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
             continue;
         }
@@ -306,30 +335,23 @@ fn plan_enrichment(
                 .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
             "hash/cache plan overflow",
         )?;
-        candidates.push((
-            index,
+        candidates.push(OcrCandidate {
+            asset_index: index,
             reference_count,
             dimensions,
-            checkpointed_sha256(&asset.bytes, context)?,
-        ));
+            digest: checkpointed_sha256(&asset.bytes, context)?,
+        })?;
     }
     if references == 0 {
         return Ok(EnrichmentPlan::Skip);
     }
-    let mut unique = Vec::<usize>::new();
-    for candidate_index in 0..candidates.len() {
-        context.checkpoint()?;
-        let candidate = &candidates[candidate_index];
-        if unique.iter().any(|prior_index| {
-            let prior = &candidates[*prior_index];
-            prior.3 == candidate.3
-                && output.assets[prior.0].bytes == output.assets[candidate.0].bytes
-        }) {
-            continue;
-        }
-        unique.push(candidate_index);
-    }
-    let unique_count = u32::try_from(unique.len())
+    let grouping = group_candidates(&candidates, &output.assets, context)?;
+    checked_add(
+        &mut total,
+        candidate_index_plan(candidates.len())?,
+        "OCR candidate index retained plan overflow",
+    )?;
+    let unique_count = u32::try_from(grouping.groups.len())
         .map_err(|_| resource("max_pages", "embedded OCR candidate count overflow"))?;
     if unique_count > options.limits.max_pages {
         return Err(resource(
@@ -346,11 +368,10 @@ fn plan_enrichment(
     // must reject.
     // Account hash/map work once per eligible AssetId, but normalization and
     // provider output once per unique byte identity.
-    for candidate_index in unique {
+    for group in &grouping.groups {
         context.checkpoint()?;
-        let candidate = &candidates[candidate_index];
-        let asset = &output.assets[candidate.0];
-        let (width, height) = candidate.2;
+        let candidate = &candidates[group.representative];
+        let (width, height) = candidate.dimensions;
         let normalized_peak = u64::from(width)
             .checked_mul(u64::from(height))
             .and_then(|pixels| pixels.checked_mul(32))
@@ -380,22 +401,9 @@ fn plan_enrichment(
             }
         };
         provider_working_peak = provider_working_peak.max(provider_working);
-        let (reference_copies, asset_copies) = candidates
-            .iter()
-            .filter(|other| other.3 == candidate.3 && output.assets[other.0].bytes == asset.bytes)
-            .try_fold((0_u64, 0_u64), |values, other| {
-                Ok::<_, ConversionError>((
-                    values.0.checked_add(other.1).ok_or_else(|| {
-                        resource("max_memory_bytes", "OCR reference-copy count overflow")
-                    })?,
-                    values.1.checked_add(1).ok_or_else(|| {
-                        resource("max_memory_bytes", "OCR asset-copy count overflow")
-                    })?,
-                ))
-            })?;
         let added_nodes = usize::try_from(provider_regions)
             .unwrap_or(usize::MAX)
-            .checked_mul(usize::try_from(reference_copies).unwrap_or(usize::MAX))
+            .checked_mul(usize::try_from(group.reference_copies).unwrap_or(usize::MAX))
             .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?;
         planned_added_nodes = planned_added_nodes
             .checked_add(added_nodes)
@@ -410,8 +418,9 @@ fn plan_enrichment(
                 "embedded OCR output can exceed the document node limit",
             ));
         }
-        let retained_copies = reference_copies
-            .checked_add(asset_copies)
+        let retained_copies = group
+            .reference_copies
+            .checked_add(group.asset_copies)
             .and_then(|value| value.checked_add(1))
             .ok_or_else(|| resource("max_memory_bytes", "OCR retained-copy count overflow"))?;
         checked_add(
@@ -662,22 +671,6 @@ fn validated_candidate_dimensions(
     Ok((width, height))
 }
 
-fn find_asset<'a>(
-    assets: &'a [into_markdown_core::Asset],
-    asset_id: &AssetId,
-    context: &ExecutionContext,
-) -> Result<Option<&'a into_markdown_core::Asset>, ConversionError> {
-    for (index, asset) in assets.iter().enumerate() {
-        if index % 256 == 0 {
-            context.checkpoint()?;
-        }
-        if asset.id == *asset_id {
-            return Ok(Some(asset));
-        }
-    }
-    Ok(None)
-}
-
 fn for_each_visual_reference(
     nodes: &[BlockNode],
     context: &ExecutionContext,
@@ -802,8 +795,7 @@ async fn enrich(
             ));
         }
     }
-    let mut hashes_by_asset = BTreeMap::new();
-    let mut unique = BTreeMap::<[u8; 32], AssetId>::new();
+    let mut candidates = CandidateBuffer::new(eligible_assets.len(), context)?;
     let mut referenced_assets = BTreeSet::new();
     let mut compressed_bytes = 0_u64;
     for (index, reference) in references.iter().enumerate() {
@@ -834,36 +826,40 @@ async fn enrich(
             ));
         }
         let digest = checkpointed_sha256(&asset.bytes, context)?;
-        hashes_by_asset.insert(reference.asset.clone(), digest);
-        unique.entry(digest).or_insert_with(|| reference.asset.clone());
+        candidates.push(OcrCandidate {
+            asset_index: *asset_index,
+            reference_count: 1,
+            dimensions: (0, 0),
+            digest,
+        })?;
     }
 
-    let unique_count = u32::try_from(unique.len())
+    let grouping = group_candidates(&candidates, &output.assets, context)?;
+    let unique_count = u32::try_from(grouping.groups.len())
         .map_err(|_| resource("max_pages", "OCR request count is not representable"))?;
     if unique_count > options.limits.max_pages {
         return Err(resource("max_pages", "embedded OCR requests exceed the request limit"));
     }
 
-    let mut cache = BTreeMap::<[u8; 32], CachedContribution>::new();
-    for (ordinal, (digest, asset_id)) in unique.into_iter().enumerate() {
+    let mut cache = Vec::<Option<CachedContribution>>::new();
+    cache.try_reserve_exact(grouping.groups.len()).map_err(|error| {
+        resource("max_memory_bytes", format!("allocate OCR contribution cache: {error}"))
+    })?;
+    cache.resize_with(grouping.groups.len(), || None);
+    for (ordinal, group_index) in grouping.digest_order.iter().copied().enumerate() {
         context.checkpoint()?;
-        let asset_index = assets.get(&asset_id).ok_or_else(|| ConversionError::Internal {
-            detail: "embedded OCR asset inventory changed during enrichment".into(),
-        })?;
-        let asset = &output.assets[*asset_index];
+        let candidate = &candidates[grouping.groups[group_index].representative];
+        let asset = &output.assets[candidate.asset_index];
         let normalized = match normalize(asset, options, context) {
             Ok(value) => value,
             Err(error)
                 if effective_ocr_policy(options) == OcrPolicy::Auto
                     && auto_degradable_normalization(&error) =>
             {
-                cache.insert(
-                    digest,
-                    CachedContribution {
-                        nodes: Vec::new(),
-                        diagnostics: vec![visual_diagnostic(None, error.to_string())],
-                    },
-                );
+                cache[group_index] = Some(CachedContribution {
+                    nodes: Vec::new(),
+                    diagnostics: vec![visual_diagnostic(None, error.to_string())],
+                });
                 continue;
             }
             Err(error) => return Err(error),
@@ -892,13 +888,10 @@ async fn enrich(
                 if effective_ocr_policy(options) == OcrPolicy::Auto
                     && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
             {
-                cache.insert(
-                    digest,
-                    CachedContribution {
-                        nodes: Vec::new(),
-                        diagnostics: vec![visual_diagnostic(None, error.to_string())],
-                    },
-                );
+                cache[group_index] = Some(CachedContribution {
+                    nodes: Vec::new(),
+                    diagnostics: vec![visual_diagnostic(None, error.to_string())],
+                });
                 continue;
             }
             Err(error) => return Err(error),
@@ -918,21 +911,25 @@ async fn enrich(
         if let Some(memory) = contribution.memory.take() {
             output.attach_memory_reservation(context, memory)?;
         }
-        cache.insert(
-            digest,
-            CachedContribution { nodes: contribution.nodes, diagnostics: contribution.diagnostics },
-        );
+        cache[group_index] = Some(CachedContribution {
+            nodes: contribution.nodes,
+            diagnostics: contribution.diagnostics,
+        });
     }
 
     let mut contributions_by_asset = BTreeMap::new();
-    for (index, (asset, digest)) in hashes_by_asset.into_iter().enumerate() {
+    for (index, candidate) in candidates.iter().enumerate() {
         if index % 256 == 0 {
             context.checkpoint()?;
         }
-        if let Some(contribution) = cache.get(&digest) {
-            contributions_by_asset.insert(asset, contribution.clone());
+        let group_index = grouping.membership[index];
+        if let Some(contribution) = &cache[group_index] {
+            contributions_by_asset
+                .insert(output.assets[candidate.asset_index].id.clone(), contribution.clone());
         }
     }
+    drop(grouping);
+    drop(candidates);
     let mut occupied_ids = BTreeSet::new();
     collect_node_ids(&output.document.blocks, &mut occupied_ids, context)?;
     output.document.blocks = rebuild_nodes(
