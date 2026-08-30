@@ -1,8 +1,10 @@
 use crate::workbook::budget::checked_field_bytes;
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::opc::package::canonical_part_name;
-use crate::workbook::schema::{PACKAGE_REL_NS, SPREADSHEET_NS, SPREADSHEET_STRICT_NS};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use crate::workbook::schema::{
+    PACKAGE_REL_NS, SPREADSHEET_BETA_NS, SPREADSHEET_NS, SPREADSHEET_STRICT_NS,
+};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,6 +23,35 @@ pub(in crate::workbook) fn decode_attr(
     attr.unescape_value()
         .map(std::borrow::Cow::into_owned)
         .map_err(|error| malformed(Some(part), format!("invalid attribute: {error}")))
+}
+
+pub(in crate::workbook) fn validate_xml_reference(
+    reference: &[u8],
+    part: &str,
+) -> Result<(), ConversionError> {
+    if matches!(reference, b"amp" | b"lt" | b"gt" | b"apos" | b"quot") {
+        return Ok(());
+    }
+    let value = if let Some(hex) = reference.strip_prefix(b"#x") {
+        (1..=6)
+            .contains(&hex.len())
+            .then(|| std::str::from_utf8(hex).ok())
+            .flatten()
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+    } else if let Some(decimal) = reference.strip_prefix(b"#") {
+        (1..=7)
+            .contains(&decimal.len())
+            .then(|| std::str::from_utf8(decimal).ok())
+            .flatten()
+            .and_then(|digits| digits.parse::<u32>().ok())
+    } else {
+        None
+    };
+    if value.and_then(char::from_u32).is_some() {
+        Ok(())
+    } else {
+        Err(malformed(Some(part), "entity reference is forbidden"))
+    }
 }
 
 #[allow(clippy::too_many_lines)] // Relationship authority and hierarchy remain one fail-closed pass.
@@ -114,7 +145,18 @@ pub(in crate::workbook) fn parse_relationships(
                         &[u64::try_from(value.len()).unwrap_or(u64::MAX)],
                     )?;
                 }
-                let target = if external { target } else { resolve_part_target(owner, &target)? };
+                if !external
+                    && options.error_policy == ErrorPolicy::BestEffort
+                    && is_relationship_kind(&kind, "hyperlink")
+                    && target.contains('#')
+                {
+                    continue;
+                }
+                let target = if external {
+                    target
+                } else {
+                    resolve_part_target(owner, &target, options.error_policy)?
+                };
                 checked_field_bytes(
                     options,
                     "resolved relationship target",
@@ -155,14 +197,26 @@ pub(in crate::workbook) fn parse_relationships(
     Ok(output)
 }
 
-fn resolve_part_target(owner: &str, target: &str) -> Result<String, ConversionError> {
-    if target.starts_with('/') || target.contains('\\') || target.contains(['\0', '?', '#']) {
+fn resolve_part_target(
+    owner: &str,
+    target: &str,
+    error_policy: ErrorPolicy,
+) -> Result<String, ConversionError> {
+    let absolute = target.starts_with('/') && !target.starts_with("//");
+    if target.contains('\\') || target.contains(['\0', '?', '#']) {
         return Err(malformed(Some(owner), "unsafe internal relationship target"));
     }
-    let mut components = owner
-        .rsplit_once('/')
-        .map_or(Vec::new(), |(parent, _)| parent.split('/').map(str::to_owned).collect());
-    for component in target.split('/') {
+    if absolute && error_policy == ErrorPolicy::Strict || target.starts_with("//") {
+        return Err(malformed(Some(owner), "unsafe internal relationship target"));
+    }
+    let mut components = if absolute {
+        Vec::new()
+    } else {
+        owner
+            .rsplit_once('/')
+            .map_or(Vec::new(), |(parent, _)| parent.split('/').map(str::to_owned).collect())
+    };
+    for component in target.trim_start_matches('/').split('/') {
         match component {
             "" | "." => {}
             ".." => {
@@ -197,7 +251,9 @@ pub(in crate::workbook) fn require_spreadsheet_namespace(
 ) -> Result<(), ConversionError> {
     match namespace {
         ResolveResult::Bound(value)
-            if value.as_ref() == SPREADSHEET_NS || value.as_ref() == SPREADSHEET_STRICT_NS =>
+            if value.as_ref() == SPREADSHEET_NS
+                || value.as_ref() == SPREADSHEET_STRICT_NS
+                || value.as_ref() == SPREADSHEET_BETA_NS =>
         {
             Ok(())
         }
@@ -209,6 +265,8 @@ pub(in crate::workbook) fn is_spreadsheet_namespace(namespace: &ResolveResult<'_
     matches!(
         namespace,
         ResolveResult::Bound(value)
-            if value.as_ref() == SPREADSHEET_NS || value.as_ref() == SPREADSHEET_STRICT_NS
+            if value.as_ref() == SPREADSHEET_NS
+                || value.as_ref() == SPREADSHEET_STRICT_NS
+                || value.as_ref() == SPREADSHEET_BETA_NS
     )
 }

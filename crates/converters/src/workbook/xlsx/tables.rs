@@ -22,6 +22,7 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
     let mut ended_root = false;
     let mut depth = 0_u16;
     let mut string_depth = None;
+    let mut current_string_bytes = 0_u64;
     loop {
         context.checkpoint()?;
         match reader.read_resolved_event() {
@@ -44,7 +45,8 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
                             if !attributes.insert(attr.key.as_ref().to_vec()) {
                                 return Err(malformed(Some(part), "duplicate sst attribute"));
                             }
-                            let target = match attr.key.local_name().as_ref() {
+                            let local_name = attr.key.local_name();
+                            let target = match local_name.as_ref() {
                                 b"uniqueCount" => Some(&mut declared_unique),
                                 b"count" => Some(&mut declared_total),
                                 _ => None,
@@ -53,7 +55,9 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
                                 let value = decode_attr(&attr, part)?
                                     .parse::<u64>()
                                     .map_err(|_| malformed(Some(part), "invalid sst count"))?;
-                                if value > options.limits.max_table_cells {
+                                if local_name.as_ref() == b"uniqueCount"
+                                    && value > options.limits.max_table_cells
+                                {
                                     return Err(limit(
                                         "max_table_cells",
                                         "shared string declaration is too large",
@@ -77,6 +81,7 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
                         }
                         inventory.shared_strings = inventory.shared_strings.saturating_add(1);
                         string_depth = Some(depth);
+                        current_string_bytes = 0;
                     }
                     _ if !saw_root || ended_root || depth == 0 => {
                         return Err(malformed(Some(part), "invalid shared-string hierarchy"));
@@ -96,10 +101,14 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
                 inventory.shared_string_bytes = inventory
                     .shared_string_bytes
                     .saturating_add(u64::try_from(text.iter().len()).unwrap_or(u64::MAX));
+                current_string_bytes = current_string_bytes
+                    .saturating_add(u64::try_from(text.iter().len()).unwrap_or(u64::MAX));
             }
             Ok((_, Event::CData(text))) if string_depth.is_some() => {
                 inventory.shared_string_bytes = inventory
                     .shared_string_bytes
+                    .saturating_add(u64::try_from(text.iter().len()).unwrap_or(u64::MAX));
+                current_string_bytes = current_string_bytes
                     .saturating_add(u64::try_from(text.iter().len()).unwrap_or(u64::MAX));
             }
             Ok((namespace, Event::End(event))) => {
@@ -113,6 +122,8 @@ pub(in crate::workbook) fn scan_xml_shared_strings(
                             return Err(malformed(Some(part), "invalid shared-string item end"));
                         }
                         string_depth = None;
+                        inventory.max_shared_string_bytes =
+                            inventory.max_shared_string_bytes.max(current_string_bytes);
                     }
                     b"sst" => {
                         if depth != 1 || string_depth.is_some() || ended_root {
@@ -376,4 +387,21 @@ fn style_collection_count(
         }
     }
     Ok(declared)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scan_xml_shared_strings;
+    use into_markdown_core::{
+        ConversionOptions, ExecutionContext, ExecutionOptions, ResourceLimits,
+    };
+
+    #[test]
+    fn declared_reference_count_does_not_allocate_shared_strings() {
+        let xml = br#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="18446744073709551615" uniqueCount="1"><si><t>used</t></si></sst>"#;
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let inventory =
+            scan_xml_shared_strings(xml, &ConversionOptions::default(), &context).unwrap();
+        assert_eq!(inventory.shared_strings, 1);
+    }
 }

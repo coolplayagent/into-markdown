@@ -6,7 +6,7 @@ mod hyperlinks;
 pub(super) mod metadata;
 mod objects;
 
-use crate::workbook::error::malformed;
+use crate::workbook::error::{malformed, warning};
 use crate::workbook::extras::comments::{parse_binary_comments, parse_comments};
 use crate::workbook::extras::hyperlinks::{
     parse_sheet_drawing_ids, parse_sheet_hyperlinks, resolve_binary_hyperlinks,
@@ -22,9 +22,17 @@ use crate::workbook::opc::relationships::{
 };
 use crate::workbook::schema::{DRAWING_CT, XLSB_COMMENTS_CT, XML_COMMENTS_CT, XML_STYLES_CT};
 use crate::workbook::xlsb::sheet::scan_xlsb_sheet;
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{
+    ConversionError, ConversionOptions, Diagnostic, ErrorPolicy, ExecutionContext, SourceLocator,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
+
+pub(in crate::workbook) struct ExtractedSheetExtras {
+    pub(in crate::workbook) sheets: BTreeMap<String, SheetExtras>,
+    pub(in crate::workbook) assets: ExtractedAssets,
+    pub(in crate::workbook) diagnostics: Vec<Diagnostic>,
+}
 
 #[allow(clippy::too_many_lines)] // Relationship isolation is clearer as one bounded traversal.
 pub(in crate::workbook) fn extract_sheet_extras(
@@ -35,9 +43,10 @@ pub(in crate::workbook) fn extract_sheet_extras(
     content_types: &ContentTypeMap,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<(BTreeMap<String, SheetExtras>, ExtractedAssets), ConversionError> {
+) -> Result<ExtractedSheetExtras, ConversionError> {
     let mut output = BTreeMap::new();
     let mut assets = ExtractedAssets::default();
+    let mut diagnostics = Vec::new();
     let styles = if kind == WorkbookKind::Xml && package_parts.contains("xl/styles.xml") {
         require_content_type(content_types, "xl/styles.xml", &[XML_STYLES_CT])?;
         let index = zip
@@ -64,8 +73,20 @@ pub(in crate::workbook) fn extract_sheet_extras(
                 .index_for_name(sheet_part)
                 .ok_or_else(|| malformed(Some(sheet_part), "worksheet part is missing"))?;
             let xml = read_entry(zip, index, sheet_part)?;
-            extras.hyperlinks =
+            let (hyperlinks, omitted_hyperlinks) =
                 parse_sheet_hyperlinks(&xml, sheet_part, &relationships, options, context)?;
+            extras.hyperlinks = hyperlinks;
+            if omitted_hyperlinks > 0 {
+                diagnostics.push(warning(
+                    "spreadsheet.hyperlink.omitted",
+                    format!("{omitted_hyperlinks} unsafe or incomplete hyperlink(s) were omitted"),
+                    Some(SourceLocator {
+                        sheet: Some(sheet_name.clone()),
+                        part: Some(sheet_part.clone()),
+                        ..SourceLocator::default()
+                    }),
+                ));
+            }
             drawing_relationship_ids = parse_sheet_drawing_ids(&xml, sheet_part, context)?;
             let (cell_marks, hidden_rows, hidden_columns) =
                 parse_sheet_cell_metadata(&xml, sheet_part, &styles, options, context)?;
@@ -148,7 +169,7 @@ pub(in crate::workbook) fn extract_sheet_extras(
                 found_drawing_relationships.insert(relationship_id.clone());
                 require_package_part(package_parts, &relationship.target)?;
                 require_content_type(content_types, &relationship.target, &[DRAWING_CT])?;
-                extract_drawing_objects(
+                let omitted_images = extract_drawing_objects(
                     zip,
                     package_parts,
                     content_types,
@@ -158,6 +179,17 @@ pub(in crate::workbook) fn extract_sheet_extras(
                     options,
                     context,
                 )?;
+                if omitted_images > 0 {
+                    diagnostics.push(warning(
+                        "spreadsheet.image.omitted",
+                        format!("{omitted_images} unsupported or invalid image(s) were omitted"),
+                        Some(SourceLocator {
+                            sheet: Some(sheet_name.clone()),
+                            part: Some(relationship.target.clone()),
+                            ..SourceLocator::default()
+                        }),
+                    ));
+                }
             } else if drawing_relationship_ids.contains(relationship_id) {
                 return Err(malformed(
                     Some(sheet_part),
@@ -166,7 +198,23 @@ pub(in crate::workbook) fn extract_sheet_extras(
             }
         }
         if found_drawing_relationships != drawing_relationship_ids {
-            return Err(malformed(Some(sheet_part), "referenced drawing relationship is missing"));
+            if options.error_policy == ErrorPolicy::BestEffort {
+                diagnostics.push(warning(
+                    "spreadsheet.extension.omitted",
+                    "worksheet drawing reference was omitted because its relationship is missing"
+                        .into(),
+                    Some(SourceLocator {
+                        sheet: Some(sheet_name.clone()),
+                        part: Some(sheet_part.clone()),
+                        ..SourceLocator::default()
+                    }),
+                ));
+            } else {
+                return Err(malformed(
+                    Some(sheet_part),
+                    "referenced drawing relationship is missing",
+                ));
+            }
         }
         let mut comment_cells = BTreeSet::new();
         if extras.annotations.iter().any(|annotation| !comment_cells.insert(annotation.cell)) {
@@ -174,7 +222,7 @@ pub(in crate::workbook) fn extract_sheet_extras(
         }
         output.insert(sheet_name.clone(), extras);
     }
-    Ok((output, assets))
+    Ok(ExtractedSheetExtras { sheets: output, assets, diagnostics })
 }
 
 #[cfg(test)]

@@ -122,7 +122,8 @@ impl ExtractedAssets {
         &self,
         options: &ConversionOptions,
         context: &ExecutionContext,
-    ) -> Result<(), ConversionError> {
+    ) -> Result<Vec<AssetId>, ConversionError> {
+        let mut invalid = Vec::new();
         for validation in &self.validations {
             context.checkpoint()?;
             let bytes = self
@@ -133,9 +134,30 @@ impl ExtractedAssets {
                 })?
                 .bytes
                 .as_slice();
-            validate_image_bytes(validation.image, bytes, &validation.part, options, context)?;
+            match validate_image_bytes(validation.image, bytes, &validation.part, options, context)
+            {
+                Ok(()) => {}
+                Err(ConversionError::Malformed { .. } | ConversionError::Unsupported { .. })
+                    if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort =>
+                {
+                    let asset = &self.assets[validation.asset_index].id;
+                    if !invalid.contains(asset) {
+                        invalid.push(asset.clone());
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok(())
+        Ok(invalid)
+    }
+
+    pub(super) fn remove_invalid(&mut self, invalid: &[AssetId]) {
+        self.assets.retain(|asset| !invalid.contains(&asset.id));
+        self.total_bytes = self.assets.iter().fold(0_u64, |total, asset| {
+            total.saturating_add(u64::try_from(asset.bytes.len()).unwrap_or(u64::MAX))
+        });
+        self.validations.clear();
+        self.by_digest.clear();
     }
 }
 

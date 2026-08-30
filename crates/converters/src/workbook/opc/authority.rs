@@ -1,4 +1,4 @@
-use crate::workbook::error::{limit, malformed};
+use crate::workbook::error::{limit, malformed, warning};
 use crate::workbook::model::{BinaryFormulaContext, WorkbookKind, WorkbookParts};
 use crate::workbook::opc::content_types::{ContentTypeMap, require_content_type};
 use crate::workbook::opc::package::{PackageEntry, read_entry};
@@ -14,7 +14,9 @@ use crate::workbook::schema::{
 };
 use crate::workbook::xlsb::workbook::{parse_binary_workbook_sheets, scan_binary_workbook_surface};
 use crate::workbook::xlsx::workbook::{parse_xml_workbook_sheets, scan_xml_workbook_surface};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{
+    ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, SourceLocator,
+};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader as XmlReader;
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,6 +179,7 @@ pub(in crate::workbook) fn workbook_sheet_parts(
         package_parts,
         content_types,
         &relationship_part,
+        options,
     )?;
     let workbook_index = zip
         .index_for_name(workbook_part)
@@ -195,14 +198,22 @@ pub(in crate::workbook) fn workbook_sheet_parts(
         }
     };
     let mut output = BTreeMap::new();
+    let mut sheet_order = Vec::new();
+    let mut diagnostics = Vec::new();
     let mut targets = BTreeSet::new();
     for (name, relationship_id) in names_to_ids {
-        let relationship = relationships.get(&relationship_id).ok_or_else(|| {
-            malformed(
-                Some(workbook_part),
-                format!("sheet {name} references missing relationship {relationship_id}"),
-            )
-        })?;
+        let Some(relationship) = resolve_sheet_relationship(
+            &relationships,
+            &relationship_id,
+            kind,
+            options,
+            &mut diagnostics,
+            &name,
+            workbook_part,
+        )?
+        else {
+            continue;
+        };
         if relationship.external {
             return Err(malformed(
                 Some(&relationship_part),
@@ -210,33 +221,22 @@ pub(in crate::workbook) fn workbook_sheet_parts(
             ));
         }
         if !is_relationship_kind(&relationship.kind, "worksheet") {
-            if let Some(content_type) = unsupported_sheet_content_type(kind, &relationship.kind) {
-                require_content_type(content_types, &relationship.target, &[content_type])?;
-                return Err(ConversionError::Unsupported {
-                    detail: format!(
-                        "non-worksheet sheet relationship is unsupported and was not opened ({name})"
-                    ),
-                });
+            if handle_unsupported_sheet(
+                kind,
+                relationship,
+                content_types,
+                options,
+                &mut diagnostics,
+                &name,
+            )? {
+                continue;
             }
             return Err(malformed(
                 Some(&relationship_part),
                 format!("sheet {name} has a spoofed relationship type"),
             ));
         }
-        if !package_parts.contains(&relationship.target) {
-            return Err(malformed(
-                Some(&relationship.target),
-                format!("sheet part for {name} is missing"),
-            ));
-        }
-        require_content_type(
-            content_types,
-            &relationship.target,
-            &[match kind {
-                WorkbookKind::Xml => XML_WORKSHEET_CT,
-                WorkbookKind::Binary => XLSB_WORKSHEET_CT,
-            }],
-        )?;
+        insert_sheet_part(package_parts, content_types, kind, relationship, &name)?;
         if !targets.insert(relationship.target.clone()) {
             return Err(malformed(
                 Some(&relationship_part),
@@ -246,8 +246,100 @@ pub(in crate::workbook) fn workbook_sheet_parts(
         if output.insert(name.clone(), relationship.target.clone()).is_some() {
             return Err(malformed(Some(workbook_part), format!("duplicate sheet name {name}")));
         }
+        sheet_order.push(name);
     }
-    Ok(WorkbookParts { sheets: output, inventory, binary_formula_context })
+    Ok(WorkbookParts {
+        sheets: output,
+        sheet_order,
+        diagnostics,
+        inventory,
+        binary_formula_context,
+    })
+}
+
+fn insert_sheet_part(
+    package_parts: &BTreeSet<String>,
+    content_types: &ContentTypeMap,
+    kind: WorkbookKind,
+    relationship: &Relationship,
+    name: &str,
+) -> Result<(), ConversionError> {
+    if !package_parts.contains(&relationship.target) {
+        return Err(malformed(
+            Some(&relationship.target),
+            format!("sheet part for {name} is missing"),
+        ));
+    }
+    require_content_type(
+        content_types,
+        &relationship.target,
+        &[match kind {
+            WorkbookKind::Xml => XML_WORKSHEET_CT,
+            WorkbookKind::Binary => XLSB_WORKSHEET_CT,
+        }],
+    )?;
+    Ok(())
+}
+
+fn resolve_sheet_relationship<'a>(
+    relationships: &'a BTreeMap<String, Relationship>,
+    relationship_id: &str,
+    kind: WorkbookKind,
+    options: &ConversionOptions,
+    diagnostics: &mut Vec<into_markdown_core::Diagnostic>,
+    name: &str,
+    workbook_part: &str,
+) -> Result<Option<&'a Relationship>, ConversionError> {
+    if let Some(relationship) = relationships.get(relationship_id) {
+        return Ok(Some(relationship));
+    }
+    if kind == WorkbookKind::Xml && options.error_policy == ErrorPolicy::BestEffort {
+        diagnostics.push(warning(
+            "spreadsheet.extension.omitted",
+            format!("sheet {name} with a missing relationship was omitted"),
+            Some(SourceLocator {
+                sheet: Some(name.into()),
+                part: Some(workbook_part.into()),
+                ..SourceLocator::default()
+            }),
+        ));
+        return Ok(None);
+    }
+    Err(malformed(
+        Some(workbook_part),
+        format!("sheet {name} references missing relationship {relationship_id}"),
+    ))
+}
+
+fn handle_unsupported_sheet(
+    kind: WorkbookKind,
+    relationship: &Relationship,
+    content_types: &ContentTypeMap,
+    options: &ConversionOptions,
+    diagnostics: &mut Vec<into_markdown_core::Diagnostic>,
+    name: &str,
+) -> Result<bool, ConversionError> {
+    let Some(content_type) = unsupported_sheet_content_type(kind, &relationship.kind) else {
+        return Ok(false);
+    };
+    require_content_type(content_types, &relationship.target, &[content_type])?;
+    if kind == WorkbookKind::Xml && options.error_policy == ErrorPolicy::BestEffort {
+        diagnostics.push(warning(
+            "spreadsheet.extension.omitted",
+            format!("non-worksheet sheet {name} was omitted"),
+            Some(SourceLocator {
+                sheet: Some(name.into()),
+                part: Some(relationship.target.clone()),
+                ..SourceLocator::default()
+            }),
+        ));
+        return Ok(true);
+    }
+    Err(ConversionError::Unsupported {
+        detail: format!(
+            "non-worksheet sheet relationship is unsupported and was not opened ({name})"
+        ),
+    })
 }
 
 fn unsupported_sheet_content_type(
@@ -273,6 +365,7 @@ fn validate_fixed_parser_parts(
     package_parts: &BTreeSet<String>,
     content_types: &ContentTypeMap,
     relationship_part: &str,
+    options: &ConversionOptions,
 ) -> Result<(), ConversionError> {
     let authorities = match kind {
         WorkbookKind::Xml => [
@@ -299,6 +392,13 @@ fn validate_fixed_parser_parts(
             ));
         }
         if package_parts.contains(fixed_target) {
+            if matching.is_empty()
+                && kind == WorkbookKind::Xml
+                && options.error_policy == ErrorPolicy::BestEffort
+            {
+                require_content_type(content_types, fixed_target, &[content_type])?;
+                continue;
+            }
             if matching.len() != 1 || matching[0].external || matching[0].target != fixed_target {
                 return Err(malformed(
                     Some(relationship_part),

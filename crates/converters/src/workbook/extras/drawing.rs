@@ -185,6 +185,15 @@ pub(super) fn parse_drawing_references(
             Ok((namespace, Event::Empty(event))) => {
                 let local = event.local_name();
                 match local.as_ref() {
+                    b"wsDr" => {
+                        if saw_root
+                            || depth != 0
+                            || !resolved_namespace_is(&namespace, SPREADSHEET_DRAWING_NS)
+                        {
+                            return Err(malformed(Some(part), "invalid DrawingML root"));
+                        }
+                        saw_root = true;
+                    }
                     b"cNvPr" if anchor.is_some() => {
                         if !resolved_namespace_is(&namespace, SPREADSHEET_DRAWING_NS) {
                             return Err(malformed(

@@ -1,6 +1,58 @@
-use super::support::{context, convert, xlsx};
-use crate::workbook::xlsx::sheet::scan_xlsx_sheet;
+use super::support::{context, convert, package, xlsx};
+use crate::workbook::xlsx::sheet_index::read_layout;
 use into_markdown_core::{Block, ConversionError, ConversionOptions, Inline, InlineMark};
+
+#[test]
+fn native_xlsx_reuses_one_prepared_layout_and_one_data_pass_per_sheet() {
+    let bytes = package(&[
+        (
+            "[Content_Types].xml",
+            r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="root" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/workbook.xml",
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Beta" sheetId="2" r:id="rBeta"/><sheet name="Alpha" sheetId="1" r:id="rAlpha"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rAlpha" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="sst" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/><Relationship Id="rBeta" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/worksheets/sheet1.xml",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+        ),
+        (
+            "xl/worksheets/sheet2.xml",
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#,
+        ),
+        (
+            "xl/sharedStrings.xml",
+            r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>shared</t></si></sst>"#,
+        ),
+    ]);
+    let output = convert(&bytes, &ConversionOptions::default()).unwrap();
+    let names = output
+        .document
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Sheet { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Beta", "Alpha"]);
+    let properties = &output.document.metadata.properties;
+    assert_eq!(properties["spreadsheet.native.layoutPasses"], "2");
+    assert_eq!(properties["spreadsheet.native.dataPasses"], "2");
+    assert_eq!(properties["spreadsheet.native.sharedStringPasses"], "1");
+    assert_eq!(properties["spreadsheet.native.stagingReads"], "2");
+    assert_eq!(properties["spreadsheet.native.stagingSeeks"], "2");
+}
+use std::io::Cursor;
 
 #[test]
 fn xlsx_preserves_types_formula_cache_merge_and_bounds() {
@@ -47,15 +99,15 @@ fn xlsx_array_and_shared_formula_states_are_explicit_and_fail_closed() {
     assert_eq!(formula, &[Inline::Code("=ROW(A1:B2) [cached: 1]".into())]);
 
     let valid_shared = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A2"/><sheetData><row r="1"><c r="A1"><f t="shared" si="7" ref="A1:A2">A1+1</f><v>2</v></c></row><row r="2"><c r="A2"><f t="shared" si="7"/><v>3</v></c></row></sheetData></worksheet>"#;
-    let (bounds, _, inventory) = scan_xlsx_sheet(
-        valid_shared.as_bytes(),
+    let layout = read_layout(
+        Cursor::new(valid_shared.as_bytes()),
         "xl/worksheets/sheet1.xml",
         &ConversionOptions::default(),
         &context(),
     )
     .unwrap();
-    assert_eq!(bounds, Some((1, 0)));
-    assert_eq!(inventory.shared_formula_slots, 8);
+    assert_eq!(layout.bounds, Some((1, 0)));
+    assert_eq!(layout.shared_formula_slots, 1);
     let output = convert(&xlsx(valid_shared), &ConversionOptions::default()).unwrap();
     let Block::Sheet { blocks, .. } = &output.document.blocks[0].block else { panic!() };
     let Block::Table { rows, .. } = &blocks[0].block else { panic!() };
@@ -66,13 +118,11 @@ fn xlsx_array_and_shared_formula_states_are_explicit_and_fail_closed() {
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="1"/></c></row></sheetData></worksheet>"#,
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="1" ref="A1:A1"></f></c></row></sheetData></worksheet>"#,
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="array" ref="A1:A1"></f></c></row></sheetData></worksheet>"#,
-        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="1" ref="A1:A2">1</f></c></row></sheetData></worksheet>"#,
         r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="1" ref="A1:A2">1</f></c><c r="B1"><f t="shared" si="1"/></c></row></sheetData></worksheet>"#,
-        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="shared" si="1" ref="A1:A1">1</f></c><c r="B1"><f t="shared" si="1" ref="B1:B1">2</f></c></row></sheetData></worksheet>"#,
     ] {
         assert!(matches!(
-            scan_xlsx_sheet(
-                invalid.as_bytes(),
+            read_layout(
+                Cursor::new(invalid.as_bytes()),
                 "xl/worksheets/sheet1.xml",
                 &ConversionOptions::default(),
                 &context(),
@@ -83,8 +133,8 @@ fn xlsx_array_and_shared_formula_states_are_explicit_and_fail_closed() {
 
     let data_table = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><f t="dataTable" ref="A1:B2">TABLE(A1,B1)</f></c></row></sheetData></worksheet>"#;
     assert!(matches!(
-        scan_xlsx_sheet(
-            data_table,
+        read_layout(
+            Cursor::new(data_table),
             "xl/worksheets/sheet1.xml",
             &ConversionOptions::default(),
             &context(),

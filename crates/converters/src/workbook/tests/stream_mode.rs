@@ -1,24 +1,13 @@
 use super::super::WorkbookConverter;
 use into_markdown_core::{
-    ConversionOptions, ConverterStream, ConverterStreamMode, FormatCandidate, InputFormat,
-    ResolvedInput, SourceMetadata, StreamConsumerKind,
+    ConversionOptions, Converter, ConverterStream, ConverterStreamMode, ExecutionContext,
+    ExecutionOptions, FormatCandidate, InputFormat, ResolvedInput, SourceMetadata,
+    StreamConsumerKind,
 };
 use std::sync::Arc;
-use std::{io::Cursor, io::Write};
 
-fn input(worksheet_bytes: usize, unrelated_bytes: usize, name: Option<&str>) -> ResolvedInput {
-    let mut output = Cursor::new(Vec::new());
-    {
-        let mut writer = zip::ZipWriter::new(&mut output);
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
-        writer.start_file("xl/worksheets/sheet1.xml", options).unwrap();
-        writer.write_all(&vec![b'x'; worksheet_bytes]).unwrap();
-        writer.start_file("customXml/unrelated.bin", options).unwrap();
-        writer.write_all(&vec![b'p'; unrelated_bytes]).unwrap();
-        writer.finish().unwrap();
-    }
-    let bytes: Arc<[u8]> = output.into_inner().into();
+fn input(bytes: usize, name: Option<&str>) -> ResolvedInput {
+    let bytes: Arc<[u8]> = vec![b'x'; bytes].into();
     ResolvedInput {
         bytes: Arc::clone(&bytes),
         metadata: SourceMetadata {
@@ -30,28 +19,18 @@ fn input(worksheet_bytes: usize, unrelated_bytes: usize, name: Option<&str>) -> 
 }
 
 #[test]
-fn collecting_keeps_small_workbooks_on_real_aggregate_fallback() {
+fn collecting_xlsx_is_native_for_every_payload_size_and_name() {
     let converter = WorkbookConverter;
     let candidate = FormatCandidate::new(InputFormat::Xlsx, 1.0, "test");
-    assert_eq!(
-        converter.stream_mode_for(
-            &input(4 * 1024, 0, Some("small.xlsx")),
-            &candidate,
-            &ConversionOptions::default(),
-            StreamConsumerKind::Collecting,
-        ),
-        ConverterStreamMode::AggregateAdapter
-    );
-}
-
-#[test]
-fn collecting_native_selection_depends_on_worksheet_payload_not_name() {
-    let converter = WorkbookConverter;
-    let candidate = FormatCandidate::new(InputFormat::Xlsx, 1.0, "test");
-    for name in [None, Some("ordinary.xlsx"), Some("unrelated.bin")] {
+    for (bytes, name) in [
+        (0, None),
+        (4 * 1024, Some("small.xlsx")),
+        (256 * 1024, Some("ordinary.xlsx")),
+        (2 * 1024 * 1024, Some("unrelated.bin")),
+    ] {
         assert_eq!(
             converter.stream_mode_for(
-                &input(256 * 1024, 0, name),
+                &input(bytes, name),
                 &candidate,
                 &ConversionOptions::default(),
                 StreamConsumerKind::Collecting,
@@ -62,16 +41,20 @@ fn collecting_native_selection_depends_on_worksheet_payload_not_name() {
 }
 
 #[test]
-fn unrelated_zip_padding_cannot_select_native_collecting() {
+fn output_plan_uses_available_credit_without_parsing_input() {
     let converter = WorkbookConverter;
     let candidate = FormatCandidate::new(InputFormat::Xlsx, 1.0, "test");
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     assert_eq!(
-        converter.stream_mode_for(
-            &input(4 * 1024, 2 * 1024 * 1024, Some("padded.xlsx")),
-            &candidate,
-            &ConversionOptions::default(),
-            StreamConsumerKind::Collecting,
-        ),
-        ConverterStreamMode::AggregateAdapter
+        converter
+            .planned_output_bytes(
+                &input(3, Some("not-a-package.xlsx")),
+                &candidate,
+                &options,
+                &context,
+            )
+            .unwrap(),
+        context.available_memory_bytes()
     );
 }

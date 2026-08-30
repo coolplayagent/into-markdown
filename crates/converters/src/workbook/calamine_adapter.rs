@@ -10,7 +10,7 @@ use crate::workbook::legacy_xls_emit::{
 use crate::workbook::model::{CellCoordinate, Hyperlink, SheetExtras};
 use crate::workbook::output::{data_text, provenance, stable_id};
 use crate::workbook::xlsb::merges::extract_xlsb_merges;
-use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xls, Xlsb, Xlsx};
+use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xls, Xlsb};
 use into_markdown_core::{
     Block, BlockNode, Cell, ConversionError, ConversionOptions, ConverterOutput, Diagnostic,
     DiagnosticSeverity, Document, ExecutionContext, Inline, NodeId, SourceLocator, TableAlignment,
@@ -18,44 +18,6 @@ use into_markdown_core::{
 };
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
-
-pub(super) fn convert_xlsx(
-    bytes: &[u8],
-    sheet_bounds: &BTreeMap<String, CellCoordinate>,
-    extras: &BTreeMap<String, SheetExtras>,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<ConverterOutput, ConversionError> {
-    // Calamine is synchronous: cancellation is observed at each audited call
-    // boundary, while preflight bounds the work of the call itself.
-    context.checkpoint()?;
-    let mut workbook =
-        Xlsx::new(Cursor::new(bytes)).map_err(|error| map_calamine("XLSX", error))?;
-    context.checkpoint()?;
-    let sheets = workbook.sheets_metadata().to_vec();
-    let mut merges = BTreeMap::new();
-    for sheet in &sheets {
-        context.checkpoint()?;
-        if sheet.typ == SheetType::WorkSheet {
-            let value = workbook
-                .merge_cells_by_sheet_name(&sheet.name)
-                .map_err(|error| map_calamine("XLSX merged cells", error))?;
-            merges.insert(sheet.name.clone(), value);
-        }
-    }
-    convert_reader(
-        &mut workbook,
-        ReaderInputs {
-            sheets: &sheets,
-            merges: &merges,
-            extras,
-            authenticated_bounds: sheet_bounds,
-            legacy_hints: None,
-        },
-        options,
-        context,
-    )
-}
 
 pub(crate) fn convert_xls(
     bytes: &[u8],
@@ -607,6 +569,16 @@ fn append_sheet_extras(
     Ok(())
 }
 
+pub(super) fn append_sheet_extras_for_native(
+    blocks: &mut Vec<BlockNode>,
+    extras: &SheetExtras,
+    sheet_name: &str,
+    sheet_index: usize,
+    options: &ConversionOptions,
+) -> Result<(), ConversionError> {
+    append_sheet_extras(blocks, extras, sheet_name, sheet_index, options)
+}
+
 #[cfg(test)]
 pub(super) fn append_sheet_extras_for_test(
     blocks: &mut Vec<BlockNode>,
@@ -615,7 +587,7 @@ pub(super) fn append_sheet_extras_for_test(
     sheet_index: usize,
     options: &ConversionOptions,
 ) -> Result<(), ConversionError> {
-    append_sheet_extras(blocks, extras, sheet_name, sheet_index, options)
+    append_sheet_extras_for_native(blocks, extras, sheet_name, sheet_index, options)
 }
 
 pub(super) fn validate_extras_fields(

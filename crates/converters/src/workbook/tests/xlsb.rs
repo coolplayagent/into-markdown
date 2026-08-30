@@ -6,7 +6,7 @@ use crate::workbook::xlsb::tables::{scan_binary_shared_strings, scan_binary_styl
 use crate::workbook::xlsb::validate_xlsb_formula_tokens_for_test;
 use crate::workbook::xlsb::workbook::scan_binary_workbook_surface;
 use calamine::Dimensions;
-use into_markdown_core::{ConversionError, ConversionOptions};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy};
 
 #[test]
 fn worksheet_bounds_use_authenticated_actual_coordinates() {
@@ -19,10 +19,16 @@ fn worksheet_bounds_use_authenticated_actual_coordinates() {
     let underreported = xlsx(
         r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData><row r="2"><c r="B2"><v>1</v></c></row></sheetData></worksheet>"#,
     );
-    assert!(matches!(
-        convert(&underreported, &ConversionOptions::default()),
-        Err(ConversionError::Malformed { .. })
-    ));
+    let corrected = convert(&underreported, &ConversionOptions::default()).unwrap();
+    assert!(
+        corrected
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "spreadsheet.dimension.corrected")
+    );
+    let strict =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
+    assert!(matches!(convert(&underreported, &strict), Err(ConversionError::Malformed { .. })));
 
     let exact = xlsx(
         r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:A2"/><sheetData><row r="2"><c r="A2"><v>1</v></c></row></sheetData></worksheet>"#,
