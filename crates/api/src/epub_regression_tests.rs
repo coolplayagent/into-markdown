@@ -1,8 +1,8 @@
 use crate::{ConversionError, ErrorCode};
 
 use super::epub_tests::{
-    PNG, chapter_one, chapter_two, container, convert, epub, epub2_one, epub2_package, epub3_book,
-    epub3_package, nav3, ncx2,
+    PNG, chapter_one, chapter_two, container, convert, convert_strict, epub, epub2_one,
+    epub2_package, epub3_book, epub3_package, nav3, ncx2,
 };
 
 #[test]
@@ -45,6 +45,89 @@ fn xml_base_dot_segments_and_unicode_ncnames_resolve_portably() {
         convert(epub3_book(missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
         ErrorCode::Malformed
     );
+}
+
+#[test]
+fn noncritical_package_metadata_is_optional_only_in_best_effort() {
+    let base = String::from_utf8(epub3_package().to_vec()).unwrap();
+    for (needle, expected) in [
+        ("<dc:title>Original EPUB Three</dc:title>", "dc:title"),
+        ("<dc:language>en</dc:language>", "dc:language"),
+        ("<meta property=\"dcterms:modified\">2026-08-13T00:00:00Z</meta>", "dcterms:modified"),
+    ] {
+        let package = base.replace(needle, "");
+        let bytes = epub3_book(package.as_bytes(), Some(nav3()));
+        let result = convert(bytes.clone()).unwrap();
+        assert!(result.markdown.contains("Alpha"));
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "epub.metadataMissing" && diagnostic.message.contains(expected)
+        }));
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    }
+}
+
+#[test]
+fn chapter_recovery_is_scoped_after_epub_security_validation() {
+    let processing_instruction = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><?ocr artifact?><p>omit me</p></body></html>"#;
+    let recovered = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", processing_instruction),
+        ("OPS/text/two.xhtml", chapter_two()),
+        ("OPS/text/extra.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}"),
+    ]);
+    let result = convert(recovered.clone()).unwrap();
+    assert!(result.markdown.contains("Omega"));
+    assert!(!result.markdown.contains("omit me"));
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic.code == "epub.spine.chapterOmitted")
+    );
+    assert_eq!(convert_strict(recovered).unwrap_err().code(), ErrorCode::Malformed);
+
+    for malicious in [
+        br#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "https://example.invalid/xhtml11.dtd"><html xmlns="http://www.w3.org/1999/xhtml"><body><p>DTD</p></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>&custom;</p></body></html>"#.as_slice(),
+        br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><a href="../../../escape">escape</a></body></html>"#.as_slice(),
+    ] {
+        let bytes = epub(&[
+            ("META-INF/container.xml", container()),
+            ("OPS/content.opf", epub3_package()),
+            ("OPS/nav.xhtml", nav3()),
+            ("OPS/text/one.xhtml", malicious),
+            ("OPS/text/two.xhtml", chapter_two()),
+            ("OPS/text/extra.xhtml", chapter_two()),
+            ("OPS/images/cover.png", PNG),
+            ("OPS/styles/book.css", b"body{}"),
+        ]);
+        assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    }
+}
+
+#[test]
+fn duplicate_spine_and_all_empty_or_unreadable_chapters_fail_closed() {
+    let duplicate = String::from_utf8(epub3_package().to_vec())
+        .unwrap()
+        .replace("<itemref idref=\"two\"/>", "<itemref idref=\"one\"/><itemref idref=\"two\"/>");
+    assert_eq!(
+        convert(epub3_book(duplicate.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+
+    let empty = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body/></html>"#;
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", empty),
+        ("OPS/text/two.xhtml", empty),
+        ("OPS/text/extra.xhtml", empty),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}"),
+    ]);
+    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]

@@ -4,7 +4,9 @@ use super::budget::EpubBudget;
 use super::path::{BasePath, Reference};
 use super::xml::{self, Attribute, Name};
 use crate::zip_converter::archive_api::SafeArchive;
-use into_markdown_core::{ConversionError, DocumentMetadata};
+use into_markdown_core::{
+    ConversionError, Diagnostic, DiagnosticSeverity, DocumentMetadata, ErrorPolicy, SourceLocator,
+};
 use quick_xml::events::Event;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +37,7 @@ pub(super) struct Package {
     pub(super) nav_id: Option<String>,
     pub(super) ncx_id: Option<String>,
     pub(super) cover_id: Option<String>,
+    pub(super) diagnostics: Vec<Diagnostic>,
 }
 
 impl Package {
@@ -71,6 +74,7 @@ pub(super) fn parse(
     bytes: &[u8],
     archive: &SafeArchive<'_, '_>,
     budget: &mut EpubBudget<'_>,
+    error_policy: ErrorPolicy,
 ) -> Result<Package, ConversionError> {
     let mut reader = xml::reader(bytes);
     let initial_base = BasePath::document(package_path)?;
@@ -90,6 +94,7 @@ pub(super) fn parse(
     let mut ncx_id = None;
     let mut cover_id = None;
     let mut modified = None;
+    let mut diagnostics = Vec::new();
     let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
@@ -263,21 +268,62 @@ pub(super) fn parse(
             xml::malformed("package unique-identifier does not name a non-empty dc:identifier")
         })?;
     if metadata.title.as_deref().is_none_or(str::is_empty) {
-        return Err(xml::malformed("package dc:title is missing"));
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("package dc:title is missing"));
+        }
+        diagnostics.push(metadata_missing_diagnostic(
+            package_path,
+            "package dc:title is missing; chapter titles and paths remain available",
+        ));
     }
     if metadata.properties.get("epub.language").is_none_or(String::is_empty) {
-        return Err(xml::malformed("package dc:language is missing"));
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("package dc:language is missing"));
+        }
+        diagnostics.push(metadata_missing_diagnostic(
+            package_path,
+            "package dc:language is missing; content language remains unspecified",
+        ));
     }
     let version = version.ok_or_else(|| xml::malformed("package version missing"))?;
     if version.starts_with('3') {
-        let modified = modified
-            .as_deref()
-            .filter(|value| valid_modified(value))
-            .ok_or_else(|| xml::malformed("EPUB 3 dcterms:modified is missing or invalid"))?;
-        metadata.properties.insert("epub.meta.dcterms:modified".into(), modified.into());
+        match modified.as_deref().filter(|value| valid_modified(value)) {
+            Some(modified) => {
+                metadata.properties.insert("epub.meta.dcterms:modified".into(), modified.into());
+            }
+            None if error_policy == ErrorPolicy::Strict => {
+                return Err(xml::malformed("EPUB 3 dcterms:modified is missing or invalid"));
+            }
+            None => diagnostics.push(metadata_missing_diagnostic(
+                package_path,
+                "EPUB 3 dcterms:modified is missing or invalid; content ordering is unaffected",
+            )),
+        }
     }
     metadata.properties.insert("epub.identifier".into(), identifier.clone());
     metadata.properties.insert("epub.version".into(), version);
+    let missing_spine_items =
+        spine.iter().filter(|item| !manifest.contains_key(&item.idref)).count();
+    if missing_spine_items != 0 {
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("spine itemref names a missing manifest item"));
+        }
+        spine.retain(|item| manifest.contains_key(&item.idref));
+        if !spine.iter().any(|item| item.linear) {
+            return Err(xml::malformed("all linear spine itemrefs name missing manifest items"));
+        }
+        diagnostics.push(Diagnostic {
+            code: "epub.spine.missingItemOmitted".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "omitted {missing_spine_items} spine itemref(s) with no manifest declaration"
+            ),
+            locator: Some(SourceLocator {
+                part: Some(package_path.into()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
     validate_references(
         &manifest,
         &spine,
@@ -285,7 +331,28 @@ pub(super) fn parse(
         ncx_id.as_deref(),
         cover_id.as_deref(),
     )?;
-    Ok(Package { path: package_path.into(), metadata, manifest, spine, nav_id, ncx_id, cover_id })
+    Ok(Package {
+        path: package_path.into(),
+        metadata,
+        manifest,
+        spine,
+        nav_id,
+        ncx_id,
+        cover_id,
+        diagnostics,
+    })
+}
+
+fn metadata_missing_diagnostic(package_path: &str, message: &str) -> Diagnostic {
+    Diagnostic {
+        code: "epub.metadataMissing".into(),
+        severity: DiagnosticSeverity::Info,
+        message: message.into(),
+        locator: Some(SourceLocator {
+            part: Some(package_path.into()),
+            ..SourceLocator::default()
+        }),
+    }
 }
 
 fn manifest_item(

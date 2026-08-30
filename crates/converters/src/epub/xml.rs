@@ -85,6 +85,20 @@ pub(super) struct Attribute {
     pub(super) value: String,
 }
 
+pub(super) enum AttributeError {
+    InvalidQName,
+    Fatal(ConversionError),
+}
+
+impl AttributeError {
+    fn into_conversion_error(self) -> ConversionError {
+        match self {
+            Self::InvalidQName => malformed("invalid XML attribute QName"),
+            Self::Fatal(error) => error,
+        }
+    }
+}
+
 pub(super) fn reader(bytes: &[u8]) -> NsReader<&[u8]> {
     let mut reader = NsReader::from_reader(bytes);
     let config = reader.config_mut();
@@ -116,29 +130,42 @@ pub(super) fn attributes(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
 ) -> Result<Vec<Attribute>, ConversionError> {
+    attributes_typed(reader, element).map_err(AttributeError::into_conversion_error)
+}
+
+pub(super) fn attributes_typed(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+) -> Result<Vec<Attribute>, AttributeError> {
     let mut output = Vec::new();
     let mut unique = BTreeSet::new();
     for attribute in element.attributes() {
-        let attribute =
-            attribute.map_err(|error| malformed(format!("invalid attribute: {error}")))?;
+        let attribute = attribute.map_err(|error| {
+            AttributeError::Fatal(malformed(format!("invalid attribute: {error}")))
+        })?;
         let raw_name = attribute.key.as_ref();
+        if !valid_qname(raw_name) {
+            return Err(AttributeError::InvalidQName);
+        }
         if raw_name == b"xmlns" || raw_name.starts_with(b"xmlns:") {
             continue;
         }
         let (resolved, local) = reader.resolve_attribute(attribute.key);
-        let namespace = namespace(resolved)?;
+        let namespace = namespace(resolved).map_err(AttributeError::Fatal)?;
         let key = (namespace.clone(), local.as_ref().to_vec());
         if !unique.insert(key.clone()) {
-            return Err(malformed("duplicate expanded XML attribute name"));
+            return Err(AttributeError::Fatal(malformed("duplicate expanded XML attribute name")));
         }
         let value = attribute
             .decode_and_unescape_value(reader.decoder())
-            .map_err(|error| malformed(format!("invalid XML attribute value: {error}")))?
+            .map_err(|error| {
+                AttributeError::Fatal(malformed(format!("invalid XML attribute value: {error}")))
+            })?
             .into_owned();
-        validate_xml_chars(&value, "attribute")?;
+        validate_xml_chars(&value, "attribute").map_err(AttributeError::Fatal)?;
         output.push(Attribute { namespace: key.0, local: key.1, value });
     }
-    EpubBudget::attributes(output.len())?;
+    EpubBudget::attributes(output.len()).map_err(AttributeError::Fatal)?;
     Ok(output)
 }
 
@@ -221,6 +248,16 @@ pub(super) fn decoded_text(event: &Event<'_>) -> Result<Option<String>, Conversi
 pub(super) fn valid_ncname(value: &str) -> bool {
     let mut characters = value.chars();
     characters.next().is_some_and(xml_name_start) && characters.all(xml_name_character)
+}
+
+pub(super) fn valid_qname(value: &[u8]) -> bool {
+    let Ok(value) = std::str::from_utf8(value) else {
+        return false;
+    };
+    let mut parts = value.split(':');
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next();
+    parts.next().is_none() && valid_ncname(first) && second.is_none_or(valid_ncname)
 }
 
 fn xml_name_start(character: char) -> bool {

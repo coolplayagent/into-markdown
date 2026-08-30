@@ -19,7 +19,7 @@ const PROVIDER: &str = "builtin.converter.epub";
 // Assembly owns the cross-module boundary values so all identity rewrites are transactional.
 pub(super) fn assemble(
     mut package: Package,
-    navigation: Option<Navigation>,
+    mut navigation: Option<Navigation>,
     mut spine: SpineResult,
     resources: ResourceStore,
     cover: Option<CoverResource>,
@@ -29,6 +29,16 @@ pub(super) fn assemble(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
+    if let Some(navigation) = &mut navigation {
+        for entry in &mut navigation.entries {
+            if entry.target.as_deref().is_some_and(|target| {
+                let path = target.split_once('#').map_or(target, |(path, _)| path);
+                spine.omitted_paths.contains(path)
+            }) {
+                entry.target = None;
+            }
+        }
+    }
     let anchors = spine
         .chapters
         .iter()
@@ -50,6 +60,8 @@ pub(super) fn assemble(
     let metadata = std::mem::take(&mut package.metadata);
     let mut output =
         ConverterOutput::new(Document { metadata, ..Document::default() }, Vec::new(), Vec::new());
+    output.diagnostics.append(&mut package.diagnostics);
+    output.diagnostics.append(&mut spine.diagnostics);
     if let Some(navigation) = navigation {
         append_navigation(&mut output.document.blocks, navigation)?;
     }

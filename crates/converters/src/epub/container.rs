@@ -124,8 +124,9 @@ pub(super) fn rootfile(
     if !root_seen || !rootfiles_seen || !stack.is_empty() {
         return Err(xml::malformed("container structure is incomplete"));
     }
-    candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| xml::malformed("container has no supported package rootfile"))
+    match candidates.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(xml::malformed("container has no supported package rootfile")),
+        _ => Err(xml::malformed("container has multiple supported package rootfiles")),
+    }
 }

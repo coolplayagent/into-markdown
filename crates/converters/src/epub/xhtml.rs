@@ -29,6 +29,31 @@ pub(super) struct PreparedXhtml {
     pub(super) _memory: ResourceReservation,
 }
 
+/// Typed boundary between recoverable chapter syntax damage and authoritative
+/// EPUB security and relationship failures discovered during preparation.
+pub(super) enum PrepareError {
+    Syntax(ConversionError),
+    Fatal(ConversionError),
+}
+
+impl PrepareError {
+    pub(super) const fn is_syntax(&self) -> bool {
+        matches!(self, Self::Syntax(_))
+    }
+
+    pub(super) fn into_conversion_error(self) -> ConversionError {
+        match self {
+            Self::Syntax(error) | Self::Fatal(error) => error,
+        }
+    }
+}
+
+impl From<ConversionError> for PrepareError {
+    fn from(error: ConversionError) -> Self {
+        Self::Fatal(error)
+    }
+}
+
 struct Frame {
     name: Name,
     base: BasePath,
@@ -56,7 +81,7 @@ pub(super) fn prepare(
     archive: &SafeArchive<'_, '_>,
     budget: &mut EpubBudget<'_>,
     context: &ExecutionContext,
-) -> Result<PreparedXhtml, ConversionError> {
+) -> Result<PreparedXhtml, PrepareError> {
     let equals =
         bytes.iter().fold(0_usize, |count, byte| count.saturating_add(usize::from(*byte == b'=')));
     let planned = bytes
@@ -88,40 +113,63 @@ pub(super) fn prepare(
     let mut anchors = BTreeSet::new();
     let mut footnotes = Vec::new();
     loop {
-        let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
+        let event = reader.read_event().map_err(|error| match error {
+            quick_xml::Error::Syntax(_) | quick_xml::Error::IllFormed(_) => {
+                PrepareError::Syntax(xml::malformed(error.to_string()))
+            }
+            _ => PrepareError::Fatal(xml::malformed(error.to_string())),
+        })?;
         let empty = matches!(&event, Event::Empty(_));
         let depth = stack
             .len()
             .saturating_add(usize::from(matches!(&event, Event::Start(_) | Event::Empty(_))));
         budget.event(depth)?;
+        if matches!(&event, Event::PI(_)) {
+            return Err(PrepareError::Syntax(xml::malformed(
+                "XHTML processing instruction is unsupported",
+            )));
+        }
         document_events.validate(&event, root_seen, !stack.is_empty(), xml::DoctypePolicy::Html)?;
         match event {
             Event::DocType(value) => {
                 writer.write_event(Event::DocType(value.into_owned())).map_err(write_error)?;
             }
-            Event::PI(_) => unreachable!("rejected above"),
+            Event::PI(_) => unreachable!("classified above"),
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {
-                    return Err(xml::malformed("XHTML has multiple root elements"));
+                    return Err(xml::malformed("XHTML has multiple root elements").into());
+                }
+                if !xml::valid_qname(element.name().as_ref()) {
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "XHTML contains an invalid element QName",
+                    )));
                 }
                 let name = xml::name(&reader, &element)?;
-                let attributes = xml::attributes(&reader, &element)?;
+                let attributes =
+                    xml::attributes_typed(&reader, &element).map_err(|error| match error {
+                        xml::AttributeError::InvalidQName => PrepareError::Syntax(xml::malformed(
+                            "XHTML contains an invalid attribute QName",
+                        )),
+                        xml::AttributeError::Fatal(error) => PrepareError::Fatal(error),
+                    })?;
                 let parent_base = stack.last().map_or(&initial_base, |frame| &frame.base);
                 let base = xml::optional(&attributes, Some(xml::XML_NS), b"base")
                     .map_or_else(|| Ok(parent_base.clone()), |value| parent_base.apply(value))?;
                 if stack.is_empty() {
                     if !name.matches(Some(XHTML_NS), b"html") {
-                        return Err(xml::malformed("spine document root is not XHTML html"));
+                        return Err(xml::malformed("spine document root is not XHTML html").into());
                     }
                     root_seen = true;
                 }
                 if name.matches(Some(XHTML_NS), b"base") {
-                    return Err(xml::malformed("HTML base elements are forbidden in EPUB XHTML"));
+                    return Err(
+                        xml::malformed("HTML base elements are forbidden in EPUB XHTML").into()
+                    );
                 }
                 if let Some(id) = xml::optional(&attributes, None, b"id") {
                     let target = initial_base.anchor(id)?.canonical_target();
                     if !anchors.insert(target) {
-                        return Err(xml::malformed("duplicate XHTML anchor identity"));
+                        return Err(xml::malformed("duplicate XHTML anchor identity").into());
                     }
                 }
                 let types = xml::optional(&attributes, Some(EPUB_NS), b"type")
@@ -130,7 +178,9 @@ pub(super) fn prepare(
                     .collect::<BTreeSet<_>>();
                 let is_footnote = types.contains("footnote") || types.contains("endnote");
                 if is_footnote && stack.iter().any(|frame| frame.footnote.is_some()) {
-                    return Err(xml::malformed("nested EPUB footnote definitions are invalid"));
+                    return Err(
+                        xml::malformed("nested EPUB footnote definitions are invalid").into()
+                    );
                 }
                 let footnote = if is_footnote {
                     let id = xml::required(&attributes, None, b"id", "footnote id")?;
@@ -144,8 +194,9 @@ pub(super) fn prepare(
                 let suppressed_text = stack.last().is_some_and(|frame| frame.suppressed_text)
                     || name.namespace.as_deref() == Some(XHTML_NS)
                         && matches!(name.local.as_slice(), b"script" | b"style");
-                let suppressed_output =
-                    is_footnote || stack.last().is_some_and(|frame| frame.suppressed_output);
+                let suppressed_output = is_footnote
+                    || stack.last().is_some_and(|frame| frame.suppressed_output)
+                    || name.matches(Some(XHTML_NS), b"script");
                 if !suppressed_output {
                     let rewritten =
                         rewrite_element(&reader, &element, &name, &base, archive, &mut inventory)?;
@@ -165,9 +216,14 @@ pub(super) fn prepare(
                 }
             }
             Event::End(element) => {
+                if !xml::valid_qname(element.name().as_ref()) {
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "XHTML contains an invalid end-tag QName",
+                    )));
+                }
                 let frame = stack.pop().ok_or_else(|| xml::malformed("orphan XHTML end tag"))?;
                 if xml::end_name(&reader, element.name())? != frame.name {
-                    return Err(xml::malformed("XHTML end tag namespace mismatch"));
+                    return Err(xml::malformed("XHTML end tag namespace mismatch").into());
                 }
                 if !frame.suppressed_output {
                     writer.write_event(Event::End(element.into_owned())).map_err(write_error)?;
@@ -177,7 +233,7 @@ pub(super) fn prepare(
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
                 let decoded = xml::decoded_text(&event)?.unwrap_or_default();
                 if stack.is_empty() && !decoded.chars().all(char::is_whitespace) {
-                    return Err(xml::malformed("character data outside XHTML root"));
+                    return Err(xml::malformed("character data outside XHTML root").into());
                 }
                 let suppressed = stack.last().is_some_and(|frame| frame.suppressed_text);
                 if !decoded.is_empty()
@@ -206,7 +262,7 @@ pub(super) fn prepare(
         }
     }
     if !root_seen || !stack.is_empty() {
-        return Err(xml::malformed("XHTML root is missing or incomplete"));
+        return Err(PrepareError::Syntax(xml::malformed("XHTML root is missing or incomplete")));
     }
     let mut output = writer.into_inner();
     let actual = u64::try_from(output.capacity()).unwrap_or(u64::MAX);

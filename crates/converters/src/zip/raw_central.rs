@@ -180,6 +180,7 @@ fn collect_records(
             physical_start: record.local_start,
             central_extra_len: record.central_extra_len,
             local_extra_len: record.local_extra_len,
+            verified: false,
         });
         cursor = next;
     }

@@ -69,10 +69,19 @@ impl<'bytes, 'request> SafeArchive<'bytes, 'request> {
     }
 
     pub(crate) fn read(&mut self, path: &str) -> Result<OwnedEntry, ConversionError> {
-        let meta = self.meta(path).cloned().ok_or_else(|| ConversionError::Malformed {
-            part: Some(path.into()),
-            detail: format!("EPUB package part {path:?} is missing"),
-        })?;
+        let index =
+            self.entries.binary_search_by(|entry| entry.name.as_str().cmp(path)).map_err(|_| {
+                ConversionError::Malformed {
+                    part: Some(path.into()),
+                    detail: format!("EPUB package part {path:?} is missing"),
+                }
+            })?;
+        if self.entries[index].verified {
+            return Err(ConversionError::Internal {
+                detail: format!("validated archive member {path:?} was requested more than once"),
+            });
+        }
+        let meta = self.entries[index].clone();
         if meta.kind != EntryKind::File {
             return Err(ConversionError::Malformed {
                 part: Some(path.into()),
@@ -80,8 +89,23 @@ impl<'bytes, 'request> SafeArchive<'bytes, 'request> {
             });
         }
         let entry = self.inner.read_entry(&meta, &mut self.budget)?;
+        self.entries[index].verified = true;
         let (bytes, memory) = entry.into_parts();
         Ok(OwnedEntry { bytes, memory })
+    }
+
+    /// Stream every unread file through the decoder so CRC and declared length
+    /// are validated without retaining unused package members.
+    pub(crate) fn validate_remaining(&mut self) -> Result<(), ConversionError> {
+        for index in 0..self.entries.len() {
+            if self.entries[index].kind != EntryKind::File || self.entries[index].verified {
+                continue;
+            }
+            let meta = self.entries[index].clone();
+            self.inner.validate_entry(&meta, &mut self.budget)?;
+            self.entries[index].verified = true;
+        }
+        Ok(())
     }
 
     fn meta(&self, path: &str) -> Option<&EntryMeta> {
@@ -109,4 +133,57 @@ fn entry_info(entry: &EntryMeta) -> EntryInfo<'_> {
 /// used for every raw archive entry.
 pub(crate) fn portable_identity(path: &str, directory: bool) -> Result<String, ConversionError> {
     super::entry_policy::portable_identity(path, directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use into_markdown_core::{ExecutionOptions, ResourceLimits};
+    use std::io::{Cursor, Write as _};
+    use zip::write::SimpleFileOptions;
+
+    fn stored(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn remaining_crc_is_streamed_without_recharging_previously_read_entries() {
+        let first = b"already-read";
+        let second = b"unused-content";
+        let bytes = stored(&[("a.txt", first), ("unused.bin", second)]);
+        let mut options = ConversionOptions::default();
+        options.limits.max_decompressed_bytes = (first.len() + second.len()) as u64;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut archive = SafeArchive::open(&bytes, &options, &context).unwrap();
+        let metadata_memory = context.reserved_memory_bytes();
+        drop(archive.read("a.txt").unwrap());
+        assert!(matches!(archive.read("a.txt"), Err(ConversionError::Internal { .. })));
+        archive.validate_remaining().unwrap();
+        assert_eq!(context.reserved_memory_bytes(), metadata_memory);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+        drop(archive);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+
+        let mut corrupt = bytes;
+        let offset = corrupt.windows(second.len()).position(|window| window == second).unwrap();
+        corrupt[offset] ^= 1;
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let mut archive = SafeArchive::open(&corrupt, &options, &context).unwrap();
+        drop(archive.read("a.txt").unwrap());
+        let error = archive.validate_remaining().unwrap_err();
+        assert!(matches!(error, ConversionError::Malformed { .. }));
+        assert!(error.to_string().contains("CRC/length"));
+        drop(archive);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+    }
 }

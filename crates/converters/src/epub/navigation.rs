@@ -6,7 +6,7 @@ use super::budget::EpubBudget;
 use super::path::{BasePath, Reference};
 use super::xml::{self, Name};
 use crate::zip_converter::archive_api::SafeArchive;
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ErrorPolicy};
 use quick_xml::events::Event;
 use std::collections::BTreeSet;
 
@@ -58,6 +58,7 @@ pub(super) fn parse_nav(
     bytes: &[u8],
     archive: &SafeArchive<'_, '_>,
     budget: &mut EpubBudget<'_>,
+    error_policy: ErrorPolicy,
 ) -> Result<Navigation, ConversionError> {
     let mut reader = xml::reader(bytes);
     let initial_base = BasePath::document(path)?;
@@ -243,7 +244,7 @@ pub(super) fn parse_nav(
                     {
                         append_label_text(parent, " ", budget)?;
                     }
-                    close_nav_frame(frame, &mut stack, &mut entries, budget)?;
+                    close_nav_frame(frame, &mut stack, &mut entries, budget, error_policy)?;
                 } else {
                     stack.push(frame);
                 }
@@ -254,7 +255,7 @@ pub(super) fn parse_nav(
                 if xml::end_name(&reader, element.name())? != frame.name {
                     return Err(xml::malformed("navigation end tag namespace mismatch"));
                 }
-                close_nav_frame(frame, &mut stack, &mut entries, budget)?;
+                close_nav_frame(frame, &mut stack, &mut entries, budget, error_policy)?;
             }
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
                 let text = xml::decoded_text(&event)?.unwrap_or_default();
@@ -283,8 +284,11 @@ pub(super) fn parse_nav(
             Event::DocType(_) | Event::Comment(_) | Event::Decl(_) => {}
         }
     }
-    if !root_seen || !toc_seen || !stack.is_empty() || entries.is_empty() {
+    if !root_seen || !toc_seen || !stack.is_empty() {
         return Err(xml::malformed("EPUB navigation toc is missing or incomplete"));
+    }
+    if entries.is_empty() && error_policy == ErrorPolicy::Strict {
+        return Err(xml::malformed("EPUB navigation toc contains no entries"));
     }
     budget.items("navigation", entries.len())?;
     Ok(Navigation { source_path: path.into(), entries, resource_paths })
@@ -295,6 +299,7 @@ fn close_nav_frame(
     stack: &mut [Frame],
     entries: &mut Vec<NavEntry>,
     budget: &EpubBudget<'_>,
+    error_policy: ErrorPolicy,
 ) -> Result<(), ConversionError> {
     if frame.in_toc && label_policy::is_label_content(&frame.name) {
         label_policy::validate_child_count(&frame.name, frame.child_elements)?;
@@ -313,18 +318,23 @@ fn close_nav_frame(
         parent.missing_alternative |= missing_alternative;
     }
     frame.missing_alternative = missing_alternative;
-    finish_nav_frame(frame, entries, budget)
+    finish_nav_frame(frame, entries, budget, error_policy)
 }
 
 fn finish_nav_frame(
     frame: Frame,
     entries: &mut Vec<NavEntry>,
     budget: &EpubBudget<'_>,
+    error_policy: ErrorPolicy,
 ) -> Result<(), ConversionError> {
     if frame.toc_root && frame.nested_lists != 1 {
         return Err(xml::malformed("EPUB toc nav must contain exactly one direct ol"));
     }
-    if frame.in_toc && frame.name.matches(Some(XHTML_NS), b"ol") && frame.list_items == 0 {
+    if frame.in_toc
+        && frame.name.matches(Some(XHTML_NS), b"ol")
+        && frame.list_items == 0
+        && error_policy == ErrorPolicy::Strict
+    {
         return Err(xml::malformed("EPUB toc ol must contain at least one direct li"));
     }
     if frame.in_toc && frame.name.matches(Some(XHTML_NS), b"li") && frame.label_sources != 1 {
