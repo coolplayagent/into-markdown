@@ -43,6 +43,8 @@ use into_markdown_pdfium::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
@@ -116,8 +118,8 @@ impl PdfConverter {
 }
 
 /// Install a process-local lazy resolver for a `PDFium` runtime embedded by the
-/// final application binary. Registering the resolver performs no filesystem
-/// work; it is called only when a PDF conversion actually begins.
+/// final application binary. Registering performs no filesystem work; the
+/// resolver is called only when a PDF conversion actually begins.
 #[must_use]
 pub fn install_pdfium_runtime_resolver(resolver: PdfiumRuntimeResolver) -> bool {
     PDFIUM_RUNTIME_RESOLVER.set(resolver).is_ok()
@@ -137,22 +139,111 @@ pub fn default_pdfium_runtime_path() -> Option<PathBuf> {
 }
 
 fn packaged_pdfium_runtime_path() -> Option<PathBuf> {
-    let executable = std::env::current_exe().ok()?.canonicalize().ok()?;
-    packaged_pdfium_path(&executable)
+    packaged_pdfium_path(&std::env::current_exe().ok()?)
 }
 
+#[cfg(not(target_os = "windows"))]
+fn packaged_pdfium_path(_executable: &Path) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
-    let root = executable.parent()?.parent()?;
-    #[cfg(target_os = "macos")]
-    let relative = Path::new("lib/pdfium/libpdfium.dylib");
-    #[cfg(target_os = "linux")]
-    let relative = Path::new("lib/pdfium/libpdfium.so");
-    #[cfg(target_os = "windows")]
+    if !path_is_physical(executable) {
+        return None;
+    }
+    let executable = executable.canonicalize().ok()?;
+    let executable_metadata = std::fs::symlink_metadata(&executable).ok()?;
+    if !executable_metadata.is_file() || is_reparse_or_link(&executable_metadata) {
+        return None;
+    }
+    let executable_directory = executable.parent()?;
     let relative = Path::new("lib/pdfium/pdfium.dll");
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return None;
-    let path = root.join(relative);
-    path.is_file().then_some(path)
+    let portable = executable_directory.join(relative);
+    match packaged_runtime_state(executable_directory, &portable) {
+        PackagedRuntimeState::Physical => return Some(portable),
+        PackagedRuntimeState::Unsafe => return None,
+        PackagedRuntimeState::Missing => {}
+    }
+    if !executable_directory.file_name().is_some_and(|name| name.eq_ignore_ascii_case("bin")) {
+        return None;
+    }
+    let installed_root = executable_directory.parent()?;
+    let installed = installed_root.join(relative);
+    matches!(packaged_runtime_state(installed_root, &installed), PackagedRuntimeState::Physical)
+        .then_some(installed)
+}
+
+#[cfg(target_os = "windows")]
+fn path_is_physical(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
+            return false;
+        };
+        if is_reparse_or_link(&metadata) {
+            return false;
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(target_os = "windows")]
+enum PackagedRuntimeState {
+    Missing,
+    Physical,
+    Unsafe,
+}
+
+#[cfg(target_os = "windows")]
+fn packaged_runtime_state(root: &Path, runtime: &Path) -> PackagedRuntimeState {
+    let Ok(relative) = runtime.strip_prefix(root) else {
+        return PackagedRuntimeState::Unsafe;
+    };
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty() {
+        return PackagedRuntimeState::Unsafe;
+    }
+    let mut current = root.to_owned();
+    for (index, component) in components.iter().enumerate() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return PackagedRuntimeState::Unsafe;
+        }
+        current.push(component.as_os_str());
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return PackagedRuntimeState::Missing;
+            }
+            Err(_) => return PackagedRuntimeState::Unsafe,
+        };
+        if is_reparse_or_link(&metadata)
+            || if index + 1 == components.len() { !metadata.is_file() } else { !metadata.is_dir() }
+        {
+            return PackagedRuntimeState::Unsafe;
+        }
+    }
+    if std::fs::canonicalize(runtime).is_ok_and(|canonical| canonical == runtime) {
+        PackagedRuntimeState::Physical
+    } else {
+        PackagedRuntimeState::Unsafe
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_reparse_or_link(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    metadata.file_attributes() & 0x400 != 0
 }
 
 /// Verify an exact pinned `PDFium` file without opening a document.

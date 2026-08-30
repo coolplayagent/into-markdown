@@ -15,6 +15,9 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod runtime_path;
+use runtime_path::contains_link_or_reparse;
+
 struct FixedOutput<T> {
     slots: Box<[std::mem::MaybeUninit<T>]>,
     initialized: usize,
@@ -1989,6 +1992,11 @@ fn validated_snapshot_with_hook(
     {
         return Err(Error::InvalidPath(
             "path must be absolute and use the pinned library filename".into(),
+        ));
+    }
+    if contains_link_or_reparse(path)? {
+        return Err(Error::InvalidPath(
+            "runtime path must not contain a symbolic link or reparse point".into(),
         ));
     }
     let metadata =

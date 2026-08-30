@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Run repeatable black-box E2E checks against published portable artifacts.
-
-On Windows, ``--platform all`` runs the Windows checks locally and the Linux
-x86_64 checks in the default WSL distribution.  The script accepts either an
-existing asset directory or downloads the required assets from a public GitHub
-release.  It never reads build outputs or Cargo/Bazel runfiles.
-"""
+"""Run isolated black-box checks against downloaded or local release assets."""
 
 from __future__ import annotations
 
@@ -16,172 +10,97 @@ import os
 import pathlib
 import shutil
 import stat
-import struct
 import subprocess
 import sys
 import time
-import urllib.request
 import zipfile
 from dataclasses import dataclass
 from typing import Any
 
-
 REPOSITORY = "coolplayagent/into-markdown"
-TARGETS = {
-    "windows": {
-        "target": "x86_64-pc-windows-msvc",
-        "core": "into-md-windows-x86_64.zip",
-        "member": "into-md.exe",
-        "speech": "official.media.whisper-x86_64-pc-windows-msvc.imp",
-        "skill": "into-markdown/assets/windows-x86_64/into-md.exe",
-    },
-    "linux": {
-        "target": "x86_64-unknown-linux-gnu",
-        "core": "into-md-linux-x86_64.zip",
-        "member": "into-md",
-        "speech": "official.media.whisper-x86_64-unknown-linux-gnu.imp",
-        "skill": "into-markdown/assets/linux-x86_64/into-md",
-    },
-}
-SKILL_ARCHIVE = "into-markdown-skill.zip"
+PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
+if str(PORTABLE_RELEASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
+from release_artifacts import (  # noqa: E402
+    CORE_ARCHIVE_MANIFEST,
+    CORE_MATERIAL_AUTHORITY,
+    CORE_MATERIAL_MEMBERS,
+    ROOT,
+    SKILL_ARCHIVE,
+    SKILL_AUTHORITY,
+    SKILL_DIRECTORIES,
+    SKILL_FILES,
+    SKILL_MANIFEST,
+    SKILL_TARGETS,
+    TARGETS,
+    WINDOWS_PDFIUM_AUTHORITY,
+    WINDOWS_PDFIUM_MEMBER,
+    WINDOWS_SKILL_PDFIUM,
+    E2EError,
+    MaterialAuthorityError,
+    MAX_ARCHIVE_ENTRIES,
+    ResourceBudget,
+    acquire_assets,
+    extract_single_core as _extract_single_core,
+    extract_skill_binary as _extract_skill_binary,
+    inspect_core,
+    load_authority,
+    load_release_file_authority,
+    normalize_release_version,
+    release_asset_url,
+    sha256_file,
+    write_json,
+)
+from post_release_scenarios import (  # noqa: E402
+    run_core_pdf,
+    run_concurrent_ocr,
+    run_fallback_matrix,
+    run_packaged_pdfium_negative_cases,
+    run_skill_packaged_runtime,
+    run_wsl,
+)
 MAX_CAPTURE_BYTES = 64 * 1024
 
+def extract_single_core(
+    archive_path: pathlib.Path,
+    platform: str,
+    output: pathlib.Path,
+    material_authority: dict,
+    budget: ResourceBudget | None = None,
+    archive_sha256: str | None = None,
+) -> dict:
+    return _extract_single_core(
+        archive_path,
+        platform,
+        output,
+        material_authority,
+        WINDOWS_PDFIUM_AUTHORITY,
+        budget,
+        archive_sha256,
+    )
 
-class E2EError(RuntimeError):
-    pass
 
-
-def sha256_file(path: pathlib.Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            value.update(chunk)
-    return value.hexdigest()
+def extract_skill_binary(
+    archive_path: pathlib.Path,
+    platform: str,
+    output: pathlib.Path,
+    material_authority: dict,
+    budget: ResourceBudget | None = None,
+    archive_sha256: str | None = None,
+) -> dict:
+    return _extract_skill_binary(
+        archive_path,
+        platform,
+        output,
+        material_authority,
+        WINDOWS_PDFIUM_AUTHORITY,
+        budget,
+        archive_sha256,
+    )
 
 
 def _bounded(value: bytes) -> str:
     return value[:MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
-
-
-def write_json(path: pathlib.Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-
-
-def release_asset_url(repository: str, tag: str, name: str) -> str:
-    if not repository or any(part in repository for part in ("..", "\\", "?", "#")):
-        raise E2EError("repository must be an owner/name pair")
-    if repository.count("/") != 1 or not tag or "/" in tag or "\\" in tag:
-        raise E2EError("release repository or tag is invalid")
-    return f"https://github.com/{repository}/releases/download/{tag}/{name}"
-
-
-def acquire_assets(
-    assets: pathlib.Path, repository: str, tag: str, platforms: list[str]
-) -> dict[str, dict[str, Any]]:
-    assets.mkdir(parents=True, exist_ok=True)
-    required = {SKILL_ARCHIVE}
-    for platform in platforms:
-        required.update((TARGETS[platform]["core"], TARGETS[platform]["speech"]))
-    records: dict[str, dict[str, Any]] = {}
-    for name in sorted(required):
-        destination = assets / name
-        downloaded = False
-        if not destination.is_file():
-            temporary = assets / f".{name}.download"
-            if temporary.exists():
-                temporary.unlink()
-            request = urllib.request.Request(
-                release_asset_url(repository, tag, name),
-                headers={"User-Agent": "into-markdown-post-release-e2e"},
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=120) as response, temporary.open(
-                    "xb"
-                ) as output:
-                    shutil.copyfileobj(response, output, length=1024 * 1024)
-                os.replace(temporary, destination)
-                downloaded = True
-            finally:
-                temporary.unlink(missing_ok=True)
-        if destination.is_symlink() or not destination.is_file():
-            raise E2EError(f"release asset is not a regular file: {name}")
-        records[name] = {
-            "path": str(destination.resolve()),
-            "bytes": destination.stat().st_size,
-            "sha256": sha256_file(destination),
-            "downloaded": downloaded,
-        }
-    return records
-
-
-def inspect_core(data: bytes, platform: str) -> dict[str, str]:
-    if platform == "windows":
-        if len(data) < 64 or data[:2] != b"MZ":
-            raise E2EError("Windows Core is not a PE executable")
-        offset = struct.unpack_from("<I", data, 0x3C)[0]
-        if offset + 6 > len(data) or data[offset : offset + 4] != b"PE\0\0":
-            raise E2EError("Windows Core has an invalid PE header")
-        if struct.unpack_from("<H", data, offset + 4)[0] != 0x8664:
-            raise E2EError("Windows Core is not x86_64")
-        return {"format": "PE", "architecture": "x86_64"}
-    if len(data) < 20 or data[:7] != b"\x7fELF\x02\x01\x01":
-        raise E2EError("Linux Core is not a 64-bit little-endian ELF executable")
-    if struct.unpack_from("<H", data, 18)[0] != 62:
-        raise E2EError("Linux Core is not x86_64")
-    return {"format": "ELF", "architecture": "x86_64"}
-
-
-def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathlib.Path) -> dict:
-    expected = TARGETS[platform]["member"]
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        if len(infos) != 1 or infos[0].filename != expected or infos[0].is_dir():
-            raise E2EError(f"{archive_path.name} must contain only {expected}")
-        info = infos[0]
-        mode = (info.external_attr >> 16) & 0o177777
-        wanted = stat.S_IFREG | (0o644 if platform == "windows" else 0o755)
-        if mode != wanted:
-            raise E2EError(f"{archive_path.name} has an invalid member mode")
-        data = archive.read(info)
-    identity = inspect_core(data, platform)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(data)
-    output.chmod(0o700)
-    return {
-        "archive": archive_path.name,
-        "archiveSha256": sha256_file(archive_path),
-        "binarySha256": hashlib.sha256(data).hexdigest(),
-        "binaryBytes": len(data),
-        "memberCount": 1,
-        **identity,
-    }
-
-
-def extract_skill_binary(archive_path: pathlib.Path, platform: str, output: pathlib.Path) -> dict:
-    wanted = TARGETS[platform]["skill"]
-    with zipfile.ZipFile(archive_path) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)) or wanted not in names:
-            raise E2EError(f"Skill does not contain {wanted} exactly once")
-        info = archive.getinfo(wanted)
-        if info.is_dir():
-            raise E2EError("Skill Core asset is a directory")
-        data = archive.read(info)
-    identity = inspect_core(data, platform)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(data)
-    output.chmod(0o700)
-    return {
-        "archiveSha256": sha256_file(archive_path),
-        "binarySha256": hashlib.sha256(data).hexdigest(),
-        "asset": wanted,
-        **identity,
-    }
 
 
 def protect_directory(path: pathlib.Path, platform: str) -> pathlib.Path:
@@ -357,6 +276,23 @@ def conversion_arguments(source: pathlib.Path, output: pathlib.Path, extra: list
     ]
 
 
+def fixture_semantic_sha256(fixtures: pathlib.Path, fixture_id: str, relative: str) -> str:
+    """Read the canonical Markdown digest from the checked-in fixture authority."""
+    manifest = json.loads((fixtures / "manifest.json").read_text(encoding="utf-8"))
+    matches = [
+        fixture
+        for fixture in manifest.get("fixtures", [])
+        if fixture.get("id") == fixture_id and fixture.get("path") == relative
+    ]
+    if len(matches) != 1:
+        raise E2EError(f"fixture authority does not contain exactly one {fixture_id}")
+    expected = matches[0].get("expected", {})
+    digest = expected.get("semantic_sha256", "")
+    if expected.get("outcome") != "success" or len(digest) != 64:
+        raise E2EError(f"fixture authority for {fixture_id} lacks a success digest")
+    return digest
+
+
 def assert_output(path: pathlib.Path, label: str) -> None:
     if not path.is_file() or not path.read_bytes():
         raise E2EError(f"{label} output is missing or empty")
@@ -473,125 +409,15 @@ def _isolated_environment(root: pathlib.Path, platform: str) -> tuple[dict[str, 
     return environment, user_data
 
 
-def run_concurrent_ocr(
-    binary: pathlib.Path,
-    fixtures: pathlib.Path,
-    root: pathlib.Path,
-    platform: str,
-) -> dict[str, Any]:
-    environment, _ = _isolated_environment(root, platform)
-    work = protect_directory(root / "work", platform)
-    source = _copy_fixture(fixtures, "small/ocr/ocr-english-clear-1.png", work / "ocr.png")
-    commands = []
-    started = time.monotonic()
-    for index in range(2):
-        process_work = protect_directory(work / f"process-{index}", platform)
-        output = process_work / "result.md"
-        commands.append(
-            (
-                output,
-                subprocess.Popen(
-                    [str(binary), *conversion_arguments(source, output, ["--ocr", "always", "--no-config"])],
-                    cwd=process_work,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                ),
-            )
-        )
-    results = []
-    for output, process in commands:
-        stdout, stderr = process.communicate(timeout=120)
-        if process.returncode != 0:
-            raise E2EError(f"concurrent OCR failed: {_bounded(stderr or stdout).strip()}")
-        assert_output(output, "concurrent OCR")
-        results.append({"exitCode": process.returncode, "outputSha256": sha256_file(output)})
-    directories = runtime_directories(environment, platform)
-    if len(directories) != 1:
-        raise E2EError("concurrent first OCR did not publish exactly one runtime")
-    return {"elapsedMs": round((time.monotonic() - started) * 1000), "processes": results}
-
-
-def create_runtime_reparse(path: pathlib.Path, target: pathlib.Path, platform: str) -> None:
-    target.mkdir(parents=True, exist_ok=False)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if platform == "windows":
-        result = subprocess.run(
-            ["cmd.exe", "/d", "/c", "mklink", "/J", str(path), str(target)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            raise E2EError(f"cannot create Windows runtime reparse fixture: {result.stderr.strip()}")
-    else:
-        path.symlink_to(target, target_is_directory=True)
-
-
-def run_fallback_matrix(
-    binary: pathlib.Path,
-    fixtures: pathlib.Path,
-    root: pathlib.Path,
-    platform: str,
-    residual_report: list[dict[str, Any]],
-    invariant_errors: list[str],
-) -> list[dict[str, Any]]:
-    results = []
-    for scenario in ("unavailable-cache", "reparse-cache"):
-        scenario_root = protect_directory(root / scenario, platform)
-        environment, _ = _isolated_environment(scenario_root / "state", platform)
-        work = protect_directory(scenario_root / "work", platform)
-        source = _copy_fixture(
-            fixtures, "small/ocr/ocr-english-clear-1.png", work / "ocr.png"
-        )
-        cache = pathlib.Path(
-            environment["LOCALAPPDATA"]
-            if platform == "windows"
-            else environment["XDG_CACHE_HOME"]
-        )
-        if scenario == "unavailable-cache":
-            blocked = cache / "into-markdown" / "runtime"
-            blocked.parent.mkdir(parents=True, exist_ok=True)
-            blocked.write_bytes(b"not a directory")
-        else:
-            create_runtime_reparse(
-                cache / "into-markdown" / "runtime",
-                scenario_root / "reparse-target",
-                platform,
-            )
-        output = work / "result.md"
-        runner = Runner(binary, environment, work)
-        scenario_result: dict[str, Any] = {"scenario": scenario, "conclusion": "failed"}
-        try:
-            result = runner.call(
-                scenario,
-                conversion_arguments(source, output, ["--ocr", "always", "--no-config"]),
-            )
-            assert_output(output, scenario)
-            scenario_result.update({"elapsedMs": result.elapsed_ms, "conclusion": "passed"})
-        except Exception as error:
-            scenario_result["error"] = str(error)
-            invariant_errors.append(f"{scenario} did not preserve OCR availability: {error}")
-        finally:
-            record_and_clean_residuals(
-                environment,
-                "into-markdown-runtime-*",
-                scenario,
-                residual_report,
-                invariant_errors,
-            )
-        results.append(scenario_result)
-    return results
-
-
 def run_platform(
     platform: str,
     assets: pathlib.Path,
     fixtures: pathlib.Path,
     work_root: pathlib.Path,
+    evidence: pathlib.Path,
     version: str,
+    budget: ResourceBudget | None = None,
+    asset_records: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     config = TARGETS[platform]
     started = time.monotonic()
@@ -610,12 +436,40 @@ def run_platform(
         invariant_errors: list[str] = []
         dispatch_residuals: list[dict[str, Any]] = []
         fallback_residuals: list[dict[str, Any]] = []
-        binaries = protect_directory(root / "bin", platform)
+        core_root = protect_directory(root / "core", platform)
+        skill_asset_root = protect_directory(root / "skill", platform)
         work = protect_directory(root / "work", platform)
-        core = binaries / config["member"]
-        report["core"] = extract_single_core(assets / config["core"], platform, core)
-        skill = binaries / ("skill.exe" if platform == "windows" else "skill")
-        report["skill"] = extract_skill_binary(assets / SKILL_ARCHIVE, platform, skill)
+        try:
+            core_authority = load_authority(
+                evidence / config["target"] / "core" / CORE_MATERIAL_AUTHORITY,
+                config["target"],
+                CORE_MATERIAL_MEMBERS,
+            )
+            skill_authority = json.loads(
+                (evidence / "release-validation" / SKILL_AUTHORITY).read_text(
+                    encoding="utf-8"
+                )
+            )
+        except MaterialAuthorityError as authority_error:
+            raise E2EError(str(authority_error)) from authority_error
+        core = core_root / config["member"]
+        report["core"] = extract_single_core(
+            assets / config["core"],
+            platform,
+            core,
+            core_authority,
+            budget,
+            (asset_records or {}).get(config["core"], {}).get("sha256"),
+        )
+        skill = skill_asset_root / ("skill.exe" if platform == "windows" else "skill")
+        report["skill"] = extract_skill_binary(
+            assets / SKILL_ARCHIVE,
+            platform,
+            skill,
+            skill_authority,
+            budget,
+            (asset_records or {}).get(SKILL_ARCHIVE, {}).get("sha256"),
+        )
         package_source = assets / config["speech"]
         package = work / config["speech"]
         shutil.copyfile(package_source, package)
@@ -652,17 +506,18 @@ def run_platform(
         if runtime_directories(environment, platform):
             raise E2EError("help/version/text/OOXML --ocr off created a runtime cache")
 
-        pdf = _copy_fixture(fixtures, "small/pdf/structures.pdf", work / "structures.pdf")
-        pdf_output = work / "structures.md"
-        pdf_case = runner.call(
-            "pdf-first-materialization",
-            conversion_arguments(pdf, pdf_output, ["--ocr", "off", "--no-config"]),
+        pdf_runtimes, expected_pdf_runtimes, pdf_elapsed_ms, core_pdf_output = run_core_pdf(
+            runner,
+            platform,
+            fixtures,
+            work,
+            environment,
+            _copy_fixture,
+            conversion_arguments,
+            assert_output,
+            runtime_directories,
         )
-        assert_output(pdf_output, "PDF")
-        pdf_runtimes = runtime_directories(environment, platform)
-        if len(pdf_runtimes) != 1:
-            raise E2EError("first PDF did not materialize exactly one runtime")
-        report["timingsMs"]["pdfFirstMaterialization"] = pdf_case.elapsed_ms
+        report["timingsMs"]["pdfFirstMaterialization"] = pdf_elapsed_ms
 
         ocr = _copy_fixture(
             fixtures,
@@ -680,7 +535,8 @@ def run_platform(
         ).lower():
             raise E2EError("OCR output does not contain the fixture authority text")
         all_runtimes = runtime_directories(environment, platform)
-        if len(all_runtimes) != 2:
+        expected_all_runtimes = expected_pdf_runtimes + 1
+        if len(all_runtimes) != expected_all_runtimes:
             raise E2EError("first OCR did not add exactly one runtime")
         ocr_runtime = next(path for path in all_runtimes if path not in pdf_runtimes)
         hot_output = work / "ocr-hot.md"
@@ -688,7 +544,7 @@ def run_platform(
             "ocr-hot-cache-reuse",
             conversion_arguments(ocr, hot_output, ["--ocr", "always", "--no-config"]),
         )
-        if len(runtime_directories(environment, platform)) != 2:
+        if len(runtime_directories(environment, platform)) != expected_all_runtimes:
             raise E2EError("hot OCR created a redundant runtime")
         corrupted, expected_hash = corrupt_runtime(ocr_runtime)
         repaired_output = work / "ocr-repaired.md"
@@ -702,7 +558,18 @@ def run_platform(
             {"ocrCold": cold.elapsed_ms, "ocrHot": hot.elapsed_ms, "ocrRepair": repair.elapsed_ms}
         )
         report["concurrentFirstOcr"] = run_concurrent_ocr(
-            core, fixtures, root / "concurrent", platform
+            core,
+            fixtures,
+            root / "concurrent",
+            platform,
+            _isolated_environment,
+            protect_directory,
+            _copy_fixture,
+            conversion_arguments,
+            _bounded,
+            assert_output,
+            sha256_file,
+            runtime_directories,
         )
         report["fallbackCache"] = run_fallback_matrix(
             core,
@@ -711,6 +578,13 @@ def run_platform(
             platform,
             fallback_residuals,
             invariant_errors,
+            protect_directory,
+            _isolated_environment,
+            _copy_fixture,
+            Runner,
+            conversion_arguments,
+            assert_output,
+            record_and_clean_residuals,
         )
         report["fallbackRuntimeResiduals"] = fallback_residuals
 
@@ -810,32 +684,52 @@ def run_platform(
         )
         report["dispatchResiduals"] = dispatch_residuals
 
-        skill_root = protect_directory(root / "skill-state", platform)
-        skill_work = protect_directory(skill_root / "work", platform)
-        skill_environment, _ = _isolated_environment(skill_root / "state", platform)
-        skill_environment["PATH"] = ""
-        skill_runner = Runner(skill, skill_environment, skill_work)
-        skill_runner.call("skill-version-empty-path", ["version", "--json", "--no-config"])
-        skill_text = _copy_fixture(fixtures, "small/text/normal.txt", skill_work / "normal.txt")
-        skill_runner.call(
-            "skill-text-empty-path",
-            conversion_arguments(skill_text, skill_work / "normal.md", ["--no-config"]),
+        report["skillCases"] = run_skill_packaged_runtime(
+            skill,
+            platform,
+            fixtures,
+            root,
+            expected_all_runtimes,
+            version,
+            fixture_semantic_sha256(
+                fixtures, "text-normal", "small/text/normal.txt"
+            ),
+            core_pdf_output,
+            protect_directory,
+            _isolated_environment,
+            Runner,
+            _copy_fixture,
+            conversion_arguments,
+            assert_output,
+            runtime_directories,
         )
-        skill_pdf = _copy_fixture(fixtures, "small/pdf/structures.pdf", skill_work / "structures.pdf")
-        skill_runner.call(
-            "skill-pdf-empty-path",
-            conversion_arguments(skill_pdf, skill_work / "structures.md", ["--ocr", "off", "--no-config"]),
-        )
-        skill_ocr = _copy_fixture(
-            fixtures, "small/ocr/ocr-english-clear-1.png", skill_work / "ocr.png"
-        )
-        skill_runner.call(
-            "skill-ocr-empty-path",
-            conversion_arguments(skill_ocr, skill_work / "ocr.md", ["--ocr", "always", "--no-config"]),
-        )
-        if len(runtime_directories(skill_environment, platform)) != 2:
-            raise E2EError("Skill empty-PATH PDF/OCR did not materialize its two runtimes")
-        report["skillCases"] = skill_runner.cases
+        if platform == "windows":
+            report["packagedPdfiumNegativeCases"] = {
+                "core": run_packaged_pdfium_negative_cases(
+                    core,
+                    fixtures,
+                    root / "core-pdfium-negative",
+                    platform,
+                    protect_directory,
+                    _isolated_environment,
+                    _copy_fixture,
+                    Runner,
+                    conversion_arguments,
+                    _bounded,
+                ),
+                "skill": run_packaged_pdfium_negative_cases(
+                    skill,
+                    fixtures,
+                    root / "skill-pdfium-negative",
+                    platform,
+                    protect_directory,
+                    _isolated_environment,
+                    _copy_fixture,
+                    Runner,
+                    conversion_arguments,
+                    _bounded,
+                ),
+            }
         report["cases"] = runner.cases
         if invariant_errors:
             raise E2EError("; ".join(invariant_errors))
@@ -854,63 +748,6 @@ def run_platform(
     return report
 
 
-def windows_to_wsl(path: pathlib.Path) -> str:
-    result = subprocess.run(
-        ["wsl.exe", "--exec", "wslpath", "-a", str(path.resolve())],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip().startswith("/"):
-        raise E2EError(f"cannot translate path for WSL: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def run_wsl(arguments: argparse.Namespace, assets: pathlib.Path, fixtures: pathlib.Path) -> dict:
-    script = windows_to_wsl(pathlib.Path(__file__))
-    assets_path = windows_to_wsl(assets)
-    fixtures_path = windows_to_wsl(fixtures)
-    report_path = arguments.work_root / "linux-x86_64.json"
-    report_wsl = windows_to_wsl(report_path)
-    command = [
-        "wsl.exe",
-        "--exec",
-        "python3",
-        script,
-        "--platform",
-        "linux",
-        "--assets-dir",
-        assets_path,
-        "--fixtures",
-        fixtures_path,
-        "--work-root",
-        f"/tmp/into-md-post-release-e2e-{os.getpid()}",
-        "--report",
-        report_wsl,
-        "--version",
-        arguments.version,
-        "--repository",
-        arguments.repository,
-        "--tag",
-        arguments.tag,
-    ]
-    started = time.monotonic()
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    if not report_path.is_file():
-        detail = _bounded(result.stderr or result.stdout).strip()
-        raise E2EError(f"WSL Linux E2E did not write its report: {detail}")
-    envelope = json.loads(report_path.read_text(encoding="utf-8"))
-    reports = envelope.get("platforms", [])
-    if len(reports) != 1:
-        raise E2EError("WSL Linux E2E report does not contain one platform result")
-    report = reports[0]
-    report["wslInvocationElapsedMs"] = round((time.monotonic() - started) * 1000)
-    if result.returncode != 0 and report.get("conclusion") == "passed":
-        raise E2EError(f"WSL Linux E2E process failed: {_bounded(result.stderr or result.stdout).strip()}")
-    return report
-
-
 def parse_arguments() -> argparse.Namespace:
     root = pathlib.Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -919,6 +756,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--tag", default="0.0.3")
     parser.add_argument("--version", default="0.0.3")
     parser.add_argument("--assets-dir", type=pathlib.Path)
+    parser.add_argument("--evidence-dir", required=True, type=pathlib.Path)
     parser.add_argument("--fixtures", type=pathlib.Path, default=root / "fixtures")
     parser.add_argument("--work-root", type=pathlib.Path, default=pathlib.Path.cwd() / "post-release-e2e")
     parser.add_argument("--report", type=pathlib.Path)
@@ -927,6 +765,7 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_arguments()
+    arguments.version = normalize_release_version(arguments.version)
     if arguments.platform in {"all", "windows"} and os.name != "nt":
         raise E2EError("Windows E2E must be launched from Windows")
     if arguments.platform == "linux" and os.name == "nt":
@@ -934,6 +773,7 @@ def main() -> int:
     fixtures = arguments.fixtures.resolve(strict=True)
     arguments.work_root.mkdir(parents=True, exist_ok=True)
     assets = (arguments.assets_dir or (arguments.work_root / "assets")).resolve()
+    evidence = arguments.evidence_dir.resolve(strict=True)
     platforms = ["windows", "linux"] if arguments.platform == "all" else [arguments.platform]
     started = time.monotonic()
     output: dict[str, Any] = {
@@ -949,15 +789,22 @@ def main() -> int:
     report_path = arguments.report or (arguments.work_root / "post-release-e2e.json")
     try:
         platform_errors: list[str] = []
+        resource_budget = ResourceBudget()
+        release_file_authority = load_release_file_authority(evidence, platforms)
         output["assets"] = acquire_assets(
-            assets, arguments.repository, arguments.tag, platforms
+            assets,
+            arguments.repository,
+            arguments.tag,
+            platforms,
+            resource_budget,
+            release_file_authority,
         )
         if arguments.platform in {"all", "windows"}:
             windows_root = arguments.work_root / "windows"
             if windows_root.exists():
                 raise E2EError(f"work root already exists: {windows_root}")
             platform_report = run_platform(
-                "windows", assets, fixtures, windows_root, arguments.version
+                "windows", assets, fixtures, windows_root, evidence, arguments.version, resource_budget, output["assets"]
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":
@@ -976,7 +823,7 @@ def main() -> int:
             if linux_root.exists():
                 raise E2EError(f"work root already exists: {linux_root}")
             platform_report = run_platform(
-                "linux", assets, fixtures, linux_root, arguments.version
+                "linux", assets, fixtures, linux_root, evidence, arguments.version, resource_budget, output["assets"]
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":

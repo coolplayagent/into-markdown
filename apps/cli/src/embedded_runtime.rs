@@ -72,9 +72,13 @@ const fn ocr_payload() -> Payload {
 }
 
 pub(super) fn register_pdfium_resolver() {
-    if EMBEDDED_RUNTIME_ENABLED {
+    if should_register_pdfium_resolver() {
         let _ = into_markdown::install_pdfium_runtime_resolver(resolve_pdfium_library);
     }
+}
+
+const fn should_register_pdfium_resolver() -> bool {
+    EMBEDDED_RUNTIME_ENABLED && !cfg!(windows)
 }
 
 /// Remove process-private runtime fallbacks after all conversions and Web tasks have stopped.
@@ -348,7 +352,7 @@ fn materialize_at(base: &Path, payload: Payload) -> Result<PathBuf, String> {
         lock.write().map_err(|error| format!("lock {} runtime: {error}", payload.label))?;
     let destination = base.join(payload.archive_sha256);
     match verify_tree(&destination, payload) {
-        Ok(()) => return Ok(destination),
+        Ok(()) => return authenticated_canonical_runtime(&destination, payload),
         Err(TreeState::Unsafe(detail)) => return Err(detail),
         Err(TreeState::MissingOrCorrupt) => {}
     }
@@ -396,7 +400,21 @@ fn materialize_at(base: &Path, payload: Payload) -> Result<PathBuf, String> {
         }
         TreeState::Unsafe(detail) => detail,
     })?;
-    Ok(destination)
+    authenticated_canonical_runtime(&destination, payload)
+}
+
+fn authenticated_canonical_runtime(path: &Path, payload: Payload) -> Result<PathBuf, String> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!("canonicalize authenticated {} runtime: {error}", payload.label)
+    })?;
+    reject_existing_ancestor_links(&canonical)?;
+    verify_tree(&canonical, payload).map_err(|state| match state {
+        TreeState::MissingOrCorrupt => {
+            format!("canonical {} runtime failed verification", payload.label)
+        }
+        TreeState::Unsafe(detail) => detail,
+    })?;
+    Ok(canonical)
 }
 
 fn remove_stale_staging_directories(base: &Path, archive_sha256: &str) -> Result<(), String> {
@@ -898,6 +916,7 @@ mod tests {
         let first = materialize_at(&base, payload).unwrap();
         let second = materialize_at(&base, payload).unwrap();
         assert_eq!(first, second);
+        assert_eq!(first, fs::canonicalize(&first).unwrap());
         fs::write(first.join("models/model"), b"bad").unwrap();
         let repaired = materialize_at(&base, payload).unwrap();
         assert_eq!(fs::read(repaired.join("models/model")).unwrap(), b"model");
@@ -1071,5 +1090,16 @@ mod tests {
         symlink(temporary.path().join("outside"), marker).unwrap();
 
         assert!(matches!(verify_tree(&published, payload), Err(TreeState::Unsafe(_))));
+    }
+
+    #[cfg(all(windows, feature = "embedded-runtime"))]
+    #[test]
+    fn windows_embeds_ocr_but_not_packaged_pdfium() {
+        assert!(!should_register_pdfium_resolver());
+        assert_eq!(PDFIUM_ARCHIVE.len(), 0);
+        assert!(PDFIUM_ARCHIVE_SHA256.is_empty());
+        assert!(PDFIUM_FILES.is_empty());
+        assert!(!OCR_ARCHIVE.is_empty());
+        assert!(!OCR_FILES.is_empty());
     }
 }

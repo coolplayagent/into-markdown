@@ -1,4 +1,26 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
 exports_files([
     "assemble.py",
+    "core_archive.py",
     "native_acceptance.py",
+    "post_release_scenarios.py",
+    "release_artifacts.py",
 ])
+
+py_library(
+    name = "core_archive",
+    srcs = ["core_archive.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "release_artifacts",
+    srcs = ["release_artifacts.py"],
+    data = [
+        "//:release_license_files",
+        "//third_party/pdfium:manifest.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":core_archive"],
+)

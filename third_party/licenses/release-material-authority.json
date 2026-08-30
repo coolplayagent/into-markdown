@@ -23,8 +23,8 @@
     },
     {
       "path": "tools/platform-release/release.py",
-      "bytes": 41310,
-      "sha256": "f9bdb526f5d14bcdf5364f0ddf895ef43ff84d60425f13796b2bca5541c4c80c"
+      "bytes": 41358,
+      "sha256": "fafba59f7d0f95eaf358d37d9363f29d39ddb6520ef2408db109284e01be48a9"
     }
   ],
   "licenses": [

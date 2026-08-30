@@ -4,12 +4,37 @@ use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+static TEMPORARY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
+
+struct TemporaryDirectory(PathBuf);
+
+impl TemporaryDirectory {
+    fn new() -> Self {
+        let nonce = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let timestamp =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir()
+            .join(format!("into-md-pdfium-test-{}-{timestamp}-{nonce}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
+#[cfg(windows)]
 fn packaged_pdfium_is_resolved_relative_to_the_canonical_executable() {
-    let nonce =
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let root =
-        std::env::temp_dir().join(format!("into-md-pdfium-test-{}-{nonce}", std::process::id()));
+    let temporary = TemporaryDirectory::new();
+    let root = temporary.path();
     let executable = root.join("bin/into-md");
     fs::create_dir_all(executable.parent().unwrap()).unwrap();
     fs::write(&executable, b"binary").unwrap();
@@ -23,8 +48,179 @@ fn packaged_pdfium_is_resolved_relative_to_the_canonical_executable() {
     return;
     fs::create_dir_all(runtime.parent().unwrap()).unwrap();
     fs::write(&runtime, b"runtime").unwrap();
-    assert_eq!(packaged_pdfium_path(&executable), Some(runtime));
-    fs::remove_dir_all(root).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), Some(runtime.canonicalize().unwrap()));
+}
+
+#[test]
+#[cfg(windows)]
+fn direct_run_archive_resolves_only_its_own_physical_pdfium() {
+    let temporary = TemporaryDirectory::new();
+    let root = temporary.path();
+    let executable = root.join(if cfg!(windows) { "into-md.exe" } else { "into-md" });
+    fs::write(&executable, b"binary").unwrap();
+    #[cfg(target_os = "macos")]
+    let runtime = root.join("lib/pdfium/libpdfium.dylib");
+    #[cfg(target_os = "linux")]
+    let runtime = root.join("lib/pdfium/libpdfium.so");
+    #[cfg(target_os = "windows")]
+    let runtime = root.join("lib/pdfium/pdfium.dll");
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return;
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(&runtime, b"runtime").unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), Some(runtime.canonicalize().unwrap()));
+    fs::remove_file(&runtime).unwrap();
+    let unrelated = root.join(runtime.file_name().unwrap());
+    fs::write(&unrelated, b"unrelated").unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+    fs::remove_file(unrelated).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn portable_bin_directory_precedes_the_installed_layout_without_case_sensitivity() {
+    for directory_name in ["bin", "BIN"] {
+        let temporary = TemporaryDirectory::new();
+        let root = temporary.path();
+        let executable_directory = root.join(directory_name);
+        let executable =
+            executable_directory.join(if cfg!(windows) { "into-md.exe" } else { "into-md" });
+        fs::create_dir(&executable_directory).unwrap();
+        fs::write(&executable, b"binary").unwrap();
+        #[cfg(target_os = "macos")]
+        let relative = Path::new("lib/pdfium/libpdfium.dylib");
+        #[cfg(target_os = "linux")]
+        let relative = Path::new("lib/pdfium/libpdfium.so");
+        #[cfg(target_os = "windows")]
+        let relative = Path::new("lib/pdfium/pdfium.dll");
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        return;
+        let portable = executable_directory.join(relative);
+        let installed = root.join(relative);
+        fs::create_dir_all(portable.parent().unwrap()).unwrap();
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&portable, b"portable").unwrap();
+        fs::write(&installed, b"installed").unwrap();
+        assert_eq!(packaged_pdfium_path(&executable), Some(portable.canonicalize().unwrap()));
+
+        fs::remove_file(&portable).unwrap();
+        assert_eq!(packaged_pdfium_path(&executable), Some(installed.canonicalize().unwrap()));
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn non_windows_ignores_executable_adjacent_pdfium() {
+    let temporary = TemporaryDirectory::new();
+    let executable = temporary.path().join("into-md");
+    let runtime = temporary.path().join(if cfg!(target_os = "macos") {
+        "lib/pdfium/libpdfium.dylib"
+    } else {
+        "lib/pdfium/libpdfium.so"
+    });
+    fs::write(&executable, b"binary").unwrap();
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(runtime, b"stale-runtime").unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn packaged_pdfium_rejects_linked_runtime_directories() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = TemporaryDirectory::new();
+    let root = temporary.path();
+    let executable = root.join("into-md");
+    let outside = root.join("outside");
+    fs::write(&executable, b"binary").unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    let name = if cfg!(target_os = "macos") { "libpdfium.dylib" } else { "libpdfium.so" };
+    fs::write(outside.join(name), b"runtime").unwrap();
+    fs::create_dir_all(root.join("lib/pdfium")).unwrap();
+    let linked_file = root.join("lib/pdfium").join(name);
+    symlink(outside.join(name), &linked_file).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+    fs::remove_file(linked_file).unwrap();
+    fs::remove_dir(root.join("lib/pdfium")).unwrap();
+    symlink(&outside, root.join("lib/pdfium")).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+
+    let linked_root = root.join("linked-root");
+    symlink(root, &linked_root).unwrap();
+    assert_eq!(packaged_pdfium_path(&linked_root.join("into-md")), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn packaged_pdfium_rejects_reparse_point_runtime_directories() {
+    use std::os::windows::fs::{symlink_dir, symlink_file};
+
+    let temporary = TemporaryDirectory::new();
+    let root = temporary.path();
+    let executable = root.join("into-md.exe");
+    let outside = root.join("outside");
+    let linked = root.join("lib/pdfium");
+    fs::write(&executable, b"binary").unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("pdfium.dll"), b"runtime").unwrap();
+    fs::create_dir_all(&linked).unwrap();
+    let linked_file = linked.join("pdfium.dll");
+    symlink_file(outside.join("pdfium.dll"), &linked_file).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+    fs::remove_file(linked_file).unwrap();
+    fs::remove_dir(&linked).unwrap();
+    symlink_dir(&outside, &linked).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+
+    let linked_root = root.join("linked-root");
+    symlink_dir(root, &linked_root).unwrap();
+    assert_eq!(packaged_pdfium_path(&linked_root.join("into-md.exe")), None);
+}
+
+#[test]
+fn corrupt_pdfium_runtime_reports_component_unavailable() {
+    let temporary = TemporaryDirectory::new();
+    let artifact = into_markdown_pdfium::Platform::current().unwrap().artifact().unwrap();
+    let runtime = temporary.path().join(artifact.library);
+    fs::write(&runtime, b"not the manifest-pinned runtime").unwrap();
+    assert!(matches!(
+        verify_pdfium_runtime(&runtime),
+        Err(ConversionError::ComponentUnavailable { component, .. }) if component == "pdfium"
+    ));
+}
+
+#[test]
+fn embedded_runtime_resolver_registration_is_cross_platform() {
+    const CHILD: &str = "INTO_MD_TEST_PDFIUM_RESOLVER_REGISTRATION_CHILD";
+    fn resolver() -> Result<PathBuf, ConversionError> {
+        std::env::var_os(CHILD).map(|_| PathBuf::from("application-owned-pdfium-runtime")).ok_or(
+            ConversionError::ComponentUnavailable {
+                component: "pdfium".into(),
+                detail: "test resolver was not authorized".into(),
+            },
+        )
+    }
+
+    if std::env::var_os(CHILD).is_none() {
+        let current_test = std::thread::current().name().unwrap().to_owned();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(current_test)
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env_remove("PDFIUM_LIBRARY")
+            .status()
+            .unwrap();
+        assert!(status.success(), "resolver registration subprocess failed");
+        return;
+    }
+
+    assert!(install_pdfium_runtime_resolver(resolver));
+    assert_eq!(
+        default_pdfium_runtime_path(),
+        Some(PathBuf::from("application-owned-pdfium-runtime"))
+    );
 }
 
 #[test]

@@ -6,10 +6,15 @@ py_library(
     name = "library",
     srcs = ["skill_release.py"],
     data = [
-        "//:LICENSE",
         "//:agent_skill_files",
+        "//:release_license_files",
+        "//third_party/pdfium:manifest.json",
     ],
     imports = ["."],
+    deps = [
+        "//tools/portable-release:core_archive",
+        "//tools/portable-release:release_artifacts",
+    ],
 )
 
 py_binary(

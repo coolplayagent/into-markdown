@@ -27,6 +27,42 @@ MAX_OUTPUT_BYTES = 64 * 1024
 LEGACY_OFFICE_FIXTURES = (
     pathlib.Path(__file__).resolve().parents[1] / "macos-release" / "fixtures"
 )
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+PDF_FIXTURE = ROOT / "fixtures/small/pdf/structures.pdf"
+PDFIUM_MANIFEST = json.loads(
+    (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
+)
+WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
+CORE_ARCHIVE_MANIFEST = "archive-manifest.json"
+PDFIUM_LICENSE_FILES = (
+    "LICENSE",
+    "licenses/abseil.txt",
+    "licenses/agg23.txt",
+    "licenses/fast_float.txt",
+    "licenses/freetype.txt",
+    "licenses/icu.txt",
+    "licenses/lcms.txt",
+    "licenses/libjpeg_turbo.ijg",
+    "licenses/libjpeg_turbo.md",
+    "licenses/libopenjpeg.txt",
+    "licenses/libpng.txt",
+    "licenses/libtiff.txt",
+    "licenses/llvm-libc.txt",
+    "licenses/pdfium.txt",
+    "licenses/simdutf.txt",
+    "licenses/zlib.txt",
+)
+CORE_MATERIAL_MEMBERS = (
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SBOM.spdx.json",
+    "SOURCES.json",
+    "licenses/npm/npm-release.spdx.json",
+    "licenses/npm/lucide-ISC-MIT.txt",
+    "licenses/npm/react-MIT.txt",
+    *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
+)
 
 
 class AcceptanceError(RuntimeError):
@@ -70,21 +106,83 @@ def inspect_binary(data: bytes, target: str) -> tuple[str, str]:
     return "Mach-O", "arm64"
 
 
-def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, bytes, str]:
+def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, dict[str, bytes], str]:
     archive_name, member, expected_format, expected_arch = CORE_ARCHIVES[target]
     archive_path = output / "release" / archive_name
     if not archive_path.is_file() or archive_path.is_symlink():
         raise AcceptanceError(f"Core archive is unavailable: {archive_name}")
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
-        if len(infos) != 1 or infos[0].filename != member or infos[0].is_dir():
-            raise AcceptanceError("Core ZIP must contain exactly its direct-run binary")
+        expected = [member]
+        if target == "x86_64-pc-windows-msvc":
+            expected.append(WINDOWS_PDFIUM_MEMBER)
+        expected.extend((*CORE_MATERIAL_MEMBERS, CORE_ARCHIVE_MANIFEST))
+        if [info.filename for info in infos] != expected or any(info.is_dir() for info in infos):
+            raise AcceptanceError("Core ZIP member inventory is invalid")
         info = infos[0]
         mode = (info.external_attr >> 16) & 0o177777
         expected_mode = stat.S_IFREG | (0o644 if member.endswith(".exe") else 0o755)
         if mode != expected_mode:
             raise AcceptanceError("Core ZIP member mode is invalid")
-        data = archive.read(info)
+        contents = {item.filename: archive.read(item) for item in infos}
+        data = contents[member]
+        if target == "x86_64-pc-windows-msvc":
+            runtime = infos[1]
+            runtime_mode = (runtime.external_attr >> 16) & 0o177777
+            if runtime_mode != stat.S_IFREG | 0o644:
+                raise AcceptanceError("Windows PDFium member is not a regular file")
+            authority = PDFIUM_MANIFEST["targets"][target]
+            runtime_data = contents[WINDOWS_PDFIUM_MEMBER]
+            if (
+                len(runtime_data) != authority["library_size"]
+                or sha256_bytes(runtime_data) != authority["library_sha256"]
+            ):
+                raise AcceptanceError("Windows PDFium differs from the pinned manifest")
+        for material in infos[2 if target == "x86_64-pc-windows-msvc" else 1 :]:
+            if (material.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise AcceptanceError("Core license or manifest member mode is invalid")
+        if any(not contents[f"licenses/pdfium/{name}"] for name in PDFIUM_LICENSE_FILES):
+            raise AcceptanceError("Core contains an empty PDFium license member")
+        try:
+            manifest = json.loads(contents[CORE_ARCHIVE_MANIFEST])
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise AcceptanceError("Core archive manifest is invalid") from error
+        projected = manifest.get("files") if isinstance(manifest, dict) else None
+        observed = [
+            {
+                "path": item.filename,
+                "bytes": len(contents[item.filename]),
+                "sha256": sha256_bytes(contents[item.filename]),
+                "mode": f"{((item.external_attr >> 16) & 0o777):04o}",
+                "kind": (
+                    "component"
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    else "license-material"
+                    if item.filename.startswith("licenses/")
+                    else "declaration"
+                    if item.filename in {"LICENSE", "NOTICE"}
+                    else "generated"
+                    if item.filename
+                    in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                    else "project"
+                ),
+                **(
+                    {"componentId": "pdfium"}
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    or item.filename.startswith("licenses/pdfium/")
+                    else {}
+                ),
+            }
+            for item in infos[:-1]
+        ]
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"schemaVersion", "target", "files"}
+            or manifest.get("schemaVersion") != 1
+            or manifest.get("target") != target
+            or projected != observed
+        ):
+            raise AcceptanceError("Core archive differs from its bidirectional manifest")
     format_name, architecture = inspect_binary(data, target)
     if (format_name, architecture) != (expected_format, expected_arch):
         raise AcceptanceError("Core binary identity does not match the release target")
@@ -95,7 +193,7 @@ def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, bytes, str]:
         "artifactSha256": sha256_file(archive_path),
         "artifactBytes": archive_path.stat().st_size,
         "member": member,
-        "memberCount": 1,
+        "memberCount": len(contents),
         "binarySha256": sha256_bytes(data),
         "binaryBytes": len(data),
         "format": format_name,
@@ -103,7 +201,15 @@ def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, bytes, str]:
         "mode": f"{mode & 0o777:04o}",
         "conclusion": "pass",
     }
-    return report, data, member
+    if target == "x86_64-pc-windows-msvc":
+        authority = PDFIUM_MANIFEST["targets"][target]
+        report["pdfiumRuntime"] = {
+            "version": PDFIUM_MANIFEST["version"],
+            "member": WINDOWS_PDFIUM_MEMBER,
+            "sha256": authority["library_sha256"],
+            "bytes": authority["library_size"],
+        }
+    return report, contents, member
 
 
 def bounded(value: bytes) -> str:
@@ -144,6 +250,35 @@ def run_case(
     )
 
 
+def run_failure_case(
+    name: str,
+    binary: pathlib.Path,
+    arguments: list[str],
+    cwd: pathlib.Path,
+    environment: dict[str, str],
+) -> dict:
+    result = subprocess.run(
+        [str(binary), *arguments, "--log-format", "json"],
+        cwd=cwd,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=20,
+        check=False,
+    )
+    try:
+        event = json.loads(result.stderr)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AcceptanceError(f"{name} did not emit a JSON error") from error
+    if result.returncode != 9 or event.get("code") != "componentUnavailable":
+        raise AcceptanceError(
+            f"{name} did not fail closed as componentUnavailable: "
+            f"exit={result.returncode}, event={event}"
+        )
+    return {"name": name, "exitCode": result.returncode, "code": event["code"]}
+
+
 def assert_runtime_absent(
     cache: pathlib.Path,
     home: pathlib.Path,
@@ -161,17 +296,29 @@ def assert_runtime_absent(
 
 
 def run_e2e(
-    target: str, data: bytes, member: str, artifact_sha: str, expected_version: str
+    target: str,
+    contents: dict[str, bytes],
+    member: str,
+    artifact_sha: str,
+    expected_version: str,
 ) -> dict:
-    with tempfile.TemporaryDirectory(prefix="into-md-native-e2e-") as name:
-        root = pathlib.Path(name)
+    temporary_parent = "/var/tmp" if target == "aarch64-apple-darwin" else None
+    with tempfile.TemporaryDirectory(
+        prefix="into-md-native-e2e-", dir=temporary_parent
+    ) as name:
+        outer = pathlib.Path(name)
+        root = outer / ("bin" if target == "x86_64-pc-windows-msvc" else "core")
+        root.mkdir()
+        for relative, data in contents.items():
+            path = root / pathlib.PurePosixPath(relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         binary = root / member
-        binary.write_bytes(data)
         binary.chmod(0o700)
-        home = root / "home"
-        cache = root / "cache"
-        temporary = root / "tmp"
-        work = root / "work"
+        home = outer / "home"
+        cache = outer / "cache"
+        temporary = outer / "tmp"
+        work = outer / "work"
         for directory in (home, cache, temporary, work):
             directory.mkdir(mode=0o700)
         environment = os.environ.copy()
@@ -185,9 +332,11 @@ def run_e2e(
                 "XDG_CONFIG_HOME": str(root / "config"),
                 "TMP": str(temporary),
                 "TEMP": str(temporary),
+                "TMPDIR": str(temporary),
                 "NO_PROXY": "*",
             }
         )
+        environment.pop("PDFIUM_LIBRARY", None)
         source = work / "source.txt"
         result = work / "result.md"
         source.write_text("Into Markdown portable release acceptance\n", encoding="utf-8")
@@ -246,6 +395,181 @@ def run_e2e(
                 temporary,
                 f"default legacy Office {extension.upper()} conversion",
             )
+        negative_cases = []
+        pdfium_runtime = None
+        if target == "x86_64-pc-windows-msvc":
+            if not PDF_FIXTURE.is_file():
+                raise AcceptanceError("real PDF acceptance fixture is unavailable")
+            pdf_result = work / "structures.md"
+            pdf_case, _ = run_case(
+                "real-pdf",
+                binary,
+                [
+                    str(PDF_FIXTURE),
+                    "-o",
+                    str(pdf_result),
+                    "--conflict",
+                    "error",
+                    "--no-config",
+                    "--progress",
+                    "never",
+                ],
+                work,
+                environment,
+            )
+            cases.append(pdf_case)
+            if not pdf_result.is_file() or not pdf_result.read_bytes():
+                raise AcceptanceError("real PDF conversion output is missing or empty")
+            assert_runtime_absent(cache, home, temporary, "packaged PDF conversion")
+
+            runtime = root / WINDOWS_PDFIUM_MEMBER
+            pinned = runtime.read_bytes()
+            decoy = work / "pdfium.dll"
+            decoy.write_bytes(pinned)
+            failure_environment = dict(environment)
+            failure_environment["PATH"] = str(work) + os.pathsep + environment.get("PATH", "")
+            failure_arguments = [
+                str(PDF_FIXTURE),
+                "-o",
+                str(work / "negative.md"),
+                "--conflict",
+                "overwrite",
+                "--no-config",
+                "--progress",
+                "never",
+            ]
+
+            runtime.unlink()
+            negative_cases.append(
+                run_failure_case(
+                    "missing-pdfium-with-path-decoy",
+                    binary,
+                    failure_arguments,
+                    work,
+                    failure_environment,
+                )
+            )
+            runtime.write_bytes(bytes([pinned[0] ^ 0xFF]) + pinned[1:])
+            negative_cases.append(
+                run_failure_case(
+                    "tampered-pdfium",
+                    binary,
+                    failure_arguments,
+                    work,
+                    failure_environment,
+                )
+            )
+            runtime.unlink()
+            outside = root / "outside-pdfium"
+            outside.mkdir()
+            (outside / "pdfium.dll").write_bytes(pinned)
+            runtime.parent.rmdir()
+            try:
+                os.symlink(outside, runtime.parent, target_is_directory=True)
+            except OSError as error:
+                raise AcceptanceError(
+                    f"cannot create PDFium reparse-point fixture: {error}"
+                ) from error
+            try:
+                negative_cases.append(
+                    run_failure_case(
+                        "reparse-point-pdfium",
+                        binary,
+                        failure_arguments,
+                        work,
+                        failure_environment,
+                    )
+                )
+            finally:
+                os.rmdir(runtime.parent)
+            runtime.parent.mkdir()
+            runtime.write_bytes(pinned)
+
+            explicit_file_root = root / "explicit-file"
+            explicit_file_root.mkdir()
+            explicit_file = explicit_file_root / "pdfium.dll"
+            os.symlink(runtime, explicit_file, target_is_directory=False)
+            explicit_environment = dict(environment)
+            explicit_environment["PDFIUM_LIBRARY"] = str(explicit_file)
+            try:
+                negative_cases.append(
+                    run_failure_case(
+                        "explicit-linked-pdfium",
+                        binary,
+                        failure_arguments,
+                        work,
+                        explicit_environment,
+                    )
+                )
+            finally:
+                explicit_file.unlink()
+
+            explicit_outside = root / "explicit-outside"
+            explicit_outside.mkdir()
+            (explicit_outside / "pdfium.dll").write_bytes(pinned)
+            explicit_parent = root / "explicit-reparse"
+            os.symlink(explicit_outside, explicit_parent, target_is_directory=True)
+            explicit_environment["PDFIUM_LIBRARY"] = str(explicit_parent / "pdfium.dll")
+            try:
+                negative_cases.append(
+                    run_failure_case(
+                        "explicit-reparse-point-pdfium",
+                        binary,
+                        failure_arguments,
+                        work,
+                        explicit_environment,
+                    )
+                )
+            finally:
+                os.rmdir(explicit_parent)
+            authority = PDFIUM_MANIFEST["targets"][target]
+            pdfium_runtime = {
+                "version": PDFIUM_MANIFEST["version"],
+                "sha256": sha256_bytes(pinned),
+                "bytes": len(pinned),
+            }
+            if (
+                pdfium_runtime["sha256"] != authority["library_sha256"]
+                or pdfium_runtime["bytes"] != authority["library_size"]
+            ):
+                raise AcceptanceError("executed PDFium runtime differs from the pinned manifest")
+        elif target == "aarch64-apple-darwin":
+            resolved_outer = outer.resolve(strict=True)
+            if not outer.as_posix().startswith("/var/") or not resolved_outer.as_posix().startswith(
+                "/private/var/"
+            ):
+                raise AcceptanceError("macOS acceptance did not traverse the trusted /var alias")
+            unsafe_cache = outer / "unsafe-cache"
+            unsafe_cache.mkdir()
+            os.symlink(unsafe_cache, home / "Library", target_is_directory=True)
+            pdf_result = work / "structures.md"
+            pdf_case, _ = run_case(
+                "real-pdf-macos-var-fallback",
+                binary,
+                [
+                    str(PDF_FIXTURE),
+                    "-o",
+                    str(pdf_result),
+                    "--conflict",
+                    "error",
+                    "--no-config",
+                    "--progress",
+                    "never",
+                ],
+                work,
+                environment,
+            )
+            cases.append(pdf_case)
+            if not pdf_result.is_file() or not pdf_result.read_bytes():
+                raise AcceptanceError("macOS /var fallback PDF output is missing or empty")
+            assert_runtime_absent(cache, home, temporary, "macOS /var fallback cleanup")
+            authority = PDFIUM_MANIFEST["targets"][target]
+            pdfium_runtime = {
+                "version": PDFIUM_MANIFEST["version"],
+                "sha256": authority["library_sha256"],
+                "bytes": authority["library_size"],
+                "materialization": "canonical-var-fallback",
+            }
         return {
             "schemaVersion": 1,
             "target": target,
@@ -253,6 +577,8 @@ def run_e2e(
             "version": expected_version,
             "cases": cases,
             "plainTextOutputSha256": sha256_file(result),
+            "pdfiumRuntime": pdfium_runtime,
+            "negativeCases": negative_cases,
             "runtimeCacheCreated": False,
             "networkRequired": False,
             "conclusion": "pass",
@@ -275,12 +601,12 @@ def parse() -> argparse.Namespace:
 def main() -> None:
     arguments = parse()
     output = arguments.output.resolve()
-    audit, data, member = audit_archive(output, arguments.target)
+    audit, contents, member = audit_archive(output, arguments.target)
     expected_version = arguments.expected_version.removeprefix("v")
     if not expected_version:
         raise AcceptanceError("expected release version is empty")
     e2e = run_e2e(
-        arguments.target, data, member, audit["artifactSha256"], expected_version
+        arguments.target, contents, member, audit["artifactSha256"], expected_version
     )
     evidence = output / "evidence" / arguments.target
     write_json(evidence / "native-audit.json", audit)

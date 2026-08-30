@@ -183,9 +183,20 @@ class PlatformReleaseTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertEqual(workflow.count("workflow_dispatch:"), 1)
+        self.assertIn(
+            "if: inputs.build_only || github.ref == 'refs/heads/main' || "
+            "startsWith(github.ref, 'refs/tags/')",
+            workflow,
+        )
+        self.assertEqual(
+            workflow.count(
+                "environment: ${{ inputs.build_only && 'release-validation' || 'release' }}"
+            ),
+            2,
+        )
         self.assertEqual(
             re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\n    name:", workflow),
-            ["build", "publish"],
+            ["build", "windows-release-e2e", "publish"],
         )
         for target in [
             "x86_64-unknown-linux-gnu",
@@ -201,7 +212,9 @@ class PlatformReleaseTests(unittest.TestCase):
             self.assertNotIn(forbidden, workflow)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
         self.assertEqual(workflow.count("timeout_minutes: 30"), 4)
-        self.assertEqual(workflow.count("    timeout-minutes: 5"), 1)
+        self.assertEqual(workflow.count("    timeout-minutes: 20"), 1)
+        self.assertEqual(workflow.count("    timeout-minutes: 35"), 1)
+        self.assertIn("needs: [build, windows-release-e2e]", workflow)
         windows = workflow.index("target: x86_64-pc-windows-msvc")
         self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
@@ -270,6 +283,31 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertIn("tools/portable-release/assemble.py verify", workflow)
         self.assertIn("tools/portable-release/native_acceptance.py", workflow)
+        self.assertIn("tools/portable-release/post_release_e2e.py", workflow)
+        self.assertIn("--assets-dir \"$RUNNER_TEMP/publish\"", workflow)
+        windows_gate = workflow.index("  windows-release-e2e:")
+        publish = workflow.index("  publish:")
+        self.assertLess(windows_gate, publish)
+        self.assertIn("runs-on: windows-2025", workflow[windows_gate:publish])
+        self.assertIn("--platform windows", workflow[windows_gate:publish])
+        self.assertIn("--evidence-dir", workflow[windows_gate:publish])
+        self.assertIn("name: windows-release-e2e", workflow[windows_gate:publish])
+        self.assertIn(
+            "$RUNNER_TEMP/evidence/release-validation/linux-x86_64.json",
+            workflow[publish:],
+        )
+        post_release = (
+            ROOT / "tools/portable-release/post_release_e2e.py"
+        ).read_text(encoding="utf-8")
+        scenarios = (
+            ROOT / "tools/portable-release/post_release_scenarios.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("run_skill_packaged_runtime", post_release)
+        self.assertIn('runner.call("skill-version-empty-path"', scenarios)
+        self.assertIn('"skill-pdf-empty-path"', scenarios)
+        self.assertIn("run_packaged_pdfium_negative_cases", scenarios)
+        for case in ('"missing"', '"tampered"', '"reparse"'):
+            self.assertIn(case, scenarios)
         self.assertIn("native-audit.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertIn("e2e.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertNotIn("portable-launcher", workflow)

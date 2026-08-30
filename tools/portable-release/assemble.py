@@ -20,14 +20,27 @@ import zipfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
+if str(PORTABLE_RELEASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
+from core_archive import (  # noqa: E402
+    CORE_ARCHIVE_MANIFEST,
+    CORE_ARCHIVES,
+    CORE_MATERIAL_AUTHORITY,
+    CORE_MATERIAL_MEMBERS,
+    PDFIUM_LICENSE_FILES,
+    WINDOWS_PDFIUM_MEMBER,
+    PortableReleaseError,
+    contains_embedded_pdfium,
+    create_core_archive,
+    load_authority,
+    stage_core_archive_materials,
+    write_core_material_authority,
+    windows_pdfium_authority,
+)
+
 PLATFORM_RELEASE = ROOT / "tools/platform-release/release.py"
 MACOS_RELEASE = ROOT / "tools/macos-release/release.py"
-CORE_ARCHIVES = {
-    "x86_64-pc-windows-msvc": ("into-md-windows-x86_64.zip", "into-md.exe"),
-    "x86_64-unknown-linux-gnu": ("into-md-linux-x86_64.zip", "into-md"),
-    "aarch64-unknown-linux-gnu": ("into-md-linux-arm64.zip", "into-md"),
-    "aarch64-apple-darwin": ("into-md-macos-arm64.zip", "into-md"),
-}
 SPEECH_NAMES = {
     target: f"official.media.whisper-{target}.imp" for target in CORE_ARCHIVES
 }
@@ -85,10 +98,6 @@ PLUGIN_SIGNATURE_FIELDS = {
 }
 
 
-class PortableReleaseError(RuntimeError):
-    """The compact release could not be assembled or verified."""
-
-
 def load_release(path: pathlib.Path, name: str):
     module_dir = str(path.parent)
     if module_dir not in sys.path:
@@ -108,27 +117,6 @@ def write_json(path: pathlib.Path, value: object) -> None:
         encoding="utf-8",
         newline="\n",
     )
-
-
-def create_core_archive(binary: pathlib.Path, destination: pathlib.Path, member: str) -> None:
-    if not binary.is_file() or binary.is_symlink():
-        raise PortableReleaseError("final Core binary is unavailable")
-    if destination.exists() or destination.is_symlink():
-        raise PortableReleaseError("Core archive destination already exists")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    info = zipfile.ZipInfo(member, (2026, 1, 1, 0, 0, 0))
-    info.create_system = 3
-    mode = 0o755 if member == "into-md" else 0o644
-    info.external_attr = (stat.S_IFREG | mode) << 16
-    with zipfile.ZipFile(
-        destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9
-    ) as archive:
-        archive.writestr(
-            info,
-            binary.read_bytes(),
-            compress_type=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
-        )
 
 
 def stage_catalog(
@@ -239,17 +227,28 @@ def build_platform(arguments: argparse.Namespace) -> None:
                 (time.monotonic_ns() - started) // 1_000_000,
             )
     release.authenticode_files([core], arguments.windows_signing_thumbprint)
-    archive_name, member = CORE_ARCHIVES[target]
-    archive = arguments.output / "release" / archive_name
-    create_core_archive(core, archive, member)
-    speech = arguments.output / "release" / SPEECH_NAMES[target]
-    speech.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     projection = release_bin / release.executable_name("release-projection", target)
     core_evidence = evidence / "core"
     core_evidence.mkdir(parents=True, exist_ok=True)
     release.write_release_inputs(core_evidence, projection, target)
     release.write_core_license_materials(core_evidence, cache, target, config)
+    materials = stage_core_archive_materials(
+        cache / "pdfium",
+        core_evidence,
+        arguments.work_root / "portable-core-materials",
+    )
+    write_core_material_authority(
+        core_evidence / CORE_MATERIAL_AUTHORITY, materials, target
+    )
+    archive_name, member = CORE_ARCHIVES[target]
+    archive = arguments.output / "release" / archive_name
+    runtime = None
+    if target == "x86_64-pc-windows-msvc":
+        runtime = (pdfium / config["pdfium"]["destination"], WINDOWS_PDFIUM_MEMBER)
+    create_core_archive(core, archive, member, runtime, materials, target)
+    speech = arguments.output / "release" / SPEECH_NAMES[target]
+    speech.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     write_target_manifest(arguments.output, target, archive, speech, release.sha256)
     verify_target(arguments.output, target)
 
@@ -318,17 +317,25 @@ def build_macos(arguments: argparse.Namespace) -> None:
                 (time.monotonic_ns() - started) // 1_000_000,
             )
     release.codesign_files([core], arguments.codesign_identity)
-    archive_name, member = CORE_ARCHIVES[target]
-    archive = arguments.output / "release" / archive_name
-    create_core_archive(core, archive, member)
-    speech = arguments.output / "release" / SPEECH_NAMES[target]
-    speech.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     core_evidence = evidence / "core"
     core_evidence.mkdir(parents=True, exist_ok=True)
     projection = build_root / "release/release-projection"
     release.write_release_inputs(core_evidence, projection)
     release.write_core_license_materials(core_evidence, cache)
+    materials = stage_core_archive_materials(
+        cache / "pdfium",
+        core_evidence,
+        arguments.work_root / "portable-core-materials",
+    )
+    write_core_material_authority(
+        core_evidence / CORE_MATERIAL_AUTHORITY, materials, target
+    )
+    archive_name, member = CORE_ARCHIVES[target]
+    archive = arguments.output / "release" / archive_name
+    create_core_archive(core, archive, member, materials=materials, target=target)
+    speech = arguments.output / "release" / SPEECH_NAMES[target]
+    speech.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     write_target_manifest(arguments.output, target, archive, speech, release.sha256)
     verify_target(arguments.output, target)
 
@@ -620,19 +627,39 @@ def _validate_speech_package(package: zipfile.ZipFile, target: str) -> None:
     _validate_speech_manifest(package, infos, target)
 
 
+def verify_core_archive(
+    archive_path: pathlib.Path,
+    target: str,
+    material_authority: dict | None = None,
+) -> None:
+    from core_archive import verify_core_archive as verify
+
+    authority = (
+        windows_pdfium_authority()
+        if target == "x86_64-pc-windows-msvc"
+        else None
+    )
+    verify(
+        archive_path,
+        target,
+        binary_architecture,
+        authority,
+        material_authority,
+    )
+
+
 def verify_target(output: pathlib.Path, target: str) -> None:
-    archive_name, member = CORE_ARCHIVES[target]
-    archive_path = output / "release" / archive_name
-    with zipfile.ZipFile(archive_path) as archive:
-        infos = archive.infolist()
-        if len(infos) != 1 or infos[0].filename != member:
-            raise PortableReleaseError("Core ZIP must contain exactly the direct-run binary")
-        if infos[0].date_time != (2026, 1, 1, 0, 0, 0):
-            raise PortableReleaseError("Core ZIP timestamp is not deterministic")
-        mode = (infos[0].external_attr >> 16) & 0o177777
-        expected_mode = stat.S_IFREG | (0o755 if member == "into-md" else 0o644)
-        if mode != expected_mode or not binary_architecture(archive.read(infos[0]), target):
-            raise PortableReleaseError("Core binary architecture or mode is invalid")
+    archive_name, _ = CORE_ARCHIVES[target]
+    authority_path = output / "evidence" / target / "core" / CORE_MATERIAL_AUTHORITY
+    try:
+        material_authority = load_authority(
+            authority_path, target, CORE_MATERIAL_MEMBERS
+        )
+    except RuntimeError as error:
+        raise PortableReleaseError(str(error)) from error
+    verify_core_archive(
+        output / "release" / archive_name, target, material_authority
+    )
     speech = output / "release" / SPEECH_NAMES[target]
     with zipfile.ZipFile(speech) as package:
         _validate_speech_package(package, target)
