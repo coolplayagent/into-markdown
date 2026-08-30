@@ -556,35 +556,30 @@ fn parse_relationships(
     preflight_xml(bytes, &part, XmlProfile::Relationships, options, context)?;
     let mut reader = NsReader::from_reader(bytes);
     let mut result = BTreeMap::new();
+    let mut stack = Vec::<(Vec<u8>, Vec<u8>)>::new();
     loop {
         context.checkpoint()?;
         match reader
             .read_event()
             .map_err(|error| malformed(Some(&part), format!("invalid XML: {error}")))?
         {
-            Event::Empty(e) | Event::Start(e)
-                if resolved_element(&reader, e.name(), &part)?
-                    == (PACKAGE_REL_NS.to_vec(), b"Relationship".to_vec()) =>
-            {
-                let id = attr(&e, b"Id", &part)?
-                    .ok_or_else(|| malformed(Some(&part), "relationship lacks Id"))?;
-                let target = attr(&e, b"Target", &part)?
-                    .ok_or_else(|| malformed(Some(&part), "relationship lacks Target"))?;
-                let kind = attr(&e, b"Type", &part)?
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| malformed(Some(&part), "relationship lacks Type"))?;
-                let kind = canonical_relationship_kind(&kind);
-                let target_mode = attr(&e, b"TargetMode", &part)?;
-                let external =
-                    target_mode.as_deref().is_some_and(|v| v.eq_ignore_ascii_case("external"));
-                if target_mode.is_some() && !external {
-                    return Err(malformed(Some(&part), "unsupported relationship TargetMode"));
+            Event::Start(e) => {
+                let name = resolved_element(&reader, e.name(), &part)?;
+                if is_direct_relationship(&name, stack.last()) {
+                    insert_relationship(&e, owner, &part, &mut result)?;
                 }
-                if !external {
-                    resolve_target(owner, &target)?;
+                stack.push(name);
+            }
+            Event::Empty(e) => {
+                let name = resolved_element(&reader, e.name(), &part)?;
+                if is_direct_relationship(&name, stack.last()) {
+                    insert_relationship(&e, owner, &part, &mut result)?;
                 }
-                if result.insert(id, Relationship { target, external, kind }).is_some() {
-                    return Err(malformed(Some(&part), "duplicate relationship Id"));
+            }
+            Event::End(e) => {
+                let name = resolved_element(&reader, e.name(), &part)?;
+                if stack.pop().as_ref() != Some(&name) {
+                    return Err(malformed(Some(&part), "relationship XML end differs from start"));
                 }
             }
             Event::DocType(_) => return Err(malformed(Some(&part), "DOCTYPE is forbidden")),
@@ -593,6 +588,45 @@ fn parse_relationships(
         }
     }
     Ok(result)
+}
+
+fn is_direct_relationship(
+    name: &(Vec<u8>, Vec<u8>),
+    parent: Option<&(Vec<u8>, Vec<u8>)>,
+) -> bool {
+    name.0.as_slice() == PACKAGE_REL_NS
+        && name.1.as_slice() == b"Relationship"
+        && parent.is_some_and(|parent| {
+            parent.0.as_slice() == PACKAGE_REL_NS && parent.1.as_slice() == b"Relationships"
+        })
+}
+
+fn insert_relationship(
+    element: &BytesStart<'_>,
+    owner: &str,
+    part: &str,
+    result: &mut BTreeMap<String, Relationship>,
+) -> Result<(), ConversionError> {
+    let id = attr(element, b"Id", part)?
+        .ok_or_else(|| malformed(Some(part), "relationship lacks Id"))?;
+    let target = attr(element, b"Target", part)?
+        .ok_or_else(|| malformed(Some(part), "relationship lacks Target"))?;
+    let kind = attr(element, b"Type", part)?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| malformed(Some(part), "relationship lacks Type"))?;
+    let kind = canonical_relationship_kind(&kind);
+    let target_mode = attr(element, b"TargetMode", part)?;
+    let external = target_mode.as_deref().is_some_and(|value| value.eq_ignore_ascii_case("external"));
+    if target_mode.is_some() && !external {
+        return Err(malformed(Some(part), "unsupported relationship TargetMode"));
+    }
+    if !external {
+        resolve_target(owner, &target)?;
+    }
+    if result.insert(id, Relationship { target, external, kind }).is_some() {
+        return Err(malformed(Some(part), "duplicate relationship Id"));
+    }
+    Ok(())
 }
 
 fn parse_styles(

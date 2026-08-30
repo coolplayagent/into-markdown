@@ -498,7 +498,7 @@ mod tests {
             r#"<w:document xmlns:w="{WORD}" xmlns:r="{OFFICE_REL}"><w:body><w:p><w:hyperlink r:id="rLink"><w:r><w:t>safe label</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
         );
         let relationships = format!(
-            r#"<Relationships xmlns="{PACKAGE_REL}" xmlns:e="urn:evil"><e:Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://evil.example" TargetMode="External"/><Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://safe.example" TargetMode="External"/></Relationships>"#
+            r#"<Relationships xmlns="{PACKAGE_REL}" xmlns:e="urn:evil"><e:Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://evil.example" TargetMode="External"/><e:wrapper><Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://evil-parent.example" TargetMode="External"/></e:wrapper><Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://safe.example" TargetMode="External"/></Relationships>"#
         );
         let output = convert_docx(
             &base(
@@ -513,6 +513,7 @@ mod tests {
             .unwrap();
         assert!(markdown.contains("https://safe.example"), "{markdown}");
         assert!(!markdown.contains("evil.example"), "{markdown}");
+        assert!(!markdown.contains("evil-parent.example"), "{markdown}");
     }
 
     #[test]
