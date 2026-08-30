@@ -40,10 +40,12 @@ buffer.
 
 For stdout, the complete primary artifact remains in an accounted temporary
 file until conversion and serialization succeed. Only then is it copied to the
-pipe. Broken pipe is a terminal consumer condition: staged companion files are
-rolled back, temporary files are dropped, and no output transaction is left
-behind. File output uses the same staged artifact and the existing atomic
-publication boundary.
+pipe. Broken pipe is a terminal consumer condition: copying stops, the primary
+temporary file is dropped, and fully staged companion assets retain the existing
+CLI behavior of committing after successful conversion and serialization.
+Serialization, cancellation, and non-pipe I/O failures abort companions. File
+output uses the same staged artifact and the existing atomic publication
+boundary.
 
 ## State and failure rules
 
