@@ -5,10 +5,11 @@ mod bundle;
 mod commit;
 mod serialization;
 mod stdout;
-#[cfg(test)]
 mod stream;
 
+#[cfg(test)]
 pub(crate) use assets::stage_assets;
+pub(crate) use assets::stage_spooled_assets;
 #[cfg(test)]
 pub(crate) use assets::write_assets;
 #[cfg(test)]
@@ -16,10 +17,10 @@ use assets::{plan_asset_writes, write_assets_with_hook};
 pub(crate) use bundle::write_bundle;
 #[cfg(test)]
 use commit::write_preflighted_file;
-pub(crate) use commit::{preflight_file, write_file, write_output_set_file, write_report};
+pub(crate) use commit::{preflight_file, write_file, write_report, write_spooled_output_set_file};
 pub(crate) use serialization::encode_result;
-pub(crate) use serialization::encode_result_into;
 pub(crate) use stdout::publish as publish_stdout;
+pub(crate) use stream::StructuredSpool;
 
 #[cfg(test)]
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
@@ -513,6 +514,51 @@ mod tests {
         .unwrap();
         staged.abort().unwrap();
         assert_eq!(fs::read(&target).unwrap(), [1, 2, 3]);
+    }
+
+    #[test]
+    fn spooled_primary_and_assets_publish_as_one_atomic_file_set() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let assets = root.join("assets");
+        fs::create_dir(&assets).unwrap();
+        let primary = root.join("document.md");
+        let context = output_context();
+        let result = empty_result();
+        let mut spool = StructuredSpool::from_result(&result, context.clone()).unwrap();
+        let asset_name = spool.external_payloads().unwrap()[0].0.to_owned();
+        let asset_target = assets.join(asset_name);
+        fs::write(&asset_target, b"old-asset").unwrap();
+        let mut encoded = context.temporary_file_in(&root, "encoded").unwrap();
+        spool.serialize(EmitKind::Markdown, &mut encoded).unwrap();
+        encoded.sync_all().unwrap();
+
+        let error = write_spooled_output_set_file(
+            &primary,
+            encoded.as_file().unwrap(),
+            &spool,
+            Some(&assets),
+            AssetModeArg::Extract,
+            ConflictPolicy::Error,
+            &context,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "assetConflict");
+        assert!(!primary.exists());
+        assert_eq!(fs::read(&asset_target).unwrap(), b"old-asset");
+
+        write_spooled_output_set_file(
+            &primary,
+            encoded.as_file().unwrap(),
+            &spool,
+            Some(&assets),
+            AssetModeArg::Extract,
+            ConflictPolicy::Overwrite,
+            &context,
+        )
+        .unwrap();
+        assert_eq!(fs::read(primary).unwrap(), result.markdown.as_bytes());
+        assert_eq!(fs::read(asset_target).unwrap(), [1, 2, 3]);
     }
 
     #[cfg(unix)]

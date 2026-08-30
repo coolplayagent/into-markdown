@@ -1,7 +1,7 @@
 use super::*;
 use into_markdown::{
-    Asset, AssetId, Block, BlockNode, Diagnostic, DiagnosticSeverity, DocumentMetadata, Inline,
-    NodeId, Provenance, ProvenanceKind, SourceLocator,
+    Asset, AssetId, Block, BlockNode, Diagnostic, DiagnosticSeverity, Document, DocumentMetadata,
+    Inline, NodeId, Provenance, ProvenanceKind, SourceLocator,
 };
 use std::collections::BTreeMap;
 use std::io::{Cursor, Seek};
@@ -98,7 +98,7 @@ fn duplicate_assets_share_one_payload_spool() {
     let spool = StructuredSpool::from_result(&result, context.clone()).unwrap();
     assert_eq!(spool.payload_records.len(), 1);
     assert_eq!(spool.asset_records.len(), 2);
-    assert_eq!(spool.payloads.as_file().unwrap().metadata().unwrap().len(), 5);
+    assert_eq!(spool.payload_records[0].file.as_file().unwrap().metadata().unwrap().len(), 5);
     assert!(context.reserved_temporary_bytes() < 16 * 1024);
 }
 

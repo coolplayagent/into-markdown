@@ -48,8 +48,8 @@ impl StructuredSpool {
             .payload_records
             .get(payload_index)
             .ok_or_else(|| CliError::internal("asset payload index is inconsistent"))?;
-        let mut reader = self.payloads.as_file().map_err(CliError::from)?.try_clone()?;
-        reader.seek(SeekFrom::Start(payload.offset))?;
+        let mut reader = payload.file.as_file().map_err(CliError::from)?.try_clone()?;
+        reader.seek(SeekFrom::Start(0))?;
         let mut limited = reader.take(payload.size);
         let mut encoder = base64::write::EncoderWriter::new(destination, &STANDARD);
         copy_reader(&self.context, &mut limited, &mut encoder)?;

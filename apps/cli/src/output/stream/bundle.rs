@@ -108,7 +108,6 @@ impl StructuredSpool {
             .start_file("document.ir.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
         replay_spool_chunks(&self.context, &self.ir, &self.ir_write_chunks, &mut archive)?;
-        archive.write_all(b"\n")?;
         archive
             .start_file("document.md", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
@@ -131,8 +130,8 @@ impl StructuredSpool {
             archive
                 .start_file(format!("assets/{}", payload.filename), files)
                 .map_err(|error| map_zip_error(error, "create bundle asset"))?;
-            let mut reader = self.payloads.as_file().map_err(CliError::from)?.try_clone()?;
-            reader.seek(SeekFrom::Start(payload.offset))?;
+            let mut reader = payload.file.as_file().map_err(CliError::from)?.try_clone()?;
+            reader.seek(SeekFrom::Start(0))?;
             copy_reader(&self.context, &mut reader.take(payload.size), &mut archive)?;
         }
         archive.finish().map_err(|error| map_zip_error(error, "finish bundle"))?;

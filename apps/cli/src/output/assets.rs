@@ -2,8 +2,12 @@
 
 use crate::args::{AssetModeArg, ConflictPolicy};
 use crate::error::{CliError, ExitClass};
-use crate::transaction::{self, PreparedTransaction, Target};
-use into_markdown::{ConversionOptions, ConversionResult, ExecutionContext, plan_assets};
+#[cfg(test)]
+use crate::transaction::Target;
+use crate::transaction::{self, FileTarget, PreparedTransaction};
+use into_markdown::ExecutionContext;
+#[cfg(test)]
+use into_markdown::{ConversionOptions, ConversionResult, plan_assets};
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,6 +15,7 @@ use std::path::{Path, PathBuf};
 use super::commit::WriteOutcome;
 #[cfg(test)]
 use super::commit::write_exact_file;
+use super::stream::StructuredSpool;
 
 /// Write extracted assets using safe, deterministic filenames.
 #[cfg(test)]
@@ -30,6 +35,7 @@ pub(crate) struct StagedAssets {
 }
 
 /// Preflight, write, and fsync every external asset without changing targets.
+#[cfg(test)]
 pub(crate) fn stage_assets(
     result: &ConversionResult,
     directory: &Path,
@@ -54,6 +60,62 @@ pub(crate) fn stage_assets(
         transaction: Some(transaction),
         targets: planned.into_iter().map(|(_, path)| path).collect(),
     })
+}
+
+/// Preflight and stage file-backed asset payloads without materializing them in memory.
+pub(crate) fn stage_spooled_assets(
+    spool: &StructuredSpool,
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<StagedAssets, CliError> {
+    let planned = plan_spooled_asset_writes(spool, directory, mode, conflict, context)?;
+    if planned.is_empty() {
+        return Ok(StagedAssets { transaction: None, targets: vec![] });
+    }
+    let files = planned
+        .iter()
+        .map(|(path, file)| FileTarget { path: path.clone(), file })
+        .collect::<Vec<_>>();
+    let transaction =
+        transaction::prepare_files(&files, conflict == ConflictPolicy::Overwrite, context)?;
+    Ok(StagedAssets {
+        transaction: Some(transaction),
+        targets: planned.into_iter().map(|(path, _)| path).collect(),
+    })
+}
+
+pub(super) fn plan_spooled_asset_writes<'a>(
+    spool: &'a StructuredSpool,
+    directory: &Path,
+    mode: AssetModeArg,
+    conflict: ConflictPolicy,
+    context: &ExecutionContext,
+) -> Result<Vec<(PathBuf, &'a std::fs::File)>, CliError> {
+    if mode != AssetModeArg::Extract {
+        return Ok(Vec::new());
+    }
+    let planned = spool
+        .external_payloads()?
+        .into_iter()
+        .map(|(filename, file)| (directory.join(filename), file))
+        .collect::<Vec<_>>();
+    let paths = planned.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
+    transaction::recover_for_paths(&paths, context)?;
+    if let Some((path, _)) =
+        planned.iter().find(|(path, _)| path.exists() && conflict != ConflictPolicy::Overwrite)
+    {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "assetConflict",
+            format!(
+                "stable asset output already exists and cannot be renamed safely: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(planned)
 }
 
 impl StagedAssets {
@@ -97,6 +159,7 @@ pub(super) fn write_assets_with_hook(
     Ok(outcomes)
 }
 
+#[cfg(test)]
 pub(super) fn plan_asset_writes(
     result: &ConversionResult,
     directory: &Path,

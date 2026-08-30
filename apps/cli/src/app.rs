@@ -16,10 +16,10 @@ use crate::output::{
 use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
-    AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, ErrorPolicy,
-    FormatHint, InputFormat, InputRef, OcrPolicy, OpenAiCompatibleClient,
-    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, RaggedRowsMode,
-    TableHeaderMode, TextDecodingMode,
+    AiMode, ArtifactSink, AssetMode, ConversionOptions, ConversionRequest, ConversionSummary,
+    DetectionRequest, ErrorPolicy, FormatHint, InputFormat, InputRef, OcrPolicy,
+    OpenAiCompatibleClient, ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy,
+    RaggedRowsMode, TableHeaderMode, TextDecodingMode,
 };
 use into_markdown_http_transport::{NetworkPolicy, TransportError, TransportErrorKind};
 use into_markdown_plugin_manager::{ManagerError, ManagerErrorCode, PluginManager};
@@ -4948,16 +4948,18 @@ fn process_stdout(
         plan.item.local_path.as_deref(),
         &policy.working_directory,
     )?;
-    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
+    spool.finish()?;
     let mut encoded =
         policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
-    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    spool.serialize(policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
     let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
-        (!result.assets.is_empty())
+        spool
+            .has_payloads()
             .then(|| {
-                output::stage_assets(
-                    &result,
+                output::stage_spooled_assets(
+                    &spool,
                     &assets_dir,
                     policy.asset_mode,
                     policy.conflict,
@@ -4967,7 +4969,7 @@ fn process_stdout(
             .transpose()?
     } else if policy.asset_mode == AssetModeArg::Extract
         && policy.emit != EmitKind::Bundle
-        && !result.assets.is_empty()
+        && spool.has_payloads()
     {
         return Err(CliError::usage(
             "stdin and URI inputs with extracted assets require --assets-dir",
@@ -4979,14 +4981,14 @@ fn process_stdout(
     Ok(BatchItemReport {
         input: plan.item.display.clone(),
         output: None,
-        format: result.detected_format().map(|format| format.as_str().into()),
+        format: summary.format.map(|format| format.as_str().into()),
         status: BatchItemStatus::Success,
-        outcome: if result.diagnostics.is_empty() {
+        outcome: if summary.diagnostics.is_empty() {
             BatchItemOutcome::Complete
         } else {
             BatchItemOutcome::Degraded
         },
-        diagnostics: result.diagnostics.iter().map(Into::into).collect(),
+        diagnostics: summary.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
         reason_code: None,
         component: None,
@@ -5120,7 +5122,8 @@ fn process_file_task_inner(
         &output_path,
         &policy.working_directory,
     )?;
-    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
+    spool.finish()?;
     let output_parent = output_path
         .parent()
         .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
@@ -5128,15 +5131,15 @@ fn process_file_task_inner(
         .output_context
         .temporary_file_in(output_parent, "into-md-encoded")
         .map_err(CliError::from)?;
-    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    spool.serialize(policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
     let outcome = {
         let _guard =
             output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
-        output::write_output_set_file(
+        output::write_spooled_output_set_file(
             &output_path,
             encoded.as_file().map_err(CliError::from)?,
-            &result,
+            &spool,
             asset_output.external_directory.as_deref(),
             policy.asset_mode,
             policy.conflict,
@@ -5150,18 +5153,18 @@ fn process_file_task_inner(
             outcome.path.display()
         ));
     }
-    Ok((outcome.path, result.detected_format(), result.diagnostics, warnings))
+    Ok((outcome.path, summary.format, summary.diagnostics, warnings))
 }
 
 fn report_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn convert_item(
+fn convert_item_into(
     item: &WorkItem,
     policy: &ExecutionPolicy,
     asset_uri_prefix: Option<String>,
-) -> Result<into_markdown::ConversionResult, CliError> {
+) -> Result<(output::StructuredSpool, ConversionSummary), CliError> {
     validate_input_network(&item.input, &policy.options)?;
     let mut request = ConversionRequest::new(item.input.clone());
     request.options = policy.options.clone();
@@ -5174,9 +5177,16 @@ fn convert_item(
         .map_err(CliError::from)?;
     let context = policy.output_context.fork_with_shared_resources(policy.execution.clone());
     let observed_context = context.clone();
-    futures::executor::block_on(engine.convert_with_context(request, context)).map_err(|error| {
-        CliError::from(error).with_detected_format(observed_context.detected_format())
+    let mut spool = output::StructuredSpool::new(context.clone(), policy.emit)?;
+    let result = futures::executor::block_on(async {
+        let prepared =
+            engine.prepare_into_with_context(request, context, spool.capabilities()).await?;
+        engine.execute_prepared_into(prepared, &mut spool).await
     })
+    .map_err(|error| {
+        CliError::from(error).with_detected_format(observed_context.detected_format())
+    })?;
+    Ok((spool, result))
 }
 
 fn plan_stdout_asset_output(

@@ -9,13 +9,16 @@ before #273.
 
 ## Responsibilities
 
-- `output/stream.rs` owns the spool state machine and compact asset index;
-  `output/stream/json.rs` performs incremental JSON string escaping.
+- `output/stream.rs` owns the spool state machine and compact indexes;
+  `output/stream/document.rs` writes semantic IR, `output/stream/sink.rs`
+  handles engine callbacks and asset payloads, and `output/stream/io.rs` owns
+  accounted replay buffers.
+- `output/stream/json.rs` performs incremental JSON string escaping.
 - `output/stream/result.rs` composes result JSON and streams Base64;
   `output/stream/bundle.rs` writes the deterministic ZIP entry contract and streams
   asset payloads without constructing Base64 or ZIP-entry buffers.
-- `output/serialization.rs` retains the compatibility encoder used by existing
-  call sites and byte-for-byte regression tests until the #272 adapter lands.
+- `output/serialization.rs` retains the compatibility encoder only for
+  byte-for-byte regression tests; production CLI conversion uses the sink.
 - `output/assets.rs` plans and stages companion asset files.
 - `output/commit.rs` publishes the primary artifact and companions atomically.
 
@@ -86,5 +89,5 @@ successful serialization and fsync.
 - Large Markdown, IR, and asset tests record peak RSS, shared memory leases,
   temporary bytes, and spool write calls. Payload growth must not increase
   retained memory proportionally and must not create a second payload copy.
-- Asset lookup and deduplication use a digest index and bounded byte comparison,
-  avoiding pairwise scans and repeated serialization.
+- Asset lookup and deduplication use an authoritative SHA-256 index plus streamed
+  digest verification, avoiding pairwise scans and repeated serialization.

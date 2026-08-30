@@ -1,11 +1,12 @@
 //! Atomic primary-artifact publication and conflict handling.
 
-use super::assets::plan_asset_writes;
+use super::assets::plan_spooled_asset_writes;
 use super::serialization::report_json_with_newline;
+use super::stream::StructuredSpool;
 use crate::args::{AssetModeArg, ConflictPolicy};
 use crate::error::{CliError, ExitClass};
 use crate::transaction::{self, FileTarget, Target};
-use into_markdown::{BatchReportDto, ConversionResult, ExecutionContext};
+use into_markdown::{BatchReportDto, ExecutionContext};
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
@@ -19,11 +20,11 @@ pub(crate) struct WriteOutcome {
     pub(crate) renamed: bool,
 }
 
-/// Atomically commit a file-backed primary artifact and in-memory companion assets.
-pub(crate) fn write_output_set_file(
+/// Atomically commit a file-backed primary artifact and file-backed companion assets.
+pub(crate) fn write_spooled_output_set_file(
     primary: &Path,
     primary_file: &std::fs::File,
-    result: &ConversionResult,
+    spool: &StructuredSpool,
     asset_directory: Option<&Path>,
     mode: AssetModeArg,
     conflict: ConflictPolicy,
@@ -31,23 +32,13 @@ pub(crate) fn write_output_set_file(
 ) -> Result<WriteOutcome, CliError> {
     let primary = primary.to_path_buf();
     let planned_assets = asset_directory
-        .map(|directory| plan_asset_writes(result, directory, mode, conflict, Some(context)))
+        .map(|directory| plan_spooled_asset_writes(spool, directory, mode, conflict, context))
         .transpose()?
         .unwrap_or_default();
-    let companions = planned_assets
-        .iter()
-        .map(|(source_index, path)| Target {
-            path: path.clone(),
-            bytes: result.assets[*source_index].bytes.as_slice(),
-        })
-        .collect::<Vec<_>>();
-    transaction::prepare_file_and_bytes(
-        &FileTarget { path: primary.clone(), file: primary_file },
-        &companions,
-        conflict == ConflictPolicy::Overwrite,
-        context,
-    )?
-    .commit()?;
+    let mut files = Vec::with_capacity(planned_assets.len() + 1);
+    files.push(FileTarget { path: primary.clone(), file: primary_file });
+    files.extend(planned_assets.into_iter().map(|(path, file)| FileTarget { path, file }));
+    transaction::prepare_files(&files, conflict == ConflictPolicy::Overwrite, context)?.commit()?;
     Ok(WriteOutcome { path: primary, renamed: false })
 }
 
