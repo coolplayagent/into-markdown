@@ -56,8 +56,9 @@ pub(super) fn parse_blocks(
                         )?);
                     }
                     ParagraphPart::Text(text) => {
-                        let inlines =
-                            parse_inlines(&text, styles, state, options, locator, &marks)?;
+                        let inlines = parse_inlines(
+                            &text, styles, package, state, options, context, locator, &marks,
+                        )?;
                         if inlines.is_empty() && mode != ParseMode::Cell {
                             continue;
                         }

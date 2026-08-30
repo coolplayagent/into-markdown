@@ -105,6 +105,47 @@ fn inline_image_anchor_preserves_bytes_marks_and_text_image_text_order() {
 }
 
 #[test]
+fn note_body_drawing_stays_inside_one_footnote_with_source_order() {
+    let mut png = Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    for class in ["footnote", "endnote"] {
+        let content = format!(
+            "<office:document-content {NS}><office:body><office:text><text:p>body-before<text:span><text:note text:id='n1' text:note-class='{class}'><text:note-citation>1</text:note-citation><text:note-body><text:p>note-before<text:span><draw:frame><draw:image xlink:href='Pictures/a.png'/></draw:frame></text:span>note-after</text:p></text:note-body></text:note></text:span>body-after</text:p></office:text></office:body></office:document-content>"
+        );
+        let bytes =
+            package(InputFormat::Odt, &content, &[("Pictures/a.png", "image/png", png.get_ref())]);
+        let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
+        output.document.validate().unwrap();
+        assert_eq!(output.document.blocks.len(), 2);
+        let Block::Paragraph(body) = &output.document.blocks[0].block else { panic!() };
+        assert_eq!(body.iter().filter(|inline| matches!(inline, into_markdown_core::Inline::FootnoteReference(id) if id == "n1")).count(), 1);
+        let Block::Footnote { label, blocks } = &output.document.blocks[1].block else { panic!() };
+        assert_eq!(label, "n1");
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            matches!(&blocks[0].block, Block::Paragraph(inlines) if matches!(inlines.as_slice(), [into_markdown_core::Inline::Text { value, .. }] if value == "note-before"))
+        );
+        assert!(
+            matches!(&blocks[1].block, Block::Image { asset, .. } if *asset == output.assets[0].id)
+        );
+        assert!(
+            matches!(&blocks[2].block, Block::Paragraph(inlines) if matches!(inlines.as_slice(), [into_markdown_core::Inline::Text { value, .. }] if value == "note-after"))
+        );
+        assert_eq!(output.assets.len(), 1);
+        assert_eq!(output.assets[0].bytes, *png.get_ref());
+        let markdown =
+            render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+        assert_eq!(markdown.matches("[^fn-6e31]:").count(), 1);
+        assert_eq!(markdown.matches("[^fn-6e31]").count(), 2);
+        let plain = markdown.replace("\\-", "-");
+        let before = plain.find("note-before").unwrap();
+        let image = plain.find("![").unwrap();
+        let after = plain.find("note-after").unwrap();
+        assert!(before < image && image < after, "{markdown}");
+    }
+}
+
+#[test]
 fn empty_sheet_does_not_emit_invalid_zero_column_table() {
     let content = format!(
         "<office:document-content {NS}><office:body><office:spreadsheet><table:table table:name='Data'><table:table-row><table:table-cell><text:p>value</text:p></table:table-cell></table:table-row></table:table><table:table table:name='Empty'><table:table-row><table:table-cell/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"

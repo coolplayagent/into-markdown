@@ -1,4 +1,4 @@
-use super::model::DRAW_NS;
+use super::model::{DRAW_NS, TEXT_NS};
 use super::xml::{XmlContent, XmlNode};
 
 pub(super) enum ParagraphPart<'a> {
@@ -9,6 +9,11 @@ pub(super) enum ParagraphPart<'a> {
 // The IR has block images, not inline images. Split only at drawing anchors, preserving
 // text wrappers/marks and source order on either side (including anchors inside spans).
 pub(super) fn split_drawings(node: &XmlNode) -> Vec<ParagraphPart<'_>> {
+    // A note owns a separate block body and one identity. Its drawings must split
+    // that body, not clone the note wrapper into the surrounding paragraph.
+    if node.is(TEXT_NS, "note") {
+        return vec![ParagraphPart::Text(node.clone())];
+    }
     if node.name.ns == DRAW_NS && matches!(node.name.local.as_str(), "frame" | "a") {
         return vec![ParagraphPart::Drawing(node)];
     }
