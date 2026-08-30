@@ -1,5 +1,6 @@
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ExecutionContext, ResourceReservation,
+    ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity, ExecutionContext,
+    ResourceReservation, SourceLocator,
 };
 
 use super::ole::CompoundBudget;
@@ -12,6 +13,7 @@ pub(super) struct MsgBudget<'a> {
     expanded_bytes: u64,
     asset_bytes: u64,
     work: u64,
+    pub(super) diagnostics: Vec<Diagnostic>,
 }
 
 impl<'a> MsgBudget<'a> {
@@ -31,7 +33,24 @@ impl<'a> MsgBudget<'a> {
             ));
         }
         context.checkpoint()?;
-        Ok(Self { options, context, entries: 0, expanded_bytes: 0, asset_bytes: 0, work: 0 })
+        Ok(Self {
+            options,
+            context,
+            entries: 0,
+            expanded_bytes: 0,
+            asset_bytes: 0,
+            work: 0,
+            diagnostics: Vec::new(),
+        })
+    }
+
+    pub(super) fn warning(&mut self, code: &str, message: &str, part: &str) {
+        self.diagnostics.push(Diagnostic {
+            code: code.into(),
+            severity: DiagnosticSeverity::Warning,
+            message: message.into(),
+            locator: Some(SourceLocator { part: Some(part.into()), ..SourceLocator::default() }),
+        });
     }
 
     pub(super) fn entry(&mut self) -> Result<(), ConversionError> {

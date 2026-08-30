@@ -317,8 +317,8 @@ def mapi_object(property_id: int) -> tuple[int, int, bytes, None]:
     return property_id, 0x000D, struct.pack("<II", 0xFFFFFFFF, 1), None
 
 
-def mapi_properties(records: list[tuple[int, int, bytes, bytes | None]], root: bool, recipients: int = 0, attachments: int = 0) -> bytes:
-    header = bytearray(32 if root else 8)
+def mapi_properties(records: list[tuple[int, int, bytes, bytes | None]], root: bool, recipients: int = 0, attachments: int = 0, embedded: bool = False) -> bytes:
+    header = bytearray((24 if embedded else 32) if root else 8)
     if root:
         struct.pack_into("<II", header, 16, recipients, attachments)
     output = bytearray(header)
@@ -335,13 +335,14 @@ def add_mapi_storage(
     root: bool,
     recipients: int = 0,
     attachments: int = 0,
+    embedded: bool = False,
 ) -> None:
     if base:
         entries.append((base, None))
     for property_id, property_type, _, stream in records:
         if stream is not None:
             entries.append((base + (f"__substg1.0_{property_id:04X}{property_type:04X}",), stream))
-    entries.append((base + ("__properties_version1.0",), mapi_properties(records, root, recipients, attachments)))
+    entries.append((base + ("__properties_version1.0",), mapi_properties(records, root, recipients, attachments, embedded)))
 
 
 def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
@@ -436,7 +437,7 @@ def lzfu_uncompressed(raw: bytes) -> bytes:
 
 def embedded_msg_entries(body: str) -> list[tuple[tuple[str, ...], bytes | None]]:
     entries: list[tuple[tuple[str, ...], bytes | None]] = []
-    add_mapi_storage(entries, (), [mapi_unicode(0x0037, "Nested fixture"), mapi_unicode(0x1000, body)], True)
+    add_mapi_storage(entries, (), [mapi_unicode(0x0037, "Nested fixture"), mapi_unicode(0x1000, body)], True, embedded=True)
     return entries
 
 

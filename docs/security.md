@@ -27,7 +27,11 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   stream chain 分别检测循环、越界、重复 sector 所有权与交叉重叠；directory slot、MAPI
   property、附件、嵌套深度、展开字节和工作量共享聚合预算。String8 仅按受支持 codepage
   无替换解码，Unicode、property length、recipient/attachment count 与路径名不一致均 fail
-  closed。stream chain 必须与声明长度所需 sector 数完全一致。CID 和 HTML 外链不触发网络；
+  closed。strict stream chain 必须与声明长度所需 sector 数完全一致；best-effort 仅复用共享
+  CFB 的冗余元数据恢复，声明数据仍须完整可达且独占。MSG 的单个字符串/RTF 终止 NUL、
+  空属性、未使用 padding 和显示名收件人恢复均带诊断；内部 NUL、缺失属性流仍被拒绝，
+  空正文不触发低优先级正文回退，也不丢弃合法的主题或附件。
+  CID 和 HTML 外链不触发网络；
   只有 exact canonical CID 引用可绑定通过 MIME 与结构审计的唯一 PNG/JPEG，未引用或非图片
   CID 按普通附件处理；附件只接受安全名称的 by-value 或受深度限制的嵌套 MSG。
 - Office 97–2003 与 MSG 共用 Core 内受限 CFB/OLE reader；DIFAT、FAT、miniFAT、目录树、

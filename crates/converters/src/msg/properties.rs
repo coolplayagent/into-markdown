@@ -1,7 +1,7 @@
 use super::budget::{MsgBudget, malformed};
 use super::ole::Storage;
 use encoding_rs::{Encoding, UTF_8};
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ErrorPolicy};
 use std::collections::BTreeMap;
 
 pub(super) const PT_LONG: u16 = 0x0003;
@@ -16,6 +16,14 @@ pub(super) const PT_BINARY: u16 = 0x0102;
 const PROPERTIES: &str = "__properties_version1.0";
 const PR_INTERNET_CPID: u16 = 0x3fde;
 const PR_MESSAGE_CODEPAGE: u16 = 0x3ffd;
+const PR_MESSAGE_LOCALE_ID: u16 = 0x3ff1;
+
+#[derive(Clone, Copy)]
+pub(super) enum PropertyScope {
+    Message,
+    EmbeddedMessage,
+    Object,
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum PropertyValue {
@@ -44,13 +52,19 @@ pub(super) struct Properties {
 impl Properties {
     pub(super) fn parse(
         storage: Storage<'_>,
-        root: bool,
+        scope: PropertyScope,
+        fallback_codepage: u32,
         budget: &mut MsgBudget<'_>,
     ) -> Result<Self, ConversionError> {
         let bytes = storage
             .stream(PROPERTIES)
             .ok_or_else(|| malformed(storage.path(), "missing __properties_version1.0 stream"))?;
-        let header = if root { 32 } else { 8 };
+        let header = match scope {
+            PropertyScope::Message => 32,
+            PropertyScope::EmbeddedMessage => 24,
+            PropertyScope::Object => 8,
+        };
+        let root = !matches!(scope, PropertyScope::Object);
         if bytes.len() < header || !(bytes.len() - header).is_multiple_of(16) {
             return Err(malformed(storage.path(), "MAPI property stream is not record aligned"));
         }
@@ -60,7 +74,7 @@ impl Properties {
                 "MAPI property header reserved bytes are non-zero",
             ));
         }
-        if root && bytes[24..32].iter().any(|byte| *byte != 0) {
+        if matches!(scope, PropertyScope::Message) && bytes[24..32].iter().any(|byte| *byte != 0) {
             return Err(malformed(
                 storage.path(),
                 "root MAPI property header reserved bytes are non-zero",
@@ -70,7 +84,13 @@ impl Properties {
             .chunks_exact(16)
             .map(RawProperty::parse)
             .collect::<Result<Vec<_>, _>>()?;
-        let codepage = select_codepage(&records, &storage)?;
+        let codepage = select_codepage(&records, &storage, fallback_codepage)?;
+        let html_codepage = records
+            .iter()
+            .find(|record| record.id == PR_INTERNET_CPID && record.kind == PT_LONG)
+            .map_or(codepage, |record| {
+                u32::from_le_bytes(record.value[..4].try_into().expect("fixed property value"))
+            });
         let mut values = BTreeMap::new();
         for record in records {
             budget.entry()?;
@@ -83,7 +103,8 @@ impl Properties {
             }
             let source =
                 format!("{}/{}#{:04X}{:04X}", storage.path(), PROPERTIES, record.id, record.kind);
-            let value = decode_property(storage, record, codepage)?;
+            let decoding_codepage = if record.id == 0x1013 { html_codepage } else { codepage };
+            let value = decode_property(storage, record, decoding_codepage, budget)?;
             values.insert(key, Property { value, source });
         }
         let recipient_count =
@@ -95,6 +116,11 @@ impl Properties {
 
     pub(super) fn codepage(&self) -> u32 {
         self.codepage
+    }
+
+    pub(super) fn html_codepage(&self) -> u32 {
+        self.integer(PR_INTERNET_CPID)
+            .map_or(self.codepage, |value| u32::try_from(value).unwrap_or(u32::MAX))
     }
 
     pub(super) fn recipient_count(&self) -> Option<u32> {
@@ -186,14 +212,15 @@ impl RawProperty {
     }
 }
 
-fn select_codepage(records: &[RawProperty], storage: &Storage<'_>) -> Result<u32, ConversionError> {
+fn select_codepage(
+    records: &[RawProperty],
+    storage: &Storage<'_>,
+    fallback: u32,
+) -> Result<u32, ConversionError> {
     let mut selected = None;
-    for record in records.iter().filter(|record| {
-        record.kind == PT_LONG && matches!(record.id, PR_INTERNET_CPID | PR_MESSAGE_CODEPAGE)
-    }) {
-        if record.value[4..].iter().any(|byte| *byte != 0) {
-            return Err(malformed(storage.path(), "MAPI codepage property has non-zero padding"));
-        }
+    for record in
+        records.iter().filter(|record| record.kind == PT_LONG && record.id == PR_MESSAGE_CODEPAGE)
+    {
         let value = u32::from_le_bytes(
             record.value[..4]
                 .try_into()
@@ -209,25 +236,46 @@ fn select_codepage(records: &[RawProperty], storage: &Storage<'_>) -> Result<u32
         })?;
         selected = Some(value);
     }
-    Ok(selected.unwrap_or(1252))
+    let locale = records
+        .iter()
+        .find(|record| record.kind == PT_LONG && record.id == PR_MESSAGE_LOCALE_ID)
+        .map(|record| {
+            u32::from_le_bytes(record.value[..4].try_into().expect("fixed property value"))
+        });
+    Ok(selected.or_else(|| locale.and_then(locale_codepage)).unwrap_or(fallback))
+}
+
+fn locale_codepage(locale: u32) -> Option<u32> {
+    // Deterministic Windows ANSI defaults when the Message codepage is absent.
+    // Internet codepage can independently describe UTF-8/ASCII body data.
+    match locale & 0xffff {
+        0x0404 | 0x0c04 | 0x1404 => Some(950),
+        0x0804 | 0x1004 => Some(936),
+        language => match language & 0x03ff {
+            0x07 | 0x09 | 0x0c => Some(1252), // German, English, French
+            0x19 => Some(1251),               // Russian
+            _ => None,
+        },
+    }
 }
 
 fn decode_property(
     storage: Storage<'_>,
     record: RawProperty,
     codepage: u32,
+    budget: &mut MsgBudget<'_>,
 ) -> Result<PropertyValue, ConversionError> {
     let part = format!("{}/__substg1.0_{:04X}{:04X}", storage.path(), record.id, record.kind);
     match record.kind {
         PT_LONG => {
-            padding_zero(&record.value[4..], &part)?;
+            padding_zero(&record.value[4..], &part, budget)?;
             Ok(PropertyValue::Integer(i64::from(i32::from_le_bytes(
                 record.value[..4].try_into().map_err(|_| malformed(&part, "truncated integer"))?,
             ))))
         }
         PT_I8 => Ok(PropertyValue::Integer(i64::from_le_bytes(record.value))),
         PT_BOOLEAN => {
-            padding_zero(&record.value[2..], &part)?;
+            padding_zero(&record.value[2..], &part, budget)?;
             let value = u16::from_le_bytes([record.value[0], record.value[1]]);
             if !matches!(value, 0 | 1) {
                 return Err(malformed(part, "invalid MAPI boolean"));
@@ -243,7 +291,7 @@ fn decode_property(
             ))
             .map_err(|_| malformed(&part, "property length cannot be represented"))?;
             let name = format!("__substg1.0_{:04X}{:04X}", record.id, record.kind);
-            let bytes = storage
+            let mut bytes = storage
                 .stream(&name)
                 .ok_or_else(|| malformed(&part, "variable MAPI property stream is missing"))?;
             let terminator_bytes = match record.kind {
@@ -255,7 +303,14 @@ fn decode_property(
                 .len()
                 .checked_add(terminator_bytes)
                 .ok_or_else(|| malformed(&part, "variable MAPI property size overflowed"))?;
-            if expected != length {
+            let has_terminator = match record.kind {
+                PT_STRING8 => bytes.ends_with(&[0]),
+                PT_UNICODE => bytes.ends_with(&[0, 0]) && bytes.len().is_multiple_of(2),
+                _ => false,
+            };
+            let recover_terminator =
+                has_terminator && budget.options().error_policy == ErrorPolicy::BestEffort;
+            if expected != length && !(recover_terminator && bytes.len() == length) {
                 return Err(malformed(
                     part,
                     format!(
@@ -263,6 +318,25 @@ fn decode_property(
                         bytes.len(),
                     ),
                 ));
+            }
+            if recover_terminator {
+                bytes = &bytes[..bytes.len() - terminator_bytes];
+                budget.warning(
+                    "msg.stringTerminatorIgnored",
+                    "one stored string terminator was excluded from the property text",
+                    &part,
+                );
+            }
+            if matches!(record.kind, PT_STRING8 | PT_UNICODE)
+                && bytes.is_empty()
+                && budget.options().error_policy == ErrorPolicy::BestEffort
+            {
+                budget.warning(
+                    "msg.emptyStringProperty",
+                    "an empty string property was retained as empty, without inventing text",
+                    &part,
+                );
+                return Ok(PropertyValue::Text(String::new()));
             }
             match record.kind {
                 PT_STRING8 => decode_string8(bytes, codepage, &part).map(PropertyValue::Text),
@@ -276,7 +350,7 @@ fn decode_property(
             }
             Ok(PropertyValue::Object)
         }
-        other => decode_opaque(storage, record, other, &part),
+        other => decode_opaque(storage, record, other, &part, budget),
     }
 }
 
@@ -285,6 +359,7 @@ fn decode_opaque(
     record: RawProperty,
     kind: u16,
     part: &str,
+    budget: &mut MsgBudget<'_>,
 ) -> Result<PropertyValue, ConversionError> {
     let fixed = match kind {
         0x0002 | 0x000b => Some(2),
@@ -293,7 +368,7 @@ fn decode_opaque(
         _ => None,
     };
     if let Some(size) = fixed {
-        padding_zero(&record.value[size..], part)?;
+        padding_zero(&record.value[size..], part, budget)?;
         return Ok(PropertyValue::Opaque);
     }
     if kind == 0x0048 || kind & 0x1000 != 0 {
@@ -332,6 +407,17 @@ fn decode_string8(bytes: &[u8], codepage: u32, part: &str) -> Result<String, Con
     if bytes.is_empty() || bytes.contains(&0) {
         return Err(malformed(part, "String8 MAPI property is empty or contains NUL"));
     }
+    decode_bytes(bytes, codepage, part)
+}
+
+pub(super) fn decode_bytes(
+    bytes: &[u8],
+    codepage: u32,
+    part: &str,
+) -> Result<String, ConversionError> {
+    if codepage == 20127 && !bytes.is_ascii() {
+        return Err(malformed(part, "non-ASCII byte in codepage 20127"));
+    }
     let encoding = encoding_for_codepage(codepage)
         .ok_or_else(|| malformed(part, format!("unsupported MAPI codepage {codepage}")))?;
     encoding
@@ -344,7 +430,7 @@ fn decode_string8(bytes: &[u8], codepage: u32, part: &str) -> Result<String, Con
 
 fn encoding_for_codepage(codepage: u32) -> Option<&'static Encoding> {
     let label: &[u8] = match codepage {
-        65001 => return Some(UTF_8),
+        65001 | 20127 => return Some(UTF_8),
         874 => b"windows-874",
         932 => b"shift_jis",
         936 => b"gbk",
@@ -364,8 +450,20 @@ fn encoding_for_codepage(codepage: u32) -> Option<&'static Encoding> {
     Encoding::for_label(label)
 }
 
-fn padding_zero(bytes: &[u8], part: &str) -> Result<(), ConversionError> {
+fn padding_zero(
+    bytes: &[u8],
+    part: &str,
+    budget: &mut MsgBudget<'_>,
+) -> Result<(), ConversionError> {
     if bytes.iter().any(|byte| *byte != 0) {
+        if budget.options().error_policy == ErrorPolicy::BestEffort {
+            budget.warning(
+                "msg.propertyPaddingIgnored",
+                "unused fixed-property padding was ignored",
+                part,
+            );
+            return Ok(());
+        }
         return Err(malformed(part, "MAPI property padding is non-zero"));
     }
     Ok(())
