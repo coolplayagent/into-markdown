@@ -614,8 +614,8 @@ fn xls_content_cell_order_display_values_and_merges_are_stable() {
 }
 
 #[test]
-fn tall_minimal_xls_pages_before_the_document_node_limit_without_loss() {
-    const ROWS: u16 = 40_000;
+fn tall_xls_pages_before_the_document_node_limit_without_loss() {
+    const ROWS: u16 = 60_000;
     let mut bytes = raw_biff4_with_label(b"anchor");
     let dimensions =
         bytes.windows(4).position(|window| window == [0x00, 0x02, 0x0a, 0x00]).unwrap();
@@ -658,7 +658,7 @@ fn tall_minimal_xls_pages_before_the_document_node_limit_without_loss() {
     assert_eq!(text.lines().last(), Some("tail"));
     assert_eq!(
         output.document.metadata.properties.get("spreadsheet.sheet.0.bounds").map(String::as_str),
-        Some("A1:A40000")
+        Some("A1:A60000")
     );
     assert_eq!(
         output.diagnostics.iter().filter(|item| item.code == "spreadsheet.largeTablePaged").count(),

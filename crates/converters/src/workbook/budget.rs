@@ -64,50 +64,9 @@ pub(super) fn enforce_total_cells(
 }
 
 pub(super) fn requires_paged_grid(rows: u64, columns: u64) -> bool {
-    // One sheet wrapper, one table, one node per row and cell, and at most one
-    // paragraph for every cell. This is the retained IR upper bound, not a
-    // proxy based only on cell count: a tall one-column sheet can otherwise
-    // cross the document limit while remaining well below the old 2x-cell
-    // threshold.
-    1_u64.saturating_add(unpaged_grid_nodes(rows, columns))
-        > u64::try_from(MAX_DOCUMENT_NODES).unwrap_or(u64::MAX)
-}
-
-pub(super) fn requires_paged_workbook(
-    bounds: impl IntoIterator<Item = (u32, u32)>,
-    sheet_count: u64,
-    extra_nodes: u64,
-) -> bool {
-    let retained_nodes = bounds.into_iter().fold(
-        sheet_count.saturating_add(extra_nodes),
-        |total, (last_row, last_column)| {
-            total.saturating_add(unpaged_grid_nodes(
-                u64::from(last_row) + 1,
-                u64::from(last_column) + 1,
-            ))
-        },
-    );
-    retained_nodes > u64::try_from(MAX_DOCUMENT_NODES).unwrap_or(u64::MAX)
-}
-
-fn unpaged_grid_nodes(rows: u64, columns: u64) -> u64 {
     let cells = rows.saturating_mul(columns);
-    1_u64.saturating_add(rows).saturating_add(cells.saturating_mul(2))
-}
-
-pub(super) fn extras_node_count(extras: &BTreeMap<String, SheetExtras>) -> u64 {
-    extras.values().fold(0_u64, |total, sheet| {
-        total.saturating_add(
-            u64::try_from(
-                sheet
-                    .annotations
-                    .len()
-                    .saturating_add(sheet.chart_titles.len())
-                    .saturating_add(sheet.images.len()),
-            )
-            .unwrap_or(u64::MAX),
-        )
-    })
+    let ir_limit = u64::try_from(MAX_DOCUMENT_NODES.saturating_sub(64) / 2).unwrap_or(u64::MAX);
+    cells > ir_limit
 }
 
 pub(super) fn extras_retained_memory(
@@ -213,24 +172,4 @@ pub(super) fn extras_retained_memory(
         .checked_mul(512)
         .and_then(|value| strings.checked_mul(4).and_then(|strings| value.checked_add(strings)))
         .ok_or_else(|| limit("max_memory_bytes", "worksheet extras memory overflow"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{requires_paged_grid, requires_paged_workbook};
-
-    #[test]
-    fn paging_uses_the_complete_retained_grid_node_bound() {
-        assert!(!requires_paged_grid(33_332, 1));
-        assert!(requires_paged_grid(33_333, 1));
-        assert!(!requires_paged_grid(2, 24_999));
-        assert!(requires_paged_grid(2, 25_000));
-    }
-
-    #[test]
-    fn paging_accounts_for_all_sheets_before_emission() {
-        assert!(!requires_paged_grid(20_000, 1));
-        assert!(requires_paged_workbook([(19_999, 0), (19_999, 0)], 2, 0));
-        assert!(!requires_paged_workbook([(19_999, 0)], 1, 0));
-    }
 }

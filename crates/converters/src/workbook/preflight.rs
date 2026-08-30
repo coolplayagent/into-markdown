@@ -1,6 +1,5 @@
 use crate::workbook::budget::{
-    enforce_grid, enforce_total_cells, extras_node_count, extras_retained_memory,
-    requires_paged_workbook,
+    enforce_grid, enforce_total_cells, extras_retained_memory, requires_paged_grid,
 };
 use crate::workbook::calamine_adapter::validate_extras_fields;
 use crate::workbook::error::{limit, malformed, warning};
@@ -646,12 +645,7 @@ pub(super) fn preflight_package(
         .saturating_add(inventory.number_formats)
         .checked_mul(128)
         .ok_or_else(|| limit("max_memory_bytes", "workbook metadata memory overflow"))?;
-    let paged = kind == WorkbookKind::Xml
-        || requires_paged_workbook(
-            sheet_bounds.values().copied(),
-            u64::try_from(sheet_parts.len()).unwrap_or(u64::MAX),
-            extras_node_count(&extras),
-        );
+    let paged = kind == WorkbookKind::Xml || requires_paged_grid(cell_capacity, 1);
     // Large sheets use bounded TSV page blocks rather than one paragraph node per
     // cell. Calamine's dense value/formula ranges still coexist with accumulated
     // page text, but validation and provenance scale with pages rather than cells.
