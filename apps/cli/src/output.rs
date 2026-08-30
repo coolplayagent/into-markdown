@@ -1,477 +1,47 @@
-//! Stable CLI serialization, bundles, batch reports, and atomic output writes.
+//! Stable CLI artifact streaming, serialization, and atomic publication.
 
+mod assets;
+mod bundle;
+mod commit;
+mod serialization;
+#[cfg(test)]
+mod stream;
+
+pub(crate) use assets::stage_assets;
+#[cfg(test)]
+pub(crate) use assets::write_assets;
+#[cfg(test)]
+use assets::{plan_asset_writes, write_assets_with_hook};
+pub(crate) use bundle::write_bundle;
+#[cfg(test)]
+use commit::write_preflighted_file;
+pub(crate) use commit::{preflight_file, write_file, write_output_set_file, write_report};
+pub(crate) use serialization::encode_result;
+pub(crate) use serialization::encode_result_into;
+
+#[cfg(test)]
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};
-use crate::error::{CliError, ExitClass};
-use crate::transaction::{self, FileTarget, PreparedTransaction, Target};
+use into_markdown::BatchReportDto;
+#[cfg(test)]
 use into_markdown::{
-    BUNDLE_SCHEMA_VERSION, BatchReportDto, ConversionOptions, ConversionResult, DTO_SCHEMA_VERSION,
-    DiagnosticsDto, DtoJsonStyle, ExecutionContext, ProvenanceListDto, ResultDto, plan_assets,
+    BUNDLE_SCHEMA_VERSION, DTO_SCHEMA_VERSION, DtoJsonStyle, ExecutionContext, ResultDto,
+    plan_assets,
 };
-use serde::Serialize;
 #[cfg(test)]
 use std::fs;
-use std::io::{Cursor, Seek, Write};
-use std::path::{Path, PathBuf};
-use zip::write::SimpleFileOptions;
+#[cfg(test)]
+use std::io::Cursor;
 
 pub use into_markdown::{
     BatchItemDto as BatchItemReport, BatchItemOutcome, BatchItemStatus, BatchLimitDto,
 };
 pub type BatchReport = BatchReportDto;
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StreamingBundleAsset<'a> {
-    id: &'a str,
-    source_asset_ids: &'a [String],
-    path: String,
-    media_type: &'a str,
-    size: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StreamingBundleManifest<'a> {
-    schema_version: u32,
-    markdown: &'static str,
-    document_ir: &'static str,
-    diagnostics: &'static str,
-    diagnostics_schema_version: u32,
-    provenance: &'static str,
-    provenance_schema_version: u32,
-    assets: &'a [StreamingBundleAsset<'a>],
-}
-
-/// Serialize a conversion result into the selected primary artifact.
-pub fn encode_result(result: &ConversionResult, emit: EmitKind) -> Result<Vec<u8>, CliError> {
-    let mut destination = Cursor::new(Vec::new());
-    encode_result_into(result, emit, &mut destination)?;
-    Ok(destination.into_inner())
-}
-
-/// Stream a conversion result into a seekable destination without allocating
-/// another complete primary-artifact buffer.
-pub fn encode_result_into<W: Write + Seek>(
-    result: &ConversionResult,
-    emit: EmitKind,
-    mut destination: W,
-) -> Result<(), CliError> {
-    match emit {
-        EmitKind::Markdown => {
-            for chunk in result.markdown.as_bytes().chunks(64 * 1024) {
-                destination.write_all(chunk)?;
-            }
-        }
-        EmitKind::IrJson => {
-            result
-                .document
-                .validate()
-                .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
-            serde_json::to_writer_pretty(&mut destination, &result.document)
-                .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
-            destination.write_all(b"\n")?;
-        }
-        EmitKind::ResultJson => {
-            ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut destination)
-                .map_err(|error| CliError::internal(format!("serialize result DTO: {error}")))?;
-            destination.write_all(b"\n")?;
-        }
-        EmitKind::Bundle => write_bundle(result, destination)?,
-    }
-    Ok(())
-}
-
-/// Write extracted assets using safe, deterministic filenames.
-#[cfg(test)]
-pub fn write_assets(
-    result: &ConversionResult,
-    directory: &Path,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-) -> Result<Vec<WriteOutcome>, CliError> {
-    write_assets_with_hook(result, directory, mode, conflict, || Ok(()))
-}
-
-/// Fully staged external assets whose targets have not been mutated yet.
-pub struct StagedAssets {
-    transaction: Option<PreparedTransaction>,
-    targets: Vec<PathBuf>,
-}
-
-/// Preflight, write, and fsync every external asset without changing targets.
-pub fn stage_assets(
-    result: &ConversionResult,
-    directory: &Path,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-) -> Result<StagedAssets, CliError> {
-    let planned = plan_asset_writes(result, directory, mode, conflict, Some(context))?;
-    if planned.is_empty() {
-        return Ok(StagedAssets { transaction: None, targets: vec![] });
-    }
-    let targets_with_bytes = planned
-        .iter()
-        .map(|(source_index, path)| Target {
-            path: path.clone(),
-            bytes: result.assets[*source_index].bytes.as_slice(),
-        })
-        .collect::<Vec<_>>();
-    let transaction =
-        transaction::prepare(&targets_with_bytes, conflict == ConflictPolicy::Overwrite, context)?;
-    Ok(StagedAssets {
-        transaction: Some(transaction),
-        targets: planned.into_iter().map(|(_, path)| path).collect(),
-    })
-}
-
-impl StagedAssets {
-    /// Commit all staged assets after the stdout stream succeeds.
-    pub fn commit(mut self) -> Result<Vec<WriteOutcome>, CliError> {
-        if let Some(transaction) = self.transaction.take() {
-            transaction.commit()?;
-        }
-        Ok(self.targets.into_iter().map(|path| WriteOutcome { path, renamed: false }).collect())
-    }
-
-    /// Discard staged resources without modifying external targets.
-    pub fn abort(mut self) -> Result<(), CliError> {
-        self.transaction.take().map_or(Ok(()), PreparedTransaction::abort)
-    }
-}
-
-#[cfg(test)]
-fn write_assets_with_hook(
-    result: &ConversionResult,
-    directory: &Path,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-    after_preflight: impl FnOnce() -> Result<(), CliError>,
-) -> Result<Vec<WriteOutcome>, CliError> {
-    let planned = plan_asset_writes(result, directory, mode, conflict, None)?;
-    if planned.is_empty() {
-        return Ok(Vec::new());
-    }
-    fs::create_dir_all(directory)?;
-    after_preflight()?;
-    let mut outcomes = Vec::with_capacity(planned.len());
-    for (source_index, path) in planned {
-        write_exact_file(
-            &path,
-            &result.assets[source_index].bytes,
-            conflict == ConflictPolicy::Overwrite,
-        )?;
-        outcomes.push(WriteOutcome { path, renamed: false });
-    }
-    Ok(outcomes)
-}
-
-fn plan_asset_writes(
-    result: &ConversionResult,
-    directory: &Path,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-    context: Option<&ExecutionContext>,
-) -> Result<Vec<(usize, PathBuf)>, CliError> {
-    if mode != AssetModeArg::Extract || result.assets.is_empty() {
-        return Ok(Vec::new());
-    }
-    let plan = plan_assets(&result.document, &result.assets, &ConversionOptions::default())
-        .map_err(CliError::from)?;
-    let mut planned = Vec::with_capacity(plan.entries().len());
-    let mut targets = std::collections::BTreeSet::new();
-    for asset in plan.entries() {
-        let path = directory.join(&asset.filename);
-        if !targets.insert(path.clone()) {
-            return Err(CliError::internal(format!(
-                "multiple assets resolve to {}",
-                path.display()
-            )));
-        }
-        planned.push((asset.source_index, path));
-    }
-    if let Some(context) = context {
-        let paths = planned.iter().map(|(_, path)| path.clone()).collect::<Vec<_>>();
-        transaction::recover_for_paths(&paths, context)?;
-    }
-    if let Some((_, path)) =
-        planned.iter().find(|(_, path)| path.exists() && conflict != ConflictPolicy::Overwrite)
-    {
-        return Err(CliError::new(
-            ExitClass::Io,
-            "assetConflict",
-            format!(
-                "stable asset output already exists and cannot be renamed safely: {}",
-                path.display()
-            ),
-        ));
-    }
-    Ok(planned)
-}
-
-/// Outcome of one atomic file write.
-#[derive(Debug, Clone)]
-pub struct WriteOutcome {
-    pub path: PathBuf,
-    pub renamed: bool,
-}
-
-/// Atomically commit a file-backed primary artifact and in-memory companion assets.
-pub fn write_output_set_file(
-    primary: &Path,
-    primary_file: &std::fs::File,
-    result: &ConversionResult,
-    asset_directory: Option<&Path>,
-    mode: AssetModeArg,
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-) -> Result<WriteOutcome, CliError> {
-    let primary = primary.to_path_buf();
-    let planned_assets = asset_directory
-        .map(|directory| plan_asset_writes(result, directory, mode, conflict, Some(context)))
-        .transpose()?
-        .unwrap_or_default();
-    let companions = planned_assets
-        .iter()
-        .map(|(source_index, path)| Target {
-            path: path.clone(),
-            bytes: result.assets[*source_index].bytes.as_slice(),
-        })
-        .collect::<Vec<_>>();
-    transaction::prepare_file_and_bytes(
-        &FileTarget { path: primary.clone(), file: primary_file },
-        &companions,
-        conflict == ConflictPolicy::Overwrite,
-        context,
-    )?
-    .commit()?;
-    Ok(WriteOutcome { path: primary, renamed: false })
-}
-
-/// Write a primary artifact using the requested conflict policy.
-pub fn write_file(
-    requested: &Path,
-    bytes: &[u8],
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-) -> Result<WriteOutcome, CliError> {
-    transaction::recover_for_paths(&[requested.to_path_buf()], context)?;
-    let (path, renamed) = resolve_conflict(requested, conflict)?;
-    transaction::prepare(
-        &[Target { path: path.clone(), bytes }],
-        conflict == ConflictPolicy::Overwrite,
-        context,
-    )?
-    .commit()?;
-    Ok(WriteOutcome { path, renamed })
-}
-
-/// Resolve an output conflict without writing the file.
-pub fn preflight_file(
-    path: &Path,
-    conflict: ConflictPolicy,
-    context: &ExecutionContext,
-) -> Result<PathBuf, CliError> {
-    transaction::recover_for_paths(&[path.to_path_buf()], context)?;
-    resolve_conflict(path, conflict).map(|(resolved, _)| resolved)
-}
-
-/// Atomically write a previously resolved path without recalculating its name.
-#[cfg(test)]
-pub fn write_preflighted_file(
-    path: &Path,
-    bytes: &[u8],
-    conflict: ConflictPolicy,
-) -> Result<WriteOutcome, CliError> {
-    write_exact_file(path, bytes, conflict == ConflictPolicy::Overwrite)?;
-    Ok(WriteOutcome { path: path.to_path_buf(), renamed: false })
-}
-
-/// Write a versioned JSON report atomically.
-pub fn write_report(
-    path: &Path,
-    report: &BatchReport,
-    context: &ExecutionContext,
-) -> Result<WriteOutcome, CliError> {
-    let json = report
-        .to_pretty_json()
-        .map_err(|error| CliError::internal(format!("serialize batch report DTO: {error}")))?;
-    write_file(path, &json_with_newline(json), ConflictPolicy::Overwrite, context)
-}
-
-fn json_with_newline(json: String) -> Vec<u8> {
-    let mut bytes = json.into_bytes();
-    bytes.push(b'\n');
-    bytes
-}
-
-/// Stream a deterministic portable bundle to a seekable destination.
-pub fn write_bundle<W: Write + Seek>(
-    result: &ConversionResult,
-    destination: W,
-) -> Result<(), CliError> {
-    if let Some(asset) = result.assets.iter().find(|asset| asset.bytes.is_empty()) {
-        return Err(CliError::new(
-            ExitClass::Conversion,
-            "bundleAssetMissingContent",
-            format!("bundle asset {} has no portable content", asset.id.0),
-        ));
-    }
-    let mut options = ConversionOptions::default();
-    options.output.asset_uri_prefix = Some("assets".into());
-    let plan = plan_assets(&result.document, &result.assets, &options).map_err(CliError::from)?;
-    let mut assets = Vec::new();
-    assets
-        .try_reserve_exact(plan.entries().len())
-        .map_err(|_| CliError::internal("allocate bounded bundle asset plan"))?;
-    for entry in plan.entries() {
-        let id = entry
-            .asset_ids
-            .first()
-            .ok_or_else(|| CliError::internal("bundle asset plan omitted its source ID"))?;
-        assets.push(StreamingBundleAsset {
-            id,
-            source_asset_ids: &entry.asset_ids,
-            path: format!("assets/{}", entry.filename),
-            media_type: &entry.media_type,
-            size: entry.size,
-        });
-    }
-    let manifest = StreamingBundleManifest {
-        schema_version: BUNDLE_SCHEMA_VERSION,
-        markdown: "document.md",
-        document_ir: "document.ir.json",
-        diagnostics: "diagnostics.json",
-        diagnostics_schema_version: DTO_SCHEMA_VERSION,
-        provenance: "provenance.json",
-        provenance_schema_version: DTO_SCHEMA_VERSION,
-        assets: &assets,
-    };
-    {
-        let mut archive = zip::ZipWriter::new(destination);
-        let file_options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
-        let directory_options = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored)
-            .unix_permissions(0o755);
-        archive
-            .start_file("diagnostics.json", file_options)
-            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-        DiagnosticsDto::write_bundle_json_from_diagnostics(&result.diagnostics, &mut archive)
-            .map_err(|error| CliError::internal(format!("serialize diagnostics DTO: {error}")))?;
-        archive.write_all(b"\n")?;
-        result
-            .document
-            .validate()
-            .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
-        archive
-            .start_file("document.ir.json", file_options)
-            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-        serde_json::to_writer_pretty(&mut archive, &result.document)
-            .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
-        archive.write_all(b"\n")?;
-        archive
-            .start_file("document.md", file_options)
-            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-        archive.write_all(result.markdown.as_bytes())?;
-        archive
-            .start_file("manifest.json", file_options)
-            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-        serde_json::to_writer_pretty(&mut archive, &manifest)
-            .map_err(|error| CliError::internal(format!("serialize bundle manifest: {error}")))?;
-        archive.write_all(b"\n")?;
-        archive
-            .start_file("provenance.json", file_options)
-            .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-        ProvenanceListDto::write_bundle_json_from_provenance(&result.provenance, &mut archive)
-            .map_err(|error| CliError::internal(format!("serialize provenance DTO: {error}")))?;
-        archive.write_all(b"\n")?;
-        archive.add_directory("assets/", directory_options).map_err(|error| {
-            CliError::internal(format!("create bundle assets directory: {error}"))
-        })?;
-        for entry in plan.entries() {
-            archive
-                .start_file(format!("assets/{}", entry.filename), file_options)
-                .map_err(|error| CliError::internal(format!("create bundle asset: {error}")))?;
-            archive.write_all(&result.assets[entry.source_index].bytes)?;
-        }
-        archive.finish().map_err(|error| CliError::internal(format!("finish bundle: {error}")))?;
-    }
-    Ok(())
-}
-
-fn resolve_conflict(
-    requested: &Path,
-    conflict: ConflictPolicy,
-) -> Result<(PathBuf, bool), CliError> {
-    if !requested.exists() || conflict == ConflictPolicy::Overwrite {
-        return Ok((requested.to_path_buf(), false));
-    }
-    if conflict == ConflictPolicy::Error {
-        return Err(CliError::new(
-            ExitClass::Io,
-            "outputConflict",
-            format!("output already exists: {}", requested.display()),
-        ));
-    }
-    let parent = requested.parent().unwrap_or_else(|| Path::new("."));
-    let filename = requested.file_name().and_then(|value| value.to_str()).unwrap_or("output");
-    let (stem, extension) = if let Some(stem) = filename.strip_suffix(".mdpkg.zip") {
-        (stem.to_owned(), Some("mdpkg.zip".to_owned()))
-    } else {
-        (
-            requested.file_stem().and_then(|value| value.to_str()).unwrap_or("output").to_owned(),
-            requested.extension().and_then(|value| value.to_str()).map(ToOwned::to_owned),
-        )
-    };
-    for number in 1_u64..=u64::MAX {
-        let name = extension.as_ref().map_or_else(
-            || format!("{stem}-{number}"),
-            |extension| format!("{stem}-{number}.{extension}"),
-        );
-        let candidate = parent.join(name);
-        if !candidate.exists() {
-            return Ok((candidate, true));
-        }
-    }
-    Err(CliError::new(
-        ExitClass::Io,
-        "outputConflict",
-        format!("could not allocate a unique output name for {}", requested.display()),
-    ))
-}
-
-#[cfg(test)]
-fn write_exact_file(path: &Path, bytes: &[u8], overwrite: bool) -> Result<(), CliError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)?;
-    let filename = path.file_name().and_then(|value| value.to_str()).unwrap_or("output");
-    let mut temporary = tempfile::Builder::new()
-        .prefix(&format!(".{filename}.into-md-"))
-        .suffix(".tmp")
-        .tempfile_in(parent)?;
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    let result =
-        if overwrite { temporary.persist(path) } else { temporary.persist_noclobber(path) };
-    result.map_err(|error| {
-        if error.error.kind() == std::io::ErrorKind::AlreadyExists {
-            CliError::new(
-                ExitClass::Io,
-                "outputConflict",
-                format!("output appeared after preflight: {}", path.display()),
-            )
-        } else {
-            CliError::from(error.error)
-        }
-    })?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::transaction::{self, Target};
     use into_markdown::{
         Asset, AssetId, Block, BlockNode, BundleManifestDto, ConversionOptions, ConversionResult,
         DiagnosticsDto, Document, NodeId, Provenance, ProvenanceKind, ProvenanceListDto,
@@ -479,6 +49,8 @@ mod tests {
     };
     use pulldown_cmark::{Event, Parser, Tag};
     use std::io::Read as _;
+    #[cfg(unix)]
+    use std::path::Path;
 
     fn empty_result() -> ConversionResult {
         ConversionResult::new(
