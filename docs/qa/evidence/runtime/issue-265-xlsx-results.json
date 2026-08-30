@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedAt": "2026-08-30T19:40:00+08:00",
+  "capturedAt": "2026-08-30T20:00:26+08:00",
   "issue": 265,
   "host": {
     "os": "Windows x86_64",
@@ -10,10 +10,10 @@
     "temporaryBudgetBytes": 4294967296
   },
   "candidate": {
-    "branch": "codex/issue-265-xlsx-auto",
+    "branch": "codex/issue-265-xlsx-bounded",
     "baseRevision": "a243eba",
     "profile": "release",
-    "binarySha256": "953c175076662baec0dbea67346f6436166dcc8cc7494e12c84a99b6c2830b32"
+    "binarySha256": "d23d736959fc4d308105dee077688857550e6e547716177c3697cb4ab450eef8"
   },
   "corpus": {
     "authority": "issue-265-xlsx-corpus.json",
@@ -22,24 +22,29 @@
     "validHardLimit": { "count": 1, "success": 0 },
     "invalid": { "count": 38, "success": 0 },
     "outcomes": { "complete": 141, "degraded": 226 },
-    "wallDurationMs": 100862.8562,
-    "sampledPeakRssBytes": 1492385792,
-    "report": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/report-corpus-final13.json",
-    "reportBytes": 508929,
-    "reportSha256": "603016063bb1749e1839ee1f074bc47268813887b463d1a5246bf98fbc75d61d"
+    "wallDurationMs": 69397.8558,
+    "perItemDurationAndProcessing": true,
+    "sampledPeakRssBytes": 1633865728,
+    "readOperations": 87058,
+    "readBytes": 1949560851,
+    "writeOperations": 53509,
+    "writeBytes": 1292980129,
+    "report": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/report-corpus-newpr1.json",
+    "reportBytes": 508570,
+    "reportSha256": "de19875906aae99f40dc0149f1f9e5893bc47aaf0d1c4cee49e4d038d9b3c14c"
   },
   "worldBank": {
     "inputBytes": 81682673,
     "exitCode": 0,
-    "wallDurationMs": 39815.9644,
-    "reportDurationMs": 39209.7091,
-    "reportProcessingDurationMs": 36695.4731,
-    "processingCpuMs": 37703.125,
-    "sampledPeakRssBytes": 1479401472,
-    "readOperations": 75300,
-    "readBytes": 1805282356,
-    "writeOperations": 18555,
-    "writeBytes": 1212935298,
+    "wallDurationMs": 36809.2801,
+    "reportDurationMs": 36669.1984,
+    "reportProcessingDurationMs": 35466.8788,
+    "processingCpuMs": 35875.0,
+    "sampledPeakRssBytes": 1598554112,
+    "readOperations": 75299,
+    "readBytes": 1805263908,
+    "writeOperations": 18521,
+    "writeBytes": 1212935194,
     "outputBytes": 255325238,
     "outputSha256": "c5aee7a504f36a498ccb811c8ab1f9dfb6fe426c1d72f48d03b8f1f614dacf84",
     "requestLeasePlanBytes": 3122717931,
@@ -56,21 +61,22 @@
     "stagingSeeks": 6,
     "preflightCells": 14034639,
     "cellRecallByStagingRead": 1.0,
-    "report": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/report-wdi-final14.json",
-    "reportSha256": "17834a8402138ac85fe7dd257eeec7dc79c0be60369479443964be469a50db89",
-    "ir": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/outputs-wdi-ir-final15/ce74b99249dda7d9.json",
-    "irBytes": 321715250
+    "report": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/report-wdi-newpr2.json",
+    "reportSha256": "79405ba78f4f512d97c688a5de7ddc7fe37edfbc3698fc2c4199583d5693728a",
+    "ir": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/outputs-wdi-ir-newpr1/ce74b99249dda7d9.json",
+    "irBytes": 321715250,
+    "irSha256": "7dc272b28aec4447c2968f2acde98b46358fede4797e623d7a8b6e5a03343540"
   },
   "commonSuccess": {
     "count": 232,
     "baselineMeanMs": 129.75278232758623,
-    "candidateMeanMs": 136.5887685344828,
-    "meanSlowdownPercent": 5.268469842625634,
+    "candidateMeanMs": 93.22679137931028,
+    "meanSlowdownPercent": -28.150449102554852,
     "thresholdPercent": 50.0,
     "baselineFailures": 0,
     "candidateFailures": 0,
-    "candidate": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/common-success-final13.json",
-    "candidateSha256": "ccc86dab14c0810cfbc8c24c42900db06270d9ead2e5ac4639827d45bd1430b2"
+    "candidate": "C:/Users/19321/Documents/workspace/into-markdown-benchmark-results/2026-08-29/issue-265-live/common-success-newpr1.json",
+    "candidateSha256": "799dee9d60b355eb69a58be34673eace6182cda00a2364c423f0c92a4dc5e60c"
   },
   "quality": {
     "worldBankOutputMatchesPriorQualitySha": true,
