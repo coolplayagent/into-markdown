@@ -1,18 +1,13 @@
 use super::process_helper::{continue_process, spawn_process_helper, wait_for_process_signal};
 use super::*;
 
-fn assert_private_registry_lock_namespace(root: &Path) {
-    let root = SafeDir::open_absolute(root).unwrap();
-    let lock_directory =
-        root.open_child(OsStr::new(super::super::registry::REGISTRY_LOCK_DIRECTORY_NAME)).unwrap();
-    lock_directory.verify_private_namespace().unwrap();
-    assert_eq!(
-        lock_directory.names_private().unwrap(),
-        [OsString::from(super::super::registry::REGISTRY_LOCK_NAME)]
-    );
-    lock_directory
-        .open_regular_private(OsStr::new(super::super::registry::REGISTRY_LOCK_NAME))
-        .unwrap();
+fn assert_registry_namespace_removed(root: &Path) {
+    assert!(manager_artifacts(root).is_empty());
+    assert!(fs::read_dir(root).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        let name = name.to_string_lossy();
+        !name.starts_with(".into-md-output-registry") && name != PARENT_LEASE_NAME
+    }));
 }
 
 #[test]
@@ -31,14 +26,7 @@ fn stale_registry_epoch_waiter_reopens_after_atomic_cleanup() {
     let status = child.wait().unwrap();
     assert!(status.success(), "registry waiter failed: {status}");
     assert!(!root.join(REGISTRY_NAME).exists());
-    assert!(fs::read_dir(&root).unwrap().all(|entry| {
-        !entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .starts_with(super::super::registry::REGISTRY_TOMBSTONE_PREFIX)
-    }));
-    assert_private_registry_lock_namespace(&root);
+    assert_registry_namespace_removed(&root);
 }
 
 #[test]
@@ -102,7 +90,7 @@ fn process_killed_after_a_durable_target_install_recovers_atomically() {
     );
     assert!(manager_artifacts(&root).is_empty());
     assert!(manager_directories(&root).is_empty());
-    assert_private_registry_lock_namespace(&root);
+    assert_registry_namespace_removed(&root);
 }
 
 #[test]
@@ -150,7 +138,7 @@ fn registry_cleanup_refuses_an_active_transaction_member() {
     epoch.registry().remove_regular_private(member).unwrap();
     assert!(epoch.try_cleanup().unwrap());
     assert!(!root.join(REGISTRY_NAME).exists());
-    assert_private_registry_lock_namespace(&root);
+    assert_registry_namespace_removed(&root);
 }
 
 #[cfg(unix)]

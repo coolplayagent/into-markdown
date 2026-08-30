@@ -4,14 +4,21 @@ use super::{
     JournalEntry, JournalPhase, JournalRecord, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES,
     PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction, Read, SafeDir, Sha256,
     StreamingTargetIndex, Target, TransactionSource, Write, absolute_lexical, checked_usize_bytes,
-    crash_point, encode_path, file_identity, fs, io, journal_entry_retained_bytes,
-    journal_identity_retained_bytes, journal_path_retained_bytes,
+    crash_point, create_missing_output_directory, encode_path, file_identity, fs, io,
+    journal_entry_retained_bytes, journal_identity_retained_bytes, journal_path_retained_bytes,
     prepare_sources_with_hook_internal, recovery_error, stage_name, transaction_index_limit,
     validate_relative_path,
 };
-use crate::transaction::lease::create_parent_lease;
+use crate::transaction::lease::{
+    ParentLeaseRemovalIndex, create_parent_lease, remove_parent_lease,
+};
 use crate::transaction::model::JournalPath;
-use crate::transaction::recovery::remove_created_output_directory;
+use crate::transaction::model::StageResume;
+use crate::transaction::recovery::{
+    remove_created_output_directory, try_resume_streaming_transaction,
+};
+
+const RESUME_CHUNK_BYTES: u64 = 1024 * 1024;
 
 pub struct StreamingFileTransaction {
     pub(in crate::transaction) transaction: Option<PreparedTransaction>,
@@ -20,6 +27,10 @@ pub struct StreamingFileTransaction {
     pub(in crate::transaction) size: u64,
     pub(in crate::transaction) current_index: usize,
     pub(in crate::transaction) target_index: Option<StreamingTargetIndex>,
+    pub(in crate::transaction) config_fingerprint: String,
+    pub(in crate::transaction) chunk_sequence: u64,
+    pub(in crate::transaction) durable_len: u64,
+    pub(in crate::transaction) current_target: PathBuf,
 }
 
 impl StreamingFileTransaction {
@@ -44,6 +55,14 @@ impl StreamingFileTransaction {
         context: &ExecutionContext,
     ) -> Result<Self, CliError> {
         let root_hint = additional_directory.map(|directory| directory.join(".into-md-authority"));
+        let resume_target = absolute_lexical(path)?;
+        let config_fingerprint =
+            streaming_config_fingerprint(path, additional_directory, overwrite)?;
+        if let Some(resumed) =
+            try_resume_streaming_transaction(&resume_target, &config_fingerprint, context)?
+        {
+            return Ok(resumed);
+        }
         for recovered in 0..=MAX_RECOVERY_RETRIES {
             context.checkpoint().map_err(CliError::from)?;
             match prepare_sources_with_hook_internal(
@@ -87,6 +106,10 @@ impl StreamingFileTransaction {
                         size: 0,
                         current_index: 0,
                         target_index: Some(target_index),
+                        config_fingerprint,
+                        chunk_sequence: 0,
+                        durable_len: 0,
+                        current_target: absolute_lexical(path)?,
                     });
                 }
                 Ok((_, None)) => {
@@ -135,7 +158,8 @@ impl StreamingFileTransaction {
             .ok_or_else(|| CliError::internal("streaming transaction index is closed"))?;
         let DynamicTargetPlan { absolute, encoded, parent, missing_directories, pending } =
             plan_dynamic_target(transaction, target_index, path)?;
-        create_dynamic_directories(transaction, &pending, &missing_directories, &mut hook)?;
+        let intent_parent =
+            create_dynamic_directories(transaction, &pending, &missing_directories, &mut hook)?;
         let (authenticated_parent, original, parent_is_new, parent_index) =
             bind_dynamic_target(transaction, target_index, &absolute, &parent, overwrite)?;
         let entry = JournalEntry {
@@ -153,20 +177,6 @@ impl StreamingFileTransaction {
         if let Err(error) = transaction.account_journal_growth(entry_growth) {
             return transaction.fail_and_recover(error);
         }
-        let record = JournalRecord::TargetAdded {
-            parent: parent_is_new.then(|| authenticated_parent.identity.clone()),
-            entry: entry.clone(),
-        };
-        if let Err(error) = transaction.append_journal_record(&record) {
-            return transaction.fail_and_recover(error);
-        }
-        if parent_is_new {
-            transaction.journal.parent_identities.push(authenticated_parent.identity.clone());
-            if let Err(error) = transaction.sync_journal_records() {
-                return transaction.fail_and_recover(error);
-            }
-        }
-        transaction.journal.entries.push(entry);
         if let Err(error) =
             transaction.journal_temporary.grow(FILE_ENTRY_TEMPORARY_BYTES).map_err(CliError::from)
         {
@@ -175,10 +185,14 @@ impl StreamingFileTransaction {
         transaction
             .temporary_reservations
             .push(transaction.context.reserve_temporary(0).map_err(CliError::from)?);
-        // The journal names the target before a stage can exist. Recovery from
-        // this point therefore only rolls back; it can never publish a partial
-        // or absent payload.
-        crash_point(&mut hook, "directoryIdentityBound", usize::MAX, transaction)?;
+        let record = JournalRecord::TargetAdded {
+            parent: parent_is_new.then(|| authenticated_parent.identity.clone()),
+            entry: entry.clone(),
+        };
+        if parent_is_new {
+            transaction.journal.parent_identities.push(authenticated_parent.identity.clone());
+        }
+        transaction.journal.entries.push(entry);
         if parent_is_new
             && let Err(error) = create_parent_lease(
                 &authenticated_parent,
@@ -188,6 +202,20 @@ impl StreamingFileTransaction {
         {
             return transaction.fail_and_recover(error);
         }
+        if let Err(error) = transaction.append_journal_record(&record) {
+            return transaction.fail_and_recover(error);
+        }
+        if parent_is_new && let Err(error) = transaction.sync_journal_records() {
+            return transaction.fail_and_recover(error);
+        }
+        if let Some(intent_parent) = intent_parent {
+            remove_dynamic_intent_lease(transaction, &intent_parent)?;
+        }
+        crash_point(&mut hook, "directoryCreated", usize::MAX, transaction)?;
+        // The journal names the target before a stage can exist. Recovery from
+        // this point therefore only rolls back; it can never publish a partial
+        // or absent payload.
+        crash_point(&mut hook, "directoryIdentityBound", usize::MAX, transaction)?;
         crash_point(&mut hook, "dynamicParentLeased", usize::MAX, transaction)?;
         let index = transaction.journal.entries.len() - 1;
         let file = match transaction.handles.directory.create_regular(&stage_name(index)) {
@@ -202,6 +230,9 @@ impl StreamingFileTransaction {
         self.digest = Sha256::new();
         self.size = 0;
         self.current_index = index;
+        self.chunk_sequence = 0;
+        self.durable_len = 0;
+        self.current_target = absolute;
         Ok(())
     }
 
@@ -214,11 +245,12 @@ impl StreamingFileTransaction {
     }
 
     fn write_all_checked_inner(&mut self, bytes: &[u8]) -> Result<(), CliError> {
-        let transaction = self
-            .transaction
-            .as_mut()
-            .ok_or_else(|| CliError::internal("streaming transaction is closed"))?;
-        transaction.context.checkpoint().map_err(CliError::from)?;
+        self.transaction
+            .as_ref()
+            .ok_or_else(|| CliError::internal("streaming transaction is closed"))?
+            .context
+            .checkpoint()
+            .map_err(CliError::from)?;
         let amount = u64::try_from(bytes.len()).map_err(|_| {
             CliError::new(
                 ExitClass::Policy,
@@ -229,26 +261,42 @@ impl StreamingFileTransaction {
         self.size.checked_add(amount).ok_or_else(|| {
             CliError::new(ExitClass::Policy, "resourceLimit", "streamed stage size overflowed")
         })?;
-        transaction.temporary_reservations[self.current_index]
+        self.transaction.as_mut().expect("streaming transaction checked").temporary_reservations
+            [self.current_index]
             .grow(amount)
             .map_err(CliError::from)?;
-        let stage = self
-            .stage
-            .as_mut()
-            .ok_or_else(|| CliError::internal("streaming transaction stage is closed"))?;
         let mut written = 0_usize;
         while written < bytes.len() {
-            if let Err(error) = transaction.context.checkpoint() {
+            if let Err(error) = self
+                .transaction
+                .as_ref()
+                .expect("streaming transaction checked")
+                .context
+                .checkpoint()
+            {
                 let unwritten = amount - u64::try_from(written).unwrap_or(u64::MAX);
-                transaction.temporary_reservations[self.current_index]
+                self.transaction
+                    .as_mut()
+                    .expect("streaming transaction checked")
+                    .temporary_reservations[self.current_index]
                     .shrink(unwritten)
                     .map_err(CliError::from)?;
                 return Err(CliError::from(error));
             }
-            match stage.write(&bytes[written..]) {
+            let until_checkpoint = RESUME_CHUNK_BYTES - (self.size % RESUME_CHUNK_BYTES);
+            let write_limit =
+                usize::try_from(until_checkpoint).unwrap_or(usize::MAX).min(bytes.len() - written);
+            let stage = self
+                .stage
+                .as_mut()
+                .ok_or_else(|| CliError::internal("streaming transaction stage is closed"))?;
+            match stage.write(&bytes[written..written + write_limit]) {
                 Ok(0) => {
                     let unwritten = amount - u64::try_from(written).unwrap_or(u64::MAX);
-                    transaction.temporary_reservations[self.current_index]
+                    self.transaction
+                        .as_mut()
+                        .expect("streaming transaction checked")
+                        .temporary_reservations[self.current_index]
                         .shrink(unwritten)
                         .map_err(CliError::from)?;
                     return Err(CliError::from(std::io::Error::new(
@@ -269,10 +317,16 @@ impl StreamingFileTransaction {
                             )
                         })?;
                     written += count;
+                    if self.size.is_multiple_of(RESUME_CHUNK_BYTES) {
+                        self.checkpoint_current_chunk()?;
+                    }
                 }
                 Err(error) => {
                     let unwritten = amount - u64::try_from(written).unwrap_or(u64::MAX);
-                    transaction.temporary_reservations[self.current_index]
+                    self.transaction
+                        .as_mut()
+                        .expect("streaming transaction checked")
+                        .temporary_reservations[self.current_index]
                         .shrink(unwritten)
                         .map_err(CliError::from)?;
                     return Err(error.into());
@@ -280,6 +334,48 @@ impl StreamingFileTransaction {
             }
         }
         Ok(())
+    }
+
+    fn checkpoint_current_chunk(&mut self) -> Result<(), CliError> {
+        let transaction = self
+            .transaction
+            .as_mut()
+            .ok_or_else(|| CliError::internal("streaming transaction is closed"))?;
+        let stage = self
+            .stage
+            .as_ref()
+            .ok_or_else(|| CliError::internal("streaming transaction stage is closed"))?;
+        stage.sync_all()?;
+        let next_sequence = self
+            .chunk_sequence
+            .checked_add(1)
+            .ok_or_else(|| transaction_index_limit("stage chunk sequence overflowed"))?;
+        let resume = StageResume {
+            config_fingerprint: self.config_fingerprint.clone(),
+            chunk_sequence: next_sequence,
+            durable_len: self.size,
+            content_sha256: format!("{:x}", self.digest.clone().finalize()),
+        };
+        transaction.append_journal_record(&JournalRecord::StageChunk {
+            index: self.current_index,
+            resume,
+        })?;
+        transaction.sync_journal_records()?;
+        self.chunk_sequence = next_sequence;
+        self.durable_len = self.size;
+        Ok(())
+    }
+
+    /// Bytes in the current stage covered by a durable resume checkpoint.
+    #[must_use]
+    pub fn resumable_bytes(&self) -> u64 {
+        self.durable_len
+    }
+
+    /// Authenticated output path for the current resumable stage.
+    #[must_use]
+    pub fn resumable_target(&self) -> &Path {
+        &self.current_target
     }
 
     fn close_after_operation_error(&mut self, error: CliError) -> CliError {
@@ -384,6 +480,29 @@ impl StreamingFileTransaction {
     }
 }
 
+fn streaming_config_fingerprint(
+    path: &Path,
+    additional_directory: Option<&Path>,
+    overwrite: bool,
+) -> Result<String, CliError> {
+    let target = absolute_lexical(path)?;
+    let root_hint = additional_directory.map(absolute_lexical).transpose()?;
+    let mut digest = Sha256::new();
+    digest.update(b"into-md-stream-resume-v1\0");
+    digest.update([u8::from(overwrite)]);
+    for value in [Some(target.as_path()), root_hint.as_deref()] {
+        match value {
+            Some(value) => {
+                let bytes = value.as_os_str().as_encoded_bytes();
+                digest.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+                digest.update(bytes);
+            }
+            None => digest.update(u64::MAX.to_le_bytes()),
+        }
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 struct DynamicTargetPlan {
     absolute: PathBuf,
     encoded: JournalPath,
@@ -465,7 +584,7 @@ fn create_dynamic_directories(
     pending: &[JournalPath],
     missing_directories: &[PathBuf],
     hook: &mut impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
-) -> Result<(), CliError> {
+) -> Result<Option<SafeDir>, CliError> {
     let pending_growth = pending.iter().try_fold(0_u64, |total, path| {
         total
             .checked_add(journal_path_retained_bytes(path)?)
@@ -474,6 +593,46 @@ fn create_dynamic_directories(
     if let Err(error) = transaction.account_journal_growth(pending_growth) {
         return transaction.fail_and_recover(error);
     }
+    let created_growth = pending.iter().try_fold(0_u64, |total, path| {
+        total
+            .checked_add(journal_path_retained_bytes(path)?)
+            .and_then(|bytes| {
+                journal_identity_retained_bytes(&transaction.journal.root_identity)
+                    .ok()
+                    .and_then(|identity| bytes.checked_add(identity))
+            })
+            .ok_or_else(|| transaction_index_limit("created directory budget overflowed"))
+    })?;
+    if let Err(error) = transaction.account_journal_growth(created_growth) {
+        return transaction.fail_and_recover(error);
+    }
+    let intent_parent = if let Some(highest_missing) = missing_directories.last() {
+        let existing = highest_missing
+            .parent()
+            .ok_or_else(|| recovery_error("missing dynamic parent has no existing ancestor"))?;
+        let relative = existing.strip_prefix(&transaction.root).map_err(|_| {
+            recovery_error("dynamic intent ancestor is outside authenticated transaction root")
+        })?;
+        let parent = transaction.handles.root.open_descendant(relative)?;
+        if transaction.journal.parent_identities.contains(&parent.identity) {
+            None
+        } else {
+            let growth = journal_identity_retained_bytes(&parent.identity)?;
+            if let Err(error) = transaction.account_journal_growth(growth) {
+                return transaction.fail_and_recover(error);
+            }
+            if let Err(error) = transaction
+                .journal_temporary
+                .grow(PARENT_LEASE_TEMPORARY_BYTES)
+                .map_err(CliError::from)
+            {
+                return transaction.fail_and_recover(error);
+            }
+            Some(parent)
+        }
+    } else {
+        None
+    };
     let temporary_bytes = u64::try_from(missing_directories.len())
         .unwrap_or(u64::MAX)
         .checked_mul(DIRECTORY_ENTRY_TEMPORARY_BYTES)
@@ -492,16 +651,27 @@ fn create_dynamic_directories(
             return transaction.fail_and_recover(error);
         }
     }
+    if let Some(parent) = &intent_parent
+        && let Err(error) =
+            create_parent_lease(parent, &transaction.handles.directory, &transaction.journal)
+    {
+        return transaction.fail_and_recover(error);
+    }
     crash_point(hook, "directoryIntentPersisted", usize::MAX, transaction)?;
     let mut created_entries = Vec::with_capacity(missing_directories.len());
     for created in missing_directories.iter().rev() {
         let result = (|| -> Result<CreatedDirectory, CliError> {
-            SafeDir::open_or_create_absolute(created)?;
-            let relative = created.strip_prefix(&transaction.root).map_err(|_| {
-                recovery_error("created output directory is outside transaction root")
-            })?;
-            let handle = transaction.handles.root.open_descendant(relative)?;
-            Ok(CreatedDirectory { path: encode_path(relative)?, identity: handle.identity })
+            create_missing_output_directory(&transaction.root, &transaction.handles.root, created)?
+                .ok_or_else(|| {
+                    CliError::new(
+                        ExitClass::Io,
+                        "outputConflict",
+                        format!(
+                            "output directory appeared during preparation: {}",
+                            created.display()
+                        ),
+                    )
+                })
         })();
         match result {
             Ok(entry) => created_entries.push(entry),
@@ -510,36 +680,42 @@ fn create_dynamic_directories(
             }
         }
     }
-    if let Err(error) = crash_point(hook, "directoryCreated", usize::MAX, transaction) {
-        if error.code() == "simulatedCrash" {
-            return Err(error);
-        }
-        return fail_dynamic_directory_creation(transaction, error, &created_entries);
+    record_dynamic_directories(transaction, created_entries)?;
+    Ok(intent_parent)
+}
+
+fn remove_dynamic_intent_lease(
+    transaction: &mut PreparedTransaction,
+    parent: &SafeDir,
+) -> Result<(), CliError> {
+    let inserted = !transaction.journal.parent_identities.contains(&parent.identity);
+    if inserted {
+        transaction.journal.parent_identities.push(parent.identity.clone());
     }
-    record_dynamic_directories(transaction, created_entries)
+    let result = ParentLeaseRemovalIndex::new(std::slice::from_ref(&parent.identity)).and_then(
+        |mut index| {
+            remove_parent_lease(
+                parent,
+                &transaction.handles.directory,
+                &transaction.journal,
+                &mut index,
+            )
+            .and_then(|()| index.finish())
+        },
+    );
+    if inserted {
+        transaction.journal.parent_identities.pop();
+    }
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => transaction.fail_and_recover(error),
+    }
 }
 
 fn record_dynamic_directories(
     transaction: &mut PreparedTransaction,
     created_entries: Vec<CreatedDirectory>,
 ) -> Result<(), CliError> {
-    let growth = created_entries.iter().try_fold(0_u64, |total, directory| {
-        total
-            .checked_add(journal_path_retained_bytes(&directory.path)?)
-            .and_then(|bytes| {
-                journal_identity_retained_bytes(&directory.identity)
-                    .ok()
-                    .and_then(|identity| bytes.checked_add(identity))
-            })
-            .ok_or_else(|| transaction_index_limit("created directory budget overflowed"))
-    });
-    let growth = match growth {
-        Ok(growth) => growth,
-        Err(error) => return fail_dynamic_directory_creation(transaction, error, &created_entries),
-    };
-    if let Err(error) = transaction.account_journal_growth(growth) {
-        return fail_dynamic_directory_creation(transaction, error, &created_entries);
-    }
     if !created_entries.is_empty() {
         let record = JournalRecord::DirectoriesCreated { directories: created_entries.clone() };
         if let Err(error) = transaction.append_journal_record(&record) {

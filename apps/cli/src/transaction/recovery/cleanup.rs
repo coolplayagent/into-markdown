@@ -4,21 +4,26 @@ use super::super::EXTERNAL_LOCK_PREFIX;
 use super::super::lease::remove_journal_parent_leases;
 #[cfg(not(any(unix, windows)))]
 use super::super::lease::transaction_platform_unavailable;
+#[cfg(any(unix, windows))]
+use super::super::lease::{
+    load_parent_lease, remove_parent_lease_binding, validate_parent_lease_binding,
+};
 use super::super::{
-    CLEANUP_PREFIX, CliError, ExecutionContext, ExitClass, File, JOURNAL_LOG_NAME, Journal,
-    JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_DIRECTORY_ENTRIES, OsStr, OsString,
-    PARENT_MARKER_PREFIX, Path, ResourceReservation, SafeDir, backup_name, fs, handle_rename,
-    inspect_transaction_lease_member, managed_nonce, parent_marker_name, recovery_error,
-    stage_name, transaction_registry, validate_journal,
+    BTreeMap, CLEANUP_PREFIX, CliError, ExecutionContext, ExitClass, File, JOURNAL_LOG_NAME,
+    Journal, JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_DIRECTORY_ENTRIES, OsStr, OsString,
+    PARENT_MARKER_PREFIX, Path, ResourceReservation, SafeDir, backup_name, decode_path, fs,
+    handle_rename, inspect_transaction_lease_member, managed_nonce, parent_marker_name,
+    recovery_error, stage_name, transaction_registry, validate_journal,
 };
 
 fn allowed_parent_markers(
     journal: &Journal,
+    intent_parents: &BTreeMap<OsString, SafeDir>,
     context: &ExecutionContext,
 ) -> Result<(Vec<OsString>, ResourceReservation), CliError> {
     #[cfg(any(unix, windows))]
     {
-        let marker_count = journal.parent_identities.len();
+        let marker_count = journal.parent_identities.len().saturating_add(intent_parents.len());
         let element_bytes = u64::try_from(std::mem::size_of::<OsString>()).unwrap_or(u64::MAX);
         let storage_bytes = u64::try_from(marker_count)
             .unwrap_or(u64::MAX)
@@ -46,7 +51,9 @@ fn allowed_parent_markers(
             memory.grow(extra_bytes).map_err(CliError::from)?;
         }
         markers.extend(journal.parent_identities.iter().map(parent_marker_name));
+        markers.extend(intent_parents.keys().cloned());
         markers.sort_unstable();
+        markers.dedup();
         Ok((markers, memory))
     }
     #[cfg(not(any(unix, windows)))]
@@ -54,6 +61,70 @@ fn allowed_parent_markers(
         let _ = journal;
         Ok((Vec::new(), context.reserve_memory(0).map_err(CliError::from)?))
     }
+}
+
+#[cfg(any(unix, windows))]
+pub(super) fn intent_parent_handles(
+    root: &SafeDir,
+    transaction: &SafeDir,
+    journal: &Journal,
+    context: &ExecutionContext,
+) -> Result<(BTreeMap<OsString, SafeDir>, ResourceReservation), CliError> {
+    let per_parent_bytes = u64::try_from(std::mem::size_of::<(OsString, SafeDir)>())
+        .unwrap_or(u64::MAX)
+        .saturating_add(512);
+    let retained_bytes = u64::try_from(journal.pending_directories.len())
+        .unwrap_or(u64::MAX)
+        .checked_mul(per_parent_bytes)
+        .ok_or_else(|| recovery_error("intent-parent memory overflowed"))?;
+    let memory = context.reserve_memory(retained_bytes).map_err(CliError::from)?;
+    let mut parents = BTreeMap::new();
+    for pending in &journal.pending_directories {
+        context.checkpoint().map_err(CliError::from)?;
+        let relative = decode_path(pending)?;
+        let mut candidate = relative.parent().unwrap_or_else(|| Path::new(""));
+        loop {
+            match fs::symlink_metadata(root.path.join(candidate)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+                Ok(metadata) => {
+                    if !metadata.is_dir() {
+                        return Err(recovery_error("directory intent ancestor is not a directory"));
+                    }
+                    let parent = root.open_descendant(candidate)?;
+                    if let Some(lease) = load_parent_lease(&parent)? {
+                        validate_parent_lease_binding(&parent, transaction, journal, &lease)?;
+                        parents.entry(parent_marker_name(&parent.identity)).or_insert(parent);
+                        break;
+                    }
+                }
+            }
+            let Some(next) = candidate.parent() else {
+                return Err(recovery_error("directory intent has no authenticated ancestor lease"));
+            };
+            if next == candidate {
+                return Err(recovery_error("directory intent has no authenticated ancestor lease"));
+            }
+            candidate = next;
+        }
+    }
+    Ok((parents, memory))
+}
+
+#[cfg(any(unix, windows))]
+pub(super) fn remove_intent_parent_leases(
+    root: &SafeDir,
+    transaction: &SafeDir,
+    journal: &Journal,
+    context: &ExecutionContext,
+) -> Result<(), CliError> {
+    let (parents, _memory) = intent_parent_handles(root, transaction, journal, context)?;
+    for parent in parents.into_values() {
+        if !journal.parent_identities.contains(&parent.identity) {
+            remove_parent_lease_binding(&parent, transaction, journal)?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(unix, windows))]
@@ -71,9 +142,15 @@ pub(super) fn validate_recovery_layout(
     context: &ExecutionContext,
 ) -> Result<(), CliError> {
     validate_journal(root, directory, journal)?;
-    let (allowed_parent_markers, _marker_memory) = allowed_parent_markers(journal, context)?;
     #[cfg(any(unix, windows))]
     let directory_handle = SafeDir::open_absolute(directory)?;
+    #[cfg(any(unix, windows))]
+    let root_handle = SafeDir::open_absolute(root)?;
+    #[cfg(any(unix, windows))]
+    let (intent_parents, _intent_memory) =
+        intent_parent_handles(&root_handle, &directory_handle, journal, context)?;
+    let (allowed_parent_markers, _marker_memory) =
+        allowed_parent_markers(journal, &intent_parents, context)?;
     #[cfg(any(unix, windows))]
     directory_handle.for_each_name_bounded(MAX_RECOVERY_DIRECTORY_ENTRIES, context, |name| {
         if !is_allowed_transaction_name(journal, &allowed_parent_markers, name) {
@@ -85,6 +162,9 @@ pub(super) fn validate_recovery_layout(
         if name.to_string_lossy().starts_with(PARENT_MARKER_PREFIX) {
             inspect_transaction_lease_member(&directory_handle, name)?
                 .ok_or_else(|| recovery_error("transaction parent marker disappeared"))?;
+        } else if name == OsStr::new("transaction.lock") {
+            inspect_transaction_lease_member(&directory_handle, name)?
+                .ok_or_else(|| recovery_error("transaction lock disappeared"))?;
         } else {
             let _ = directory_handle.open_regular(name)?;
         }
@@ -185,6 +265,8 @@ pub(super) fn remove_transaction_directory(
 
     #[cfg(any(unix, windows))]
     let cleanup_handle = registry_handle.open_child(&cleanup_name)?;
+    #[cfg(any(unix, windows))]
+    remove_intent_parent_leases(&root_handle, &cleanup_handle, journal, context)?;
     #[cfg(any(unix, windows))]
     remove_journal_parent_leases(&root_handle, &cleanup_handle, journal)?;
     drop(lock);

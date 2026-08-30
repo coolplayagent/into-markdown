@@ -1,23 +1,33 @@
 #[cfg(windows)]
 use super::super::EXTERNAL_LOCK_PREFIX;
 #[cfg(any(unix, windows))]
+use super::super::journal::LoadedJournal;
+#[cfg(any(unix, windows))]
 use super::super::lease::remove_journal_parent_leases;
 #[cfg(any(unix, windows))]
+use super::super::model::StageResume;
+#[cfg(any(unix, windows))]
 use super::super::registry::lock_registry_epoch;
+use super::super::stage::StreamingTargetIndex;
 use super::super::{
     AuthenticatedTarget, BTreeMap, CLEANUP_PREFIX, CliError, Digest, ExecutionContext, ExitClass,
     File, FileIdentity, INITIAL_PREFIX, JOURNAL_LOG_NAME, Journal, JournalEntry, JournalPath,
     JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_DIRECTORY_ENTRIES, MAX_RECOVERY_TRANSACTIONS,
-    OsStr, OsString, PARENT_MARKER_PREFIX, Path, PathBuf, REGISTRY_NAME, ResourceReservation,
-    SafeDir, TRANSACTION_PREFIX, TargetAuthenticator, TransactionSource, active_transactions,
-    backup_name, decode_path, fs, handle_rename, inspect_transaction_lease_member, io,
-    load_journal, load_journal_handle, load_parent_lease, managed_nonce, parent_marker_name,
-    recovery_error, recovery_failed, remove_initial_transaction_with_external_lock, stage_name,
+    OsStr, OsString, PARENT_MARKER_PREFIX, Path, PathBuf, PreparedTransaction, REGISTRY_NAME, Read,
+    ResourceReservation, SafeDir, Sha256, StreamingFileTransaction, TRANSACTION_PREFIX,
+    TargetAuthenticator, TransactionHandles, TransactionSource, active_transactions, backup_name,
+    decode_path, fs, handle_rename, inspect_transaction_lease_member, io, load_journal,
+    load_journal_handle, load_parent_lease, managed_nonce, parent_marker_name, recovery_error,
+    recovery_failed, remove_initial_transaction_with_external_lock, stage_name,
     transaction_registry, try_cleanup_empty_registry, try_recovery_lock_handle, validate_journal,
     validate_parent_lease, verify_file_content, verify_handle_content,
 };
-use super::cleanup::{remove_regular_handle_if_present, validate_recovery_layout};
-use super::rollback::{finish_committed, rollback_transaction};
+use super::cleanup::{
+    remove_intent_parent_leases, remove_regular_handle_if_present, validate_recovery_layout,
+};
+use super::rollback::{finish_committed, remove_created_output_directories, rollback_transaction};
+
+const RESUME_HASH_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(super) struct RecoveryReference {
     root: PathBuf,
@@ -43,6 +53,294 @@ pub(in crate::transaction) fn recover_parent_transactions(
     {
         recover_parent_groups(parents, context)
     }
+}
+
+pub(in crate::transaction) fn try_resume_streaming_transaction(
+    target: &Path,
+    config_fingerprint: &str,
+    context: &ExecutionContext,
+) -> Result<Option<StreamingFileTransaction>, CliError> {
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, config_fingerprint, context);
+        return Ok(None);
+    }
+    #[cfg(any(unix, windows))]
+    {
+        let parent_path = target.parent().ok_or_else(|| recovery_error("target has no parent"))?;
+        let Ok(parent) = SafeDir::open_absolute(parent_path) else { return Ok(None) };
+        let Some(lease) = load_parent_lease(&parent)? else { return Ok(None) };
+        let root_path = decode_path(&lease.root)?;
+        let root = SafeDir::open_absolute(&root_path)?;
+        if root.identity != lease.root_identity {
+            return Ok(None);
+        }
+        let Some(epoch) = lock_registry_epoch(&root, false)? else { return Ok(None) };
+        let Some((name, directory, initial)) =
+            locate_parent_candidate(epoch.registry(), &lease.nonce)?
+        else {
+            return Ok(None);
+        };
+        if initial || !name.to_string_lossy().starts_with(TRANSACTION_PREFIX) {
+            return Ok(None);
+        }
+        let Some(lock) = try_recovery_lock_handle(&directory)? else { return Ok(None) };
+        let directory_path = epoch.root().path.join(REGISTRY_NAME).join(&name);
+        let loaded =
+            load_journal_handle(epoch.root(), &directory, &directory_path, &lease.nonce, context)?;
+        validate_parent_lease(&parent, &directory, &loaded, &lease)?;
+        validate_recovery_layout(&root_path, &directory_path, &loaded, context)?;
+        drop(epoch);
+        resume_validated_transaction(
+            ResumeOpenState { root_path, root, directory_path, directory, lock },
+            loaded,
+            target,
+            config_fingerprint,
+            context,
+        )
+    }
+}
+
+#[cfg(any(unix, windows))]
+struct ResumeOpenState {
+    root_path: PathBuf,
+    root: SafeDir,
+    directory_path: PathBuf,
+    directory: SafeDir,
+    lock: File,
+}
+
+#[cfg(any(unix, windows))]
+fn select_resume_stage(
+    loaded: &LoadedJournal,
+    target: &Path,
+    root: &Path,
+    fingerprint: &str,
+) -> Result<Option<(usize, StageResume)>, CliError> {
+    let mut candidates = loaded.resumable_stages.iter();
+    let Some((&index, resume)) = candidates.next() else { return Ok(None) };
+    let expected = target
+        .strip_prefix(root)
+        .map_err(|_| recovery_error("resumable target is outside its transaction root"))?;
+    let matches = candidates.next().is_none()
+        && loaded.phase == JournalPhase::Staging
+        && index.checked_add(1) == Some(loaded.entries.len())
+        && loaded.entries[..index]
+            .iter()
+            .all(|entry| entry.staged_identity.is_some() && !entry.content_sha256.is_empty())
+        && loaded.entries[index].staged_identity.is_none()
+        && loaded.entries[index].content_sha256.is_empty()
+        && resume.config_fingerprint == fingerprint
+        && decode_path(&loaded.entries[0].target)? == expected;
+    Ok(matches.then(|| (index, resume.clone())))
+}
+
+#[cfg(any(unix, windows))]
+fn verified_resume_digest(
+    directory: &SafeDir,
+    index: usize,
+    resume: &StageResume,
+    context: &ExecutionContext,
+) -> Result<Option<Sha256>, CliError> {
+    let stage = directory.open_regular(&stage_name(index))?;
+    if stage.metadata()?.len() != resume.durable_len {
+        return Ok(None);
+    }
+    let _memory =
+        context.reserve_memory(RESUME_HASH_BUFFER_BYTES as u64).map_err(CliError::from)?;
+    let mut reader =
+        std::io::BufReader::with_capacity(RESUME_HASH_BUFFER_BYTES, stage.take(resume.durable_len));
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; RESUME_HASH_BUFFER_BYTES];
+    let mut read_bytes = 0_u64;
+    loop {
+        context.checkpoint().map_err(CliError::from)?;
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+        read_bytes = read_bytes
+            .checked_add(u64::try_from(count).unwrap_or(u64::MAX))
+            .ok_or_else(|| recovery_error("resumable stage length overflowed"))?;
+    }
+    let valid = read_bytes == resume.durable_len
+        && format!("{:x}", digest.clone().finalize()) == resume.content_sha256;
+    Ok(valid.then_some(digest))
+}
+
+#[cfg(any(unix, windows))]
+fn rebuild_streaming_index(
+    loaded: &LoadedJournal,
+    root: &Path,
+    context: &ExecutionContext,
+) -> Result<StreamingTargetIndex, CliError> {
+    let first =
+        loaded.entries.first().ok_or_else(|| recovery_error("resumable journal is empty"))?;
+    let parent = first
+        .parent_index
+        .and_then(|index| loaded.parent_identities.get(index))
+        .cloned()
+        .ok_or_else(|| recovery_error("resumable stage parent identity is missing"))?;
+    let mut index = StreamingTargetIndex::new(
+        root.join(decode_path(&first.target)?),
+        first.original.clone(),
+        parent,
+        context,
+    )?;
+    for entry in loaded.entries.iter().skip(1) {
+        index.insert_target(root.join(decode_path(&entry.target)?))?;
+        if let Some(original) = &entry.original {
+            index.insert_original(original.clone())?;
+        }
+        let parent = entry
+            .parent_index
+            .and_then(|parent| loaded.parent_identities.get(parent))
+            .ok_or_else(|| recovery_error("resumable stage parent identity is missing"))?;
+        if !index.contains_parent(parent) {
+            index.insert_parent(parent.clone())?;
+        }
+    }
+    Ok(index)
+}
+
+#[cfg(any(unix, windows))]
+fn resume_validated_transaction(
+    state: ResumeOpenState,
+    loaded: LoadedJournal,
+    target: &Path,
+    fingerprint: &str,
+    context: &ExecutionContext,
+) -> Result<Option<StreamingFileTransaction>, CliError> {
+    let Some((current_index, resume)) =
+        select_resume_stage(&loaded, target, &state.root_path, fingerprint)?
+    else {
+        return Ok(None);
+    };
+    let Some(digest) = verified_resume_digest(&state.directory, current_index, &resume, context)?
+    else {
+        return Ok(None);
+    };
+    let target_index = rebuild_streaming_index(&loaded, &state.root_path, context)?;
+    let current_target = state.root_path.join(decode_path(&loaded.entries[current_index].target)?);
+    assemble_resumed_transaction(
+        ResumeAssembly {
+            state,
+            loaded,
+            current_index,
+            resume,
+            digest,
+            target_index,
+            current_target,
+        },
+        context,
+    )
+}
+
+#[cfg(any(unix, windows))]
+struct ResumeAssembly {
+    state: ResumeOpenState,
+    loaded: LoadedJournal,
+    current_index: usize,
+    resume: StageResume,
+    digest: Sha256,
+    target_index: StreamingTargetIndex,
+    current_target: PathBuf,
+}
+
+#[cfg(any(unix, windows))]
+fn journal_file_bytes(directory: &SafeDir) -> Result<([u64; 2], u64), CliError> {
+    let slots = ["journal-a.json", "journal-b.json"].map(|name| {
+        directory
+            .open_regular_optional(OsStr::new(name))?
+            .map_or(Ok::<u64, CliError>(0), |file| Ok(file.metadata()?.len()))
+    });
+    let [first, second] = slots;
+    let log = directory
+        .open_regular_optional(OsStr::new(JOURNAL_LOG_NAME))?
+        .map_or(Ok::<u64, CliError>(0), |file| Ok(file.metadata()?.len()))?;
+    Ok(([first?, second?], log))
+}
+
+#[cfg(any(unix, windows))]
+fn assemble_resumed_transaction(
+    assembly: ResumeAssembly,
+    context: &ExecutionContext,
+) -> Result<Option<StreamingFileTransaction>, CliError> {
+    let ResumeAssembly {
+        state,
+        loaded,
+        current_index,
+        resume,
+        digest,
+        target_index,
+        current_target,
+    } = assembly;
+    let (journal_slot_bytes, journal_log_bytes) = journal_file_bytes(&state.directory)?;
+    let stage_sizes = loaded
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| if index == current_index { resume.durable_len } else { entry.size })
+        .collect::<Vec<_>>();
+    let staged_bytes = stage_sizes.iter().try_fold(0_u64, |total, bytes| {
+        total
+            .checked_add(*bytes)
+            .ok_or_else(|| recovery_error("resumable stage byte count overflowed"))
+    })?;
+    let (journal, _, journal_memory, tree_bytes) = loaded.into_recovered_parts();
+    let journal_temporary = context
+        .reserve_temporary(tree_bytes.saturating_sub(staged_bytes))
+        .map_err(CliError::from)?;
+    let temporary_reservations = stage_sizes
+        .into_iter()
+        .map(|bytes| context.reserve_temporary(bytes).map_err(CliError::from))
+        .collect::<Result<Vec<_>, _>>()?;
+    let stage = state.directory.open_regular_append(&stage_name(current_index))?;
+    let inserted = active_transactions()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(state.directory_path.clone());
+    if !inserted {
+        return Ok(None);
+    }
+    let transaction = PreparedTransaction {
+        root: state.root_path,
+        directory: state.directory_path,
+        journal,
+        context: context.clone(),
+        active: true,
+        temporary_reservations,
+        backup_reservations: Vec::new(),
+        journal_memory,
+        journal_temporary,
+        journal_slot_bytes,
+        journal_log_bytes,
+        #[cfg(test)]
+        journal_persist_calls: 0,
+        #[cfg(test)]
+        journal_record_calls: 0,
+        #[cfg(test)]
+        journal_record_bytes: 0,
+        #[cfg(test)]
+        journal_record_sync_calls: 0,
+        #[cfg(test)]
+        simulate_rollback_failure: false,
+        lock: Some(state.lock),
+        handles: TransactionHandles { root: state.root, directory: state.directory },
+    };
+    Ok(Some(StreamingFileTransaction {
+        transaction: Some(transaction),
+        stage: Some(stage),
+        digest,
+        size: resume.durable_len,
+        current_index,
+        target_index: Some(target_index),
+        config_fingerprint: resume.config_fingerprint,
+        chunk_sequence: resume.chunk_sequence,
+        durable_len: resume.durable_len,
+        current_target,
+    }))
 }
 
 #[cfg(any(unix, windows))]
@@ -485,6 +783,7 @@ pub(super) fn recover_initial_transaction(
         return Err(recovery_error("initial transaction has advanced beyond staging"));
     }
     validate_recovery_layout(root, directory, &journal, context)?;
+    remove_intent_parent_leases(&root_handle, directory_handle, &journal, context)?;
     remove_journal_parent_leases(&root_handle, directory_handle, &journal)?;
     drop(lock);
     let registry = transaction_registry(&root_handle, false)?
@@ -493,7 +792,8 @@ pub(super) fn recover_initial_transaction(
         &registry,
         directory.file_name().ok_or_else(|| recovery_error("initial transaction has no name"))?,
         &journal.nonce,
-    )
+    )?;
+    remove_created_output_directories(root, &journal)
 }
 
 #[cfg(any(unix, windows))]

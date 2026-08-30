@@ -14,8 +14,6 @@ use super::{
 };
 
 pub(super) const REGISTRY_LOCK_NAME: &str = "registry.lock";
-pub(super) const REGISTRY_LOCK_DIRECTORY_NAME: &str = ".into-md-output-registry-lock-01";
-pub(super) const REGISTRY_TOMBSTONE_PREFIX: &str = ".into-md-output-registry-tombstone-01-";
 const MAX_REGISTRY_EPOCH_RETRIES: u32 = 128;
 
 pub(super) fn active_transactions() -> &'static Mutex<BTreeSet<PathBuf>> {
@@ -397,7 +395,12 @@ impl RegistryEpochGuard {
         &self.registry.identity == expected
     }
 
-    /// Atomically retires this registry generation when it has no transaction members.
+    /// Retires this registry generation when it has no transaction members.
+    ///
+    /// The lock name is unlinked while the locked handle remains alive. A waiter
+    /// that already opened that handle must fail the identity check below and
+    /// retry; a waiter that publishes a replacement lock makes the registry
+    /// non-empty, so the final directory removal harmlessly loses the race.
     pub(super) fn try_cleanup(self) -> Result<bool, CliError> {
         let Self { root, registry, lock } = self;
         registry.verify_private_namespace()?;
@@ -406,48 +409,45 @@ impl RegistryEpochGuard {
             into_markdown::ResourceLimits::default(),
         );
         let mut empty = true;
-        registry.for_each_name_bounded(MAX_RECOVERY_DIRECTORY_ENTRIES, &cleanup_context, |_| {
-            empty = false;
-            Ok(())
-        })?;
+        registry.for_each_name_bounded(
+            MAX_RECOVERY_DIRECTORY_ENTRIES,
+            &cleanup_context,
+            |name| {
+                if name != OsStr::new(REGISTRY_LOCK_NAME) {
+                    empty = false;
+                }
+                Ok(())
+            },
+        )?;
         registry.verify_private_namespace()?;
         if !empty {
             return Ok(false);
         }
-
-        let tombstone_name = (0..MAX_REGISTRY_EPOCH_RETRIES)
-            .find_map(|attempt| {
-                let name = registry_tombstone_name(attempt);
-                match root.rename_child_no_replace(OsStr::new(REGISTRY_NAME), &name) {
-                    Ok(()) => Some(Ok(name)),
-                    Err(error) => match root.open_child_optional(&name) {
-                        Ok(Some(_)) => None,
-                        Ok(None) | Err(_) => Some(Err(error)),
-                    },
-                }
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                CliError::new(
-                    ExitClass::Io,
-                    "transactionCleanupFailed",
-                    "could not allocate a unique registry tombstone",
-                )
-            })?;
-
-        let tombstone = root.open_child(&tombstone_name)?;
-        if tombstone.identity != registry.identity {
-            return Err(recovery_error("registry tombstone identity changed during publication"));
+        let expected_lock_identity = file_identity(&lock)?;
+        let current_lock = registry.open_regular_private(OsStr::new(REGISTRY_LOCK_NAME))?;
+        if file_identity(&current_lock)? != expected_lock_identity {
+            return Err(recovery_error(
+                "transaction registry lock identity changed before cleanup",
+            ));
         }
-        tombstone.verify_private_namespace()?;
-        root.sync()?;
-
-        drop(registry);
-        drop(tombstone);
-        root.remove_empty_child(&tombstone_name)?;
-        root.sync()?;
+        drop(current_lock);
+        registry.remove_regular_private(OsStr::new(REGISTRY_LOCK_NAME))?;
+        registry.sync()?;
         lock.unlock()?;
-        Ok(true)
+        drop(lock);
+        drop(registry);
+
+        match root.remove_empty_child(OsStr::new(REGISTRY_NAME)) {
+            Ok(()) => {
+                root.sync()?;
+                Ok(true)
+            }
+            Err(_) => {
+                // A concurrent creator either retained the generation or
+                // replaced it. In both cases it owns the cleanup obligation.
+                Ok(transaction_registry(&root, false)?.is_none())
+            }
+        }
     }
 }
 
@@ -482,11 +482,7 @@ fn lock_registry_epoch_inner(
         let Some(observed_registry) = transaction_registry(&observed_root, create)? else {
             return Ok(None);
         };
-        let lock_directory = registry_lock_directory(&observed_root, true)?.ok_or_else(|| {
-            recovery_error("transaction registry lock directory could not be created")
-        })?;
-        let observed_lock_directory_identity = lock_directory.identity.clone();
-        let lock = open_or_create_registry_lock(&lock_directory)?;
+        let Ok(lock) = open_or_create_registry_lock(&observed_registry) else { continue };
         let observed_lock_identity = file_identity(&lock)?;
         before_lock(&observed_registry);
         lock.lock().map_err(|error| {
@@ -501,14 +497,6 @@ fn lock_registry_epoch_inner(
         if current_root.identity != root.identity {
             return Err(recovery_error("transaction root identity changed after registry lock"));
         }
-        let Some(current_lock_directory) = registry_lock_directory(&current_root, false)? else {
-            lock.unlock()?;
-            continue;
-        };
-        if current_lock_directory.identity != observed_lock_directory_identity {
-            lock.unlock()?;
-            continue;
-        }
         let Some(current_registry) = transaction_registry(&current_root, false)? else {
             lock.unlock()?;
             continue;
@@ -517,8 +505,12 @@ fn lock_registry_epoch_inner(
             lock.unlock()?;
             continue;
         }
-        let current_lock =
-            current_lock_directory.open_regular_private(OsStr::new(REGISTRY_LOCK_NAME))?;
+        let Ok(current_lock) =
+            current_registry.open_regular_private(OsStr::new(REGISTRY_LOCK_NAME))
+        else {
+            lock.unlock()?;
+            continue;
+        };
         if file_identity(&current_lock)? != observed_lock_identity {
             lock.unlock()?;
             continue;
@@ -602,80 +594,6 @@ fn open_or_create_registry_lock(registry: &SafeDir) -> Result<File, CliError> {
         registry.sync()?;
     }
     Ok(file)
-}
-
-#[cfg(any(unix, windows))]
-fn registry_tombstone_name(attempt: u32) -> OsString {
-    let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    let digest = Sha256::digest(
-        format!("registry:{}:{time}:{counter}:{attempt}", std::process::id()).as_bytes(),
-    );
-    OsString::from(format!("{REGISTRY_TOMBSTONE_PREFIX}{}", hex_bytes(&digest[..16])))
-}
-
-#[cfg(unix)]
-fn registry_lock_directory(root: &SafeDir, create: bool) -> Result<Option<SafeDir>, CliError> {
-    match root.open_child_optional(OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME))? {
-        Some(directory) => {
-            directory.verify_private_namespace()?;
-            Ok(Some(directory))
-        }
-        None if !create => Ok(None),
-        None => {
-            match rustix::fs::mkdirat(
-                &root.fd,
-                REGISTRY_LOCK_DIRECTORY_NAME,
-                rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR | rustix::fs::Mode::XUSR,
-            ) {
-                Ok(()) => root.sync()?,
-                Err(rustix::io::Errno::EXIST) => {}
-                Err(error) => return Err(error.into()),
-            }
-            let directory = root.open_child(OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME))?;
-            directory.verify_private_namespace()?;
-            Ok(Some(directory))
-        }
-    }
-}
-
-#[cfg(windows)]
-fn registry_lock_directory(root: &SafeDir, create: bool) -> Result<Option<SafeDir>, CliError> {
-    match root.open_child_optional(OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME))? {
-        Some(directory) => {
-            directory.verify_private_namespace()?;
-            Ok(Some(directory))
-        }
-        None if !create => Ok(None),
-        None => {
-            root.verify_namespace()?;
-            let path = root.path.join(REGISTRY_LOCK_DIRECTORY_NAME);
-            let creation = into_markdown_process_plugin::create_windows_plugin_store_directory(
-                &path,
-            )
-            .map_err(|error| {
-                recovery_error(format!(
-                    "create private transaction registry lock directory ({}): {error}",
-                    path.display()
-                ))
-            });
-            match creation {
-                Ok(()) => root.sync()?,
-                Err(error) => {
-                    let Some(directory) =
-                        root.open_child_optional(OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME))?
-                    else {
-                        return Err(error);
-                    };
-                    directory.verify_private_namespace()?;
-                    return Ok(Some(directory));
-                }
-            }
-            let directory = root.open_child(OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME))?;
-            directory.verify_private_namespace()?;
-            Ok(Some(directory))
-        }
-    }
 }
 
 #[cfg(unix)]

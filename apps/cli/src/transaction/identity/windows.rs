@@ -1,7 +1,8 @@
 use super::{
-    CliError, Component, Digest, ExecutionContext, ExitClass, File, FileIdentity, OpenOptions,
-    OsStr, OsString, Path, PathBuf, Read, TransactionSource, Write, file_identity, io,
-    recovery_error, validate_relative_path, validate_single_name, verify_name_identity,
+    CliError, Component, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest, ExecutionContext, ExitClass,
+    FILE_ENTRY_TEMPORARY_BYTES, File, FileIdentity, OpenOptions, OsStr, OsString, Path, PathBuf,
+    Read, TransactionSource, Write, file_identity, io, recovery_error, validate_relative_path,
+    validate_single_name, verify_name_identity,
 };
 
 #[cfg(windows)]
@@ -493,15 +494,24 @@ impl SafeDir {
                 if *entries > max_entries {
                     return Err(recovery_error("managed storage entry count exceeds its limit"));
                 }
-                if let Some(file) = directory.open_regular_optional(&name)? {
+                let metadata = directory.directory.symlink_metadata(&name)?;
+                if metadata.file_type().is_symlink() {
+                    return Err(recovery_error("managed storage contains an unsafe object"));
+                }
+                if metadata.is_file() {
                     total = total
-                        .checked_add(file.metadata()?.len())
+                        .checked_add(metadata.len())
+                        .and_then(|bytes| bytes.checked_add(FILE_ENTRY_TEMPORARY_BYTES))
                         .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
-                } else {
+                } else if metadata.is_dir() {
                     let child = directory.open_child(&name)?;
                     total = total
+                        .checked_add(DIRECTORY_ENTRY_TEMPORARY_BYTES)
+                        .ok_or_else(|| recovery_error("managed storage byte count overflow"))?
                         .checked_add(visit(&child, depth + 1, max_depth, entries, max_entries)?)
                         .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
+                } else {
+                    return Err(recovery_error("managed storage contains an unsafe object"));
                 }
             }
             Ok(total)

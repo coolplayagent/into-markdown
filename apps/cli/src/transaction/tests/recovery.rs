@@ -97,6 +97,102 @@ fn cancelled_request_cleanup_scope_can_recover_and_releases_journal_leases() {
 }
 
 #[test]
+fn matching_stream_configuration_resumes_the_last_durable_chunk() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("resumed.bin");
+    let chunk = vec![b'a'; 1024 * 1024];
+    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    stream.write_all_checked(&chunk).unwrap();
+    assert_eq!(stream.resumable_bytes(), chunk.len() as u64);
+    stream.abandon_for_test();
+
+    let mut resumed = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    assert_eq!(resumed.resumable_bytes(), chunk.len() as u64);
+    resumed.write_all_checked(b"tail").unwrap();
+    resumed.seal().unwrap().commit().unwrap();
+
+    let value = fs::read(&output).unwrap();
+    assert_eq!(&value[..chunk.len()], chunk.as_slice());
+    assert_eq!(&value[chunk.len()..], b"tail");
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
+fn multi_asset_stream_resumes_its_unique_last_unsealed_stage() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let primary = root.join("document.md");
+    let assets = root.join("assets");
+    let asset = assets.join("image.bin");
+    let chunk = vec![b'i'; 1024 * 1024];
+    let mut stream =
+        StreamingFileTransaction::begin_with_root_hint(&primary, Some(&assets), false, &context())
+            .unwrap();
+    stream.write_all_checked(b"document").unwrap();
+    stream.begin_target(&asset, false).unwrap();
+    stream.write_all_checked(&chunk).unwrap();
+    stream.abandon_for_test();
+
+    let mut resumed =
+        StreamingFileTransaction::begin_with_root_hint(&primary, Some(&assets), false, &context())
+            .unwrap();
+    assert_eq!(resumed.resumable_target(), asset);
+    assert_eq!(resumed.resumable_bytes(), chunk.len() as u64);
+    resumed.write_all_checked(b"tail").unwrap();
+    resumed.seal().unwrap().commit().unwrap();
+
+    assert_eq!(fs::read(&primary).unwrap(), b"document");
+    let value = fs::read(&asset).unwrap();
+    assert_eq!(&value[..chunk.len()], chunk.as_slice());
+    assert_eq!(&value[chunk.len()..], b"tail");
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
+fn mismatched_stream_configuration_rolls_back_instead_of_resuming() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("replacement.bin");
+    let chunk = vec![b'a'; 1024 * 1024];
+    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    stream.write_all_checked(&chunk).unwrap();
+    stream.abandon_for_test();
+
+    let mut replacement = StreamingFileTransaction::begin(&output, true, &context()).unwrap();
+    assert_eq!(replacement.resumable_bytes(), 0);
+    replacement.write_all_checked(b"replacement").unwrap();
+    replacement.seal().unwrap().commit().unwrap();
+
+    assert_eq!(fs::read(&output).unwrap(), b"replacement");
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
+fn recovery_temporary_budget_includes_the_authenticated_stage_tree() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("large-stage.bin");
+    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    stream.write_all_checked(&vec![b'x'; 1024 * 1024]).unwrap();
+    stream.abandon_for_test();
+    let limited = ExecutionContext::new(
+        ExecutionOptions::default(),
+        ResourceLimits { max_temporary_bytes: 512 * 1024, ..ResourceLimits::default() },
+    );
+
+    let error = super::super::recovery::recover_root_transactions(&root, &limited).unwrap_err();
+    assert_eq!(error.code(), "resourceLimit");
+    assert_eq!(limited.reserved_memory_bytes(), 0);
+    assert_eq!(limited.reserved_temporary_bytes(), 0);
+
+    let resumed = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    assert_eq!(resumed.resumable_bytes(), 1024 * 1024);
+    resumed.abort().unwrap();
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
 fn every_durable_phase_is_recoverable_by_a_new_manager() {
     let phases = [
         "journalCreated",

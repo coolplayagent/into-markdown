@@ -364,6 +364,45 @@ fn one_hundred_thousand_distinct_parent_keys_keep_a_fixed_handle_window() {
 }
 
 #[test]
+fn late_failure_rollback_indexes_one_hundred_thousand_distinct_parents_linearly() {
+    const PARENT_COUNT: usize = 100_000;
+
+    let parent_identities = (0..PARENT_COUNT)
+        .map(|index| FileIdentity {
+            platform: "test".into(),
+            first: u64::try_from(index).unwrap(),
+            second: 1,
+            size: 0,
+        })
+        .collect::<Vec<_>>();
+    let mut index = ParentLeaseRemovalIndex::new(&parent_identities).unwrap();
+    let parent_count = u64::try_from(PARENT_COUNT).unwrap();
+    let mut rollback_calls = 0_u64;
+    let error = parent_identities
+        .iter()
+        .try_for_each(|identity| {
+            index.consume(identity)?;
+            rollback_calls = rollback_calls.saturating_add(1);
+            if rollback_calls == parent_count {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "injectedLateRollbackFailure",
+                    "injected failure after the final distinct parent",
+                ));
+            }
+            Ok(())
+        })
+        .unwrap_err();
+
+    assert_eq!(error.code(), "injectedLateRollbackFailure");
+    assert_eq!(rollback_calls, parent_count);
+    assert_eq!(index.build_insertions(), parent_count);
+    assert_eq!(index.membership_probes(), parent_count);
+    assert_eq!(index.build_insertions() + index.membership_probes(), parent_count * 2);
+    index.finish().unwrap();
+}
+
+#[test]
 fn dynamic_directory_creation_is_recoverable_at_every_durable_boundary() {
     for phase in [
         "directoryIntentPersisted",
@@ -397,12 +436,7 @@ fn dynamic_directory_creation_is_recoverable_at_every_durable_boundary() {
         stream.abandon_for_test();
         recover_pending(&root).unwrap_or_else(|error| panic!("{phase}: {error:?}"));
         assert!(!output.exists(), "{phase}");
-        if phase == "directoryCreated" {
-            assert!(asset_directory.is_dir(), "{phase}");
-            assert!(fs::read_dir(&asset_directory).unwrap().next().is_none(), "{phase}");
-        } else {
-            assert!(!root.join("new-assets").exists(), "{phase}");
-        }
+        assert!(!root.join("new-assets").exists(), "{phase}");
         assert!(manager_directories(&root).is_empty(), "{phase}");
     }
 
@@ -431,4 +465,34 @@ fn dynamic_directory_creation_is_recoverable_at_every_durable_boundary() {
     stream.abandon_for_test();
     recover_pending(&root).unwrap();
     assert!(asset_directory.is_dir());
+}
+
+#[test]
+fn static_directory_intent_recovery_removes_only_authenticated_created_parents() {
+    for phase in ["directoryIntentPersisted", "directoryCreated"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let existing = root.join("existing");
+        fs::create_dir(&existing).unwrap();
+        let target = root.join("created/nested/output.md");
+        let error = prepare_with_hook(
+            &[Target { path: target, bytes: b"output" }],
+            false,
+            &context(),
+            |current, _| {
+                Ok(if current == phase {
+                    HookDecision::SimulateCrash
+                } else {
+                    HookDecision::Continue
+                })
+            },
+        )
+        .err()
+        .expect("injected preparation crash");
+        assert_eq!(error.code(), "simulatedCrash", "{phase}");
+        recover_pending(&root).unwrap_or_else(|error| panic!("{phase}: {error:?}"));
+        assert!(!root.join("created").exists(), "{phase}");
+        assert!(existing.is_dir(), "{phase}");
+        assert!(manager_directories(&root).is_empty(), "{phase}");
+    }
 }

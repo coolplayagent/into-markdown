@@ -9,6 +9,7 @@ pub(crate) use registry::recover_pending;
 pub(super) use registry::remove_external_lock_if_present;
 pub(super) use registry::{
     recover_parent_transactions, recover_root_transactions, recover_transaction,
+    try_resume_streaming_transaction,
 };
 pub(super) use rollback::{
     finish_committed, remove_created_output_directories, remove_created_output_directory,

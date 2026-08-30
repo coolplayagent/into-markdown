@@ -83,6 +83,8 @@ use identity::{
 use journal::{
     JOURNAL_LOG_NAME, load_journal, load_journal_handle, persist_journal_handle, validate_journal,
 };
+#[cfg(test)]
+use lease::ParentLeaseRemovalIndex;
 use lease::{
     ensure_transaction_platform, for_each_journal_parent, inspect_transaction_lease_member,
     load_parent_lease, parent_marker_name, remove_journal_parent_leases,
@@ -100,10 +102,9 @@ use recovery::{
     remove_created_output_directories, remove_regular_handle_if_present,
 };
 use registry::{
-    PreparingTransactionRoot, REGISTRY_LOCK_DIRECTORY_NAME, active_transactions,
-    create_initial_transaction_in_registry, lock_registry_epoch, managed_nonce,
-    remove_initial_transaction_with_external_lock, transaction_registry,
-    try_cleanup_empty_registry, try_recovery_lock_handle,
+    PreparingTransactionRoot, active_transactions, create_initial_transaction_in_registry,
+    lock_registry_epoch, managed_nonce, remove_initial_transaction_with_external_lock,
+    transaction_registry, try_cleanup_empty_registry, try_recovery_lock_handle,
 };
 use stage::{TransactionSource, call_hook, crash_point};
 

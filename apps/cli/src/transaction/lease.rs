@@ -1,4 +1,3 @@
-use super::registry::REGISTRY_LOCK_DIRECTORY_NAME;
 use super::{
     BTreeSet, CliError, Digest, ExitClass, FileIdentity, HashSet, JOURNAL_SIGNATURE,
     JOURNAL_VERSION, Journal, MAX_RECOVERY_DIRECTORY_ENTRIES, MAX_RECOVERY_TRANSACTIONS, OsStr,
@@ -31,10 +30,7 @@ pub(super) fn for_each_target_parent(
     let mut identities = BTreeSet::new();
     for target in targets {
         let name = target.file_name().ok_or_else(|| recovery_error("target has no file name"))?;
-        if name == OsStr::new(REGISTRY_NAME)
-            || name == OsStr::new(REGISTRY_LOCK_DIRECTORY_NAME)
-            || name == OsStr::new(PARENT_LEASE_NAME)
-        {
+        if name == OsStr::new(REGISTRY_NAME) || name == OsStr::new(PARENT_LEASE_NAME) {
             return Err(CliError::new(
                 ExitClass::Io,
                 "outputPathUnsupported",
@@ -262,7 +258,7 @@ pub(super) fn validate_parent_lease(
 }
 
 #[cfg(any(unix, windows))]
-fn validate_parent_lease_binding(
+pub(in crate::transaction) fn validate_parent_lease_binding(
     parent: &SafeDir,
     transaction: &SafeDir,
     journal: &Journal,
@@ -305,23 +301,83 @@ pub(super) fn validate_journal_parent_leases(
 }
 
 #[cfg(any(unix, windows))]
+pub(super) struct ParentLeaseRemovalIndex {
+    remaining: HashSet<FileIdentity>,
+    #[cfg(test)]
+    build_insertions: u64,
+    #[cfg(test)]
+    membership_probes: u64,
+}
+
+#[cfg(any(unix, windows))]
+impl ParentLeaseRemovalIndex {
+    pub(super) fn new(parent_identities: &[FileIdentity]) -> Result<Self, CliError> {
+        let mut remaining = HashSet::new();
+        #[cfg(test)]
+        let mut build_insertions = 0_u64;
+        remaining.try_reserve(parent_identities.len()).map_err(|error| {
+            recovery_error(format!("cannot reserve physical parent lease index: {error}"))
+        })?;
+        for identity in parent_identities {
+            if !remaining.insert(identity.clone()) {
+                return Err(recovery_error("journal contains duplicate physical parents"));
+            }
+            #[cfg(test)]
+            {
+                build_insertions = build_insertions.saturating_add(1);
+            }
+        }
+        Ok(Self {
+            remaining,
+            #[cfg(test)]
+            build_insertions,
+            #[cfg(test)]
+            membership_probes: 0,
+        })
+    }
+
+    pub(super) fn consume(&mut self, identity: &FileIdentity) -> Result<(), CliError> {
+        #[cfg(test)]
+        {
+            self.membership_probes = self.membership_probes.saturating_add(1);
+        }
+        if !self.remaining.remove(identity) {
+            return Err(recovery_error("physical parent is absent from the journal index"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(self) -> Result<(), CliError> {
+        if !self.remaining.is_empty() {
+            return Err(recovery_error("journal physical parent cleanup is incomplete"));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn build_insertions(&self) -> u64 {
+        self.build_insertions
+    }
+
+    #[cfg(test)]
+    pub(super) fn membership_probes(&self) -> u64 {
+        self.membership_probes
+    }
+}
+
+#[cfg(any(unix, windows))]
 pub(super) fn remove_parent_lease(
     parent: &SafeDir,
     transaction: &SafeDir,
     journal: &Journal,
+    index: &mut ParentLeaseRemovalIndex,
 ) -> Result<(), CliError> {
-    let parent_index = journal.parent_identities.iter().cloned().collect::<HashSet<_>>();
-    if parent_index.len() != journal.parent_identities.len() {
-        return Err(recovery_error("journal contains duplicate physical parents"));
-    }
-    if !parent_index.contains(&parent.identity) {
-        return Err(recovery_error("physical parent is absent from the journal index"));
-    }
+    index.consume(&parent.identity)?;
     remove_parent_lease_binding(parent, transaction, journal)
 }
 
 #[cfg(any(unix, windows))]
-fn remove_parent_lease_binding(
+pub(in crate::transaction) fn remove_parent_lease_binding(
     parent: &SafeDir,
     transaction: &SafeDir,
     journal: &Journal,

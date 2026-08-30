@@ -58,6 +58,15 @@ pub(super) struct CreatedDirectory {
     pub(super) identity: FileIdentity,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StageResume {
+    pub(super) config_fingerprint: String,
+    pub(super) chunk_sequence: u64,
+    pub(super) durable_len: u64,
+    pub(super) content_sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Journal {
@@ -84,6 +93,7 @@ pub(super) enum JournalRecord {
     DirectoryIntent { paths: Vec<JournalPath> },
     DirectoriesCreated { directories: Vec<CreatedDirectory> },
     TargetAdded { parent: Option<FileIdentity>, entry: JournalEntry },
+    StageChunk { index: usize, resume: StageResume },
     StageSealed { index: usize, size: u64, content_sha256: String, staged_identity: FileIdentity },
 }
 

@@ -3,11 +3,11 @@ use super::{
     ExecutionContext, ExitClass, FILE_ENTRY_TEMPORARY_BYTES, HookDecision, JOURNAL_SIGNATURE,
     JOURNAL_VERSION, Journal, JournalEntry, JournalPhase, MAX_JOURNAL_ENTRIES, OsStr,
     PARENT_LEASE_NAME, PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparingTransactionRoot,
-    REGISTRY_LOCK_DIRECTORY_NAME, REGISTRY_NAME, ResourceReservation, SafeDir,
-    TRANSACTION_METADATA_TEMPORARY_BYTES, TransactionSource, absolute_lexical,
-    common_existing_ancestor, encode_path, ensure_same_filesystem, fs, io, journal_retained_bytes,
+    REGISTRY_NAME, ResourceReservation, SafeDir, TRANSACTION_METADATA_TEMPORARY_BYTES,
+    TransactionSource, absolute_lexical, common_existing_ancestor, create_missing_output_directory,
+    encode_path, ensure_same_filesystem, fs, io, journal_retained_bytes, plan_intent_parent_paths,
     plan_missing_directories, recover_existing_target_parents, recover_root_transactions,
-    recovery_error, transaction_index_limit, unpublished_hook, validate_relative_path,
+    recovery_error, transaction_index_limit, validate_relative_path,
 };
 
 pub(super) struct StaticRootPlan {
@@ -15,6 +15,7 @@ pub(super) struct StaticRootPlan {
     pub(super) root: PathBuf,
     pub(super) root_handle: SafeDir,
     pub(super) missing_directories: Vec<PathBuf>,
+    pub(super) intent_parent_paths: Vec<PathBuf>,
     pub(super) root_guard: PreparingTransactionRoot,
     pub(super) planning_memory: ResourceReservation,
 }
@@ -66,12 +67,14 @@ pub(super) fn plan_static_root<T: TransactionSource>(
     recover_root_transactions(&root, context)?;
     let root_handle = SafeDir::open_absolute(&root)?;
     let missing_directories = plan_missing_directories(&root, &paths)?;
+    let intent_parent_paths = plan_intent_parent_paths(&paths, &missing_directories)?;
     recover_existing_target_parents(&paths, context)?;
     Ok(StaticRootPlan {
         paths,
         root,
         root_handle,
         missing_directories,
+        intent_parent_paths,
         root_guard: guard,
         planning_memory,
     })
@@ -91,19 +94,12 @@ pub(super) fn create_and_bind_static_directories(
     paths: &[PathBuf],
     root: &Path,
     root_handle: &SafeDir,
-    hook: &mut impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
 ) -> Result<(), CliError> {
     for planned in missing {
-        SafeDir::open_or_create_absolute(planned)?;
-        let relative = planned
-            .strip_prefix(root)
-            .map_err(|_| recovery_error("created output directory is outside transaction root"))?;
-        let handle = root_handle.open_descendant(relative)?;
-        journal
-            .created_directories
-            .push(CreatedDirectory { path: encode_path(relative)?, identity: handle.identity });
+        if let Some(created) = create_missing_output_directory(root, root_handle, planned)? {
+            journal.created_directories.push(created);
+        }
     }
-    unpublished_hook(hook, "directoryCreated")?;
     let mut parent_indices = BTreeMap::new();
     let (entries, parent_identities) = (&mut journal.entries, &mut journal.parent_identities);
     for (entry, absolute) in entries.iter_mut().zip(paths) {
@@ -137,6 +133,7 @@ pub(super) fn reserve_static_resources(
     paths: &[PathBuf],
     root: &Path,
     root_handle: &SafeDir,
+    intent_parent_count: usize,
     context: &ExecutionContext,
 ) -> Result<ReservedStaticResources, CliError> {
     let pending = missing
@@ -177,7 +174,7 @@ pub(super) fn reserve_static_resources(
         .collect();
     let journal_memory =
         context.reserve_memory(journal_retained_bytes(&projected)?).map_err(CliError::from)?;
-    let parent_bytes = u64::try_from(parent_paths.len())
+    let parent_bytes = u64::try_from(parent_paths.len().saturating_add(intent_parent_count))
         .unwrap_or(u64::MAX)
         .checked_mul(PARENT_LEASE_TEMPORARY_BYTES);
     let entry_bytes = u64::try_from(journal.entries.len())
@@ -237,10 +234,7 @@ pub(super) fn plan_static_entries<T: TransactionSource>(
             ));
         }
         let name = absolute.file_name().ok_or_else(|| recovery_error("target has no file name"))?;
-        if [REGISTRY_NAME, REGISTRY_LOCK_DIRECTORY_NAME, PARENT_LEASE_NAME]
-            .iter()
-            .any(|reserved| name == OsStr::new(reserved))
-        {
+        if [REGISTRY_NAME, PARENT_LEASE_NAME].iter().any(|reserved| name == OsStr::new(reserved)) {
             return Err(CliError::new(
                 ExitClass::Io,
                 "outputPathUnsupported",

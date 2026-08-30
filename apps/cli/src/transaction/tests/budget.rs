@@ -158,16 +158,16 @@ fn timeout_during_streaming_closes_and_releases_every_reservation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let output = root.join("timed-out.md");
-    let execution = ExecutionContext::new(
+    let execution = context();
+    let mut stream = StreamingFileTransaction::begin(&output, false, &execution).unwrap();
+    stream.write_all_checked(b"first chunk").unwrap();
+    stream.transaction.as_mut().unwrap().context = ExecutionContext::new(
         ExecutionOptions {
-            timeout: Some(std::time::Duration::from_millis(500)),
+            timeout: Some(std::time::Duration::ZERO),
             ..ExecutionOptions::default()
         },
         ResourceLimits::default(),
     );
-    let mut stream = StreamingFileTransaction::begin(&output, false, &execution).unwrap();
-    stream.write_all_checked(b"first chunk").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(600));
 
     assert_eq!(stream.write_all_checked(b"timed out").unwrap_err().code(), "timeout");
     assert!(stream.write_all_checked(b"cannot reuse a failed stream").is_err());

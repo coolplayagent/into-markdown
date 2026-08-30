@@ -1,3 +1,4 @@
+use super::model::StageResume;
 use super::{
     CliError, Digest, ExitClass, FileIdentity, Journal, JournalEntry, JournalPath, Path,
     TransactionSource,
@@ -146,6 +147,42 @@ pub(super) fn journal_entry_retained_bytes(entry: &JournalEntry) -> Result<u64, 
         "journal entry memory estimate overflowed",
     )?;
     Ok(bytes)
+}
+
+pub(super) fn stage_resume_retained_bytes(resume: &StageResume) -> Result<u64, CliError> {
+    checked_usize_bytes(std::mem::size_of::<StageResume>(), "stage resume size overflowed")?
+        .checked_add(checked_usize_bytes(
+            resume.config_fingerprint.capacity(),
+            "stage resume fingerprint overflowed",
+        )?)
+        .and_then(|bytes| {
+            checked_usize_bytes(resume.content_sha256.capacity(), "stage resume digest overflowed")
+                .ok()
+                .and_then(|digest| bytes.checked_add(digest))
+        })
+        .and_then(|bytes| bytes.checked_add(JOURNAL_ELEMENT_FIXED_BYTES))
+        .ok_or_else(|| transaction_index_limit("stage resume memory estimate overflowed"))
+}
+
+pub(super) fn recovered_tree_temporary_bytes(
+    transaction_tree_bytes: u64,
+    journal: &Journal,
+) -> Result<u64, CliError> {
+    let parent_leases = u64::try_from(journal.parent_identities.len())
+        .unwrap_or(u64::MAX)
+        .checked_mul(PARENT_LEASE_TEMPORARY_BYTES)
+        .ok_or_else(|| transaction_index_limit("recovered parent lease budget overflowed"))?;
+    let output_directories = journal
+        .created_directories
+        .len()
+        .checked_add(journal.pending_directories.len())
+        .and_then(|count| u64::try_from(count).ok())
+        .and_then(|count| count.checked_mul(DIRECTORY_ENTRY_TEMPORARY_BYTES))
+        .ok_or_else(|| transaction_index_limit("recovered directory budget overflowed"))?;
+    transaction_tree_bytes
+        .checked_add(parent_leases)
+        .and_then(|bytes| bytes.checked_add(output_directories))
+        .ok_or_else(|| transaction_index_limit("recovered temporary tree budget overflowed"))
 }
 
 pub(super) fn journal_retained_bytes(journal: &Journal) -> Result<u64, CliError> {

@@ -29,8 +29,10 @@ pub(super) use path::resolve_existing_parent;
 pub(super) use path::{absolute_lexical, common_existing_ancestor};
 #[cfg(test)]
 pub(crate) use prepare::prepare_with_hook;
+pub(super) use prepare::{
+    create_missing_output_directory, prepare_sources_with_hook, prepare_sources_with_hook_internal,
+};
 pub use prepare::{prepare, prepare_file_and_bytes, prepare_files, recover_for_paths};
-pub(super) use prepare::{prepare_sources_with_hook, prepare_sources_with_hook_internal};
 pub use source::{FileTarget, Target};
 pub(super) use source::{MixedContent, MixedTarget, TransactionSource};
 pub use streaming::StreamingFileTransaction;

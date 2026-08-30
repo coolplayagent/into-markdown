@@ -1,9 +1,127 @@
 use super::{
-    BTreeSet, CliError, ExecutionContext, ExitClass, File, HookDecision, Journal,
-    PARENT_HANDLE_BATCH, Path, PathBuf, SafeDir, create_parent_lease, fs, io,
-    recover_parent_transactions, recovery_error, remove_created_output_directories,
-    remove_initial_transaction_with_external_lock, remove_parent_lease,
+    BTreeSet, CliError, CreatedDirectory, ExecutionContext, ExitClass, File, FileIdentity,
+    HookDecision, Journal, PARENT_HANDLE_BATCH, ParentLeaseRemovalIndex, Path, PathBuf, SafeDir,
+    create_parent_lease, encode_path, fs, io, recover_parent_transactions, recovery_error,
+    remove_created_output_directories, remove_initial_transaction_with_external_lock,
+    remove_parent_lease,
 };
+
+pub(super) struct IntentLease {
+    pub(super) parent: SafeDir,
+}
+
+pub(super) fn plan_intent_parent_paths(
+    paths: &[PathBuf],
+    missing: &[PathBuf],
+) -> Result<Vec<PathBuf>, CliError> {
+    let missing = missing.iter().collect::<BTreeSet<_>>();
+    let mut ancestors = BTreeSet::new();
+    for target in paths {
+        let mut parent = target.parent().ok_or_else(|| recovery_error("target has no parent"))?;
+        if !missing.contains(&parent.to_path_buf()) {
+            continue;
+        }
+        while missing.contains(&parent.to_path_buf()) {
+            parent = parent
+                .parent()
+                .ok_or_else(|| recovery_error("missing target parent has no existing ancestor"))?;
+        }
+        ancestors.insert(parent.to_path_buf());
+    }
+    Ok(ancestors.into_iter().collect())
+}
+
+pub(super) fn create_intent_leases(
+    paths: &[PathBuf],
+    transaction: &SafeDir,
+    journal: &mut Journal,
+) -> Result<Vec<IntentLease>, CliError> {
+    let mut leases = Vec::with_capacity(paths.len());
+    for path in paths {
+        let parent = SafeDir::open_absolute(path)?;
+        if let Err(error) = create_parent_lease(&parent, transaction, journal) {
+            let _ = remove_intent_leases(&leases, transaction, journal, &BTreeSet::new());
+            return Err(error);
+        }
+        leases.push(IntentLease { parent });
+    }
+    Ok(leases)
+}
+
+pub(super) fn remove_intent_leases(
+    leases: &[IntentLease],
+    transaction: &SafeDir,
+    journal: &mut Journal,
+    keep: &BTreeSet<FileIdentity>,
+) -> Result<(), CliError> {
+    let removal_identities = leases
+        .iter()
+        .filter(|lease| !keep.contains(&lease.parent.identity))
+        .map(|lease| lease.parent.identity.clone())
+        .collect::<Vec<_>>();
+    let mut removal_index = ParentLeaseRemovalIndex::new(&removal_identities)?;
+    for lease in leases {
+        if keep.contains(&lease.parent.identity) {
+            continue;
+        }
+        let inserted = !journal.parent_identities.contains(&lease.parent.identity);
+        if inserted {
+            journal.parent_identities.push(lease.parent.identity.clone());
+        }
+        let result = remove_parent_lease(&lease.parent, transaction, journal, &mut removal_index);
+        if inserted {
+            journal.parent_identities.pop();
+        }
+        result?;
+    }
+    removal_index.finish()
+}
+
+#[cfg(any(unix, windows))]
+pub(in crate::transaction) fn create_missing_output_directory(
+    root: &Path,
+    root_handle: &SafeDir,
+    path: &Path,
+) -> Result<Option<CreatedDirectory>, CliError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| recovery_error("created output directory is outside transaction root"))?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| recovery_error("created output directory has no name"))?;
+    let parent_relative = relative.parent().unwrap_or_else(|| Path::new(""));
+    let parent = root_handle.open_descendant(parent_relative)?;
+    #[cfg(unix)]
+    let created = match rustix::fs::mkdirat(
+        &parent.fd,
+        name,
+        rustix::fs::Mode::RUSR
+            | rustix::fs::Mode::WUSR
+            | rustix::fs::Mode::XUSR
+            | rustix::fs::Mode::RGRP
+            | rustix::fs::Mode::XGRP
+            | rustix::fs::Mode::ROTH
+            | rustix::fs::Mode::XOTH,
+    ) {
+        Ok(()) => true,
+        Err(rustix::io::Errno::EXIST) => false,
+        Err(error) => return Err(error.into()),
+    };
+    #[cfg(windows)]
+    let created = match parent.directory.create_dir(name) {
+        Ok(()) => true,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => false,
+        Err(error) => return Err(error.into()),
+    };
+    if created {
+        parent.sync()?;
+    }
+    let child = parent.open_child(name)?;
+    if !created {
+        return Ok(None);
+    }
+    Ok(Some(CreatedDirectory { path: encode_path(relative)?, identity: child.identity }))
+}
 
 #[cfg(any(unix, windows))]
 pub(super) fn plan_missing_directories(
@@ -100,10 +218,11 @@ pub(super) fn unpublished_hook(
 #[cfg(any(unix, windows))]
 pub(super) fn create_parent_leases_windowed(
     parent_paths: &[PathBuf],
+    already_leased: &BTreeSet<FileIdentity>,
     transaction: &SafeDir,
     journal: &Journal,
 ) -> Result<(), CliError> {
-    let mut identities = BTreeSet::new();
+    let mut identities = already_leased.clone();
     for chunk in parent_paths.chunks(PARENT_HANDLE_BATCH) {
         let mut parents = Vec::with_capacity(chunk.len());
         for path in chunk {
@@ -125,6 +244,7 @@ pub(super) fn remove_parent_leases_windowed(
     transaction: &SafeDir,
     journal: &Journal,
 ) -> Result<(), CliError> {
+    let mut removal_index = ParentLeaseRemovalIndex::new(&journal.parent_identities)?;
     let mut identities = BTreeSet::new();
     for chunk in parent_paths.chunks(PARENT_HANDLE_BATCH) {
         let mut parents = Vec::with_capacity(chunk.len());
@@ -135,10 +255,10 @@ pub(super) fn remove_parent_leases_windowed(
             }
         }
         for parent in &parents {
-            remove_parent_lease(parent, transaction, journal)?;
+            remove_parent_lease(parent, transaction, journal, &mut removal_index)?;
         }
     }
-    Ok(())
+    removal_index.finish()
 }
 
 #[cfg(any(unix, windows))]

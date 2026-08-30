@@ -3,10 +3,11 @@ use super::OpenOptions;
 #[cfg(unix)]
 use super::OwnedFd;
 use super::{
-    Arc, AuthenticatedTarget, CliError, Component, Digest, ExecutionContext, ExitClass, File,
-    FileIdentity, JournalEntry, JournalPath, MAX_AUTHENTICATED_PARENT_HANDLES, MAX_PATH_UNITS,
-    MAX_RECOVERY_DIRECTORY_ENTRIES, OsStr, OsString, Path, PathBuf, Read, Sha256,
-    TransactionSource, Write, hex_bytes, io, managed_nonce, recovery_error,
+    Arc, AuthenticatedTarget, CliError, Component, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest,
+    ExecutionContext, ExitClass, FILE_ENTRY_TEMPORARY_BYTES, File, FileIdentity, JournalEntry,
+    JournalPath, MAX_AUTHENTICATED_PARENT_HANDLES, MAX_PATH_UNITS, MAX_RECOVERY_DIRECTORY_ENTRIES,
+    OsStr, OsString, Path, PathBuf, Read, Sha256, TransactionSource, Write, hex_bytes, io,
+    managed_nonce, recovery_error,
 };
 
 mod authority;

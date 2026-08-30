@@ -1,10 +1,13 @@
+use super::accounting::{recovered_tree_temporary_bytes, stage_resume_retained_bytes};
+use super::model::StageResume;
 use super::{
-    BTreeSet, CLEANUP_PREFIX, CliError, Deserialize, Digest, ExecutionContext, ExitClass, File,
-    FileIdentity, HashSet, INITIAL_PREFIX, JOURNAL_SIGNATURE, JOURNAL_VERSION, Journal,
-    JournalPhase, JournalRecord, MAX_JOURNAL_BYTES, MAX_JOURNAL_ENTRIES, OsStr, OsString, Path,
-    PreparedTransaction, Read, ResourceReservation, SafeDir, Seek, Serialize, Sha256,
-    TRANSACTION_PREFIX, TransactionSource, Write, decode_path, fs, io, journal_retained_bytes,
-    recovery_error, remove_regular_handle_if_present, transaction_registry, validate_relative_path,
+    BTreeMap, BTreeSet, CLEANUP_PREFIX, CliError, Deserialize, Digest, ExecutionContext, ExitClass,
+    File, FileIdentity, HashSet, INITIAL_PREFIX, JOURNAL_SIGNATURE, JOURNAL_VERSION, Journal,
+    JournalPhase, JournalRecord, MAX_JOURNAL_BYTES, MAX_JOURNAL_ENTRIES,
+    MAX_RECOVERY_DIRECTORY_ENTRIES, OsStr, OsString, Path, PreparedTransaction, Read,
+    ResourceReservation, SafeDir, Seek, Serialize, Sha256, TRANSACTION_PREFIX, TransactionSource,
+    Write, decode_path, fs, io, journal_retained_bytes, recovery_error,
+    remove_regular_handle_if_present, transaction_registry, validate_relative_path,
 };
 
 const JOURNAL_READ_BUFFER_BYTES: usize = 64 * 1024;
@@ -19,9 +22,11 @@ pub(super) use replay::replay_journal_records;
 /// the journal.
 pub(super) struct LoadedJournal {
     journal: Journal,
+    pub(super) resumable_stages: BTreeMap<usize, StageResume>,
     memory: ResourceReservation,
     temporary: [Option<ResourceReservation>; 2],
     retained_bytes: u64,
+    tree_bytes: u64,
 }
 
 impl std::ops::Deref for LoadedJournal {
@@ -432,6 +437,17 @@ pub(super) fn load_journal_handle(
     })?;
     replay_journal_records(directory, &mut journal, context)?;
     validate_journal_handle(root, directory_path, &journal)?;
+    let tree_bytes = recovered_tree_temporary_bytes(
+        directory.measured_tree_bytes(0, MAX_RECOVERY_DIRECTORY_ENTRIES)?,
+        &journal,
+    )?;
+    // Slot/log permits protect the reads above. Replace them with one exact
+    // authenticated-tree permit so stages, backups, lease markers, journals,
+    // and the lock stay charged for the complete recovery lifetime without
+    // double-counting journal files.
+    journal.temporary = [None, None];
+    journal.temporary[0] = Some(context.reserve_temporary(tree_bytes).map_err(CliError::from)?);
+    journal.tree_bytes = tree_bytes;
     Ok(journal)
 }
 
@@ -450,7 +466,14 @@ struct LoadedSlot<T> {
 
 impl LoadedJournal {
     fn update_memory_charge(&mut self) -> Result<(), CliError> {
-        let retained_bytes = journal_retained_bytes(&self.journal)?;
+        let retained_bytes = self.resumable_stages.values().try_fold(
+            journal_retained_bytes(&self.journal)?,
+            |bytes, resume| {
+                bytes
+                    .checked_add(stage_resume_retained_bytes(resume)?)
+                    .ok_or_else(|| recovery_error("stage resume memory charge overflowed"))
+            },
+        )?;
         if retained_bytes > self.retained_bytes {
             self.memory.grow(retained_bytes - self.retained_bytes).map_err(CliError::from)?;
         } else if retained_bytes < self.retained_bytes {
@@ -458,6 +481,14 @@ impl LoadedJournal {
         }
         self.retained_bytes = retained_bytes;
         Ok(())
+    }
+
+    pub(in crate::transaction) fn into_recovered_parts(
+        self,
+    ) -> (Journal, BTreeMap<usize, StageResume>, ResourceReservation, u64) {
+        let Self { journal, resumable_stages, memory, temporary: _, retained_bytes: _, tree_bytes } =
+            self;
+        (journal, resumable_stages, memory, tree_bytes)
     }
 }
 
@@ -486,9 +517,11 @@ fn load_valid_journal_slot(
     }
     Ok(Some(LoadedJournal {
         journal: slot.value,
+        resumable_stages: BTreeMap::new(),
         memory: slot.memory,
         temporary: [Some(slot.temporary), None],
         retained_bytes: slot.retained_bytes,
+        tree_bytes: 0,
     }))
 }
 

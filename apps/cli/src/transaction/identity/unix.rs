@@ -609,14 +609,17 @@ impl SafeDir {
                     rustix::fs::FileType::Directory => {
                         let child = directory.open_child(OsStr::from_bytes(name.to_bytes()))?;
                         total = total
+                            .checked_add(DIRECTORY_ENTRY_TEMPORARY_BYTES)
+                            .ok_or_else(|| recovery_error("managed storage byte count overflow"))?
                             .checked_add(visit(&child, depth + 1, max_depth, entries, max_entries)?)
                             .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
                     }
-                    rustix::fs::FileType::RegularFile if stat.st_nlink == 1 => {
+                    rustix::fs::FileType::RegularFile => {
                         total = total
                             .checked_add(u64::try_from(stat.st_size).map_err(|_| {
                                 recovery_error("managed file size is not representable")
                             })?)
+                            .and_then(|bytes| bytes.checked_add(FILE_ENTRY_TEMPORARY_BYTES))
                             .ok_or_else(|| recovery_error("managed storage byte count overflow"))?;
                     }
                     _ => return Err(recovery_error("managed storage contains an unsafe object")),

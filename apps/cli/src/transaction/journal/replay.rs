@@ -1,3 +1,4 @@
+use super::super::model::StageResume;
 use super::super::{
     CliError, Deserialize, Digest, ExecutionContext, FileIdentity, HashSet, Journal, JournalPhase,
     JournalRecord, MAX_JOURNAL_BYTES, MAX_JOURNAL_ENTRIES, OsStr, Read, SafeDir, Sha256, io,
@@ -7,6 +8,7 @@ use super::{
     JOURNAL_LOG_NAME, JOURNAL_RECORD_HEADER_BYTES, JOURNAL_RECORD_HEADER_SIZE,
     JOURNAL_RECORD_MAGIC, LoadedJournal, OwnedJournalRecordEnvelope, journal_buffer_bytes,
 };
+use std::collections::BTreeMap;
 
 pub(in crate::transaction) fn replay_journal_records(
     directory: &SafeDir,
@@ -86,7 +88,14 @@ pub(in crate::transaction) fn replay_journal_records(
             return Err(recovery_error("journal record sequence is not contiguous"));
         }
         if envelope.sequence > journal.log_sequence {
-            apply_journal_record(journal, envelope.record, &mut parent_index)?;
+            let mut resumable_stages = std::mem::take(&mut journal.resumable_stages);
+            apply_journal_record(
+                journal,
+                envelope.record,
+                &mut parent_index,
+                &mut resumable_stages,
+            )?;
+            journal.resumable_stages = resumable_stages;
             journal.update_memory_charge()?;
             journal.log_sequence = envelope.sequence;
         }
@@ -132,6 +141,7 @@ pub(super) fn apply_journal_record(
     journal: &mut Journal,
     record: JournalRecord,
     parent_index: &mut HashSet<FileIdentity>,
+    resumable_stages: &mut BTreeMap<usize, StageResume>,
 ) -> Result<(), CliError> {
     if journal.phase != JournalPhase::Staging {
         return Err(recovery_error("journal record follows a non-staging checkpoint"));
@@ -168,6 +178,32 @@ pub(super) fn apply_journal_record(
             }
             journal.entries.push(entry);
         }
+        JournalRecord::StageChunk { index, resume } => {
+            let entry = journal
+                .entries
+                .get(index)
+                .ok_or_else(|| recovery_error("stage chunk has no journal target"))?;
+            if entry.staged_identity.is_some() || !entry.content_sha256.is_empty() {
+                return Err(recovery_error("stage chunk follows a sealed stage"));
+            }
+            let valid_digest = |value: &str| {
+                value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+            };
+            if !valid_digest(&resume.content_sha256) || !valid_digest(&resume.config_fingerprint) {
+                return Err(recovery_error("stage chunk resume metadata is malformed"));
+            }
+            if let Some(previous) = resumable_stages.get(&index) {
+                if resume.chunk_sequence != previous.chunk_sequence.saturating_add(1)
+                    || resume.durable_len != previous.durable_len.saturating_add(1024 * 1024)
+                    || resume.config_fingerprint != previous.config_fingerprint
+                {
+                    return Err(recovery_error("stage chunk resume sequence is not contiguous"));
+                }
+            } else if resume.chunk_sequence != 1 || resume.durable_len != 1024 * 1024 {
+                return Err(recovery_error("stage chunk resume sequence does not start at one"));
+            }
+            resumable_stages.insert(index, resume);
+        }
         JournalRecord::StageSealed { index, size, content_sha256, staged_identity } => {
             let entry = journal
                 .entries
@@ -179,6 +215,7 @@ pub(super) fn apply_journal_record(
             entry.size = size;
             entry.content_sha256 = content_sha256;
             entry.staged_identity = Some(staged_identity);
+            resumable_stages.remove(&index);
         }
     }
     Ok(())

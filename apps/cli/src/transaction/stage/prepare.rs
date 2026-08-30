@@ -1,29 +1,33 @@
 use super::{
     BTreeSet, CliError, Component, CreatedDirectory, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest,
     EXTERNAL_LOCK_PREFIX, EntryState, ExecutionContext, ExitClass, FILE_ENTRY_TEMPORARY_BYTES,
-    File, FileTarget, HookDecision, JOURNAL_SIGNATURE, JOURNAL_VERSION, Journal, JournalEntry,
-    JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES, MixedContent, MixedTarget, OsString,
-    PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction, PreparingTransactionRoot,
-    Read, SafeDir, TRANSACTION_METADATA_TEMPORARY_BYTES, Target, TransactionHandles,
-    TransactionSource, absolute_lexical, active_transactions, call_hook, common_existing_ancestor,
-    crash_point, encode_path, ensure_same_filesystem, ensure_transaction_platform, file_identity,
-    fs, handle_rename, io, journal_retained_bytes, persist_journal_handle,
-    recover_parent_transactions, recovery_error, remove_initial_transaction_with_external_lock,
-    stage_name, transaction_index_limit, validate_relative_path,
+    File, FileIdentity, FileTarget, HookDecision, JOURNAL_SIGNATURE, JOURNAL_VERSION, Journal,
+    JournalEntry, JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES, MixedContent,
+    MixedTarget, OsString, PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction,
+    PreparingTransactionRoot, Read, SafeDir, TRANSACTION_METADATA_TEMPORARY_BYTES, Target,
+    TransactionHandles, TransactionSource, absolute_lexical, active_transactions, call_hook,
+    common_existing_ancestor, crash_point, encode_path, ensure_same_filesystem,
+    ensure_transaction_platform, file_identity, fs, handle_rename, io, journal_retained_bytes,
+    persist_journal_handle, recover_parent_transactions, recovery_error,
+    remove_initial_transaction_with_external_lock, stage_name, transaction_index_limit,
+    validate_relative_path,
 };
-use crate::transaction::lease::{create_parent_lease, remove_parent_lease};
+use crate::transaction::lease::{
+    ParentLeaseRemovalIndex, create_parent_lease, remove_parent_lease,
+};
 use crate::transaction::recovery::remove_created_output_directories;
 
 mod directories;
 mod planning;
 use crate::transaction::{
-    BTreeMap, OsStr, PARENT_LEASE_NAME, REGISTRY_LOCK_DIRECTORY_NAME, REGISTRY_NAME,
-    ResourceReservation, create_initial_transaction_in_registry, lock_registry_epoch,
-    recover_root_transactions,
+    BTreeMap, OsStr, PARENT_LEASE_NAME, REGISTRY_NAME, ResourceReservation,
+    create_initial_transaction_in_registry, lock_registry_epoch, recover_root_transactions,
 };
+pub(in crate::transaction) use directories::create_missing_output_directory;
 use directories::{
-    UnpublishedPrepareCleanup, cleanup_empty_initial, create_parent_leases_windowed,
-    plan_missing_directories, recover_existing_target_parents, unpublished_hook,
+    IntentLease, UnpublishedPrepareCleanup, cleanup_empty_initial, create_intent_leases,
+    create_parent_leases_windowed, plan_intent_parent_paths, plan_missing_directories,
+    recover_existing_target_parents, remove_intent_leases, unpublished_hook,
 };
 use planning::{
     ReservedStaticResources, StaticRootPlan, create_and_bind_static_directories,
@@ -192,10 +196,130 @@ pub(in crate::transaction) fn prepare_sources_with_hook_internal<T: TransactionS
             &plan.paths,
             &plan.root,
             &plan.root_handle,
+            plan.intent_parent_paths.len(),
             context,
         )?;
         finish_static_transaction(targets, context, defer_single_stage, &mut hook, plan, resources)
     }
+}
+
+#[cfg(any(unix, windows))]
+struct StaticIntentState {
+    plan: StaticRootPlan,
+    resources: ReservedStaticResources,
+    initial: InitialStaticTransaction,
+    intent_leases: Vec<IntentLease>,
+}
+
+#[cfg(any(unix, windows))]
+struct StaticBindInputs<'a> {
+    journal: &'a mut Journal,
+    journal_temporary: &'a mut ResourceReservation,
+    journal_slot_bytes: &'a mut [u64; 2],
+    paths: &'a [PathBuf],
+    missing_directories: &'a [PathBuf],
+    parent_paths: &'a [PathBuf],
+    root: &'a Path,
+    root_handle: &'a SafeDir,
+    initial_handle: &'a SafeDir,
+    intent_leases: &'a [IntentLease],
+}
+
+#[cfg(any(unix, windows))]
+struct StaticBindError {
+    error: CliError,
+    intent_leases_active: bool,
+}
+
+#[cfg(any(unix, windows))]
+fn bind_static_resources(inputs: &mut StaticBindInputs<'_>) -> Result<(), StaticBindError> {
+    let active = |error| StaticBindError { error, intent_leases_active: true };
+    create_and_bind_static_directories(
+        inputs.journal,
+        inputs.missing_directories,
+        inputs.paths,
+        inputs.root,
+        inputs.root_handle,
+    )
+    .map_err(active)?;
+    let intent_parents = inputs
+        .intent_leases
+        .iter()
+        .map(|lease| lease.parent.identity.clone())
+        .collect::<BTreeSet<_>>();
+    create_parent_leases_windowed(
+        inputs.parent_paths,
+        &intent_parents,
+        inputs.initial_handle,
+        inputs.journal,
+    )
+    .map_err(active)?;
+    persist_journal_handle(
+        inputs.initial_handle,
+        inputs.journal,
+        inputs.journal_temporary,
+        inputs.journal_slot_bytes,
+    )
+    .map_err(active)?;
+    let final_parents = inputs.journal.parent_identities.iter().cloned().collect::<BTreeSet<_>>();
+    remove_intent_leases(
+        inputs.intent_leases,
+        inputs.initial_handle,
+        inputs.journal,
+        &final_parents,
+    )
+    .map_err(|error| StaticBindError { error, intent_leases_active: false })
+}
+
+#[cfg(any(unix, windows))]
+fn acquire_static_intent(
+    mut plan: StaticRootPlan,
+    mut resources: ReservedStaticResources,
+    hook: &mut impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
+) -> Result<StaticIntentState, CliError> {
+    let initial = initialize_static_transaction(
+        &plan.root,
+        &plan.root_handle,
+        &mut resources.journal,
+        &mut resources.journal_temporary,
+    )?;
+    let cleanup = UnpublishedPrepareCleanup {
+        root: &plan.root,
+        registry: &initial.registry_handle,
+        initial_directory: &initial.initial_directory,
+    };
+    let intent_leases = match create_intent_leases(
+        &plan.intent_parent_paths,
+        &initial.initial_handle,
+        &mut resources.journal,
+    ) {
+        Ok(leases) => leases,
+        Err(error) => {
+            return Err(cleanup.finish(
+                error,
+                initial.initial_handle,
+                &resources.journal,
+                &[],
+                initial.lock,
+            ));
+        }
+    };
+    if let Err(error) = unpublished_hook(hook, "directoryIntentPersisted") {
+        if error.code() == "simulatedCrash" {
+            drop(initial.lock);
+            return Err(error);
+        }
+        return Err(finish_with_intent_leases(
+            &cleanup,
+            error,
+            initial.initial_handle,
+            &mut resources.journal,
+            &[],
+            &intent_leases,
+            initial.lock,
+        ));
+    }
+    Ok(StaticIntentState { plan, resources, initial, intent_leases })
 }
 
 #[cfg(any(unix, windows))]
@@ -207,13 +331,16 @@ fn finish_static_transaction<T: TransactionSource>(
     plan: StaticRootPlan,
     resources: ReservedStaticResources,
 ) -> Result<(PreparedTransaction, Option<File>), CliError> {
+    let StaticIntentState { plan, resources, initial, intent_leases } =
+        acquire_static_intent(plan, resources, hook)?;
     let StaticRootPlan {
         paths,
         root,
         root_handle,
-        missing_directories,
-        root_guard,
-        planning_memory,
+        missing_directories: missing,
+        intent_parent_paths: intents,
+        root_guard: guard,
+        planning_memory: memory,
     } = plan;
     let ReservedStaticResources {
         mut journal,
@@ -222,13 +349,6 @@ fn finish_static_transaction<T: TransactionSource>(
         temporary_reservations,
         parent_paths,
     } = resources;
-    let initial = initialize_static_transaction(
-        &root,
-        &root_handle,
-        &mut journal,
-        &mut journal_temporary,
-        hook,
-    )?;
     let InitialStaticTransaction {
         initial_directory,
         directory,
@@ -243,29 +363,37 @@ fn finish_static_transaction<T: TransactionSource>(
         registry: &registry_handle,
         initial_directory: &initial_directory,
     };
-    if let Err(error) = create_and_bind_static_directories(
-        &mut journal,
-        &missing_directories,
-        &paths,
-        &root,
-        &root_handle,
-        hook,
-    ) {
+    if let Err(failure) = bind_static_resources(&mut StaticBindInputs {
+        journal: &mut journal,
+        journal_temporary: &mut journal_temporary,
+        journal_slot_bytes: &mut journal_slot_bytes,
+        paths: &paths,
+        missing_directories: &missing,
+        parent_paths: &parent_paths,
+        root: &root,
+        root_handle: &root_handle,
+        initial_handle: &initial_handle,
+        intent_leases: &intent_leases,
+    }) {
+        return Err(if failure.intent_leases_active {
+            finish_with_intent_leases(
+                &cleanup,
+                failure.error,
+                initial_handle,
+                &mut journal,
+                &parent_paths,
+                &intent_leases,
+                lock,
+            )
+        } else {
+            cleanup.finish(failure.error, initial_handle, &journal, &parent_paths, lock)
+        });
+    }
+    if let Err(error) = unpublished_hook(hook, "directoryCreated") {
         if error.code() == "simulatedCrash" {
             drop(lock);
             return Err(error);
         }
-        return Err(cleanup.finish(error, initial_handle, &journal, &parent_paths, lock));
-    }
-    if let Err(error) = persist_journal_handle(
-        &initial_handle,
-        &mut journal,
-        &mut journal_temporary,
-        &mut journal_slot_bytes,
-    ) {
-        return Err(cleanup.finish(error, initial_handle, &journal, &parent_paths, lock));
-    }
-    if let Err(error) = create_parent_leases_windowed(&parent_paths, &initial_handle, &journal) {
         return Err(cleanup.finish(error, initial_handle, &journal, &parent_paths, lock));
     }
     let (directory_handle, lock) = publish_static_transaction(StaticPublication {
@@ -279,17 +407,60 @@ fn finish_static_transaction<T: TransactionSource>(
         parent_paths: &parent_paths,
         cleanup: &cleanup,
     })?;
+    drop((paths, missing, intents, parent_paths, memory, guard));
+    stage_published_static(
+        PublishedStaticState {
+            root,
+            directory,
+            journal,
+            temporary_reservations,
+            journal_memory,
+            journal_temporary,
+            journal_slot_bytes,
+            lock,
+            root_handle,
+            directory_handle,
+        },
+        targets,
+        context,
+        defer_single_stage,
+        hook,
+    )
+}
+
+#[cfg(any(unix, windows))]
+struct PublishedStaticState {
+    root: PathBuf,
+    directory: PathBuf,
+    journal: Journal,
+    temporary_reservations: Vec<ResourceReservation>,
+    journal_memory: ResourceReservation,
+    journal_temporary: ResourceReservation,
+    journal_slot_bytes: [u64; 2],
+    lock: File,
+    root_handle: SafeDir,
+    directory_handle: SafeDir,
+}
+
+#[cfg(any(unix, windows))]
+fn stage_published_static<T: TransactionSource>(
+    state: PublishedStaticState,
+    targets: &[T],
+    context: &ExecutionContext,
+    defer_single_stage: bool,
+    hook: &mut impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
+) -> Result<(PreparedTransaction, Option<File>), CliError> {
     let transaction = PreparedTransaction {
-        root: root.clone(),
-        directory: directory.clone(),
-        journal,
+        root: state.root,
+        directory: state.directory,
+        journal: state.journal,
         context: context.clone(),
         active: true,
-        temporary_reservations,
+        temporary_reservations: state.temporary_reservations,
         backup_reservations: Vec::with_capacity(targets.len()),
-        journal_memory,
-        journal_temporary,
-        journal_slot_bytes,
+        journal_memory: state.journal_memory,
+        journal_temporary: state.journal_temporary,
+        journal_slot_bytes: state.journal_slot_bytes,
         journal_log_bytes: 0,
         #[cfg(test)]
         journal_persist_calls: 2,
@@ -301,11 +472,39 @@ fn finish_static_transaction<T: TransactionSource>(
         journal_record_sync_calls: 0,
         #[cfg(test)]
         simulate_rollback_failure: false,
-        lock: Some(lock),
-        handles: TransactionHandles { root: root_handle, directory: directory_handle },
+        lock: Some(state.lock),
+        handles: TransactionHandles { root: state.root_handle, directory: state.directory_handle },
     };
-    drop((paths, missing_directories, parent_paths, planning_memory, root_guard));
     stage_static_targets(transaction, targets, context, defer_single_stage, hook)
+}
+
+#[cfg(any(unix, windows))]
+fn finish_with_intent_leases(
+    cleanup: &UnpublishedPrepareCleanup<'_>,
+    original: CliError,
+    initial_handle: SafeDir,
+    journal: &mut Journal,
+    parent_paths: &[PathBuf],
+    intent_leases: &[IntentLease],
+    lock: File,
+) -> CliError {
+    if let Err(error) =
+        remove_intent_leases(intent_leases, &initial_handle, journal, &BTreeSet::new())
+    {
+        drop(lock);
+        return CliError::new(
+            ExitClass::Io,
+            "rollbackFailed",
+            format!(
+                "output transaction failed ({}: {}); intent lease rollback failed ({}: {})",
+                original.code(),
+                original.message(),
+                error.code(),
+                error.message()
+            ),
+        );
+    }
+    cleanup.finish(original, initial_handle, journal, parent_paths, lock)
 }
 
 #[cfg(any(unix, windows))]
@@ -325,7 +524,6 @@ fn initialize_static_transaction(
     root_handle: &SafeDir,
     journal: &mut Journal,
     journal_temporary: &mut ResourceReservation,
-    hook: &mut impl FnMut(&str, usize) -> Result<HookDecision, CliError>,
 ) -> Result<InitialStaticTransaction, CliError> {
     let epoch = lock_registry_epoch(root_handle, true)?
         .ok_or_else(|| recovery_error("transaction registry epoch disappeared"))?;
@@ -384,13 +582,6 @@ fn initialize_static_transaction(
     if let Err(error) =
         persist_journal_handle(&initial_handle, journal, journal_temporary, &mut journal_slot_bytes)
     {
-        return Err(cleanup.finish(error, initial_handle, journal, &[], lock));
-    }
-    if let Err(error) = unpublished_hook(hook, "directoryIntentPersisted") {
-        if error.code() == "simulatedCrash" {
-            drop(lock);
-            return Err(error);
-        }
         return Err(cleanup.finish(error, initial_handle, journal, &[], lock));
     }
     let registry_identity = match epoch.release() {
