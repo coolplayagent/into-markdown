@@ -10,6 +10,7 @@ mod merge;
 mod navigation;
 mod package;
 mod path;
+mod reachability;
 mod resources;
 mod spine;
 mod xhtml;
@@ -127,6 +128,13 @@ async fn convert_epub(
     let navigation = read_navigation(&package, &mut archive, &mut budget)?;
     let mut spine =
         spine::convert(&package, &mut archive, options, services, &mut budget, context).await?;
+    let omitted = reachability::omitted_resources(
+        &package,
+        navigation.as_ref(),
+        &spine,
+        &mut archive,
+        context,
+    )?;
     let mut resources = ResourceStore::new(options);
     for chapter in &mut spine.chapters {
         resources.bind_chapter_images(
@@ -146,6 +154,7 @@ async fn convert_epub(
         cover,
         encryption,
         rights_metadata,
+        omitted,
         context,
     )
 }

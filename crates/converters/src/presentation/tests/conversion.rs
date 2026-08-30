@@ -2,8 +2,9 @@ use super::super::relationships::resolve_target;
 use super::super::schema::{A_NS, LAYOUT_REL, P_NS, R_NS, REL_NS, REL_PREFIX, SLIDE_REL};
 use super::support::{block_on, convert, fixture, rewrite_part, zip};
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions, FormatDetector,
-    FormatHint, InputFormat, ResolvedInput, SourceMetadata,
+    Block, ConversionError, ConversionOptions, ConversionOutcome, DiagnosticSeverity,
+    ExecutionContext, ExecutionOptions, FormatDetector, FormatHint, InputFormat, ResolvedInput,
+    SourceMetadata, conversion_outcome,
 };
 use into_markdown_render_markdown::render;
 use std::io::{Cursor, Read};
@@ -122,6 +123,8 @@ fn multiple_slide_boundaries_and_hidden_slide_order_are_deterministic() {
     assert_eq!(output.document.blocks.len(), 1);
     assert!(matches!(output.document.blocks[0].block, Block::Slide { number: 2, .. }));
     assert_eq!(output.diagnostics[0].code, "presentation.hiddenSlideSkipped");
+    assert_eq!(output.diagnostics[0].severity, DiagnosticSeverity::Warning);
+    assert_eq!(conversion_outcome(&output.diagnostics), ConversionOutcome::Degraded);
     assert_eq!(output.diagnostics[0].locator.as_ref().unwrap().slide, Some(1));
 }
 

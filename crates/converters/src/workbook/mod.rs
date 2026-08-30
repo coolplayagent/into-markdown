@@ -27,7 +27,7 @@ use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink, ConverterOutput,
     ConverterStream, ConverterStreamCompletion, ConverterStreamMode, ExecutionContext,
     FormatCandidate, InputFormat, LocalBoxFuture, ProbeOutcome, ResolvedInput, Services,
-    StreamConsumerKind, stream_converter_output,
+    SourceContentEvidence, StreamConsumerKind, document_is_empty, stream_converter_output,
 };
 
 const FORMATS: &[InputFormat] = &[InputFormat::Xlsx];
@@ -43,7 +43,15 @@ pub(crate) fn convert_legacy_xls(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    calamine_adapter::convert_xls(bytes, options, context)
+    let output = calamine_adapter::convert_xls(bytes, options, context)?;
+    if document_is_empty(&output.document)
+        && output.assets.is_empty()
+        && output.diagnostics.is_empty()
+    {
+        Ok(output.with_source_content_evidence(SourceContentEvidence::Empty))
+    } else {
+        Ok(output)
+    }
 }
 
 impl Converter for WorkbookConverter {

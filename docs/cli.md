@@ -146,7 +146,14 @@ into-md <INPUT...>
 - 多输入输出保留相对于各输入根的目录结构；不同输入根产生同名输出时先加输入根名
   前缀，仍冲突时再使用稳定数字后缀，所有消歧均在调度前完成。
 - `--report` 写入带 `schemaVersion` 的 JSON 报告，包含逐项输入、输出、状态、
-  格式、诊断、警告和错误码。
+  `outcome`、格式、诊断、警告、错误码和细分 `reasonCode`。成功结果为 `complete` 或
+  `degraded`，失败为 `failed`；真正空源使用 `complete` / `emptySource`，未证明可用的
+  空产物使用 `malformed` / `emptyContent`。
+- Engine 的空结果判定发生在 stdout 编码及文件事务 stage/commit 之前。除明确
+  `emptySource` 外，成功或 degraded 的 Markdown 目标必须存在且非空；`emptyContent`
+  不创建目标，并使批处理失败计数和退出码与报告一致。asset-only 结果只有在所选
+  输出能表示每项资源时成功：`result-json` 可保留 payload 或外部 URI；bundle 和带
+  `--asset-mode extract` 的 `ir-json` 要求本地 payload。
 - `--dry-run` 只展开输入、验证配置和计算输出路径，不转换、不联网、不写任何文件。
 
 ### OCR 与 AI

@@ -45,7 +45,16 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   非空、唯一、按字节序排列的完整别名集合。schema 1 输入归一为 `[id]`，写出端生成
   schema 2。
 - `BatchReportDto`：包含派生的 `succeeded`、`failed` 和输入稳定顺序的 `items`；状态
-  只有 `success`、`failed`。失败项必须有 `errorCode`，成功项不得有 `errorCode`。
+  只有 `success`、`failed`。`outcome` 区分 `complete`、`degraded`、`failed`；
+  `reasonCode` 细分 `emptySource`、`assetOnly`、`emptyContent` 或首个有损诊断。失败项
+  必须有 `errorCode`，成功项不得有 `errorCode`。旧报告缺少 additive 的 `outcome` 或
+  `reasonCode` 时仍按原有 status 解码。
+
+`ResultDto` 保持 schema 1，不新增重复 outcome 字段。显式 `emptySource` / `assetOnly`
+证据作为稳定 diagnostics code 随 Result JSON、Web diagnostics artifact 和 bundle
+传播；Engine 返回前已经执行共享终态校验，因此结构化消费者不会收到未证明可用的空
+成功结果。Web schema 1 历史记录仍只公开任务的 succeeded/failed 状态，不声称保存
+`ConversionOutcome`；完整诊断保存在成功任务的 diagnostics artifact 中。
 
 结果示例：
 

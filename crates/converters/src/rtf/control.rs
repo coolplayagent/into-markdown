@@ -271,7 +271,7 @@ impl Parser<'_> {
             _ if is_known_non_destination_control(name) => {}
             _ => self.add_diagnostic(
                 "rtf.unknownControlIgnored",
-                DiagnosticSeverity::Info,
+                DiagnosticSeverity::Warning,
                 "unknown non-destination control word was ignored",
                 Some(locator(start, end)),
             )?,
@@ -309,7 +309,7 @@ impl Parser<'_> {
             _ => {
                 self.add_diagnostic(
                     "rtf.unknownControlSymbolIgnored",
-                    DiagnosticSeverity::Info,
+                    DiagnosticSeverity::Warning,
                     "unknown control symbol was ignored",
                     Some(locator(start, end)),
                 )?;

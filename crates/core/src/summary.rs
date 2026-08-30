@@ -1,7 +1,7 @@
 //! Completion-summary ownership and accounting.
 
 use crate::spi::OutputMemoryLease;
-use crate::{ConversionOutcome, ConversionResult, ConversionSummary};
+use crate::{ConversionResult, ConversionSummary};
 
 impl Clone for ConversionSummary {
     fn clone(&self) -> Self {
@@ -11,6 +11,10 @@ impl Clone for ConversionSummary {
             diagnostics: self.diagnostics.clone(),
             markdown_bytes: self.markdown_bytes,
             assets: self.assets,
+            content: self.content,
+            payload_only_assets: self.payload_only_assets,
+            external_only_assets: self.external_only_assets,
+            dual_representation_assets: self.dual_representation_assets,
             _memory_lease: OutputMemoryLease::default(),
         }
     }
@@ -23,6 +27,10 @@ impl PartialEq for ConversionSummary {
             && self.diagnostics == other.diagnostics
             && self.markdown_bytes == other.markdown_bytes
             && self.assets == other.assets
+            && self.content == other.content
+            && self.payload_only_assets == other.payload_only_assets
+            && self.external_only_assets == other.external_only_assets
+            && self.dual_representation_assets == other.dual_representation_assets
     }
 }
 
@@ -34,17 +42,34 @@ impl ConversionResult {
     #[doc(hidden)]
     #[must_use]
     pub fn into_summary(self) -> ConversionSummary {
-        let outcome = if self.diagnostics.is_empty() {
-            ConversionOutcome::Complete
-        } else {
-            ConversionOutcome::Degraded
-        };
+        let outcome = self.outcome();
+        let content = self.content().ok();
+        let payload_only_assets = self
+            .assets
+            .iter()
+            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_none())
+            .count();
+        let external_only_assets = self
+            .assets
+            .iter()
+            .filter(|asset| asset.bytes.is_empty() && asset.external_uri.is_some())
+            .count();
+        let dual_representation_assets = self
+            .assets
+            .iter()
+            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_some())
+            .count();
         ConversionSummary {
             format: self.detected_format,
             outcome,
             diagnostics: self.diagnostics,
             markdown_bytes: u64::try_from(self.markdown.len()).unwrap_or(u64::MAX),
             assets: u64::try_from(self.assets.len()).unwrap_or(u64::MAX),
+            content,
+            payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
+            external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),
+            dual_representation_assets: u64::try_from(dual_representation_assets)
+                .unwrap_or(u64::MAX),
             _memory_lease: self.memory_lease,
         }
     }

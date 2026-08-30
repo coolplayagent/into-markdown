@@ -781,14 +781,27 @@ impl FormatDetector for HintFormatDetector {
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
-                    let confidence = if matches!(
-                        format,
-                        InputFormat::Markdown
-                            | InputFormat::Csv
-                            | InputFormat::Tsv
-                            | InputFormat::Wikipedia
-                    ) {
-                        0.99
+                    let strong_package_hint = !conflict
+                        && reasons.contains(&"filename extension")
+                        && matches!(
+                            format,
+                            InputFormat::Docx
+                                | InputFormat::Pptx
+                                | InputFormat::Xlsx
+                                | InputFormat::Odt
+                                | InputFormat::Ods
+                                | InputFormat::Odp
+                                | InputFormat::Epub
+                        );
+                    let confidence = if strong_package_hint
+                        || matches!(
+                            format,
+                            InputFormat::Markdown
+                                | InputFormat::Csv
+                                | InputFormat::Tsv
+                                | InputFormat::Wikipedia
+                        ) {
+                        if strong_package_hint { 0.91 } else { 0.99 }
                     } else if reasons.len() > 1 {
                         0.68
                     } else if reasons[0] == "media type" {
@@ -3422,6 +3435,26 @@ mod tests {
         let candidates = block_on(detector.detect(&input, &hint, &execution_context())).unwrap();
         assert_eq!(candidates.len(), 2);
         assert!(candidates.iter().all(|candidate| !candidate.diagnostics.is_empty()));
+    }
+
+    #[test]
+    fn package_extension_is_stronger_than_generic_zip_content() {
+        let input = resolved([b"PK\x05\x06".as_slice(), &[0_u8; 18]].concat(), "invalid.xlsx");
+        let hints = block_on(HintFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
+        let content = block_on(ContentFormatDetector.detect(
+            &input,
+            &FormatHint::default(),
+            &execution_context(),
+        ))
+        .unwrap();
+        let xlsx = hints.iter().find(|candidate| candidate.format == InputFormat::Xlsx).unwrap();
+        let zip = content.iter().find(|candidate| candidate.format == InputFormat::Zip).unwrap();
+        assert!(xlsx.confidence > zip.confidence);
     }
 
     #[test]

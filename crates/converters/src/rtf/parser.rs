@@ -265,7 +265,9 @@ impl<'a> Parser<'a> {
         }
         self.flush_pending_surrogate()?;
         self.finish_table_or_paragraph(self.bytes.len())?;
-        if self.blocks.is_empty() && self.assets.is_empty() {
+        let source_is_empty =
+            self.blocks.is_empty() && self.assets.is_empty() && self.diagnostics.is_empty();
+        if source_is_empty {
             self.add_diagnostic(
                 "rtf.emptyDocument",
                 DiagnosticSeverity::Info,
@@ -294,7 +296,18 @@ impl<'a> Parser<'a> {
         // table, and decode buffer has been dropped. Only then may the retained-output
         // authority shrink the same authenticated reservation to the live IR/assets.
         drop(self);
-        ConverterOutput::new_with_memory_reservation(document, assets, diagnostics, context, memory)
+        let output = ConverterOutput::new_with_memory_reservation(
+            document,
+            assets,
+            diagnostics,
+            context,
+            memory,
+        )?;
+        Ok(if source_is_empty {
+            output.with_source_content_evidence(into_markdown_core::SourceContentEvidence::Empty)
+        } else {
+            output
+        })
     }
 
     pub(super) fn state(&self) -> &State {

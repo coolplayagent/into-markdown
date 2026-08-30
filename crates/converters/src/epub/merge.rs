@@ -3,6 +3,7 @@
 use super::encryption::EncryptionPolicy;
 use super::navigation::{NavEntry, Navigation};
 use super::package::Package;
+use super::reachability::OmittedResources;
 use super::resources::{CoverResource, ResourceStore};
 use super::spine::SpineResult;
 use into_markdown_core::{
@@ -24,6 +25,7 @@ pub(super) fn assemble(
     cover: Option<CoverResource>,
     encryption: EncryptionPolicy,
     rights_metadata: bool,
+    omitted: OmittedResources,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
@@ -69,20 +71,12 @@ pub(super) fn assemble(
         ));
     }
     if spine.skipped_non_linear > 0 {
-        output.diagnostics.push(diagnostic(
-            "epub.spine.nonLinearSkipped",
-            DiagnosticSeverity::Info,
-            format!("skipped {} non-linear spine item(s)", spine.skipped_non_linear),
-            Some(&package.path),
-        ));
+        output
+            .diagnostics
+            .push(non_linear_spine_diagnostic(spine.skipped_non_linear, &package.path));
     }
     if rights_metadata {
-        output.diagnostics.push(diagnostic(
-            "epub.rightsMetadataIgnored",
-            DiagnosticSeverity::Info,
-            "META-INF/rights.xml was retained as inert metadata and not interpreted".into(),
-            Some("META-INF/rights.xml"),
-        ));
+        output.diagnostics.push(rights_metadata_diagnostic());
     }
     for path in encryption.unavailable_fonts {
         output.diagnostics.push(diagnostic(
@@ -92,7 +86,7 @@ pub(super) fn assemble(
             Some(&path),
         ));
     }
-    append_omitted_resource_diagnostic(&mut output, &package);
+    append_omitted_resource_diagnostic(&mut output, omitted, &package.path);
 
     for (index, chapter) in spine.chapters.iter_mut().enumerate() {
         let sequence = index + 1;
@@ -178,11 +172,33 @@ pub(super) fn assemble(
     output.account_retained(context)
 }
 
+fn non_linear_spine_diagnostic(skipped: usize, package_path: &str) -> Diagnostic {
+    diagnostic(
+        "epub.spine.nonLinearSkipped",
+        DiagnosticSeverity::Warning,
+        format!("skipped {skipped} non-linear spine item(s)"),
+        Some(package_path),
+    )
+}
+
+fn rights_metadata_diagnostic() -> Diagnostic {
+    diagnostic(
+        "epub.rightsMetadataIgnored",
+        DiagnosticSeverity::Info,
+        "META-INF/rights.xml was retained as inert metadata and not interpreted".into(),
+        Some("META-INF/rights.xml"),
+    )
+}
+
+#[cfg(test)]
+#[path = "merge_tests.rs"]
+mod tests;
+
 fn append_navigation(
     blocks: &mut Vec<BlockNode>,
     navigation: Navigation,
 ) -> Result<(), ConversionError> {
-    let Navigation { source_path, entries } = navigation;
+    let Navigation { source_path, entries, .. } = navigation;
     if entries.iter().any(|entry| entry.depth.saturating_add(2) > MAX_DOCUMENT_DEPTH) {
         return Err(ConversionError::ResourceLimit {
             limit: "documentDepth",
@@ -407,28 +423,35 @@ fn chapter_title(chapter: &super::spine::Chapter, package: &Package, sequence: u
         .unwrap_or_else(|| chapter.path.rsplit('/').next().unwrap_or(&chapter.path).to_owned())
 }
 
-fn append_omitted_resource_diagnostic(output: &mut ConverterOutput, package: &Package) {
-    let mut css = 0;
-    let mut fonts = 0;
-    let mut media = 0;
-    for item in package.manifest.values() {
-        match item.media_type.as_str() {
-            "text/css" => css += 1,
-            value if value.starts_with("font/") || value.contains("font") => fonts += 1,
-            value if value.starts_with("audio/") || value.starts_with("video/") => media += 1,
-            _ => {}
-        }
-    }
-    if css + fonts + media > 0 {
-        output.diagnostics.push(diagnostic(
-            "epub.unreferencedResourcesOmitted",
-            DiagnosticSeverity::Info,
-            format!(
-                "omitted {css} CSS, {fonts} font, and {media} audio/video manifest resource(s) without an IR reference contract"
-            ),
-            Some(&package.path),
+fn append_omitted_resource_diagnostic(
+    output: &mut ConverterOutput,
+    omitted: OmittedResources,
+    package_path: &str,
+) {
+    if omitted.css + omitted.fonts + omitted.media > 0 {
+        output.diagnostics.push(omitted_resources_diagnostic(
+            omitted.css,
+            omitted.fonts,
+            omitted.media,
+            package_path,
         ));
     }
+}
+
+fn omitted_resources_diagnostic(
+    css: usize,
+    fonts: usize,
+    media: usize,
+    package_path: &str,
+) -> Diagnostic {
+    diagnostic(
+        "epub.linkedResourcesOmitted",
+        DiagnosticSeverity::Warning,
+        format!(
+            "omitted {css} reachable CSS, {fonts} reachable font, and {media} reachable audio/video resource(s) without a proven lossless IR mapping"
+        ),
+        Some(package_path),
+    )
 }
 
 fn node(id: String, block: Block, part: &str, kind: ProvenanceKind) -> BlockNode {

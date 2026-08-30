@@ -6,7 +6,7 @@ use into_markdown_core::{
     Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
     FormatCandidate, Inline, InlineMark, InputFormat, ListItem, ListKind, MAX_DOCUMENT_INLINES,
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, ProbeOutcome, Provenance, ProvenanceKind,
-    ResolvedInput, Services, SourceLocator, TableAlignment, TableRow,
+    ResolvedInput, Services, SourceContentEvidence, SourceLocator, TableAlignment, TableRow,
 };
 use quick_xml::events::{BytesCData, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;
@@ -595,6 +595,15 @@ fn convert_docx(
         options,
         context,
     )?;
+    let glossary_part = relationship_target(&relationships, "glossaryDocument", &main_part)?;
+    if let Some(part) = glossary_part.as_deref() {
+        require_content_type(
+            &package,
+            part,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml",
+        )?;
+        package.required(part)?;
+    }
     let styles_part = relationship_target(&relationships, "styles", &main_part)?;
     let styles = if let Some(part) = styles_part.as_deref() {
         require_content_type(
@@ -618,6 +627,13 @@ fn convert_docx(
         BTreeMap::new()
     };
     let mut state = ParseState::default();
+    if let Some(part) = glossary_part.as_deref() {
+        state.warning(
+            "word.glossaryContentOmitted",
+            "authenticated glossary document content is not represented in the Markdown output",
+            part,
+        );
+    }
     if package.macro_present {
         state.warning(
             "docx.macrosIgnored",
@@ -721,7 +737,16 @@ fn convert_docx(
             error.detail
         ),
     })?;
-    Ok(ConverterOutput::new(state.document, state.assets, state.diagnostics))
+    let evidence = if state.document.blocks.is_empty()
+        && state.assets.is_empty()
+        && state.diagnostics.is_empty()
+    {
+        SourceContentEvidence::Empty
+    } else {
+        SourceContentEvidence::Unknown
+    };
+    Ok(ConverterOutput::new(state.document, state.assets, state.diagnostics)
+        .with_source_content_evidence(evidence))
 }
 
 fn relationship_target(
@@ -4167,6 +4192,9 @@ mod tests {
                 "word/endnotes.xml" => Some(
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
                 ),
+                "word/glossary/document.xml" => Some(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml",
+                ),
                 "word/header1.xml" => Some(
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
                 ),
@@ -4229,6 +4257,36 @@ mod tests {
             ("word/_rels/document.xml.rels".into(), relationships.into_bytes()),
             (part.into(), bytes.to_vec()),
         ])
+    }
+
+    #[test]
+    fn authenticated_glossary_content_is_omitted_with_unknown_evidence() {
+        let document =
+            format!(r#"<w:document xmlns:w="{WORD}"><w:body><w:p/></w:body></w:document>"#);
+        let relationships = format!(
+            r#"<Relationships xmlns="{PACKAGE_REL}"><Relationship Id="rGlossary" Type="{REL_TYPE_PREFIX}glossaryDocument" Target="glossary/document.xml"/></Relationships>"#
+        );
+        let glossary = format!(
+            r#"<w:glossaryDocument xmlns:w="{WORD}"><w:docParts><w:docPart><w:docPartBody><w:sdt><w:sdtContent><w:p><w:r><w:t>Building block</w:t></w:r></w:p></w:sdtContent></w:sdt></w:docPartBody></w:docPart></w:docParts></w:glossaryDocument>"#
+        );
+        let bytes = base(
+            document.as_bytes(),
+            &[
+                ("word/_rels/document.xml.rels", relationships.as_bytes()),
+                ("word/glossary/document.xml", glossary.as_bytes()),
+            ],
+        );
+
+        let output = convert_docx(&bytes, &ConversionOptions::default(), &context()).unwrap();
+
+        assert_eq!(output.source_content_evidence(), SourceContentEvidence::Unknown);
+        assert!(output.document.blocks.is_empty());
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "word.glossaryContentOmitted")
+        );
     }
 
     #[test]

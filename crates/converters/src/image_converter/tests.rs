@@ -2,8 +2,9 @@ use super::*;
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use into_markdown_core::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoundOcrResult, BoxFuture,
-    ExecutionOptions, Inline, OcrEngine, OcrEvidenceStage, OcrEvidenceStep, OcrOutputPlan,
-    OcrPolicy, OcrRecognition, OcrRegion, OcrRequest, OcrResult, ResourceLimits, SourceMetadata,
+    ConversionOutcome, ExecutionOptions, Inline, OcrEngine, OcrEvidenceStage, OcrEvidenceStep,
+    OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRegion, OcrRequest, OcrResult, ResourceLimits,
+    SourceMetadata, conversion_outcome,
 };
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -769,6 +770,28 @@ fn bound_ocr_emits_exact_geometry_confidence_and_chain() {
     assert!((evidence.regions[0].detection_confidence - 0.98).abs() < f32::EPSILON);
     assert_eq!(evidence.chain.len(), 3);
     assert_eq!(evidence.chain[2].stage, OcrEvidenceStage::Merge);
+}
+
+#[test]
+fn low_confidence_ocr_omission_is_degraded() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    options.ocr.minimum_confidence = 0.99;
+    let services = Services { ocr: Some(Arc::new(BoundOcr)), ..Services::default() };
+    let output = block_on(convert_image(
+        &input(encoded(ImageFormat::Png), "low-confidence.png"),
+        &options,
+        &services,
+        &context(&options),
+    ))
+    .unwrap();
+    let diagnostic = output
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "ocr.lowConfidence")
+        .unwrap();
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+    assert_eq!(conversion_outcome(&output.diagnostics), ConversionOutcome::Degraded);
 }
 
 struct LegacyOcr;

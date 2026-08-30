@@ -198,7 +198,7 @@ fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {
     assert_eq!(result.assets[0].media_type, "image/png");
     assert!(result.assets[0].external_uri.is_none());
     assert!(result.diagnostics.iter().any(|item| item.code == "epub.spine.nonLinearSkipped"));
-    assert!(result.diagnostics.iter().any(|item| item.code == "epub.unreferencedResourcesOmitted"));
+    assert!(!result.diagnostics.iter().any(|item| item.code == "epub.linkedResourcesOmitted"));
 
     let mut link_targets = Vec::new();
     let mut footnote_references = Vec::new();
@@ -212,6 +212,41 @@ fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {
         .filter(|node| matches!(&node.block, Block::Footnote { label, .. } if label == "epub-footnote-000001"))
         .count(), 1);
     assert!(has_nested_list(&result.document.blocks));
+}
+
+#[test]
+fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
+    let package = std::str::from_utf8(epub3_package()).unwrap().replace(
+        "</manifest>",
+        r#"<item id="font" href="fonts/book.woff2" media-type="font/woff2"/></manifest>"#,
+    );
+    let chapter = std::str::from_utf8(chapter_one()).unwrap().replace(
+        "<title>Chapter One</title>",
+        r#"<title>Chapter One</title><link rel="stylesheet" href="../styles/book.css"/>"#,
+    );
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", package.as_bytes()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter.as_bytes()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        (
+            "OPS/text/extra.xhtml",
+            b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>skip me</p></body></html>",
+        ),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"@font-face{src:url('../fonts/book.woff2')}"),
+        ("OPS/fonts/book.woff2", b"font"),
+    ]);
+
+    let result = convert(bytes).unwrap();
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|item| item.code == "epub.linkedResourcesOmitted")
+        .expect("linked resources must be disclosed");
+    assert!(diagnostic.message.contains("1 reachable CSS"));
+    assert!(diagnostic.message.contains("1 reachable font"));
 }
 
 #[test]
