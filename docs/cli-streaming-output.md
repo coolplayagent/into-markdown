@@ -1,9 +1,11 @@
 # CLI bounded structured output
 
-Issue #273 is stacked on #272. The lower change owns the engine transaction and
-semantic event contract (`prepare_into` / `execute_prepared_into`), including
-the existing Markdown file sink. This change owns only the CLI consumers of
-that contract. Merge #272 before #273.
+Issue #273 is stacked on #272. The lower change owns collecting conversion's
+single-execution boundary. This change owns the structured-output sink contract,
+semantic document events and finalization, plus the smallest practical
+`prepare_into` / `execute_prepared_into` seam needed by the CLI. Those seams
+remain crate-private unless another crate must implement the sink. Merge #272
+before #273.
 
 ## Responsibilities
 

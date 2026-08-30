@@ -1,8 +1,8 @@
 //! File-backed structured artifact staging.
 //!
 //! The engine adapter is intentionally added only after the stacked #272
-//! branch is available. Keeping this module independent prevents #273 from
-//! copying the engine's streaming contract.
+//! branch is approved. Keeping this module independent lets #273 add the
+//! smallest sink contract and prepare/execute seam against that stable base.
 
 use crate::args::EmitKind;
 use crate::error::{CliError, ExitClass};
