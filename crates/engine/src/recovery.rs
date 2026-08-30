@@ -602,6 +602,12 @@ pub(super) async fn convert(
             &context,
         )
         .await?;
+        let output = crate::result_policy::attach_evidence(
+            output,
+            source.input(),
+            attempt.candidate.format,
+            &context,
+        )?;
         validate_asset_inventory(&output.document, &output.assets, &request)?;
         validate_diagnostics(&output.diagnostics)?;
         store.commit(
@@ -659,6 +665,7 @@ pub(super) async fn convert(
         provenance,
         [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
     )?;
+    result.content()?;
     store.commit(
         token,
         &context,
@@ -892,6 +899,9 @@ async fn validate_recovered_success(
             "checkpoint Markdown does not match its document and assets",
         ));
     }
+    result.content().map_err(|error| {
+        recovery_error("corrupt", format!("checkpoint result fails content validation: {error}"))
+    })?;
     Ok(result)
 }
 

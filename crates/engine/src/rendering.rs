@@ -68,6 +68,7 @@ pub(crate) async fn render(
         [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
     )?;
     result.set_detected_format(format);
+    result.content()?;
     Ok(result)
 }
 

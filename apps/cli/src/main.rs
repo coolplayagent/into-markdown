@@ -9,6 +9,7 @@ mod error;
 mod i18n;
 mod output;
 mod proxy_env;
+mod result_policy;
 mod services;
 mod transaction;
 mod ui;

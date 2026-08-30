@@ -6,6 +6,7 @@ mod nested;
 mod preparation;
 mod recovery;
 mod rendering;
+mod result_policy;
 mod result_sink;
 mod stream_execution;
 
@@ -374,6 +375,12 @@ impl Engine {
             &context,
         )
         .await?;
+        let output = result_policy::attach_evidence(
+            output,
+            source.input(),
+            attempt.candidate.format,
+            &context,
+        )?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
@@ -1344,8 +1351,8 @@ mod tests {
         }
     }
 
-    struct EmptyRenderer;
-    impl MarkdownRenderer for EmptyRenderer {
+    struct TitleRenderer;
+    impl MarkdownRenderer for TitleRenderer {
         fn id(&self) -> &'static str {
             "test.renderer"
         }
@@ -1360,12 +1367,12 @@ mod tests {
         }
         fn render<'a>(
             &'a self,
-            _: &'a Document,
+            document: &'a Document,
             _: &'a [Asset],
             _: &'a ConversionOptions,
             _: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<String, ConversionError>> {
-            Box::pin(async { Ok(String::new()) })
+            Box::pin(async move { Ok(document.metadata.title.clone().unwrap_or_default()) })
         }
     }
 
@@ -1663,7 +1670,7 @@ mod tests {
     #[test]
     fn output_enrichers_run_in_registration_order_before_rendering() {
         let mut builder = EngineBuilder::new()
-            .renderer(Arc::new(EmptyRenderer))
+            .renderer(Arc::new(TitleRenderer))
             .enricher(Arc::new(TitleEnricher { id: "first.enricher", suffix: ":one" }))
             .enricher(Arc::new(TitleEnricher { id: "second.enricher", suffix: ":two" }));
         builder
@@ -1770,7 +1777,7 @@ mod tests {
 
     #[test]
     fn stable_id_breaks_equal_confidence_and_priority_ties() {
-        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(BytesResolver))
@@ -1785,7 +1792,7 @@ mod tests {
 
     #[test]
     fn invalid_converter_ir_is_rejected_before_rendering() {
-        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(BytesResolver))
@@ -1800,7 +1807,7 @@ mod tests {
 
     #[test]
     fn overdeep_converter_ir_is_bounded_before_retained_estimation() {
-        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(BytesResolver))
@@ -1859,7 +1866,7 @@ mod tests {
     fn converter_credit_requires_each_coexisting_owner_before_allocation() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = Arc::new(Mutex::new(None));
-        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(TrackingBytesResolver {
@@ -1891,7 +1898,7 @@ mod tests {
     fn engine_accounts_large_ir_capacity_with_and_without_assets() {
         for (title_capacity, asset_capacity) in [(80_000, 0), (40_000, 40_000)] {
             let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+            let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
             builder
                 .registry_mut()
                 .register_source_resolver(Arc::new(BytesResolver))
@@ -2043,7 +2050,7 @@ mod tests {
 
     #[test]
     fn explicit_format_attempt_precedes_higher_combined_inferred_attempt() {
-        let mut builder = EngineBuilder::new().renderer(Arc::new(EmptyRenderer));
+        let mut builder = EngineBuilder::new().renderer(Arc::new(TitleRenderer));
         builder
             .registry_mut()
             .register_source_resolver(Arc::new(BytesResolver))

@@ -15,6 +15,7 @@ mod media_checkpoint;
 mod nested;
 mod ocr_binding;
 mod options;
+mod result_policy;
 mod spi;
 mod stream;
 mod summary;
@@ -60,6 +61,12 @@ pub use options::{
     DelimitedTextOptions, DiarizationOptions, ErrorPolicy, NetworkOptions, OcrOptions, OcrPolicy,
     OutputOptions, RaggedRowsMode, ResourceLimits, TableHeaderMode, TextDecodingMode, TextOptions,
 };
+pub use result_policy::{
+    ASSET_ONLY_REASON_CODE, EMPTY_SOURCE_REASON_CODE, ResultContent, SourceContentEvidence,
+    classify_result, conversion_outcome, markdown_has_visible_content,
+};
+#[doc(hidden)]
+pub use result_policy::{document_is_asset_only, document_is_empty};
 pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, ArtifactSink, AssetStreamInfo,
     BoxFuture, ConversionOutcome, ConversionRequest, ConversionResult, ConversionSummary,

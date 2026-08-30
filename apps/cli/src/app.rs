@@ -4313,26 +4313,21 @@ fn run_conversion(
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        let (output_path, detected_format, diagnostics, warnings) =
-            process_file_task_inner(plan, &policy, &output_phase)?;
+        let completed = process_file_task_inner(plan, &policy, &output_phase)?;
         vec![BatchItemReport {
             input: plan.item.display.clone(),
-            output: Some(report_path(&output_path)),
-            format: detected_format.map(|format| format.as_str().into()),
+            output: Some(report_path(&completed.path)),
+            format: completed.format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
-            diagnostics: diagnostics.iter().map(Into::into).collect(),
+            outcome: crate::result_policy::batch_outcome(completed.outcome),
+            diagnostics: completed.diagnostics.iter().map(Into::into).collect(),
             error_code: None,
-            reason_code: None,
+            reason_code: completed.reason_code,
             component: None,
             part: None,
             limit: None,
             message: None,
-            warnings,
+            warnings: completed.warnings,
         }]
     } else {
         process_batch(plans, &policy, arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get))?
@@ -4949,6 +4944,7 @@ fn process_stdout(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    crate::result_policy::validate_for_emit(&result, policy.emit, policy.asset_mode)?;
     let mut encoded =
         policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
     output::encode_result_into(&result, policy.emit, &mut encoded)?;
@@ -5016,14 +5012,10 @@ fn process_stdout(
         output: None,
         format: result.detected_format().map(|format| format.as_str().into()),
         status: BatchItemStatus::Success,
-        outcome: if result.diagnostics.is_empty() {
-            BatchItemOutcome::Complete
-        } else {
-            BatchItemOutcome::Degraded
-        },
+        outcome: crate::result_policy::batch_outcome(result.outcome()),
         diagnostics: result.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
-        reason_code: None,
+        reason_code: result.reason_code().map(str::to_owned),
         component: None,
         part: None,
         limit: None,
@@ -5093,24 +5085,20 @@ fn process_file_task(
 ) -> BatchItemReport {
     let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok((output_path, detected_format, diagnostics, warnings)) => BatchItemReport {
+        Ok(completed) => BatchItemReport {
             input: plan.item.display,
-            output: Some(report_path(&output_path)),
-            format: detected_format.map(|format| format.as_str().into()),
+            output: Some(report_path(&completed.path)),
+            format: completed.format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
-            diagnostics: diagnostics.iter().map(Into::into).collect(),
+            outcome: crate::result_policy::batch_outcome(completed.outcome),
+            diagnostics: completed.diagnostics.iter().map(Into::into).collect(),
             error_code: None,
-            reason_code: None,
+            reason_code: completed.reason_code,
             component: None,
             part: None,
             limit: None,
             message: None,
-            warnings,
+            warnings: completed.warnings,
         },
         Err(error) => BatchItemReport {
             input: plan.item.display,
@@ -5140,7 +5128,7 @@ fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
     output_phase: &Mutex<()>,
-) -> Result<(PathBuf, Option<InputFormat>, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
+) -> Result<crate::result_policy::CommittedOutput, CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
     let output_path = {
@@ -5156,6 +5144,9 @@ fn process_file_task_inner(
         &policy.working_directory,
     )?;
     let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    crate::result_policy::validate_for_emit(&result, policy.emit, policy.asset_mode)?;
+    let content_outcome = result.outcome();
+    let reason_code = result.reason_code().map(str::to_owned);
     let output_parent = output_path
         .parent()
         .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
@@ -5185,7 +5176,14 @@ fn process_file_task_inner(
             outcome.path.display()
         ));
     }
-    Ok((outcome.path, result.detected_format(), result.diagnostics, warnings))
+    Ok(crate::result_policy::CommittedOutput {
+        path: outcome.path,
+        format: result.detected_format(),
+        diagnostics: result.diagnostics,
+        warnings,
+        outcome: content_outcome,
+        reason_code,
+    })
 }
 
 fn report_path(path: &Path) -> String {

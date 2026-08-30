@@ -4,7 +4,7 @@ use super::entry_policy::EntryKind;
 use super::merge::MergeState;
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ConverterOutput, ErrorCode, FormatHint,
-    NestedConversionRequest, ResolvedInput, Services, SourceMetadata,
+    NestedConversionRequest, ResolvedInput, Services, SourceContentEvidence, SourceMetadata,
 };
 use std::sync::Arc;
 
@@ -30,7 +30,13 @@ pub(super) async fn convert<'a>(
             ConversionError::Unsupported { detail: "ZIP contains no convertible members".into() }
         }));
     }
-    walker.merge.finish()
+    let has_leaf_content = walker.stats.leaves != 0;
+    let output = walker.merge.finish()?;
+    Ok(if has_leaf_content {
+        output
+    } else {
+        output.with_source_content_evidence(SourceContentEvidence::Empty)
+    })
 }
 
 struct RecursiveConverter<'a> {

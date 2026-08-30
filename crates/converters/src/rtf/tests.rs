@@ -382,9 +382,22 @@ fn table_list_and_safe_field_map_to_structured_ir() {
         !link.diagnostics.iter().any(|diagnostic| diagnostic.code == "rtf.unknownControlIgnored")
     );
     let unknown = convert(b"{\\rtf1\\ansi\\definitelyunknown text}").unwrap();
-    assert!(
-        unknown.diagnostics.iter().any(|diagnostic| diagnostic.code == "rtf.unknownControlIgnored")
-    );
+    let diagnostic = unknown
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "rtf.unknownControlIgnored")
+        .unwrap();
+    assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+    assert_eq!(conversion_outcome(&unknown.diagnostics), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn empty_rtf_is_certified_without_degrading_its_audit_diagnostic() {
+    let output = convert(b"{\\rtf1\\ansi}").unwrap();
+    assert_eq!(output.source_content_evidence(), SourceContentEvidence::Empty);
+    assert_eq!(output.diagnostics[0].code, "rtf.emptyDocument");
+    assert_eq!(output.diagnostics[0].severity, DiagnosticSeverity::Info);
+    assert_eq!(conversion_outcome(&output.diagnostics), ConversionOutcome::Complete);
 }
 
 #[test]

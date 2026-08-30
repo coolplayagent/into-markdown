@@ -1,7 +1,7 @@
 //! Completion-summary ownership and accounting.
 
 use crate::spi::OutputMemoryLease;
-use crate::{ConversionOutcome, ConversionResult, ConversionSummary};
+use crate::{ConversionResult, ConversionSummary};
 
 impl Clone for ConversionSummary {
     fn clone(&self) -> Self {
@@ -34,11 +34,7 @@ impl ConversionResult {
     #[doc(hidden)]
     #[must_use]
     pub fn into_summary(self) -> ConversionSummary {
-        let outcome = if self.diagnostics.is_empty() {
-            ConversionOutcome::Complete
-        } else {
-            ConversionOutcome::Degraded
-        };
+        let outcome = self.outcome();
         ConversionSummary {
             format: self.detected_format,
             outcome,

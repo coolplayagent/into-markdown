@@ -134,9 +134,10 @@ pub struct AssetStreamInfo {
 /// Semantic result of a completed streaming conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversionOutcome {
-    /// No recoverable content was omitted or sanitized.
+    /// No recoverable content was omitted, replaced, or sanitized.
     Complete,
-    /// Conversion completed with one or more diagnostics.
+    /// Conversion completed with usable output after a recoverable omission,
+    /// replacement, or sanitization.
     Degraded,
 }
 
@@ -408,6 +409,8 @@ pub struct ConverterOutput {
     pub assets: Vec<Asset>,
     /// Recoveries and scoped failures.
     pub diagnostics: Vec<Diagnostic>,
+    /// Converter-owned evidence consumed by the shared empty-result policy.
+    source_content_evidence: crate::SourceContentEvidence,
     /// Live memory charges transferred with the output until the engine has assembled its result.
     memory_lease: OutputMemoryLease,
 }
@@ -416,7 +419,13 @@ impl ConverterOutput {
     /// Construct an output without transferred charges.
     #[must_use]
     pub fn new(document: Document, assets: Vec<Asset>, diagnostics: Vec<Diagnostic>) -> Self {
-        Self { document, assets, diagnostics, memory_lease: OutputMemoryLease::default() }
+        Self {
+            document,
+            assets,
+            diagnostics,
+            source_content_evidence: crate::SourceContentEvidence::Unknown,
+            memory_lease: OutputMemoryLease::default(),
+        }
     }
 
     /// Construct converter output with reservations attached exactly once.
@@ -433,6 +442,7 @@ impl ConverterOutput {
             document,
             assets,
             diagnostics,
+            source_content_evidence: crate::SourceContentEvidence::Unknown,
             memory_lease: OutputMemoryLease::from_reservations(leases),
         }
     }
@@ -451,7 +461,27 @@ impl ConverterOutput {
         certify_recovered_reservation(context, &mut lease, retained)?;
         let mut memory_lease = OutputMemoryLease::from_reservation(lease)?;
         memory_lease.accounted_bytes = retained;
-        Ok(Self { document, assets, diagnostics, memory_lease })
+        Ok(Self {
+            document,
+            assets,
+            diagnostics,
+            source_content_evidence: crate::SourceContentEvidence::Unknown,
+            memory_lease,
+        })
+    }
+
+    /// Attach converter-owned source-content evidence.
+    #[must_use]
+    pub fn with_source_content_evidence(mut self, evidence: crate::SourceContentEvidence) -> Self {
+        self.source_content_evidence = evidence;
+        self
+    }
+
+    /// Read converter-owned source-content evidence at the engine boundary.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn source_content_evidence(&self) -> crate::SourceContentEvidence {
+        self.source_content_evidence
     }
 
     /// Bind live reservations to this output using the central retained-size
@@ -560,7 +590,8 @@ impl ConverterOutput {
         provenance: Vec<Provenance>,
         reservations: [Option<ResourceReservation>; 3],
     ) -> Result<ConversionResult, ConversionError> {
-        let Self { document, assets, diagnostics, mut memory_lease } = self;
+        let Self { document, assets, diagnostics, source_content_evidence: _, mut memory_lease } =
+            self;
         for reservation in reservations.into_iter().flatten() {
             memory_lease.push(reservation)?;
         }
