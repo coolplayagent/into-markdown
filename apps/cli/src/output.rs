@@ -4,6 +4,7 @@ mod assets;
 mod bundle;
 mod commit;
 mod serialization;
+mod stdout;
 #[cfg(test)]
 mod stream;
 
@@ -18,6 +19,7 @@ use commit::write_preflighted_file;
 pub(crate) use commit::{preflight_file, write_file, write_output_set_file, write_report};
 pub(crate) use serialization::encode_result;
 pub(crate) use serialization::encode_result_into;
+pub(crate) use stdout::publish as publish_stdout;
 
 #[cfg(test)]
 use crate::args::{AssetModeArg, ConflictPolicy, EmitKind};

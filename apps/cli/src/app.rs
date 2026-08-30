@@ -28,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
@@ -4953,8 +4953,6 @@ fn process_stdout(
         policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
     output::encode_result_into(&result, policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
-    let mut reader = encoded.as_file().map_err(CliError::from)?.try_clone()?;
-    reader.rewind()?;
     let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
         (!result.assets.is_empty())
             .then(|| {
@@ -4977,40 +4975,7 @@ fn process_stdout(
     } else {
         None
     };
-    let mut buffer = [0_u8; 64 * 1024];
-    let write_result = (|| -> Result<(), std::io::Error> {
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                return Ok(());
-            }
-            context.stdout.write_all(&buffer[..read])?;
-        }
-    })();
-    if let Err(error) = write_result {
-        let error = CliError::from(error);
-        if let Some(staged) = staged_assets {
-            if error.is_broken_pipe() {
-                staged.commit()?;
-            } else if let Err(recovery) = staged.abort() {
-                return Err(CliError::new(
-                    crate::error::ExitClass::Io,
-                    "rollbackFailed",
-                    format!(
-                        "stdout failed ({}: {}); staged asset rollback failed ({}: {})",
-                        error.code(),
-                        error.message(),
-                        recovery.code(),
-                        recovery.message()
-                    ),
-                ));
-            }
-        }
-        return Err(error);
-    }
-    if let Some(staged) = staged_assets {
-        staged.commit()?;
-    }
+    output::publish_stdout(&encoded, context.stdout, staged_assets, &policy.output_context)?;
     Ok(BatchItemReport {
         input: plan.item.display.clone(),
         output: None,
