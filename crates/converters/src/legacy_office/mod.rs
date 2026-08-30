@@ -8,6 +8,7 @@ mod budget;
 mod builder;
 mod doc;
 mod ppt;
+mod tables;
 mod xls;
 
 use crate::msg::ole::{CompoundCompatibility, CompoundFile, CompoundRecovery};

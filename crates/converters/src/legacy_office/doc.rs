@@ -4,6 +4,10 @@ use crate::msg::ole::Storage;
 use encoding_rs::{BIG5, Encoding, GBK, SHIFT_JIS, WINDOWS_1251, WINDOWS_1252};
 use into_markdown_core::{Block, Cell, ConversionError, Inline, ListItem, ListKind, TableRow};
 
+mod links;
+mod table_output;
+mod tables;
+
 const WORD97: u16 = 0x00c1;
 const WORD2003_MAX: u16 = 0x0112;
 const FIB_IDENT: u16 = 0xa5ec;
@@ -70,7 +74,8 @@ pub(super) fn convert(
             Some(locator("WordDocument/text")),
         );
     }
-    emit_story(main, &mut builder, budget)?;
+    let rows = tables::read_rows(word, table, &pieces, budget)?;
+    table_output::emit(main, &rows, &mut builder, budget)?;
     let footnote_start = main_characters;
     emit_notes(
         slice_chars(&text, footnote_start, story_counts[1])?,
@@ -109,7 +114,9 @@ pub(super) fn convert(
         "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
         Some(locator("WordDocument")),
     );
-    Ok(builder.finish())
+    let mut output = builder.finish();
+    links::normalize(&mut output, budget)?;
+    Ok(output)
 }
 
 fn story_counts(word: &[u8]) -> Result<[usize; 8], ConversionError> {
@@ -288,8 +295,10 @@ fn emit_story(
         if cleaned.contains('\u{7}') {
             flush_list(builder, &mut list);
             let cells = cleaned
-                .split('\u{7}')
-                .filter(|value| !value.is_empty())
+                .trim_end_matches('\r')
+                .strip_suffix('\u{7}')
+                .unwrap_or(&cleaned)
+                .split_terminator('\u{7}')
                 .map(|value| Cell {
                     row_span: 1,
                     column_span: 1,
@@ -457,8 +466,7 @@ fn flush_table(
     if rows.is_empty() {
         return Ok(());
     }
-    let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
-    budget.table_shape(rows.len(), columns)?;
+    crate::legacy_office::tables::rectangularize(rows, builder, budget, "WordDocument")?;
     builder.push(
         Block::Table { rows: std::mem::take(rows), alignments: Vec::new() },
         locator("WordDocument"),
