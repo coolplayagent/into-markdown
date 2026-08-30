@@ -31,6 +31,7 @@ impl Drop for TemporaryDirectory {
 }
 
 #[test]
+#[cfg(windows)]
 fn packaged_pdfium_is_resolved_relative_to_the_canonical_executable() {
     let temporary = TemporaryDirectory::new();
     let root = temporary.path();
@@ -51,6 +52,7 @@ fn packaged_pdfium_is_resolved_relative_to_the_canonical_executable() {
 }
 
 #[test]
+#[cfg(windows)]
 fn direct_run_archive_resolves_only_its_own_physical_pdfium() {
     let temporary = TemporaryDirectory::new();
     let root = temporary.path();
@@ -75,6 +77,7 @@ fn direct_run_archive_resolves_only_its_own_physical_pdfium() {
 }
 
 #[test]
+#[cfg(windows)]
 fn portable_bin_directory_precedes_the_installed_layout_without_case_sensitivity() {
     for directory_name in ["bin", "BIN"] {
         let temporary = TemporaryDirectory::new();
@@ -103,6 +106,22 @@ fn portable_bin_directory_precedes_the_installed_layout_without_case_sensitivity
         fs::remove_file(&portable).unwrap();
         assert_eq!(packaged_pdfium_path(&executable), Some(installed.canonicalize().unwrap()));
     }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn non_windows_ignores_executable_adjacent_pdfium() {
+    let temporary = TemporaryDirectory::new();
+    let executable = temporary.path().join("into-md");
+    let runtime = temporary.path().join(if cfg!(target_os = "macos") {
+        "lib/pdfium/libpdfium.dylib"
+    } else {
+        "lib/pdfium/libpdfium.so"
+    });
+    fs::write(&executable, b"binary").unwrap();
+    fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    fs::write(runtime, b"stale-runtime").unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
 }
 
 #[cfg(unix)]

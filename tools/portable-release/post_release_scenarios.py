@@ -245,7 +245,7 @@ def run_core_pdf(
     conversion_arguments: Callable[[pathlib.Path, pathlib.Path, list[str]], list[str]],
     assert_output: Callable[[pathlib.Path, str], None],
     runtime_directories: Callable[[dict[str, str], str], list[pathlib.Path]],
-) -> tuple[list[pathlib.Path], int, int]:
+) -> tuple[list[pathlib.Path], int, int, bytes]:
     """Run the first Core PDF conversion and return its runtime observations."""
     source = copy_fixture(fixtures, "small/pdf/structures.pdf", work / "structures.pdf")
     output = work / "structures.md"
@@ -260,7 +260,7 @@ def run_core_pdf(
         raise E2EError(
             "first PDF did not use the expected packaged or embedded PDFium runtime"
         )
-    return runtimes, expected, case.elapsed_ms
+    return runtimes, expected, case.elapsed_ms, output.read_bytes()
 
 
 def run_skill_packaged_runtime(
@@ -269,6 +269,8 @@ def run_skill_packaged_runtime(
     fixtures: pathlib.Path,
     root: pathlib.Path,
     expected_all_runtimes: int,
+    expected_version: str,
+    expected_pdf_output: bytes,
     protect_directory: Callable[[pathlib.Path, str], pathlib.Path],
     isolated_environment: Callable[
         [pathlib.Path, str], tuple[dict[str, str], pathlib.Path]
@@ -276,6 +278,7 @@ def run_skill_packaged_runtime(
     runner_factory: Callable[[pathlib.Path, dict[str, str], pathlib.Path], Any],
     copy_fixture: Callable[[pathlib.Path, str, pathlib.Path], pathlib.Path],
     conversion_arguments: Callable[[pathlib.Path, pathlib.Path, list[str]], list[str]],
+    assert_output: Callable[[pathlib.Path, str], None],
     runtime_directories: Callable[[dict[str, str], str], list[pathlib.Path]],
 ) -> list[dict[str, Any]]:
     """Prove the Skill layout converts PDF/OCR with an empty search path."""
@@ -284,30 +287,51 @@ def run_skill_packaged_runtime(
     environment, _user_data = isolated_environment(skill_root / "state", platform)
     environment["PATH"] = ""
     runner = runner_factory(skill, environment, skill_work)
-    runner.call("skill-version-empty-path", ["version", "--json", "--no-config"])
+    version = runner.call("skill-version-empty-path", ["version", "--json", "--no-config"])
+    try:
+        version_payload = json.loads(version.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise E2EError("Skill version output is not JSON") from error
+    if version_payload.get("name") != "into-md" or version_payload.get("version") != expected_version:
+        raise E2EError("Skill version does not match the requested release")
     text = copy_fixture(fixtures, "small/text/normal.txt", skill_work / "normal.txt")
+    text_output = skill_work / "normal.md"
     runner.call(
         "skill-text-empty-path",
-        conversion_arguments(text, skill_work / "normal.md", ["--no-config"]),
+        conversion_arguments(text, text_output, ["--no-config"]),
     )
+    assert_output(text_output, "Skill plain text")
+    source_text = text.read_text(encoding="utf-8").strip()
+    if source_text and source_text not in text_output.read_text(encoding="utf-8"):
+        raise E2EError("Skill text output does not contain the fixture authority text")
     pdf = copy_fixture(
         fixtures, "small/pdf/structures.pdf", skill_work / "structures.pdf"
     )
+    pdf_output = skill_work / "structures.md"
     runner.call(
         "skill-pdf-empty-path",
         conversion_arguments(
-            pdf, skill_work / "structures.md", ["--ocr", "off", "--no-config"]
+            pdf, pdf_output, ["--ocr", "off", "--no-config"]
         ),
     )
+    assert_output(pdf_output, "Skill PDF")
+    if pdf_output.read_bytes() != expected_pdf_output:
+        raise E2EError("Skill PDF output differs from the authenticated Core output")
     ocr = copy_fixture(
         fixtures, "small/ocr/ocr-english-clear-1.png", skill_work / "ocr.png"
     )
+    ocr_output = skill_work / "ocr.md"
     runner.call(
         "skill-ocr-empty-path",
         conversion_arguments(
-            ocr, skill_work / "ocr.md", ["--ocr", "always", "--no-config"]
+            ocr, ocr_output, ["--ocr", "always", "--no-config"]
         ),
     )
+    assert_output(ocr_output, "Skill OCR")
+    if "clear scans verify document conversion quality" not in ocr_output.read_text(
+        encoding="utf-8"
+    ).lower():
+        raise E2EError("Skill OCR output does not contain the fixture authority text")
     if len(runtime_directories(environment, platform)) != expected_all_runtimes:
         raise E2EError(
             "Skill empty-PATH PDF/OCR did not use the expected packaged/embedded runtimes"

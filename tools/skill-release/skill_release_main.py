@@ -19,10 +19,13 @@ def main() -> None:
     build.add_argument("--windows-x86-64-pdfium", required=True, type=pathlib.Path)
     build.add_argument("--linux-x86-64-core", required=True, type=pathlib.Path)
     build.add_argument("--linux-arm64-core", required=True, type=pathlib.Path)
-    build.add_argument("--material-authority", required=True, type=pathlib.Path)
+    build.add_argument("--windows-material-authority", required=True, type=pathlib.Path)
+    build.add_argument("--linux-x86-64-material-authority", required=True, type=pathlib.Path)
+    build.add_argument("--linux-arm64-material-authority", required=True, type=pathlib.Path)
+    build.add_argument("--authority-output", required=True, type=pathlib.Path)
     verify = commands.add_parser("verify")
     verify.add_argument("--archive", required=True, type=pathlib.Path)
-    verify.add_argument("--material-authority", required=True, type=pathlib.Path)
+    verify.add_argument("--skill-authority", required=True, type=pathlib.Path)
     copy = commands.add_parser("materialize")
     copy.add_argument("--destination", required=True, type=pathlib.Path)
     commands.add_parser("validate")
@@ -36,11 +39,16 @@ def main() -> None:
                 arguments.linux_x86_64_core.resolve(),
                 arguments.linux_arm64_core.resolve(),
             ),
-            arguments.material_authority.resolve(),
+            {
+                "x86_64-pc-windows-msvc": arguments.windows_material_authority.resolve(),
+                "x86_64-unknown-linux-gnu": arguments.linux_x86_64_material_authority.resolve(),
+                "aarch64-unknown-linux-gnu": arguments.linux_arm64_material_authority.resolve(),
+            },
+            arguments.authority_output.resolve(),
         )
     elif arguments.command == "verify":
         verify_release(
-            arguments.archive.resolve(), arguments.material_authority.resolve()
+            arguments.archive.resolve(), arguments.skill_authority.resolve()
         )
     elif arguments.command == "materialize":
         materialize(arguments.destination.resolve())

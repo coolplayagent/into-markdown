@@ -152,14 +152,10 @@ def write_core_archive(
             archive.writestr(member(extra), b"unexpected")
 
 
-def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> None:
+def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> dict:
     files = {
         "into-markdown/LICENSE": (e2e.ROOT / "LICENSE").read_bytes(),
-        "into-markdown/NOTICE": b"notice",
-        "into-markdown/SBOM.spdx.json": b"{}",
         "into-markdown/SKILL.md": b"skill",
-        "into-markdown/SOURCES.json": b"{}",
-        "into-markdown/THIRD_PARTY_NOTICES.md": b"notices",
         "into-markdown/agents/openai.yaml": b"interface: {}",
         "into-markdown/assets/linux-arm64/into-md": elf(183),
         "into-markdown/assets/linux-x86_64/into-md": elf(),
@@ -168,20 +164,9 @@ def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> Non
     }
     if runtime is not None:
         files[e2e.WINDOWS_SKILL_PDFIUM] = runtime
-    for relative in e2e.CORE_MATERIAL_MEMBERS:
-        if relative == "LICENSE":
-            continue
-        authority = {
-            "licenses/npm/npm-release.spdx.json": e2e.ROOT
-            / "third_party/licenses/npm-release.spdx.json",
-            "licenses/npm/lucide-ISC-MIT.txt": e2e.ROOT
-            / "third_party/licenses/npm/lucide-ISC-MIT.txt",
-            "licenses/npm/react-MIT.txt": e2e.ROOT
-            / "third_party/licenses/npm/react-MIT.txt",
-        }.get(relative)
-        files[f"into-markdown/{relative}"] = (
-            authority.read_bytes() if authority else material_bytes(relative)
-        )
+    for target, _asset in e2e.SKILL_TARGETS:
+        for relative in e2e.CORE_MATERIAL_MEMBERS:
+            files[f"into-markdown/evidence/{target}/{relative}"] = material_bytes(relative)
     ordered_names = ["into-markdown/", *sorted(set(e2e.SKILL_DIRECTORIES[1:]) | set(e2e.SKILL_FILES))]
     records = []
     for name in ordered_names:
@@ -209,11 +194,13 @@ def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> Non
                 if relative in {"LICENSE", "NOTICE"}
                 else "executable"
                 if relative.startswith("assets/")
+                else "target-evidence"
+                if relative.startswith("evidence/")
                 else "skill-source"
             ),
             **(
                 {"componentId": "pdfium"}
-                if name == e2e.WINDOWS_SKILL_PDFIUM or relative.startswith("licenses/pdfium/")
+                if name == e2e.WINDOWS_SKILL_PDFIUM or "/licenses/pdfium/" in relative
                 else {}
             ),
         }
@@ -233,6 +220,33 @@ def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> Non
                     "into-markdown/assets/linux-x86_64/into-md",
                 } else 0o644
                 archive.writestr(member(name, mode), files[name])
+    targets = []
+    for target, asset in e2e.SKILL_TARGETS:
+        binary = files[f"into-markdown/{asset}"]
+        targets.append(
+            {
+                "target": target,
+                "binary": {
+                    "path": asset,
+                    "bytes": len(binary),
+                    "sha256": __import__("hashlib").sha256(binary).hexdigest(),
+                },
+                "materials": [
+                    {
+                        "path": relative,
+                        "bytes": len(material_bytes(relative)),
+                        "sha256": __import__("hashlib").sha256(material_bytes(relative)).hexdigest(),
+                    }
+                    for relative in sorted(e2e.CORE_MATERIAL_MEMBERS)
+                ],
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "namespace": "into-markdown/skill-release-authority",
+        "artifact": "into-markdown",
+        "targets": targets,
+    }
 
 
 class PostReleaseE2ETests(unittest.TestCase):
@@ -317,9 +331,8 @@ class PostReleaseE2ETests(unittest.TestCase):
         ):
             root = pathlib.Path(name)
             archive_path = root / e2e.SKILL_ARCHIVE
-            write_skill_archive(archive_path, runtime)
+            material = write_skill_archive(archive_path, runtime)
             output = root / "skill" / "skill.exe"
-            material = material_authority(e2e.TARGETS["windows"]["target"])
             e2e.extract_skill_binary(archive_path, "windows", output, material)
             self.assertEqual(
                 (output.parent / e2e.WINDOWS_PDFIUM_MEMBER).read_bytes(), runtime
@@ -363,6 +376,148 @@ class PostReleaseE2ETests(unittest.TestCase):
             self.assertEqual(len(records), 3)
             self.assertTrue(all(not record["downloaded"] for record in records.values()))
             self.assertTrue(all(len(record["sha256"]) == 64 for record in records.values()))
+            expected = {
+                name: {"bytes": record["bytes"], "sha256": record["sha256"]}
+                for name, record in records.items()
+                if name != e2e.SKILL_ARCHIVE
+            }
+            expected[e2e.TARGETS["linux"]["core"]]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(e2e.E2EError, "independent authority"):
+                e2e.acquire_assets(
+                    root, "owner/repo", "0.0.3", ["linux"], expected_assets=expected
+                )
+
+    def test_download_rejects_missing_length_insecure_redirect_and_length_mismatch(self) -> None:
+        class Response:
+            def __init__(self, data: bytes, url: str, length: str | None):
+                self.data = data
+                self.url = url
+                self.headers = {} if length is None else {"Content-Length": length}
+                self.offset = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def geturl(self):
+                return self.url
+
+            def read(self, size):
+                value = self.data[self.offset : self.offset + size]
+                self.offset += len(value)
+                return value
+
+        cases = (
+            (Response(b"x", "https://github.com/asset", None), "Content-Length"),
+            (Response(b"x", "http://attacker.invalid/asset", "1"), "not HTTPS"),
+            (Response(b"xx", "https://github.com/asset", "1"), "declared length"),
+        )
+        for response, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as name:
+                root = pathlib.Path(name)
+                for asset in (e2e.TARGETS["linux"]["core"], e2e.TARGETS["linux"]["speech"]):
+                    (root / asset).write_bytes(b"local")
+                with mock.patch("release_artifacts.urllib.request.urlopen", return_value=response), self.assertRaisesRegex(e2e.E2EError, message):
+                    e2e.acquire_assets(root, "owner/repo", "0.0.3", ["linux"])
+
+    def test_zip_preflight_rejects_entry_flood_ratio_bomb_and_shared_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            flood = root / "flood.zip"
+            with zipfile.ZipFile(flood, "w") as archive:
+                for index in range(e2e.MAX_ARCHIVE_ENTRIES + 1):
+                    archive.writestr(f"entry-{index}", b"")
+            with self.assertRaisesRegex(e2e.E2EError, "central directory"):
+                e2e.extract_single_core(
+                    flood, "linux", root / "flood-output", material_authority(e2e.TARGETS["linux"]["target"])
+                )
+
+            bomb = root / "bomb.zip"
+            with zipfile.ZipFile(bomb, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("bomb", b"0" * (8 * 1024 * 1024))
+            with self.assertRaisesRegex(e2e.E2EError, "compression ratio"):
+                e2e.extract_single_core(
+                    bomb, "linux", root / "bomb-output", material_authority(e2e.TARGETS["linux"]["target"])
+                )
+
+            core = root / "core.zip"
+            write_core_archive(core, "linux")
+            budget = e2e.ResourceBudget(max_entries=1)
+            with self.assertRaisesRegex(e2e.E2EError, "entries budget"):
+                e2e.extract_single_core(
+                    core,
+                    "linux",
+                    root / "budget-output",
+                    material_authority(e2e.TARGETS["linux"]["target"]),
+                    budget,
+                )
+
+    def test_skill_black_box_rejects_no_output_wrong_version_and_wrong_content(self) -> None:
+        class Result:
+            def __init__(self, stdout=b""):
+                self.stdout = stdout
+                self.stderr = b""
+                self.elapsed_ms = 1
+
+        def protect(path, _platform):
+            path.mkdir(parents=True, exist_ok=False)
+            return path
+
+        def isolated(path, _platform):
+            path.mkdir(parents=True, exist_ok=False)
+            return {"PATH": "", "XDG_CACHE_HOME": str(path / "cache")}, path
+
+        for scenario, expected in (
+            ("no-output", "missing or empty"),
+            ("wrong-version", "version does not match"),
+            ("wrong-text", "fixture authority text"),
+            ("wrong-pdf", "differs from the authenticated Core"),
+            ("wrong-ocr", "fixture authority text"),
+        ):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as name:
+                root = pathlib.Path(name)
+
+                class FakeRunner:
+                    def __init__(self, _binary, _environment, _work):
+                        self.cases = []
+
+                    def call(self, case, arguments):
+                        self.cases.append({"name": case})
+                        if case == "skill-version-empty-path":
+                            version = "9.9.9" if scenario == "wrong-version" else "0.0.3"
+                            return Result(json.dumps({"name": "into-md", "version": version}).encode())
+                        if scenario != "no-output":
+                            output = pathlib.Path(arguments[arguments.index("-o") + 1])
+                            if case == "skill-text-empty-path":
+                                output.write_text("wrong" if scenario == "wrong-text" else "Alpha 中文 line\nSecond line", encoding="utf-8")
+                            elif case == "skill-pdf-empty-path":
+                                output.write_bytes(b"wrong" if scenario == "wrong-pdf" else b"core-pdf")
+                            else:
+                                output.write_text(
+                                    "wrong" if scenario == "wrong-ocr" else "clear scans verify document conversion quality",
+                                    encoding="utf-8",
+                                )
+                        return Result()
+
+                with self.assertRaisesRegex(e2e.E2EError, expected):
+                    e2e.run_skill_packaged_runtime(
+                        root / "skill",
+                        "linux",
+                        e2e.ROOT / "fixtures",
+                        root / "run",
+                        0,
+                        "0.0.3",
+                        b"core-pdf",
+                        protect,
+                        isolated,
+                        FakeRunner,
+                        e2e._copy_fixture,
+                        e2e.conversion_arguments,
+                        e2e.assert_output,
+                        lambda _environment, _platform: [],
+                    )
 
     def test_dispatch_snapshot_detection_is_scoped_to_the_isolated_temp(self) -> None:
         with tempfile.TemporaryDirectory() as name:

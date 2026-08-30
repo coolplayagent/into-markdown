@@ -43,6 +43,8 @@ use into_markdown_pdfium::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
 use std::time::Duration;
@@ -140,6 +142,12 @@ fn packaged_pdfium_runtime_path() -> Option<PathBuf> {
     packaged_pdfium_path(&std::env::current_exe().ok()?)
 }
 
+#[cfg(not(target_os = "windows"))]
+fn packaged_pdfium_path(_executable: &Path) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
     if !path_is_physical(executable) {
         return None;
@@ -150,14 +158,7 @@ fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
         return None;
     }
     let executable_directory = executable.parent()?;
-    #[cfg(target_os = "macos")]
-    let relative = Path::new("lib/pdfium/libpdfium.dylib");
-    #[cfg(target_os = "linux")]
-    let relative = Path::new("lib/pdfium/libpdfium.so");
-    #[cfg(target_os = "windows")]
     let relative = Path::new("lib/pdfium/pdfium.dll");
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    return None;
     let portable = executable_directory.join(relative);
     match packaged_runtime_state(executable_directory, &portable) {
         PackagedRuntimeState::Physical => return Some(portable),
@@ -173,6 +174,7 @@ fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
         .then_some(installed)
 }
 
+#[cfg(target_os = "windows")]
 fn path_is_physical(path: &Path) -> bool {
     if !path.is_absolute() {
         return false;
@@ -194,12 +196,14 @@ fn path_is_physical(path: &Path) -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(target_os = "windows")]
 enum PackagedRuntimeState {
     Missing,
     Physical,
     Unsafe,
 }
 
+#[cfg(target_os = "windows")]
 fn packaged_runtime_state(root: &Path, runtime: &Path) -> PackagedRuntimeState {
     let Ok(relative) = runtime.strip_prefix(root) else {
         return PackagedRuntimeState::Unsafe;
@@ -234,17 +238,12 @@ fn packaged_runtime_state(root: &Path, runtime: &Path) -> PackagedRuntimeState {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn is_reparse_or_link(metadata: &std::fs::Metadata) -> bool {
     if metadata.file_type().is_symlink() {
         return true;
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        metadata.file_attributes() & 0x400 != 0
-    }
-    #[cfg(not(windows))]
-    false
+    metadata.file_attributes() & 0x400 != 0
 }
 
 /// Verify an exact pinned `PDFium` file without opening a document.

@@ -25,23 +25,27 @@ from release_artifacts import (  # noqa: E402
     CORE_ARCHIVE_MANIFEST,
     CORE_MATERIAL_AUTHORITY,
     CORE_MATERIAL_MEMBERS,
-    PDFIUM_LICENSE_FILES,
     ROOT,
     SKILL_ARCHIVE,
+    SKILL_AUTHORITY,
     SKILL_DIRECTORIES,
     SKILL_FILES,
     SKILL_MANIFEST,
+    SKILL_TARGETS,
     TARGETS,
     WINDOWS_PDFIUM_AUTHORITY,
     WINDOWS_PDFIUM_MEMBER,
     WINDOWS_SKILL_PDFIUM,
     E2EError,
     MaterialAuthorityError,
+    MAX_ARCHIVE_ENTRIES,
+    ResourceBudget,
     acquire_assets,
     extract_single_core as _extract_single_core,
     extract_skill_binary as _extract_skill_binary,
     inspect_core,
     load_authority,
+    load_release_file_authority,
     normalize_release_version,
     release_asset_url,
     sha256_file,
@@ -62,6 +66,8 @@ def extract_single_core(
     platform: str,
     output: pathlib.Path,
     material_authority: dict,
+    budget: ResourceBudget | None = None,
+    archive_sha256: str | None = None,
 ) -> dict:
     return _extract_single_core(
         archive_path,
@@ -69,6 +75,8 @@ def extract_single_core(
         output,
         material_authority,
         WINDOWS_PDFIUM_AUTHORITY,
+        budget,
+        archive_sha256,
     )
 
 
@@ -77,6 +85,8 @@ def extract_skill_binary(
     platform: str,
     output: pathlib.Path,
     material_authority: dict,
+    budget: ResourceBudget | None = None,
+    archive_sha256: str | None = None,
 ) -> dict:
     return _extract_skill_binary(
         archive_path,
@@ -84,6 +94,8 @@ def extract_skill_binary(
         output,
         material_authority,
         WINDOWS_PDFIUM_AUTHORITY,
+        budget,
+        archive_sha256,
     )
 
 
@@ -387,6 +399,8 @@ def run_platform(
     work_root: pathlib.Path,
     evidence: pathlib.Path,
     version: str,
+    budget: ResourceBudget | None = None,
+    asset_records: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     config = TARGETS[platform]
     started = time.monotonic()
@@ -414,23 +428,30 @@ def run_platform(
                 config["target"],
                 CORE_MATERIAL_MEMBERS,
             )
-            skill_authority = load_authority(
-                evidence
-                / TARGETS["windows"]["target"]
-                / "core"
-                / CORE_MATERIAL_AUTHORITY,
-                TARGETS["windows"]["target"],
-                CORE_MATERIAL_MEMBERS,
+            skill_authority = json.loads(
+                (evidence / "release-validation" / SKILL_AUTHORITY).read_text(
+                    encoding="utf-8"
+                )
             )
         except MaterialAuthorityError as authority_error:
             raise E2EError(str(authority_error)) from authority_error
         core = core_root / config["member"]
         report["core"] = extract_single_core(
-            assets / config["core"], platform, core, core_authority
+            assets / config["core"],
+            platform,
+            core,
+            core_authority,
+            budget,
+            (asset_records or {}).get(config["core"], {}).get("sha256"),
         )
         skill = skill_asset_root / ("skill.exe" if platform == "windows" else "skill")
         report["skill"] = extract_skill_binary(
-            assets / SKILL_ARCHIVE, platform, skill, skill_authority
+            assets / SKILL_ARCHIVE,
+            platform,
+            skill,
+            skill_authority,
+            budget,
+            (asset_records or {}).get(SKILL_ARCHIVE, {}).get("sha256"),
         )
         package_source = assets / config["speech"]
         package = work / config["speech"]
@@ -468,7 +489,7 @@ def run_platform(
         if runtime_directories(environment, platform):
             raise E2EError("help/version/text/OOXML --ocr off created a runtime cache")
 
-        pdf_runtimes, expected_pdf_runtimes, pdf_elapsed_ms = run_core_pdf(
+        pdf_runtimes, expected_pdf_runtimes, pdf_elapsed_ms, core_pdf_output = run_core_pdf(
             runner,
             platform,
             fixtures,
@@ -652,11 +673,14 @@ def run_platform(
             fixtures,
             root,
             expected_all_runtimes,
+            version,
+            core_pdf_output,
             protect_directory,
             _isolated_environment,
             Runner,
             _copy_fixture,
             conversion_arguments,
+            assert_output,
             runtime_directories,
         )
         if platform == "windows":
@@ -745,15 +769,22 @@ def main() -> int:
     report_path = arguments.report or (arguments.work_root / "post-release-e2e.json")
     try:
         platform_errors: list[str] = []
+        resource_budget = ResourceBudget()
+        release_file_authority = load_release_file_authority(evidence, platforms)
         output["assets"] = acquire_assets(
-            assets, arguments.repository, arguments.tag, platforms
+            assets,
+            arguments.repository,
+            arguments.tag,
+            platforms,
+            resource_budget,
+            release_file_authority,
         )
         if arguments.platform in {"all", "windows"}:
             windows_root = arguments.work_root / "windows"
             if windows_root.exists():
                 raise E2EError(f"work root already exists: {windows_root}")
             platform_report = run_platform(
-                "windows", assets, fixtures, windows_root, evidence, arguments.version
+                "windows", assets, fixtures, windows_root, evidence, arguments.version, resource_budget, output["assets"]
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":
@@ -772,7 +803,7 @@ def main() -> int:
             if linux_root.exists():
                 raise E2EError(f"work root already exists: {linux_root}")
             platform_report = run_platform(
-                "linux", assets, fixtures, linux_root, evidence, arguments.version
+                "linux", assets, fixtures, linux_root, evidence, arguments.version, resource_budget, output["assets"]
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":

@@ -13,3 +13,14 @@ py_library(
     srcs = ["core_archive.py"],
     visibility = ["//visibility:public"],
 )
+
+py_library(
+    name = "release_artifacts",
+    srcs = ["release_artifacts.py"],
+    data = [
+        "//:release_license_files",
+        "//third_party/pdfium:manifest.json",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [":core_archive"],
+)

@@ -28,6 +28,8 @@ from skill_release import (
     SKILL_NAME,
     SKILL_SOURCE,
     WINDOWS_PDFIUM_RELATIVE,
+    TARGET_LAYOUTS,
+    evidence_relative,
     SkillReleaseError,
     core_inputs,
     create_archive as create_release_archive,
@@ -58,15 +60,16 @@ def elf(machine: int, marker: bytes = b"") -> bytes:
 
 
 def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]:
-    windows = root / "windows-core.exe"
-    pdfium = root / "pdfium.dll"
-    linux_x86_64 = root / "linux-x86_64-core"
-    linux_arm64 = root / "linux-arm64-core"
+    windows = root / "windows" / "windows-core.exe"
+    pdfium = root / "windows" / "pdfium.dll"
+    linux_x86_64 = root / "linux-x86_64" / "linux-x86_64-core"
+    linux_arm64 = root / "linux-arm64" / "linux-arm64-core"
+    for path in (windows, pdfium, linux_x86_64, linux_arm64):
+        path.parent.mkdir(parents=True, exist_ok=True)
     windows.write_bytes(pe(marker=b"windows"))
     pdfium.write_bytes(b"test-pdfium")
     linux_x86_64.write_bytes(elf(62, b"linux-x86_64"))
     linux_arm64.write_bytes(elf(183, b"linux-arm64"))
-    (root / "LICENSE").write_bytes((ROOT / "LICENSE").read_bytes())
     static_materials = {
         pathlib.PurePosixPath("licenses/npm/npm-release.spdx.json"): ROOT
         / "third_party/licenses/npm-release.spdx.json",
@@ -75,68 +78,80 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
         pathlib.PurePosixPath("licenses/npm/react-MIT.txt"): ROOT
         / "third_party/licenses/npm/react-MIT.txt",
     }
-    for relative in CORE_MATERIAL_RELATIVES:
-        path = root / pathlib.Path(relative.as_posix())
-        path.parent.mkdir(parents=True, exist_ok=True)
-        source = static_materials.get(relative)
-        if source:
-            contents = source.read_bytes()
-        elif relative.as_posix() == "SBOM.spdx.json":
-            contents = json.dumps(
-                {
-                    "SPDXID": "SPDXRef-DOCUMENT",
-                    "spdxVersion": "SPDX-2.3",
-                    "dataLicense": "CC0-1.0",
-                    "creationInfo": {},
-                    "packages": [{"name": "fixture"}],
-                }
-            ).encode()
-        elif relative.as_posix() == "SOURCES.json":
-            contents = json.dumps(
-                {
-                    "schema_version": 1,
-                    "target": AUTHORITY_TARGET,
-                    "artifact": "into-markdown-core",
-                    "version": "0.0.3",
-                    "source_revision": "fixture",
-                    "components": [{"id": "fixture"}],
-                }
-            ).encode()
-        else:
-            contents = f"material:{relative}".encode()
-        path.write_bytes(contents)
+    for target, base in (
+        ("x86_64-pc-windows-msvc", windows.parent),
+        ("x86_64-unknown-linux-gnu", linux_x86_64.parent),
+        ("aarch64-unknown-linux-gnu", linux_arm64.parent),
+    ):
+        (base / "LICENSE").write_bytes((ROOT / "LICENSE").read_bytes())
+        for relative in CORE_MATERIAL_RELATIVES:
+            path = base / pathlib.Path(relative.as_posix())
+            path.parent.mkdir(parents=True, exist_ok=True)
+            source = static_materials.get(relative)
+            if source:
+                contents = source.read_bytes()
+            elif relative.as_posix() == "SBOM.spdx.json":
+                contents = json.dumps(
+                    {
+                        "SPDXID": "SPDXRef-DOCUMENT",
+                        "spdxVersion": "SPDX-2.3",
+                        "dataLicense": "CC0-1.0",
+                        "creationInfo": {},
+                        "packages": [{"name": f"fixture-{target}"}],
+                    }
+                ).encode()
+            elif relative.as_posix() == "SOURCES.json":
+                contents = json.dumps(
+                    {
+                        "schema_version": 1,
+                        "target": target,
+                        "artifact": "into-markdown-core",
+                        "version": "0.0.3",
+                        "source_revision": "fixture",
+                        "components": [{"id": f"fixture-{target}"}],
+                    }
+                ).encode()
+            else:
+                contents = f"material:{target}:{relative}".encode()
+            path.write_bytes(contents)
     return core_inputs(windows, pdfium, linux_x86_64, linux_arm64)
 
 
-def write_test_authority(
+def write_test_authorities(
     root: pathlib.Path,
     cores: dict[pathlib.PurePosixPath, pathlib.Path],
-) -> pathlib.Path:
-    authority = root / "material-authority.json"
-    if authority.exists():
-        return authority
-    materials = {
-        "LICENSE": root / "LICENSE",
-        **{
-            relative.as_posix(): cores[relative]
-            for relative in CORE_MATERIAL_RELATIVES
-        },
-    }
-    write_authority(authority, materials, AUTHORITY_TARGET, AUTHORITY_MATERIALS)
-    return authority
+) -> dict[str, pathlib.Path]:
+    result = {}
+    for target, _asset in TARGET_LAYOUTS:
+        authority = root / f"material-authority-{target}.json"
+        materials = {
+            member: cores[evidence_relative(target, member)]
+            for member in AUTHORITY_MATERIALS
+        }
+        if not authority.exists():
+            write_authority(authority, materials, target, AUTHORITY_MATERIALS)
+        result[target] = authority
+    return result
 
 
 def create_archive(
     destination: pathlib.Path,
     cores: dict[pathlib.PurePosixPath, pathlib.Path],
 ) -> pathlib.Path:
-    return create_release_archive(
-        destination, cores, write_test_authority(destination.parent, cores)
+    authority = destination.parent / "skill-authority.json"
+    output = authority if not authority.exists() else destination.with_suffix(".authority.json")
+    result = create_release_archive(
+        destination, cores, write_test_authorities(destination.parent, cores), output
     )
+    if output != authority:
+        if output.read_bytes() != authority.read_bytes():
+            raise AssertionError("deterministic builds produced different Skill authority")
+        output.unlink()
+    return result
 
 
 def verify_release(archive: pathlib.Path) -> None:
-    verify_release_archive(archive, archive.parent / "material-authority.json")
+    verify_release_archive(archive, archive.parent / "skill-authority.json")
 
 
 def rewrite_entry(
@@ -229,8 +244,10 @@ class SkillReleaseTests(unittest.TestCase):
             root = pathlib.Path(name)
             cores = write_cores(root)
             first = create_archive(root / "first.zip", cores)
+            authority_bytes = (root / "skill-authority.json").read_bytes()
             second = create_archive(root / "second.zip", cores)
             self.assertEqual(first.read_bytes(), second.read_bytes())
+            self.assertEqual(authority_bytes, (root / "skill-authority.json").read_bytes())
             self.assertFalse(first.with_name(first.name + ".sha256").exists())
             verify_release(first)
             with zipfile.ZipFile(first) as archive:
@@ -256,11 +273,59 @@ class SkillReleaseTests(unittest.TestCase):
                 )
                 manifest = archive.getinfo(f"{SKILL_NAME}/{ARCHIVE_MANIFEST.as_posix()}")
                 self.assertIn(b'"schemaVersion": 1', archive.read(manifest))
-                for relative in CORE_MATERIAL_RELATIVES:
-                    self.assertEqual(
-                        archive.read(f"{SKILL_NAME}/{relative.as_posix()}"),
-                        cores[relative].read_bytes(),
-                    )
+                for target, _asset in TARGET_LAYOUTS:
+                    for member in AUTHORITY_MATERIALS:
+                        relative = evidence_relative(target, member)
+                        self.assertEqual(
+                            archive.read(f"{SKILL_NAME}/{relative.as_posix()}"),
+                            cores[relative].read_bytes(),
+                        )
+                self.assertFalse(any("whisper" in name.lower() or "ffmpeg" in name.lower() for name in names))
+
+    def test_three_target_materials_and_matching_binaries_are_authority_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            valid = create_archive(root / "valid.zip", write_cores(root))
+            for target, _asset in TARGET_LAYOUTS:
+                relative = evidence_relative(target, "SOURCES.json").as_posix()
+                replaced = root / f"replaced-{target}.zip"
+                replace_material_and_recompute_manifest(valid, replaced, relative, b'{"target":"attacker"}')
+                with self.subTest(target=target), self.assertRaisesRegex(
+                    SkillReleaseError, "differs from authority"
+                ):
+                    verify_release(replaced)
+
+            asset = ASSET_SPECS[1].relative.as_posix()
+            replaced_binary = root / "replaced-binary.zip"
+            replace_material_and_recompute_manifest(
+                valid, replaced_binary, asset, elf(62, b"other-valid-core")
+            )
+            with self.assertRaisesRegex(SkillReleaseError, "differs from authority"):
+                verify_release(replaced_binary)
+
+    def test_skill_authority_rejects_namespace_missing_duplicate_and_unsorted_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            valid = create_archive(root / "valid.zip", write_cores(root))
+            original = json.loads((root / "skill-authority.json").read_text(encoding="utf-8"))
+            variants = {}
+            namespace = json.loads(json.dumps(original))
+            namespace["namespace"] = "attacker"
+            variants["namespace"] = namespace
+            missing = json.loads(json.dumps(original))
+            missing["targets"].pop()
+            variants["missing"] = missing
+            duplicate = json.loads(json.dumps(original))
+            duplicate["targets"][1] = duplicate["targets"][0]
+            variants["duplicate"] = duplicate
+            unsorted = json.loads(json.dumps(original))
+            unsorted["targets"].reverse()
+            variants["unsorted"] = unsorted
+            for case, value in variants.items():
+                path = root / f"authority-{case}.json"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                with self.subTest(case=case), self.assertRaises(SkillReleaseError):
+                    verify_release_archive(valid, path)
 
     def test_verify_is_standalone_and_rejects_sidecars_or_extra_entries(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -308,7 +373,8 @@ class SkillReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             valid = create_archive(root / "valid.zip", write_cores(root))
-            notice = f"{SKILL_NAME}/NOTICE"
+            notice_relative = evidence_relative(AUTHORITY_TARGET, "NOTICE").as_posix()
+            notice = f"{SKILL_NAME}/{notice_relative}"
             rewrite_entry(valid, root / "tampered.zip", notice, contents=b"tampered")
             with self.assertRaisesRegex(SkillReleaseError, "bidirectional projection"):
                 verify_release(root / "tampered.zip")
@@ -316,18 +382,24 @@ class SkillReleaseTests(unittest.TestCase):
             replace_material_and_recompute_manifest(
                 valid,
                 root / "recomputed-manifest.zip",
-                "NOTICE",
+                notice_relative,
                 b"attacker-controlled notice",
             )
             with self.assertRaisesRegex(
-                SkillReleaseError, "independent authority"
+                SkillReleaseError, "differs from authority"
             ):
                 verify_release(root / "recomputed-manifest.zip")
 
             cores = write_cores(root)
-            cores.pop(pathlib.PurePosixPath("licenses/pdfium/licenses/zlib.txt"))
+            authorities = write_test_authorities(root, cores)
+            cores.pop(evidence_relative(AUTHORITY_TARGET, "licenses/pdfium/licenses/zlib.txt"))
             with self.assertRaisesRegex(SkillReleaseError, "exact release materials"):
-                create_archive(root / "missing.zip", cores)
+                create_release_archive(
+                    root / "missing.zip",
+                    cores,
+                    authorities,
+                    root / "missing-authority.json",
+                )
 
     def test_materialized_canonical_copy_remains_instruction_only(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -358,7 +430,8 @@ class SkillReleaseTests(unittest.TestCase):
             root = pathlib.Path(name)
             cores = write_cores(root)
             archive = root / "skill.zip"
-            authority = write_test_authority(root, cores)
+            authorities = write_test_authorities(root, cores)
+            skill_authority = root / "skill-authority.json"
             command = [
                 "skill-release",
                 "build",
@@ -372,8 +445,14 @@ class SkillReleaseTests(unittest.TestCase):
                 str(cores[ASSET_SPECS[1].relative]),
                 "--linux-arm64-core",
                 str(cores[ASSET_SPECS[2].relative]),
-                "--material-authority",
-                str(authority),
+                "--windows-material-authority",
+                str(authorities["x86_64-pc-windows-msvc"]),
+                "--linux-x86-64-material-authority",
+                str(authorities["x86_64-unknown-linux-gnu"]),
+                "--linux-arm64-material-authority",
+                str(authorities["aarch64-unknown-linux-gnu"]),
+                "--authority-output",
+                str(skill_authority),
             ]
             with mock.patch.object(sys, "argv", command):
                 skill_release_main.main()
@@ -385,8 +464,8 @@ class SkillReleaseTests(unittest.TestCase):
                     "verify",
                     "--archive",
                     str(archive),
-                    "--material-authority",
-                    str(authority),
+                    "--skill-authority",
+                    str(skill_authority),
                 ],
             ):
                 skill_release_main.main()

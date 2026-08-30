@@ -23,6 +23,7 @@ from core_archive import (  # noqa: E402
     load_authority,
     verify_materials,
 )
+from release_artifacts import ResourceBudget, _preflight_zip  # noqa: E402
 
 SKILL_NAME = "into-markdown"
 SKILL_SOURCE = ROOT / ".agents/skills" / SKILL_NAME
@@ -62,10 +63,37 @@ CORE_MATERIAL_RELATIVES = tuple(
     )
 )
 AUTHORITY_MATERIALS = ("LICENSE", *(path.as_posix() for path in CORE_MATERIAL_RELATIVES))
-AUTHORITY_TARGET = "x86_64-pc-windows-msvc"
+SKILL_AUTHORITY_NAMESPACE = "into-markdown/skill-release-authority"
+TARGET_LAYOUTS = (
+    ("x86_64-pc-windows-msvc", pathlib.PurePosixPath("assets/windows-x86_64/into-md.exe")),
+    ("x86_64-unknown-linux-gnu", pathlib.PurePosixPath("assets/linux-x86_64/into-md")),
+    ("aarch64-unknown-linux-gnu", pathlib.PurePosixPath("assets/linux-arm64/into-md")),
+)
+# Compatibility name for source-material fixtures; Skill authority is never single-target.
+AUTHORITY_TARGET = TARGET_LAYOUTS[0][0]
+EVIDENCE_ROOT = pathlib.PurePosixPath("evidence")
+
+
+def evidence_relative(target: str, member: str) -> pathlib.PurePosixPath:
+    return EVIDENCE_ROOT / target / pathlib.PurePosixPath(member)
+
+
 MATERIAL_DIRECTORIES = tuple(
     pathlib.PurePosixPath(value)
-    for value in ("licenses", "licenses/npm", "licenses/pdfium", "licenses/pdfium/licenses")
+    for value in (
+        "evidence",
+        *(
+            item
+            for target, _asset in TARGET_LAYOUTS
+            for item in (
+                f"evidence/{target}",
+                f"evidence/{target}/licenses",
+                f"evidence/{target}/licenses/npm",
+                f"evidence/{target}/licenses/pdfium",
+                f"evidence/{target}/licenses/pdfium/licenses",
+            )
+        ),
+    )
 )
 CANONICAL_FILES = (
     pathlib.PurePosixPath("LICENSE"),
@@ -136,12 +164,14 @@ def core_inputs(
         ASSET_SPECS[1].relative: linux_x86_64_core,
         ASSET_SPECS[2].relative: linux_arm64_core,
     }
-    inputs.update(
-        {
-            relative: windows_x86_64_core.parent / pathlib.Path(relative.as_posix())
-            for relative in CORE_MATERIAL_RELATIVES
-        }
-    )
+    roots = {
+        TARGET_LAYOUTS[0][0]: windows_x86_64_core.parent,
+        TARGET_LAYOUTS[1][0]: linux_x86_64_core.parent,
+        TARGET_LAYOUTS[2][0]: linux_arm64_core.parent,
+    }
+    for target, root in roots.items():
+        for member in AUTHORITY_MATERIALS:
+            inputs[evidence_relative(target, member)] = root / pathlib.Path(member)
     return inputs
 
 
@@ -304,7 +334,11 @@ def _validated_cores(
     expected = (
         {spec.relative for spec in ASSET_SPECS}
         | {WINDOWS_PDFIUM_RELATIVE}
-        | set(CORE_MATERIAL_RELATIVES)
+        | {
+            evidence_relative(target, member)
+            for target, _asset in TARGET_LAYOUTS
+            for member in AUTHORITY_MATERIALS
+        }
     )
     if set(cores) != expected:
         raise SkillReleaseError(
@@ -323,28 +357,33 @@ def _validated_cores(
     ):
         raise SkillReleaseError("Windows PDFium input differs from the pinned manifest")
     validated[WINDOWS_PDFIUM_RELATIVE] = runtime
-    for relative in CORE_MATERIAL_RELATIVES:
-        validated[relative] = _validate_material(pathlib.Path(cores[relative]), relative)
-    windows_root = pathlib.Path(cores[ASSET_SPECS[0].relative]).parent
-    project_license = _validate_material(windows_root / "LICENSE", pathlib.PurePosixPath("LICENSE"))
-    if project_license.read_bytes() != (ROOT / "LICENSE").read_bytes():
-        raise SkillReleaseError("Core project LICENSE differs from the repository authority")
-    for relative, source in (
-        (
-            pathlib.PurePosixPath("licenses/npm/npm-release.spdx.json"),
-            ROOT / "third_party/licenses/npm-release.spdx.json",
-        ),
-        (
-            pathlib.PurePosixPath("licenses/npm/lucide-ISC-MIT.txt"),
-            ROOT / "third_party/licenses/npm/lucide-ISC-MIT.txt",
-        ),
-        (
-            pathlib.PurePosixPath("licenses/npm/react-MIT.txt"),
-            ROOT / "third_party/licenses/npm/react-MIT.txt",
-        ),
-    ):
-        if validated[relative].read_bytes() != source.read_bytes():
-            raise SkillReleaseError(f"{relative} differs from the repository authority")
+    static_materials = {
+        "LICENSE": ROOT / "LICENSE",
+        "licenses/npm/npm-release.spdx.json": ROOT / "third_party/licenses/npm-release.spdx.json",
+        "licenses/npm/lucide-ISC-MIT.txt": ROOT / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+        "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+    }
+    for target, _asset in TARGET_LAYOUTS:
+        for member in AUTHORITY_MATERIALS:
+            relative = evidence_relative(target, member)
+            path = _validate_material(pathlib.Path(cores[relative]), relative)
+            validated[relative] = path
+            authority_source = static_materials.get(member)
+            if authority_source is not None and path.read_bytes() != authority_source.read_bytes():
+                raise SkillReleaseError(f"{relative} differs from the repository authority")
+            if member in {"SBOM.spdx.json", "SOURCES.json"}:
+                try:
+                    structured = json.loads(path.read_text(encoding="utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise SkillReleaseError(f"{relative} is not valid JSON") from error
+                serialized = json.dumps(structured, sort_keys=True).lower()
+                if "whisper" in serialized or "ffmpeg" in serialized:
+                    raise SkillReleaseError("Skill target evidence must not include optional speech components")
+                if member == "SOURCES.json" and (
+                    structured.get("target") != target
+                    or structured.get("artifact") != "into-markdown-core"
+                ):
+                    raise SkillReleaseError(f"{relative} target or artifact identity is invalid")
     return validated
 
 
@@ -388,30 +427,120 @@ def validate_materialized(destination: pathlib.Path, source: pathlib.Path = SKIL
         raise SkillReleaseError("materialized skill differs from the canonical source")
 
 
+def _file_record(path: pathlib.Path, relative: str) -> dict[str, object]:
+    return {"path": relative, "bytes": path.stat().st_size, "sha256": sha256(path)}
+
+
+def build_skill_authority(
+    cores: Mapping[pathlib.PurePosixPath, pathlib.Path],
+    material_authorities: Mapping[str, pathlib.Path],
+) -> dict[str, object]:
+    """Bind every target's Core binary and target-scoped release materials."""
+    validated = _validated_cores(cores)
+    expected_targets = {target for target, _asset in TARGET_LAYOUTS}
+    if set(material_authorities) != expected_targets:
+        raise SkillReleaseError("exactly one material authority is required for each Skill target")
+    targets = []
+    for target, asset in sorted(TARGET_LAYOUTS):
+        try:
+            authority = load_authority(
+                pathlib.Path(material_authorities[target]), target, AUTHORITY_MATERIALS
+            )
+            materials = {
+                member: validated[evidence_relative(target, member)].read_bytes()
+                for member in AUTHORITY_MATERIALS
+            }
+            verify_materials(materials, authority, AUTHORITY_MATERIALS)
+        except MaterialAuthorityError as error:
+            raise SkillReleaseError(str(error)) from error
+        targets.append(
+            {
+                "target": target,
+                "binary": _file_record(validated[asset], asset.as_posix()),
+                "materials": [
+                    _file_record(
+                        validated[evidence_relative(target, member)], member
+                    )
+                    for member in sorted(AUTHORITY_MATERIALS)
+                ],
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "namespace": SKILL_AUTHORITY_NAMESPACE,
+        "artifact": SKILL_NAME,
+        "targets": targets,
+    }
+
+
+def write_skill_authority(path: pathlib.Path, authority: dict[str, object]) -> None:
+    if path.exists() or path.is_symlink():
+        raise SkillReleaseError("Skill authority destination already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(authority, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def load_skill_authority(path: pathlib.Path) -> dict[str, object]:
+    try:
+        authority = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SkillReleaseError("Skill authority is not readable canonical JSON") from error
+    if (
+        not isinstance(authority, dict)
+        or set(authority) != {"schemaVersion", "namespace", "artifact", "targets"}
+        or authority.get("schemaVersion") != 1
+        or authority.get("namespace") != SKILL_AUTHORITY_NAMESPACE
+        or authority.get("artifact") != SKILL_NAME
+        or not isinstance(authority.get("targets"), list)
+    ):
+        raise SkillReleaseError("Skill authority namespace or schema is invalid")
+    expected_targets = sorted(target for target, _asset in TARGET_LAYOUTS)
+    observed_targets = [item.get("target") for item in authority["targets"] if isinstance(item, dict)]
+    if observed_targets != expected_targets or len(observed_targets) != len(authority["targets"]):
+        raise SkillReleaseError("Skill authority targets are missing, duplicated, or unsorted")
+    assets = dict(TARGET_LAYOUTS)
+    for item in authority["targets"]:
+        if set(item) != {"target", "binary", "materials"}:
+            raise SkillReleaseError("Skill authority target schema is invalid")
+        expected = [*sorted(AUTHORITY_MATERIALS)]
+        records = item["materials"]
+        if not isinstance(records, list) or [record.get("path") for record in records if isinstance(record, dict)] != expected:
+            raise SkillReleaseError("Skill authority materials are missing, duplicated, or unsorted")
+        _validate_authority_record(item["binary"], assets[item["target"]].as_posix())
+        for record, member in zip(records, expected, strict=True):
+            _validate_authority_record(record, member)
+    return authority
+
+
+def _validate_authority_record(record: object, expected_path: str) -> None:
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"path", "bytes", "sha256"}
+        or record.get("path") != expected_path
+        or not isinstance(record.get("bytes"), int)
+        or isinstance(record.get("bytes"), bool)
+        or record["bytes"] <= 0
+        or not isinstance(record.get("sha256"), str)
+        or len(record["sha256"]) != 64
+        or any(character not in "0123456789abcdef" for character in record["sha256"])
+    ):
+        raise SkillReleaseError("Skill authority contains an invalid file record")
+
+
 def create_archive(
     destination: pathlib.Path,
     cores: Mapping[pathlib.PurePosixPath, pathlib.Path],
-    material_authority: pathlib.Path,
+    material_authorities: Mapping[str, pathlib.Path],
+    authority_output: pathlib.Path,
     source: pathlib.Path = SKILL_SOURCE,
 ) -> pathlib.Path:
     files = validate(source)
     validated_cores = _validated_cores(cores)
-    authority = _load_material_authority(material_authority)
-    authority_inputs = {
-        "LICENSE": source / "LICENSE",
-        **{
-            relative.as_posix(): validated_cores[relative]
-            for relative in CORE_MATERIAL_RELATIVES
-        },
-    }
-    try:
-        verify_materials(
-            {name: path.read_bytes() for name, path in authority_inputs.items()},
-            authority,
-            AUTHORITY_MATERIALS,
-        )
-    except MaterialAuthorityError as error:
-        raise SkillReleaseError(str(error)) from error
+    authority = build_skill_authority(validated_cores, material_authorities)
     sidecar = destination.with_name(destination.name + ".sha256")
     if destination.exists() or destination.is_symlink() or sidecar.exists() or sidecar.is_symlink():
         raise SkillReleaseError("skill archive destination or forbidden checksum sidecar already exists")
@@ -427,7 +556,14 @@ def create_archive(
             *((path.relative_to(source.resolve()).as_posix(), path, 0o644) for path in files),
             *((spec.relative.as_posix(), validated_cores[spec.relative], spec.mode) for spec in ASSET_SPECS),
             (WINDOWS_PDFIUM_RELATIVE.as_posix(), validated_cores[WINDOWS_PDFIUM_RELATIVE], 0o644),
-            *((relative.as_posix(), validated_cores[relative], 0o644) for relative in CORE_MATERIAL_RELATIVES),
+            *(
+                (relative.as_posix(), validated_cores[relative], 0o644)
+                for relative in sorted(
+                    path
+                    for path in validated_cores
+                    if path.parts and path.parts[0] == EVIDENCE_ROOT.as_posix()
+                )
+            ),
         ]
         manifest_files = [
             _manifest_record(relative, path, mode)
@@ -448,12 +584,9 @@ def create_archive(
                 _write_directory(archive, f"{SKILL_NAME}/{relative}/")
             else:
                 _write_file(archive, f"{SKILL_NAME}/{relative}", path, mode)
-    verify_release(
-        destination,
-        material_authority,
-        source,
-        expected_cores=validated_cores,
-    )
+    verify_archive(destination, authority, source, expected_cores=validated_cores)
+    write_skill_authority(authority_output, authority)
+    verify_release(destination, authority_output, source, expected_cores=validated_cores)
     return destination
 
 
@@ -466,7 +599,12 @@ def _write_directory(archive: zipfile.ZipFile, name: str) -> None:
 
 
 def _write_file(archive: zipfile.ZipFile, name: str, path: pathlib.Path, mode: int) -> None:
-    _write_bytes(archive, name, path.read_bytes(), mode)
+    info = zipfile.ZipInfo(name, FIXED_TIMESTAMP)
+    info.create_system = 3
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = (stat.S_IFREG | mode) << 16
+    with path.open("rb") as source, archive.open(info, "w") as output:
+        shutil.copyfileobj(source, output, length=1024 * 1024)
 
 
 def _write_bytes(archive: zipfile.ZipFile, name: str, data: bytes, mode: int) -> None:
@@ -478,11 +616,10 @@ def _write_bytes(archive: zipfile.ZipFile, name: str, data: bytes, mode: int) ->
 
 
 def _manifest_record(relative: str, path: pathlib.Path, mode: int) -> dict[str, object]:
-    data = path.read_bytes()
     record: dict[str, object] = {
         "path": relative,
-        "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": path.stat().st_size,
+        "sha256": sha256(path),
         "mode": f"{mode:04o}",
         "kind": (
             "component"
@@ -495,10 +632,12 @@ def _manifest_record(relative: str, path: pathlib.Path, mode: int) -> dict[str, 
             if relative in {"LICENSE", "NOTICE"}
             else "executable"
             if relative.startswith("assets/")
+            else "target-evidence"
+            if relative.startswith("evidence/")
             else "skill-source"
         ),
     }
-    if relative == WINDOWS_PDFIUM_RELATIVE.as_posix() or relative.startswith("licenses/pdfium/"):
+    if relative == WINDOWS_PDFIUM_RELATIVE.as_posix() or "/licenses/pdfium/" in relative:
         record["componentId"] = "pdfium"
     return record
 
@@ -525,11 +664,68 @@ def _expected_archive_entries(
             | set(canonical)
             | set(assets)
             | {f"{SKILL_NAME}/{WINDOWS_PDFIUM_RELATIVE.as_posix()}"}
-            | {f"{SKILL_NAME}/{relative.as_posix()}" for relative in CORE_MATERIAL_RELATIVES}
+            | {
+                f"{SKILL_NAME}/{evidence_relative(target, member).as_posix()}"
+                for target, _asset in TARGET_LAYOUTS
+                for member in AUTHORITY_MATERIALS
+            }
             | {f"{SKILL_NAME}/{ARCHIVE_MANIFEST.as_posix()}"}
         ),
     ]
     return names, canonical, assets
+
+
+def _stream_verified_member(
+    archive: zipfile.ZipFile, info: zipfile.ZipInfo, capture: bool
+) -> tuple[bytes, int, str, bytes | None]:
+    digest = hashlib.sha256()
+    header = bytearray()
+    contents = bytearray() if capture else None
+    size = 0
+    with archive.open(info) as source:
+        while chunk := source.read(1024 * 1024):
+            size += len(chunk)
+            if size > info.file_size:
+                raise SkillReleaseError(f"skill archive member exceeded its declared size: {info.filename}")
+            digest.update(chunk)
+            if len(header) < 4096:
+                header.extend(chunk[: 4096 - len(header)])
+            if contents is not None:
+                if size > 16 * 1024 * 1024:
+                    raise SkillReleaseError("skill archive metadata member is too large")
+                contents.extend(chunk)
+    if size != info.file_size:
+        raise SkillReleaseError(f"skill archive member size is inconsistent: {info.filename}")
+    return bytes(header), size, digest.hexdigest(), bytes(contents) if contents is not None else None
+
+
+def _observed_manifest_record(
+    relative: str, size: int, digest: str, mode: int
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "path": relative,
+        "bytes": size,
+        "sha256": digest,
+        "mode": f"{mode & 0o7777:04o}",
+        "kind": (
+            "component"
+            if relative == WINDOWS_PDFIUM_RELATIVE.as_posix()
+            else "license-material"
+            if relative.startswith("licenses/")
+            else "generated"
+            if relative in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+            else "declaration"
+            if relative in {"LICENSE", "NOTICE"}
+                            else "executable"
+                            if relative.startswith("assets/")
+                            else "target-evidence"
+                            if relative.startswith("evidence/")
+                            else "skill-source"
+        ),
+    }
+    if relative == WINDOWS_PDFIUM_RELATIVE.as_posix() or "/licenses/pdfium/" in relative:
+        record["componentId"] = "pdfium"
+    return record
 
 
 def verify_archive(
@@ -543,15 +739,15 @@ def verify_archive(
     if expected_cores is not None:
         expected_hashes = {relative: sha256(path) for relative, path in _validated_cores(expected_cores).items()}
     try:
+        infos = _preflight_zip(archive_path, ResourceBudget())
         with zipfile.ZipFile(archive_path) as archive:
-            infos = archive.infolist()
             names = [info.filename for info in infos]
             if names != expected_names or len(names) != len(set(names)):
                 raise SkillReleaseError("skill archive does not contain the exact reviewed entries in sorted order")
             if archive.comment:
                 raise SkillReleaseError("skill archive metadata is not deterministic")
             observed_manifest_files: list[dict[str, object]] = []
-            observed_materials: dict[str, bytes] = {}
+            observed_authority_files: dict[str, dict[str, object]] = {}
             manifest: object = None
             for info in infos:
                 if (
@@ -565,94 +761,56 @@ def verify_archive(
                     raise SkillReleaseError("skill archive metadata is not deterministic")
                 mode = (info.external_attr >> 16) & 0o177777
                 if info.is_dir():
-                    if mode != stat.S_IFDIR | 0o755 or archive.read(info):
+                    if mode != stat.S_IFDIR | 0o755 or info.file_size != 0:
                         raise SkillReleaseError("skill archive directory metadata is invalid")
                     continue
                 relative = info.filename.removeprefix(f"{SKILL_NAME}/")
-                data = archive.read(info)
+                capture = info.filename in canonical or relative == ARCHIVE_MANIFEST.as_posix()
+                header, size, digest, data = _stream_verified_member(archive, info, capture)
                 if relative == ARCHIVE_MANIFEST.as_posix():
                     if mode != stat.S_IFREG | 0o644:
                         raise SkillReleaseError("skill archive manifest permissions are invalid")
                     try:
+                        assert data is not None
                         manifest = json.loads(data)
                     except (UnicodeDecodeError, json.JSONDecodeError) as error:
                         raise SkillReleaseError("skill archive manifest is not valid JSON") from error
                     continue
-                if relative in AUTHORITY_MATERIALS:
-                    observed_materials[relative] = data
-                observed_manifest_files.append(
-                    {
-                        "path": relative,
-                        "bytes": len(data),
-                        "sha256": hashlib.sha256(data).hexdigest(),
-                        "mode": f"{mode & 0o7777:04o}",
-                        "kind": (
-                            "component"
-                            if relative == WINDOWS_PDFIUM_RELATIVE.as_posix()
-                            else "license-material"
-                            if relative.startswith("licenses/")
-                            else "generated"
-                            if relative in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
-                            else "declaration"
-                            if relative in {"LICENSE", "NOTICE"}
-                            else "executable"
-                            if relative.startswith("assets/")
-                            else "skill-source"
-                        ),
-                        **(
-                            {"componentId": "pdfium"}
-                            if relative == WINDOWS_PDFIUM_RELATIVE.as_posix()
-                            or relative.startswith("licenses/pdfium/")
-                            else {}
-                        ),
-                    }
-                )
+                if relative.startswith(f"{EVIDENCE_ROOT.as_posix()}/") or relative.startswith("assets/"):
+                    observed_authority_files[relative] = {"bytes": size, "sha256": digest}
+                observed_manifest_files.append(_observed_manifest_record(relative, size, digest, mode))
                 if info.filename in canonical:
+                    assert data is not None
                     if mode != stat.S_IFREG | 0o644 or data != canonical[info.filename]:
                         raise SkillReleaseError("skill archive instruction metadata or bytes are invalid")
                     continue
                 if info.filename == f"{SKILL_NAME}/{WINDOWS_PDFIUM_RELATIVE.as_posix()}":
                     if (
                         mode != stat.S_IFREG | 0o644
-                        or len(data) != WINDOWS_PDFIUM_AUTHORITY["library_size"]
-                        or hashlib.sha256(data).hexdigest()
-                        != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
+                        or size != WINDOWS_PDFIUM_AUTHORITY["library_size"]
+                        or digest != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
                     ):
                         raise SkillReleaseError(
                             "Windows PDFium archive member differs from the pinned manifest"
                         )
                     continue
                 material = pathlib.PurePosixPath(relative)
-                if material in CORE_MATERIAL_RELATIVES:
-                    if mode != stat.S_IFREG | 0o644 or not data:
+                if material.parts and material.parts[0] == EVIDENCE_ROOT.as_posix():
+                    if mode != stat.S_IFREG | 0o644 or size == 0:
                         raise SkillReleaseError("skill archive release material is invalid")
-                    if expected_hashes is not None and hashlib.sha256(data).hexdigest() != expected_hashes[material]:
+                    if expected_hashes is not None and digest != expected_hashes[material]:
                         raise SkillReleaseError(f"{material} bytes differ from the supplied Core")
                     continue
                 spec = assets[info.filename]
                 if mode != stat.S_IFREG | spec.mode:
                     raise SkillReleaseError(f"{spec.relative} archive permissions are invalid")
-                with archive.open(info) as binary:
-                    header = binary.read(4096)
-                _validate_binary_header(header, info.file_size, spec)
-                if expected_hashes is not None:
-                    digest = hashlib.sha256()
-                    with archive.open(info) as binary:
-                        while chunk := binary.read(1024 * 1024):
-                            digest.update(chunk)
-                    if digest.hexdigest() != expected_hashes[spec.relative]:
-                        raise SkillReleaseError(f"{spec.relative} bytes differ from the supplied Core")
+                _validate_binary_header(header, size, spec)
+                if expected_hashes is not None and digest != expected_hashes[spec.relative]:
+                    raise SkillReleaseError(f"{spec.relative} bytes differ from the supplied Core")
             expected_manifest = {"schemaVersion": 1, "files": observed_manifest_files}
             if manifest != expected_manifest:
                 raise SkillReleaseError("skill archive manifest is not an exact bidirectional projection")
-            try:
-                verify_materials(
-                    observed_materials,
-                    material_authority,
-                    AUTHORITY_MATERIALS,
-                )
-            except MaterialAuthorityError as error:
-                raise SkillReleaseError(str(error)) from error
+            _verify_skill_authority_files(observed_authority_files, material_authority)
     except (OSError, zipfile.BadZipFile, RuntimeError) as error:
         if isinstance(error, SkillReleaseError):
             raise
@@ -667,7 +825,7 @@ def verify_release(
 ) -> None:
     verify_archive(
         archive_path,
-        _load_material_authority(material_authority),
+        load_skill_authority(material_authority),
         source,
         expected_cores,
     )
@@ -676,8 +834,22 @@ def verify_release(
         raise SkillReleaseError("skill release must not have an external checksum sidecar")
 
 
-def _load_material_authority(path: pathlib.Path) -> dict:
-    try:
-        return load_authority(path, AUTHORITY_TARGET, AUTHORITY_MATERIALS)
-    except MaterialAuthorityError as error:
-        raise SkillReleaseError(str(error)) from error
+def _verify_skill_authority_files(
+    files: Mapping[str, dict[str, object]], authority: Mapping[str, object]
+) -> None:
+    expected_names: set[str] = set()
+    for target in authority["targets"]:
+        binary = target["binary"]
+        expected_names.add(binary["path"])
+        _verify_authority_bytes(files.get(binary["path"]), binary)
+        for material in target["materials"]:
+            relative = evidence_relative(target["target"], material["path"]).as_posix()
+            expected_names.add(relative)
+            _verify_authority_bytes(files.get(relative), material)
+    if set(files) & ({path.as_posix() for _target, path in TARGET_LAYOUTS} | {name for name in files if name.startswith("evidence/")}) != expected_names:
+        raise SkillReleaseError("Skill archive authority projection is not exact")
+
+
+def _verify_authority_bytes(data: Mapping[str, object] | None, record: Mapping[str, object]) -> None:
+    if data != {"bytes": record["bytes"], "sha256": record["sha256"]}:
+        raise SkillReleaseError(f"Skill archive member differs from authority: {record['path']}")

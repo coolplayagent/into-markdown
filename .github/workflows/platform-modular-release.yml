@@ -362,17 +362,23 @@ jobs:
           Expand-Archive "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\release\into-md-windows-x86_64.zip" $windows
           Expand-Archive "$env:RUNNER_TEMP\targets\release-x86_64-unknown-linux-gnu\release\into-md-linux-x86_64.zip" $linuxX64
           Expand-Archive "$env:RUNNER_TEMP\targets\release-aarch64-unknown-linux-gnu\release\into-md-linux-arm64.zip" $linuxArm64
-          $authority = "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\evidence\x86_64-pc-windows-msvc\core\archive-material-authority.json"
+          $windowsAuthority = "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\evidence\x86_64-pc-windows-msvc\core\archive-material-authority.json"
+          $linuxX64Authority = "$env:RUNNER_TEMP\targets\release-x86_64-unknown-linux-gnu\evidence\x86_64-unknown-linux-gnu\core\archive-material-authority.json"
+          $linuxArm64Authority = "$env:RUNNER_TEMP\targets\release-aarch64-unknown-linux-gnu\evidence\aarch64-unknown-linux-gnu\core\archive-material-authority.json"
+          $skillAuthority = "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\evidence\release-validation\into-markdown-skill-authority.json"
           python tools/skill-release/skill_release_main.py build `
             --windows-x86-64-core "$windows\into-md.exe" `
             --windows-x86-64-pdfium "$windows\lib\pdfium\pdfium.dll" `
             --linux-x86-64-core "$linuxX64\into-md" `
             --linux-arm64-core "$linuxArm64\into-md" `
-            --material-authority $authority `
+            --windows-material-authority $windowsAuthority `
+            --linux-x86-64-material-authority $linuxX64Authority `
+            --linux-arm64-material-authority $linuxArm64Authority `
+            --authority-output $skillAuthority `
             --archive "$publish\into-markdown-skill.zip"
           python tools/skill-release/skill_release_main.py verify `
             --archive "$publish\into-markdown-skill.zip" `
-            --material-authority $authority
+            --skill-authority $skillAuthority
           Copy-Item "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\release\into-md-windows-x86_64.zip" $publish
           Copy-Item "$env:RUNNER_TEMP\targets\release-x86_64-pc-windows-msvc\release\official.media.whisper-x86_64-pc-windows-msvc.imp" $publish
       - name: Run offline Windows Core and Skill black-box E2E
@@ -425,11 +431,14 @@ jobs:
             --windows-x86-64-pdfium "$RUNNER_TEMP/skill-input/windows/lib/pdfium/pdfium.dll" \
             --linux-x86-64-core "$RUNNER_TEMP/skill-input/linux-x86_64/into-md" \
             --linux-arm64-core "$RUNNER_TEMP/skill-input/linux-arm64/into-md" \
-            --material-authority "$RUNNER_TEMP/targets/release-x86_64-pc-windows-msvc/evidence/x86_64-pc-windows-msvc/core/archive-material-authority.json" \
+            --windows-material-authority "$RUNNER_TEMP/targets/release-x86_64-pc-windows-msvc/evidence/x86_64-pc-windows-msvc/core/archive-material-authority.json" \
+            --linux-x86-64-material-authority "$RUNNER_TEMP/targets/release-x86_64-unknown-linux-gnu/evidence/x86_64-unknown-linux-gnu/core/archive-material-authority.json" \
+            --linux-arm64-material-authority "$RUNNER_TEMP/targets/release-aarch64-unknown-linux-gnu/evidence/aarch64-unknown-linux-gnu/core/archive-material-authority.json" \
+            --authority-output "$RUNNER_TEMP/evidence/release-validation/into-markdown-skill-authority.json" \
             --archive "$RUNNER_TEMP/publish/into-markdown-skill.zip"
           python tools/skill-release/skill_release_main.py verify \
             --archive "$RUNNER_TEMP/publish/into-markdown-skill.zip" \
-            --material-authority "$RUNNER_TEMP/targets/release-x86_64-pc-windows-msvc/evidence/x86_64-pc-windows-msvc/core/archive-material-authority.json"
+            --skill-authority "$RUNNER_TEMP/evidence/release-validation/into-markdown-skill-authority.json"
       - name: Collect four Core and four speech downloads
         run: |
           for directory in "$RUNNER_TEMP"/targets/release-*; do
