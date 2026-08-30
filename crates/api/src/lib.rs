@@ -82,7 +82,8 @@ pub use into_markdown_converters::{
 };
 pub use into_markdown_core::*;
 pub use into_markdown_engine::{
-    Engine, EngineBuilder, RecoveryStore, RecoveryToken, RegistryBuilder, TaskCheckpoint, TaskPhase,
+    Engine, EngineBuilder, PreparedArtifactConversion, RecoveryStore, RecoveryToken,
+    RegistryBuilder, TaskCheckpoint, TaskPhase,
 };
 pub use into_markdown_ocr::{
     AcquiredModelArtifact, ArchiveMember, CharacterSet, DataDirectoryEnvironment, ModelAcquisition,
@@ -95,8 +96,8 @@ pub use into_markdown_ocr::{
 #[cfg(feature = "ocr-provider-runtime")]
 pub use into_markdown_onnxruntime::verify_worker_executable as verify_ocr_worker_executable;
 pub use into_markdown_render_markdown::{
-    AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, plan_assets,
-    render as render_markdown,
+    AssetPlan, PlannedAsset, PlannedAssetReference, asset_filename, asset_filename_from_sha256,
+    plan_assets, render as render_markdown,
 };
 pub use into_markdown_task_store::{
     ArtifactKind, ArtifactReference, BusyControl, ConfigurationSnapshot, DiagnosticCode,

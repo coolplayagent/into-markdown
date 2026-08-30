@@ -129,6 +129,8 @@ pub struct AssetStreamInfo {
     pub size: u64,
     /// External reference when the asset has no local payload.
     pub external_uri: Option<String>,
+    /// Authoritative SHA-256 for a local payload, absent for external-only assets.
+    pub content_sha256: Option<[u8; 32]>,
 }
 
 /// Semantic result of a completed streaming conversion.
@@ -158,6 +160,11 @@ pub struct ConversionSummary {
 
 /// Ordered destination for incremental Markdown and asset payloads.
 pub trait ArtifactSink {
+    /// Freeze the representations accepted for this execution.
+    fn capabilities(&self) -> crate::ArtifactSinkCapabilities {
+        crate::ArtifactSinkCapabilities::default()
+    }
+
     /// Consume the next ordered Markdown byte chunk.
     ///
     /// # Errors
@@ -189,6 +196,36 @@ pub trait ArtifactSink {
     /// Returns an I/O or destination-specific conversion error when the asset
     /// stream cannot be finalized.
     fn end_asset(&mut self) -> Result<(), ConversionError>;
+
+    /// Consume one ordered semantic document event.
+    ///
+    /// # Errors
+    ///
+    /// The default rejects semantic output so existing Markdown sinks remain
+    /// source compatible until they opt in through [`Self::capabilities`].
+    fn write_document_event(
+        &mut self,
+        _event: &crate::DocumentStreamEvent<'_>,
+    ) -> Result<(), ConversionError> {
+        Err(ConversionError::Unsupported {
+            detail: "artifact sink does not accept semantic document events".into(),
+        })
+    }
+
+    /// Finalize the semantic document and its ordered audit inventories.
+    ///
+    /// # Errors
+    ///
+    /// The default rejects semantic finalization.
+    fn finish_document(
+        &mut self,
+        _diagnostics: &[Diagnostic],
+        _provenance: &[Provenance],
+    ) -> Result<(), ConversionError> {
+        Err(ConversionError::Unsupported {
+            detail: "artifact sink does not accept semantic document finalization".into(),
+        })
+    }
 }
 
 /// Opaque live-memory ownership transferred across conversion pipeline stages.
@@ -572,6 +609,31 @@ impl ConverterOutput {
             provenance,
             memory_lease,
         ))
+    }
+
+    /// Consume an emitted converter output while retaining diagnostics and
+    /// their authenticated request-memory ownership in the bounded summary.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn into_conversion_summary(
+        self,
+        format: InputFormat,
+        markdown_bytes: u64,
+    ) -> ConversionSummary {
+        let Self { assets, diagnostics, memory_lease, .. } = self;
+        let outcome = if diagnostics.is_empty() {
+            ConversionOutcome::Complete
+        } else {
+            ConversionOutcome::Degraded
+        };
+        ConversionSummary {
+            format: Some(format),
+            outcome,
+            diagnostics,
+            markdown_bytes,
+            assets: u64::try_from(assets.len()).unwrap_or(u64::MAX),
+            _memory_lease: memory_lease,
+        }
     }
 
     #[doc(hidden)]

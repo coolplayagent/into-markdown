@@ -1,13 +1,13 @@
 use crate::{Engine, EngineBuilder};
 use into_markdown_core::{
-    ArtifactSink, Asset, AssetId, AssetStreamInfo, Block, BlockNode, BoxFuture, ConversionError,
-    ConversionOptions, ConversionRequest, Converter, ConverterEventSink, ConverterOutput,
-    ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
-    DiagnosticSeverity, Document, ExecutionContext, ExecutionOptions, ExecutionStage,
-    FormatCandidate, FormatDetector, FormatHint, InputFormat, InputRef, LocalBoxFuture,
-    MarkdownRenderer, NodeId, ProbeOutcome, ProgressEvent, ProgressListener, Provenance,
-    ProvenanceKind, ResolvedInput, Services, SourceLocator, SourceMetadata, SourceResolver,
-    stream_converter_output,
+    ArtifactSink, ArtifactSinkCapabilities, Asset, AssetId, AssetStreamInfo, Block, BlockNode,
+    BoxFuture, ConversionError, ConversionOptions, ConversionRequest, Converter,
+    ConverterEventSink, ConverterOutput, ConverterStream, ConverterStreamCompletion,
+    ConverterStreamMode, Diagnostic, DiagnosticSeverity, Document, DocumentStreamEvent,
+    ExecutionContext, ExecutionOptions, ExecutionStage, FormatCandidate, FormatDetector,
+    FormatHint, InputFormat, InputRef, LocalBoxFuture, MarkdownRenderer, NodeId, ProbeOutcome,
+    ProgressEvent, ProgressListener, Provenance, ProvenanceKind, ResolvedInput, Services,
+    SourceLocator, SourceMetadata, SourceResolver, stream_converter_output,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -421,6 +421,95 @@ fn aggregate_and_streamed_public_bytes_assets_and_diagnostics_match() {
     assert_eq!(streamed.assets[0].0.id, aggregate.assets[0].id);
     assert_eq!(streamed.assets[0].1, aggregate.assets[0].bytes);
     assert_eq!(summary.diagnostics, aggregate.diagnostics);
+}
+
+#[derive(Default)]
+struct SemanticCountingSink {
+    metadata_calls: usize,
+    block_ids: Vec<NodeId>,
+    finalization_calls: usize,
+    markdown_calls: usize,
+    asset_begin_calls: usize,
+    asset_end_calls: usize,
+}
+
+impl ArtifactSink for SemanticCountingSink {
+    fn capabilities(&self) -> ArtifactSinkCapabilities {
+        ArtifactSinkCapabilities { markdown: true, semantic_events: true, assets: true }
+    }
+
+    fn write_markdown(&mut self, _: &[u8]) -> Result<(), ConversionError> {
+        self.markdown_calls += 1;
+        Ok(())
+    }
+
+    fn begin_asset(&mut self, _: &AssetStreamInfo) -> Result<(), ConversionError> {
+        self.asset_begin_calls += 1;
+        Ok(())
+    }
+
+    fn write_asset(&mut self, _: &[u8]) -> Result<(), ConversionError> {
+        Ok(())
+    }
+
+    fn end_asset(&mut self) -> Result<(), ConversionError> {
+        self.asset_end_calls += 1;
+        Ok(())
+    }
+
+    fn write_document_event(
+        &mut self,
+        event: &DocumentStreamEvent<'_>,
+    ) -> Result<(), ConversionError> {
+        match event {
+            DocumentStreamEvent::Metadata(_) => self.metadata_calls += 1,
+            DocumentStreamEvent::RootBlock(block) => self.block_ids.push(block.id.clone()),
+        }
+        Ok(())
+    }
+
+    fn finish_document(
+        &mut self,
+        diagnostics: &[Diagnostic],
+        provenance: &[Provenance],
+    ) -> Result<(), ConversionError> {
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(provenance.len(), 3);
+        self.finalization_calls += 1;
+        Ok(())
+    }
+}
+
+#[test]
+fn prepared_semantic_artifact_path_executes_and_finalizes_exactly_once() {
+    let aggregate_calls = Arc::new(AtomicUsize::new(0));
+    let native_calls = Arc::new(AtomicUsize::new(0));
+    let engine = engine(CountingNative {
+        aggregate_calls: Arc::clone(&aggregate_calls),
+        native_calls: Arc::clone(&native_calls),
+        plan: 1024 * 1024,
+        schema_version: into_markdown_core::DOCUMENT_SCHEMA_VERSION,
+        block_count: 3,
+    });
+    let request = request();
+    let context = ExecutionContext::new(request.execution.clone(), request.options.limits.clone());
+    let mut sink = SemanticCountingSink::default();
+    let prepared =
+        block_on(engine.prepare_into_with_context(request, context, sink.capabilities())).unwrap();
+
+    assert_eq!(aggregate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(native_calls.load(Ordering::SeqCst), 0);
+    let summary = block_on(engine.execute_prepared_into(prepared, &mut sink)).unwrap();
+
+    assert_eq!(aggregate_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(native_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(sink.metadata_calls, 1);
+    assert_eq!(sink.block_ids.len(), 3);
+    assert_eq!(sink.finalization_calls, 1);
+    assert_eq!(sink.markdown_calls as u64, summary.markdown_bytes.div_ceil(64 * 1024));
+    assert_eq!(sink.asset_begin_calls, 1);
+    assert_eq!(sink.asset_end_calls, 1);
+    assert_eq!(summary.assets, 1);
 }
 
 struct StageListener(Arc<Mutex<Vec<ExecutionStage>>>);

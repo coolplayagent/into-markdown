@@ -19,34 +19,26 @@ pub(crate) struct RenderRequest<'a> {
     pub(crate) context: &'a ExecutionContext,
 }
 
+pub(crate) struct RenderedArtifacts {
+    pub(crate) output: ConverterOutput,
+    pub(crate) markdown: String,
+    pub(crate) provenance: Vec<into_markdown_core::Provenance>,
+    pub(crate) markdown_memory: into_markdown_core::ResourceReservation,
+    pub(crate) provenance_memory: into_markdown_core::ResourceReservation,
+}
+
 pub(crate) async fn render(
     request: RenderRequest<'_>,
 ) -> Result<ConversionResult, ConversionError> {
-    let RenderRequest { renderer, output, source, format, options, context } = request;
-    validate_asset_limits(&output, options)?;
-    context.report(
-        into_markdown_core::ExecutionStage::Rendering,
-        None,
-        None,
-        Some(renderer.id()),
-    )?;
-    let (markdown, markdown_memory) = if format == InputFormat::Markdown
-        && options.ai.markdown_postprocess == AiMode::Off
-        && options.text.charset.is_none()
-        && options.text.decoding_mode == TextDecodingMode::Strict
-    {
-        preserve_utf8_markdown(source, context)?
-    } else {
-        invoke_renderer_preflighted(renderer, &output.document, &output.assets, options, context)
-            .await?
-    };
+    let format = request.format;
+    let context = request.context;
+    let RenderedArtifacts { output, markdown, provenance, markdown_memory, provenance_memory } =
+        render_artifacts(request).await?;
     let markdown_bytes =
         u64::try_from(markdown.capacity()).map_err(|_| ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: "rendered Markdown capacity cannot be represented as u64".into(),
         })?;
-    let (provenance, provenance_memory) =
-        collect_provenance_preflighted(&output.document.blocks, context)?;
     let final_required = estimate_retained_result(
         &output.document,
         &markdown,
@@ -69,6 +61,32 @@ pub(crate) async fn render(
     )?;
     result.set_detected_format(format);
     Ok(result)
+}
+
+pub(crate) async fn render_artifacts(
+    request: RenderRequest<'_>,
+) -> Result<RenderedArtifacts, ConversionError> {
+    let RenderRequest { renderer, output, source, format, options, context } = request;
+    validate_asset_limits(&output, options)?;
+    context.report(
+        into_markdown_core::ExecutionStage::Rendering,
+        None,
+        None,
+        Some(renderer.id()),
+    )?;
+    let (markdown, markdown_memory) = if format == InputFormat::Markdown
+        && options.ai.markdown_postprocess == AiMode::Off
+        && options.text.charset.is_none()
+        && options.text.decoding_mode == TextDecodingMode::Strict
+    {
+        preserve_utf8_markdown(source, context)?
+    } else {
+        invoke_renderer_preflighted(renderer, &output.document, &output.assets, options, context)
+            .await?
+    };
+    let (provenance, provenance_memory) =
+        collect_provenance_preflighted(&output.document.blocks, context)?;
+    Ok(RenderedArtifacts { output, markdown, provenance, markdown_memory, provenance_memory })
 }
 
 fn validate_asset_limits(

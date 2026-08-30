@@ -18,13 +18,48 @@ pub(crate) async fn invoke_native_collecting(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    let plan = converter.planned_stream_bytes(
+    invoke_native(
+        converter,
         input,
         candidate,
         options,
+        services,
         context,
         StreamConsumerKind::Collecting,
-    )?;
+    )
+    .await
+}
+
+pub(crate) async fn invoke_native_immediate(
+    converter: &dyn ConverterStream,
+    input: &ResolvedInput,
+    candidate: &FormatCandidate,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    invoke_native(
+        converter,
+        input,
+        candidate,
+        options,
+        services,
+        context,
+        StreamConsumerKind::Immediate,
+    )
+    .await
+}
+
+async fn invoke_native(
+    converter: &dyn ConverterStream,
+    input: &ResolvedInput,
+    candidate: &FormatCandidate,
+    options: &ConversionOptions,
+    services: &Services,
+    context: &ExecutionContext,
+    consumer: StreamConsumerKind,
+) -> Result<ConverterOutput, ConversionError> {
+    let plan = converter.planned_stream_bytes(input, candidate, options, context, consumer)?;
     let mut admission = context.reserve_memory(plan)?;
     let credited = context.with_memory_credit(&mut admission)?;
     let mut sink = CollectingArtifactSink::new(&credited);

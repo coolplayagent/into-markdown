@@ -5,6 +5,7 @@
 //! runtime, or provider implementation. Implementations depend on this crate;
 //! the dependency never points in the opposite direction.
 
+mod artifact;
 mod dto;
 mod error;
 mod execution;
@@ -19,6 +20,7 @@ mod spi;
 mod stream;
 mod summary;
 
+pub use artifact::{ArtifactSinkCapabilities, DocumentStreamEvent};
 pub use dto::{
     AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
     BatchLimitDto, BatchReportDto, BundleAssetDto, BundleManifestDto, DTO_SCHEMA_VERSION,
