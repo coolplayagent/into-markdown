@@ -45,6 +45,32 @@ fn concurrent_parent_creation_authenticates_the_winning_directory() {
     assert!(identities.windows(2).all(|pair| pair[0] == pair[1]));
 }
 
+#[test]
+fn concurrent_preflights_create_one_missing_output_root_without_transaction_residue() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("missing-output");
+    let barrier = Arc::new(Barrier::new(16));
+    std::thread::scope(|scope| {
+        let handles = (0..16)
+            .map(|index| {
+                let barrier = Arc::clone(&barrier);
+                let target = output.join(format!("item-{index}.md"));
+                scope.spawn(move || {
+                    barrier.wait();
+                    recover_for_paths(&[target], &context()).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+
+    assert!(output.is_dir());
+    assert!(manager_artifacts(&root).is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn output_transaction_resolves_an_existing_symlinked_parent_once() {
