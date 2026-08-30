@@ -122,11 +122,22 @@ real parser evidence as well as common-enricher evidence:
   Core 可执行文件大小、冷启动、逐格式转换、串行/并发批量吞吐及峰值 RSS。旧基线缺少可选
   runtime 时只记录不可用状态，候选仍须通过绝对资源上限与可解释的相对回退门禁；JSON 报告
   作为 `legacy-office-performance-linux-x86_64` artifact 上传。
+- `.github/workflows/legacy-xls-quality.yml` 的 PR job 使用仓库原创 `normal.xls` 与动态加载的
+  `xlrd 2.0.2` 逐单元格核对显示文本、数值/日期、sheet/row/cell 顺序和合并区；同一合法输入
+  分别走 strict 与 best-effort，输出必须一致。该 job 同时执行 DOC/PPT 的损坏 CFB 对抗回归，
+  证明 XLS 的兼容策略没有放宽其它旧 Office 格式。
 - 对外部真实 XLS corpus 的复核可追加 `--xls-corpus` 与
-  `--xls-authority tools/legacy-xls-corpus-authority.json`。authority 固定 60 个输入的 SHA-256，
-  并保存 `xlrd 2.0.2` 独立完成的 56 个有效结构分类；扩展报告逐文件记录耗时、峰值 RSS、
-  进程退出后的临时字节、重复读取输出摘要及硬限制证据，并在 PR base 与候选共同成功集合的
-  平均耗时回退达到 50% 时失败。该外部 corpus 不进入发布物或单元测试。
+  `--xls-authority tools/legacy-xls-corpus-authority.json` 和 `--xls-xlrd-path <pinned-site-packages>`。
+  authority 固定 60 个输入的 SHA-256，并保存 `xlrd 2.0.2` 独立完成的 56 个有效结构分类；运行时
+  oracle 会再次动态加载固定版本并 eager-read 全部 sheet/cell/merge。基线与候选先各预热一次，
+  之后按文件和轮次奇偶交错执行；报告在固定共同成功集合上比较逐文件均值，并逐文件记录峰值
+  RSS、输出邻接 staging/part/transaction 与 temp 的运行期峰值/退出残留、重复读取摘要，以及
+  `documentNodes` 的结构化硬限制证据。55 个合法成功项必须全部通过内容 oracle，31 个共同成功项
+  必须保持字节 SHA 一致，普通共同成功平均回退达到 50% 时失败；最多且恰有一个合法输入可因
+  `documentNodes` 硬限制失败。共享 lease 聚合遥测由 #269 跟踪，本门禁同时执行真实
+  `CompoundFile::open` 的 exact、minus-one、取消和 Drop 释放测试。私有 corpus 不进入发布物；
+  `legacy-xls-quality.yml` 的 release environment/self-hosted job 提供受控远端门禁，不把本地报告
+  当作唯一证据。
 - RecoveryStore tests (Unix filesystem semantics) prove enriched converter
   output is atomically checkpointed before rendering and is not enriched again
   after a process restart. Windows gates compile that path; Unix CI executes it.

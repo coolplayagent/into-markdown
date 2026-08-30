@@ -3,7 +3,6 @@ mod chain;
 use super::budget::{limit, malformed};
 use chain::{walk_chain, walk_chain_with_declared_tail};
 use into_markdown_core::{ConversionError, ResourceReservation};
-use std::collections::{BTreeMap, BTreeSet};
 
 const SIGNATURE: [u8; 8] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
 const FREE: u32 = 0xffff_ffff;
@@ -34,9 +33,9 @@ struct DirectoryEntry {
 #[derive(Debug)]
 pub(crate) struct CompoundFile {
     entries: Vec<DirectoryEntry>,
-    streams: BTreeMap<usize, Vec<u8>>,
-    recoveries: BTreeSet<CompoundRecovery>,
-    _memory: Option<ResourceReservation>,
+    streams: Vec<Option<Vec<u8>>>,
+    recoveries: CompoundRecoveries,
+    _memory: Vec<ResourceReservation>,
 }
 
 /// Narrow compatibility recoveries for safely addressable legacy Office CFB files.
@@ -50,7 +49,8 @@ pub(crate) enum CompoundCompatibility {
     LegacyOfficeBestEffort,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub(crate) enum CompoundRecovery {
     TrailingFileBytes,
     FatSectorMarker,
@@ -60,6 +60,72 @@ pub(crate) enum CompoundRecovery {
     StorageStreamMetadata,
     StreamChainTail,
     PartialStreamSector,
+}
+
+impl CompoundRecovery {
+    const ALL: [Self; 8] = [
+        Self::TrailingFileBytes,
+        Self::FatSectorMarker,
+        Self::UnreachableFatTarget,
+        Self::DirectoryNameTerminator,
+        Self::RootStorageName,
+        Self::StorageStreamMetadata,
+        Self::StreamChainTail,
+        Self::PartialStreamSector,
+    ];
+}
+
+#[derive(Debug, Default)]
+struct CompoundRecoveries(u16);
+
+impl CompoundRecoveries {
+    fn insert(&mut self, recovery: CompoundRecovery) {
+        self.0 |= 1_u16 << recovery as u8;
+    }
+
+    fn remove(&mut self, recovery: CompoundRecovery) {
+        self.0 &= !(1_u16 << recovery as u8);
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CompoundRecovery> + '_ {
+        CompoundRecovery::ALL.into_iter().filter(|recovery| self.contains(*recovery))
+    }
+
+    fn contains(&self, recovery: CompoundRecovery) -> bool {
+        self.0 & (1_u16 << recovery as u8) != 0
+    }
+}
+
+struct CompoundMemory {
+    leases: Vec<ResourceReservation>,
+}
+
+impl CompoundMemory {
+    fn new<B: CompoundBudget + ?Sized>(
+        initial_bytes: u64,
+        budget: &B,
+    ) -> Result<Self, ConversionError> {
+        let mut leases = Vec::new();
+        if initial_bytes != 0 {
+            leases.push(budget.cfb_memory(initial_bytes)?);
+        }
+        Ok(Self { leases })
+    }
+
+    fn grow<B: CompoundBudget + ?Sized>(
+        &mut self,
+        bytes: u64,
+        budget: &B,
+    ) -> Result<(), ConversionError> {
+        if bytes != 0 {
+            self.leases.push(budget.cfb_memory(bytes)?);
+        }
+        Ok(())
+    }
+
+    fn into_leases(self) -> Vec<ResourceReservation> {
+        self.leases
+    }
 }
 
 impl CompoundFile {
@@ -83,7 +149,7 @@ impl CompoundFile {
     }
 
     pub(crate) fn recoveries(&self) -> impl Iterator<Item = CompoundRecovery> + '_ {
-        self.recoveries.iter().copied()
+        self.recoveries.iter()
     }
 
     fn children(&self, parent: usize) -> impl Iterator<Item = (usize, &DirectoryEntry)> {
@@ -108,7 +174,7 @@ impl<'a> Storage<'a> {
             .find(|(_, entry)| {
                 entry.kind == EntryKind::Stream && entry.name.eq_ignore_ascii_case(name)
             })
-            .and_then(|(index, _)| self.file.streams.get(&index).map(Vec::as_slice))
+            .and_then(|(index, _)| self.file.streams.get(index)?.as_deref())
     }
 
     pub(crate) fn storages(&self) -> impl Iterator<Item = Storage<'a>> + 'a {
@@ -224,17 +290,12 @@ impl Header {
             && !bytes.len().is_multiple_of(self.sector_size))
         .then_some(sector_count);
         let stream_sector_count = sector_count + usize::from(partial_stream_sector.is_some());
-        // Hold one authenticated lifetime lease before the first attacker-sized allocation.
-        // The plan covers the retained FAT/miniFAT, directory inventory, root mini-stream,
-        // non-overlapping stream payloads and their bounded phase scratch. Directory ancestry is
-        // stored by parent index, so it cannot grow quadratically with nesting depth.
-        let memory = (compatibility == CompoundCompatibility::LegacyOfficeBestEffort)
-            .then(|| {
-                let memory_plan = cfb_memory_plan(bytes.len(), stream_sector_count)?;
-                budget.cfb_memory(memory_plan)
-            })
-            .transpose()?;
-        let mut recoveries = BTreeSet::new();
+        // CFB parsing accounts the concrete logical capacities it is about to allocate in both
+        // compatibility modes. The lifetime lease grows only when authenticated structure
+        // reveals another retained allocation; phase scratch has a separate short-lived lease.
+        let mut memory =
+            CompoundMemory::new(cfb_initial_memory_plan(self, stream_sector_count)?, budget)?;
+        let mut recoveries = CompoundRecoveries::default();
         if trailing_recovery {
             // Sector identifiers can only address complete sectors. A short physical tail is
             // unreachable by every authenticated chain and can therefore be ignored safely.
@@ -303,9 +364,19 @@ impl Header {
         for id in &directory_chain {
             claim(&mut owners, *id, "cfb/directory")?;
         }
+        let directory_capacity = directory_chain
+            .len()
+            .checked_mul(self.sector_size)
+            .ok_or_else(|| limit("max_memory_bytes", "CFB directory capacity overflowed"))?;
+        let directory_entries = directory_capacity / 128;
+        memory.grow(cfb_directory_memory_plan(directory_entries)?, budget)?;
+        let directory_scratch =
+            budget.cfb_memory(u64::try_from(directory_capacity).unwrap_or(u64::MAX))?;
         let directory_bytes = concatenate(bytes, self.sector_size, &directory_chain)?;
         let mut entries =
             parse_directory(&directory_bytes, self.major, budget, compatibility, &mut recoveries)?;
+        drop(directory_bytes);
+        drop(directory_scratch);
         assign_paths(&mut entries, budget)?;
 
         let minifat_chain = if self.minifat_sectors == 0 {
@@ -325,25 +396,42 @@ impl Header {
         for id in &minifat_chain {
             claim(&mut owners, *id, "cfb/minifat")?;
         }
-        let minifat_bytes = concatenate(bytes, self.sector_size, &minifat_chain)?;
-        let mut minifat = try_vec_capacity(minifat_bytes.len() / 4, "CFB miniFAT")?;
-        minifat.extend(
-            minifat_bytes
-                .chunks_exact(4)
-                .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
-        );
-
         let root =
             entries.first().ok_or_else(|| malformed("cfb/directory", "missing root entry"))?;
-        let root_chain = regular_stream_chain(
+        memory.grow(
+            cfb_stream_memory_plan(
+                &entries,
+                minifat_chain.len(),
+                self.sector_size,
+                self.mini_sector_size,
+                self.mini_cutoff,
+            )?,
+            budget,
+        )?;
+        let minifat_capacity = minifat_chain
+            .len()
+            .checked_mul(self.sector_size / 4)
+            .ok_or_else(|| limit("max_memory_bytes", "CFB miniFAT capacity overflowed"))?;
+        let mut minifat = try_vec_capacity(minifat_capacity, "CFB miniFAT")?;
+        for id in &minifat_chain {
+            minifat.extend(
+                read_sector(bytes, self.sector_size, *id)?
+                    .chunks_exact(4)
+                    .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])),
+            );
+        }
+
+        let (root_chain, root_tail) = regular_stream_chain(
             root,
             &fat,
             sector_count,
             self.sector_size,
             "cfb/root",
             compatibility,
-            &mut recoveries,
         )?;
+        let mut regular_tail_targets =
+            try_vec_capacity(entries.len(), "CFB regular stream tail targets")?;
+        regular_tail_targets.extend(root_tail);
         for id in &root_chain {
             claim(&mut owners, *id, "cfb/root-mini-stream")?;
         }
@@ -358,7 +446,7 @@ impl Header {
         )?;
         if let Some(consumed_all_tail) = root_partial_tail_consumed {
             if consumed_all_tail {
-                recoveries.remove(&CompoundRecovery::TrailingFileBytes);
+                recoveries.remove(CompoundRecovery::TrailingFileBytes);
             }
             recoveries.insert(CompoundRecovery::PartialStreamSector);
         }
@@ -367,7 +455,9 @@ impl Header {
             false,
             "CFB mini-sector owner table",
         )?;
-        let mut streams = BTreeMap::new();
+        let mut mini_tail_targets =
+            try_vec_capacity(entries.len(), "CFB mini stream tail targets")?;
+        let mut streams = try_sized_vec(entries.len(), None, "CFB stream slots")?;
         for (index, entry) in
             entries.iter().enumerate().filter(|(_, entry)| entry.kind == EntryKind::Stream)
         {
@@ -380,19 +470,19 @@ impl Header {
                     owners: &mut mini_owners,
                     mini_size: self.mini_sector_size,
                     compatibility,
-                    recoveries: &mut recoveries,
+                    pending_tails: &mut mini_tail_targets,
                 };
                 read_mini_stream(entry, &part, &mut mini_context)?
             } else {
-                let chain = regular_stream_chain(
+                let (chain, pending_tail) = regular_stream_chain(
                     entry,
                     &fat,
                     stream_sector_count,
                     self.sector_size,
                     &part,
                     compatibility,
-                    &mut recoveries,
                 )?;
+                regular_tail_targets.extend(pending_tail);
                 for id in &chain {
                     claim(&mut owners, *id, &part)?;
                 }
@@ -406,15 +496,20 @@ impl Header {
                 )?;
                 if let Some(consumed_all_tail) = partial_tail_consumed {
                     if consumed_all_tail {
-                        recoveries.remove(&CompoundRecovery::TrailingFileBytes);
+                        recoveries.remove(CompoundRecovery::TrailingFileBytes);
                     }
                     recoveries.insert(CompoundRecovery::PartialStreamSector);
                 }
                 data
             };
-            streams.insert(index, data);
+            streams[index] = Some(data);
         }
-        Ok(CompoundFile { entries, streams, recoveries, _memory: memory })
+        validate_pending_tails(&regular_tail_targets, &owners, &fat, "cfb/stream-tail")?;
+        validate_pending_tails(&mini_tail_targets, &mini_owners, &minifat, "cfb/mini-stream-tail")?;
+        if !regular_tail_targets.is_empty() || !mini_tail_targets.is_empty() {
+            recoveries.insert(CompoundRecovery::StreamChainTail);
+        }
+        Ok(CompoundFile { entries, streams, recoveries, _memory: memory.into_leases() })
     }
 
     fn read_difat<B: CompoundBudget + ?Sized>(
@@ -423,7 +518,8 @@ impl Header {
         sector_count: usize,
         budget: &mut B,
     ) -> Result<(Vec<u32>, Vec<u32>), ConversionError> {
-        let mut fat_ids = Vec::new();
+        let mut fat_ids =
+            try_vec_capacity(to_usize(self.fat_sectors)?, "CFB FAT sector identifiers")?;
         for offset in (76..512).step_by(4) {
             let id = le32(bytes, offset, "cfb/difat")?;
             if id != FREE {
@@ -431,15 +527,12 @@ impl Header {
                 fat_ids.push(id);
             }
         }
-        let mut difat_ids = Vec::new();
-        let mut difat_seen = BTreeSet::new();
+        let mut difat_ids =
+            try_vec_capacity(to_usize(self.difat_sectors)?, "CFB DIFAT sector identifiers")?;
         let mut current = self.first_difat;
         for _ in 0..self.difat_sectors {
             budget.cfb_work(1)?;
             validate_physical(current, sector_count, "cfb/difat")?;
-            if !difat_seen.insert(current) {
-                return Err(malformed("cfb/difat", "DIFAT chain contains a cycle"));
-            }
             difat_ids.push(current);
             let sector = read_sector(bytes, self.sector_size, current)?;
             for chunk in sector[..self.sector_size - 4].chunks_exact(4) {
@@ -461,41 +554,88 @@ impl Header {
         if fat_ids.len() != to_usize(self.fat_sectors)? {
             return Err(malformed("cfb/difat", "declared FAT sector count does not match DIFAT"));
         }
-        let unique = fat_ids.iter().copied().collect::<BTreeSet<_>>();
-        if unique.len() != fat_ids.len() {
-            return Err(malformed("cfb/difat", "DIFAT repeats a FAT sector"));
-        }
         Ok((fat_ids, difat_ids))
     }
 }
 
-fn cfb_memory_plan(input_bytes: usize, sector_count: usize) -> Result<u64, ConversionError> {
-    let input = u64::try_from(input_bytes).unwrap_or(u64::MAX);
+fn cfb_initial_memory_plan(header: Header, sector_count: usize) -> Result<u64, ConversionError> {
     let sectors = u64::try_from(sector_count).unwrap_or(u64::MAX);
-    let entries = input / 128;
-    let retained_payloads = input
+    let sector_size = u64::try_from(header.sector_size).unwrap_or(u64::MAX);
+    let owners = sectors;
+    let fat = u64::from(header.fat_sectors)
+        .checked_mul(sector_size)
+        .ok_or_else(|| limit("max_memory_bytes", "CFB FAT allocation plan overflowed"))?;
+    let allocation_ids = u64::from(header.fat_sectors)
+        .checked_add(u64::from(header.difat_sectors))
+        .and_then(|count| count.checked_mul(4))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB allocation-id plan overflowed"))?;
+    // At most one already-owned set of chains and one adversarial overlapping chain coexist
+    // before ownership validation rejects it. Each chain item is one u32 sector identifier.
+    let chain_scratch = sectors
         .checked_mul(8)
-        .ok_or_else(|| limit("max_memory_bytes", "CFB retained-payload memory plan overflowed"))?;
-    let directory_inventory = entries
-        .checked_mul(
-            u64::try_from(std::mem::size_of::<DirectoryEntry>() + 64 + 160).unwrap_or(u64::MAX),
-        )
-        .ok_or_else(|| limit("max_memory_bytes", "CFB directory memory plan overflowed"))?;
-    let chain_inventory = sectors
-        .checked_mul(96)
-        .ok_or_else(|| limit("max_memory_bytes", "CFB chain memory plan overflowed"))?;
-    retained_payloads
-        .checked_add(directory_inventory)
-        .and_then(|bytes| bytes.checked_add(chain_inventory))
-        .and_then(|bytes| bytes.checked_add(64 * 1024))
-        .ok_or_else(|| limit("max_memory_bytes", "CFB memory plan overflowed"))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB chain inventory plan overflowed"))?;
+    owners
+        .checked_add(fat)
+        .and_then(|bytes| bytes.checked_add(allocation_ids))
+        .and_then(|bytes| bytes.checked_add(chain_scratch))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB initial memory plan overflowed"))
+}
+
+fn cfb_directory_memory_plan(entries: usize) -> Result<u64, ConversionError> {
+    const MAX_DIRECTORY_NAME_UTF8_BYTES: usize = 31 * 3;
+    let bytes_per_entry = std::mem::size_of::<DirectoryEntry>()
+        .checked_add(MAX_DIRECTORY_NAME_UTF8_BYTES)
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<bool>()))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Option<Vec<u8>>>()))
+        .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<u32>()))
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<(usize, String)>()))
+        .and_then(|bytes| bytes.checked_add(MAX_DIRECTORY_NAME_UTF8_BYTES))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB directory entry plan overflowed"))?;
+    u64::try_from(entries)
+        .unwrap_or(u64::MAX)
+        .checked_mul(u64::try_from(bytes_per_entry).unwrap_or(u64::MAX))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB directory memory plan overflowed"))
+}
+
+fn cfb_stream_memory_plan(
+    entries: &[DirectoryEntry],
+    minifat_sectors: usize,
+    sector_size: usize,
+    mini_sector_size: usize,
+    mini_cutoff: u32,
+) -> Result<u64, ConversionError> {
+    let root = entries.first().ok_or_else(|| malformed("cfb/directory", "missing root entry"))?;
+    let minifat = minifat_sectors
+        .checked_mul(sector_size)
+        .ok_or_else(|| limit("max_memory_bytes", "CFB miniFAT plan overflowed"))?;
+    let root_bytes = to_usize64(root.size, "cfb/root")?;
+    let mini_owners = root_bytes.div_ceil(mini_sector_size);
+    let mut bytes = u64::try_from(minifat)
+        .unwrap_or(u64::MAX)
+        .checked_add(u64::try_from(root_bytes).unwrap_or(u64::MAX))
+        .and_then(|value| value.checked_add(u64::try_from(mini_owners).unwrap_or(u64::MAX)))
+        .ok_or_else(|| limit("max_memory_bytes", "CFB stream inventory plan overflowed"))?;
+    for entry in entries.iter().filter(|entry| entry.kind == EntryKind::Stream) {
+        let logical = to_usize64(entry.size, "cfb/stream")?;
+        let capacity = if entry.size < u64::from(mini_cutoff) {
+            logical.checked_next_multiple_of(mini_sector_size).ok_or_else(|| {
+                limit("max_memory_bytes", "CFB mini-stream capacity plan overflowed")
+            })?
+        } else {
+            logical
+        };
+        bytes = bytes
+            .checked_add(u64::try_from(capacity).unwrap_or(u64::MAX))
+            .ok_or_else(|| limit("max_memory_bytes", "CFB stream memory plan overflowed"))?;
+    }
+    Ok(bytes)
 }
 fn parse_directory<B: CompoundBudget + ?Sized>(
     bytes: &[u8],
     major: u16,
     budget: &mut B,
     compatibility: CompoundCompatibility,
-    recoveries: &mut BTreeSet<CompoundRecovery>,
+    recoveries: &mut CompoundRecoveries,
 ) -> Result<Vec<DirectoryEntry>, ConversionError> {
     if !bytes.len().is_multiple_of(128) {
         return Err(malformed("cfb/directory", "directory stream is not entry aligned"));
@@ -594,7 +734,7 @@ fn try_sized_vec<T: Clone>(
 fn parse_directory_name(
     raw: &[u8],
     compatibility: CompoundCompatibility,
-    recoveries: &mut BTreeSet<CompoundRecovery>,
+    recoveries: &mut CompoundRecoveries,
 ) -> Result<String, ConversionError> {
     let name_len = usize::from(le16(raw, 64, "cfb/directory")?);
     if !(2..=64).contains(&name_len) || !name_len.is_multiple_of(2) {
@@ -642,7 +782,7 @@ fn assign_paths<B: CompoundBudget + ?Sized>(
     {
         return Err(malformed("cfb/directory", "non-empty directory entry is unreachable"));
     }
-    Ok(())
+    validate_unique_names(entries, budget)
 }
 
 fn visit_tree<B: CompoundBudget + ?Sized>(
@@ -666,27 +806,41 @@ fn visit_tree<B: CompoundBudget + ?Sized>(
         return Err(malformed("cfb/directory", "directory graph contains a cycle or shared child"));
     }
     seen[index] = true;
-    let (left, right, child, kind, name) = {
+    let (left, right, child, kind) = {
         let entry = &entries[index];
-        (entry.left, entry.right, entry.child, entry.kind, entry.name.clone())
+        (entry.left, entry.right, entry.child, entry.kind)
     };
     visit_tree(entries, left, parent, storage_depth, tree_depth + 1, seen, budget)?;
-    if entries.iter().enumerate().any(|(other, entry)| {
-        other != index
-            && seen[other]
-            && entry.parent == parent
-            && entry.name.eq_ignore_ascii_case(&name)
-    }) {
-        return Err(malformed(
-            "cfb/directory",
-            "storage contains duplicate case-insensitive names",
-        ));
-    }
     entries[index].parent = parent;
     if matches!(kind, EntryKind::Storage) {
         visit_tree(entries, child, Some(index), storage_depth + 1, 0, seen, budget)?;
     }
     visit_tree(entries, right, parent, storage_depth, tree_depth + 1, seen, budget)
+}
+
+fn validate_unique_names<B: CompoundBudget + ?Sized>(
+    entries: &[DirectoryEntry],
+    budget: &mut B,
+) -> Result<(), ConversionError> {
+    let count = entries.iter().filter(|entry| entry.parent.is_some()).count();
+    let comparison_levels = usize::try_from(usize::BITS - count.saturating_sub(1).leading_zeros())
+        .unwrap_or(usize::MAX);
+    let comparison_bound = count
+        .checked_mul(comparison_levels)
+        .ok_or_else(|| limit("max_memory_bytes", "CFB name comparison plan overflowed"))?;
+    budget.cfb_work(u64::try_from(comparison_bound).unwrap_or(u64::MAX))?;
+    let mut names = try_vec_capacity(count, "CFB normalized sibling names")?;
+    for entry in entries.iter().filter(|entry| entry.parent.is_some()) {
+        names.push((entry.parent.unwrap_or(0), entry.name.to_ascii_lowercase()));
+    }
+    names.sort_unstable();
+    if names.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(malformed(
+            "cfb/directory",
+            "storage contains duplicate case-insensitive names",
+        ));
+    }
+    budget.cfb_work(u64::try_from(count).unwrap_or(u64::MAX))
 }
 
 struct MiniStreamContext<'a> {
@@ -695,7 +849,7 @@ struct MiniStreamContext<'a> {
     owners: &'a mut [bool],
     mini_size: usize,
     compatibility: CompoundCompatibility,
-    recoveries: &'a mut BTreeSet<CompoundRecovery>,
+    pending_tails: &'a mut Vec<u32>,
 }
 
 fn read_mini_stream(
@@ -704,7 +858,7 @@ fn read_mini_stream(
     context: &mut MiniStreamContext<'_>,
 ) -> Result<Vec<u8>, ConversionError> {
     let expected = to_usize64(entry.size, part)?.div_ceil(context.mini_size);
-    let (chain, recovered_tail) = walk_chain_with_declared_tail(
+    let (chain, pending_tail) = walk_chain_with_declared_tail(
         entry.start,
         context.minifat,
         context.owners.len(),
@@ -712,9 +866,7 @@ fn read_mini_stream(
         part,
         context.compatibility == CompoundCompatibility::LegacyOfficeBestEffort,
     )?;
-    if recovered_tail {
-        context.recoveries.insert(CompoundRecovery::StreamChainTail);
-    }
+    context.pending_tails.extend(pending_tail);
     let capacity = expected
         .checked_mul(context.mini_size)
         .ok_or_else(|| limit("max_decompressed_bytes", "mini-stream capacity overflowed"))?;
@@ -746,21 +898,34 @@ fn regular_stream_chain(
     sector_size: usize,
     part: &str,
     compatibility: CompoundCompatibility,
-    recoveries: &mut BTreeSet<CompoundRecovery>,
-) -> Result<Vec<u32>, ConversionError> {
+) -> Result<(Vec<u32>, Option<u32>), ConversionError> {
     let count = to_usize64(entry.size, part)?.div_ceil(sector_size);
-    let (chain, recovered_tail) = walk_chain_with_declared_tail(
+    walk_chain_with_declared_tail(
         entry.start,
         fat,
         sector_count,
         Some(u32::try_from(count).unwrap_or(u32::MAX)),
         part,
         compatibility == CompoundCompatibility::LegacyOfficeBestEffort,
-    )?;
-    if recovered_tail {
-        recoveries.insert(CompoundRecovery::StreamChainTail);
+    )
+}
+
+fn validate_pending_tails(
+    targets: &[u32],
+    owners: &[bool],
+    allocation_table: &[u32],
+    part: &str,
+) -> Result<(), ConversionError> {
+    for target in targets {
+        let index = to_usize(*target)?;
+        if owners.get(index).copied().unwrap_or(true) {
+            return Err(malformed(part, "declared stream tail aliases an owned sector"));
+        }
+        if allocation_table.get(index).copied() != Some(FREE) {
+            return Err(malformed(part, "declared stream tail points to a live orphan chain"));
+        }
     }
-    Ok(chain)
+    Ok(())
 }
 
 fn validate_fat_targets(fat: &[u32], sector_count: usize) -> Result<(), ConversionError> {
@@ -940,6 +1105,9 @@ fn to_usize64(value: u64, part: &str) -> Result<usize, ConversionError> {
 mod tests {
     use super::*;
     use into_markdown_core::ErrorCode;
+    use std::cell::Cell;
+
+    const XLS: &[u8] = include_bytes!("../../../../tools/macos-release/fixtures/normal.xls");
 
     fn stream(size: u64) -> DirectoryEntry {
         DirectoryEntry {
@@ -982,6 +1150,76 @@ mod tests {
         }
     }
 
+    struct OpenBudget {
+        context: into_markdown_core::ExecutionContext,
+        peak: Cell<u64>,
+    }
+
+    struct WorkBudget {
+        context: into_markdown_core::ExecutionContext,
+        work: u64,
+    }
+
+    impl CompoundBudget for WorkBudget {
+        fn cfb_memory(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
+            self.context.reserve_memory(bytes)
+        }
+
+        fn cfb_entry(&mut self) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_expanded(&mut self, _bytes: u64) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_depth(&self, _depth: u16, _part: &str) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_work(&mut self, units: u64) -> Result<(), ConversionError> {
+            self.work = self.work.checked_add(units).unwrap();
+            Ok(())
+        }
+    }
+
+    impl CompoundBudget for OpenBudget {
+        fn cfb_memory(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
+            let reservation = self.context.reserve_memory(bytes)?;
+            self.peak.set(self.peak.get().max(self.context.reserved_memory_bytes()));
+            Ok(reservation)
+        }
+
+        fn cfb_entry(&mut self) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_expanded(&mut self, _bytes: u64) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_depth(&self, _depth: u16, _part: &str) -> Result<(), ConversionError> {
+            Ok(())
+        }
+
+        fn cfb_work(&mut self, _units: u64) -> Result<(), ConversionError> {
+            Ok(())
+        }
+    }
+
+    fn open_budget(max_memory_bytes: u64) -> OpenBudget {
+        OpenBudget {
+            context: into_markdown_core::ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                into_markdown_core::ResourceLimits {
+                    max_memory_bytes,
+                    ..into_markdown_core::ResourceLimits::default()
+                },
+            ),
+            peak: Cell::new(0),
+        }
+    }
+
     #[test]
     fn regular_stream_budget_is_checked_before_materialization() {
         let mut budget = RejectExpandedBudget {
@@ -1001,65 +1239,97 @@ mod tests {
     }
 
     #[test]
-    fn compound_lifetime_memory_plan_has_exact_boundary_and_releases_on_drop() {
-        let plan = cfb_memory_plan(8 * 1024, 15).unwrap();
-        let limits = into_markdown_core::ResourceLimits {
-            max_memory_bytes: plan,
-            ..into_markdown_core::ResourceLimits::default()
-        };
-        let exact = into_markdown_core::ExecutionContext::new(
-            into_markdown_core::ExecutionOptions::default(),
-            limits.clone(),
-        );
-        let lease = exact.reserve_memory(plan).unwrap();
-        assert!(exact.reserve_memory(1).is_err());
-        drop(lease);
-        assert!(exact.reserve_memory(plan).is_ok());
-
-        let limits = into_markdown_core::ResourceLimits {
-            max_memory_bytes: plan - 1,
-            ..into_markdown_core::ResourceLimits::default()
-        };
-        let below = into_markdown_core::ExecutionContext::new(
-            into_markdown_core::ExecutionOptions::default(),
-            limits,
-        );
-        let error = below.reserve_memory(plan).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    }
-
-    #[test]
-    fn compound_memory_plan_rejects_attacker_sized_overflow_without_allocating() {
-        let error = cfb_memory_plan(usize::MAX, usize::MAX).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::ResourceLimit);
-    }
-
-    #[test]
-    fn compound_memory_reservation_observes_cancellation_without_leaking() {
-        let cancellation = into_markdown_core::CancellationToken::new();
+    fn high_cardinality_directory_name_validation_has_deterministic_bounded_work() {
+        const COUNT: usize = 10_000;
+        let entries = (0..COUNT)
+            .map(|index| DirectoryEntry {
+                name: format!("stream-{index:05}"),
+                parent: Some(0),
+                ..stream(0)
+            })
+            .collect::<Vec<_>>();
         let context = into_markdown_core::ExecutionContext::new(
-            into_markdown_core::ExecutionOptions {
-                cancellation: cancellation.clone(),
-                ..into_markdown_core::ExecutionOptions::default()
-            },
+            into_markdown_core::ExecutionOptions::default(),
             into_markdown_core::ResourceLimits::default(),
         );
-        cancellation.cancel();
-        let error = context.reserve_memory(1024).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::Cancelled);
+        let mut budget = WorkBudget { context, work: 0 };
+        validate_unique_names(&entries, &mut budget).unwrap();
+
+        let levels = usize::BITS - COUNT.saturating_sub(1).leading_zeros();
+        let expected = u64::try_from(COUNT).unwrap() * (u64::from(levels) + 1);
+        assert_eq!(budget.work, expected);
+
+        let mut duplicate = entries;
+        duplicate[COUNT - 1].name = duplicate[0].name.to_ascii_uppercase();
+        budget.work = 0;
+        assert!(matches!(
+            validate_unique_names(&duplicate, &mut budget),
+            Err(ConversionError::Malformed { .. })
+        ));
+        assert_eq!(budget.work, u64::try_from(COUNT).unwrap() * u64::from(levels));
+    }
+
+    #[test]
+    fn compound_open_has_exact_incremental_boundary_and_releases_on_drop() {
+        for compatibility in
+            [CompoundCompatibility::Strict, CompoundCompatibility::LegacyOfficeBestEffort]
+        {
+            let mut measuring = open_budget(u64::MAX);
+            let compound =
+                CompoundFile::open_with_compatibility(XLS, &mut measuring, compatibility).unwrap();
+            let peak = measuring.peak.get();
+            assert!(peak > 0);
+            drop(compound);
+            assert_eq!(measuring.context.reserved_memory_bytes(), 0);
+
+            let mut exact = open_budget(peak);
+            let compound =
+                CompoundFile::open_with_compatibility(XLS, &mut exact, compatibility).unwrap();
+            drop(compound);
+            assert_eq!(exact.context.reserved_memory_bytes(), 0);
+            assert!(exact.context.reserve_memory(peak).is_ok());
+
+            let mut below = open_budget(peak - 1);
+            let error =
+                CompoundFile::open_with_compatibility(XLS, &mut below, compatibility).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::ResourceLimit);
+            assert_eq!(below.context.reserved_memory_bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn compound_open_observes_cancellation_without_leaking() {
+        for compatibility in
+            [CompoundCompatibility::Strict, CompoundCompatibility::LegacyOfficeBestEffort]
+        {
+            let cancellation = into_markdown_core::CancellationToken::new();
+            let context = into_markdown_core::ExecutionContext::new(
+                into_markdown_core::ExecutionOptions {
+                    cancellation: cancellation.clone(),
+                    ..into_markdown_core::ExecutionOptions::default()
+                },
+                into_markdown_core::ResourceLimits::default(),
+            );
+            cancellation.cancel();
+            let mut budget = OpenBudget { context, peak: Cell::new(0) };
+            let error =
+                CompoundFile::open_with_compatibility(XLS, &mut budget, compatibility).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::Cancelled);
+            assert_eq!(budget.context.reserved_memory_bytes(), 0);
+        }
     }
 
     #[test]
     fn mini_stream_reader_rejects_a_chain_longer_than_declared_data() {
         let mut owners = vec![false, false];
-        let mut recoveries = BTreeSet::new();
+        let mut pending_tails = Vec::new();
         let mut context = MiniStreamContext {
             minifat: &[1, END],
             root: &[0; 128],
             owners: &mut owners,
             mini_size: 64,
             compatibility: CompoundCompatibility::Strict,
-            recoveries: &mut recoveries,
+            pending_tails: &mut pending_tails,
         };
         let error = read_mini_stream(&stream(1), "mini", &mut context).unwrap_err();
         assert_eq!(error.code(), ErrorCode::Malformed);
@@ -1074,10 +1344,20 @@ mod tests {
             512,
             "regular",
             CompoundCompatibility::Strict,
-            &mut BTreeSet::new(),
         )
         .unwrap_err();
         assert_eq!(error.code(), ErrorCode::Malformed);
+    }
+
+    #[test]
+    fn declared_tail_target_must_be_unowned_and_free() {
+        assert!(
+            validate_pending_tails(&[1], &[true, true, false], &[END, END, FREE], "tail").is_err()
+        );
+        assert!(
+            validate_pending_tails(&[2], &[true, false, false], &[END, FREE, END], "tail").is_err()
+        );
+        validate_pending_tails(&[2], &[true, false, false], &[END, END, FREE], "tail").unwrap();
     }
 
     #[test]

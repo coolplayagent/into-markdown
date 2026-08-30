@@ -37,7 +37,11 @@ class XlsObservation:
     returncode: int
     output_bytes: int
     output_sha256: str | None
+    output_path: pathlib.Path
+    peak_temporary_bytes: int
     temporary_bytes_after: int
+    residual_paths: tuple[str, ...]
+    report: dict[str, object] | None
     stderr: str
 
 
@@ -51,6 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallelism", type=int, default=3)
     parser.add_argument("--xls-corpus", type=pathlib.Path)
     parser.add_argument("--xls-authority", type=pathlib.Path)
+    parser.add_argument("--xls-xlrd-path", type=pathlib.Path)
     parser.add_argument("--xls-regression-limit", type=float, default=0.5)
     return parser.parse_args()
 
@@ -185,10 +190,36 @@ def file_sha256(path: pathlib.Path) -> str:
 
 
 def directory_file_bytes(root: pathlib.Path) -> int:
-    return sum(
-        path.stat().st_size
-        for path in root.rglob("*")
-        if path.is_file() and not path.is_symlink()
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def transient_output_bytes(root: pathlib.Path, final_output: pathlib.Path) -> int:
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            if path != final_output and path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except FileNotFoundError:
+            continue
+    return total
+
+
+def output_residuals(root: pathlib.Path, allowed: pathlib.Path | None) -> tuple[str, ...]:
+    if not root.exists():
+        return ()
+    return tuple(
+        sorted(
+            path.relative_to(root).as_posix()
+            for path in root.rglob("*")
+            if path != allowed and (path.is_file() or path.is_symlink())
+        )
     )
 
 
@@ -199,8 +230,11 @@ def observe_xls(
     run_root: pathlib.Path,
 ) -> XlsObservation:
     home = run_root / "home"
-    output = run_root / "output.md"
     run_root.mkdir(parents=True)
+    output_root = run_root / "output"
+    output_root.mkdir(parents=True)
+    output = output_root / "output.ir.json"
+    report_path = run_root / "report.json"
     started = time.perf_counter()
     process = subprocess.Popen(
         [
@@ -209,6 +243,10 @@ def observe_xls(
             str(source),
             "--format",
             "xls",
+            "--error-policy",
+            "best-effort",
+            "--emit",
+            "ir-json",
             "--asset-mode",
             "embed",
             "--quiet",
@@ -216,6 +254,8 @@ def observe_xls(
             str(output),
             "--conflict",
             "error",
+            "--report",
+            str(report_path),
         ],
         cwd=current_dir,
         env=private_environment(home),
@@ -224,29 +264,47 @@ def observe_xls(
         stderr=subprocess.PIPE,
     )
     peak = 0
-    deadline = time.monotonic() + 30
+    peak_temporary = 0
+    deadline = time.monotonic() + 120
     while True:
         sample = resident_bytes(process)
         peak = max(peak, sample or 0)
+        peak_temporary = max(
+            peak_temporary,
+            directory_file_bytes(home / "tmp")
+            + transient_output_bytes(output_root, output),
+        )
         if process.poll() is not None:
             break
         if time.monotonic() >= deadline:
             process.kill()
             process.wait()
-            raise RuntimeError(f"XLS benchmark command exceeded 30 seconds: {source.name}")
+            raise RuntimeError(f"XLS benchmark command exceeded 120 seconds: {source.name}")
         time.sleep(0.002)
     _, stderr = process.communicate()
     sample = resident_bytes(process)
     peak = max(peak, sample or 0)
+    peak_temporary = max(
+        peak_temporary,
+        directory_file_bytes(home / "tmp")
+        + transient_output_bytes(output_root, output),
+    )
     output_bytes = output.stat().st_size if output.is_file() else 0
     temporary = home / "tmp"
+    report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
     return XlsObservation(
         elapsed_ms=(time.perf_counter() - started) * 1000,
         peak_rss_bytes=peak or None,
         returncode=process.returncode,
         output_bytes=output_bytes,
         output_sha256=file_sha256(output) if output_bytes else None,
+        output_path=output,
+        peak_temporary_bytes=peak_temporary,
         temporary_bytes_after=directory_file_bytes(temporary),
+        residual_paths=output_residuals(
+            output_root, output if process.returncode == 0 and output.is_file() else None
+        ),
+        report=report,
         stderr=stderr.decode("utf-8", errors="replace")[-2048:],
     )
 
@@ -421,9 +479,242 @@ def load_xls_authority(
     return items
 
 
+def load_xls_oracle(
+    oracle_tool: pathlib.Path,
+    xlrd_path: pathlib.Path,
+    corpus: pathlib.Path,
+    authority_path: pathlib.Path,
+) -> dict[str, dict[str, object]]:
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(xlrd_path), environment.get("PYTHONPATH", "")])
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(oracle_tool),
+            "--corpus",
+            str(corpus),
+            "--authority",
+            str(authority_path),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=environment,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "legacy XLS oracle failed: "
+            + result.stderr.decode("utf-8", errors="replace")[-2048:]
+        )
+    decoded = json.loads(result.stdout)
+    if decoded.get("schemaVersion") != 1 or decoded.get("classifier") != {
+        "name": "xlrd",
+        "version": "2.0.2",
+    }:
+        raise SystemExit("legacy XLS oracle returned an unexpected schema or xlrd version")
+    items = decoded.get("items")
+    if not isinstance(items, list) or len(items) != 56:
+        raise SystemExit("legacy XLS oracle must describe exactly 56 valid files")
+    indexed = {str(item.get("file")): item for item in items}
+    if len(indexed) != len(items):
+        raise SystemExit("legacy XLS oracle returned duplicate files")
+    return indexed
+
+
+def inline_text(inline: dict[str, object]) -> str:
+    kind = inline.get("type")
+    data = inline.get("data")
+    if kind == "text" and isinstance(data, dict):
+        return str(data.get("value", ""))
+    if kind == "code":
+        return str(data or "")
+    if isinstance(data, dict) and isinstance(data.get("content"), list):
+        return "".join(inline_text(item) for item in data["content"])
+    return ""
+
+
+def candidate_cell_text(cell: dict[str, object]) -> tuple[str, tuple[int, int] | None]:
+    text: list[str] = []
+    coordinate = None
+    for node in cell.get("blocks", []):
+        block = node.get("block", {})
+        if block.get("type") == "paragraph" and isinstance(block.get("data"), list):
+            text.extend(inline_text(item) for item in block["data"])
+        locator = node.get("provenance", {}).get("locator", {})
+        cell_ref = locator.get("cell") if isinstance(locator, dict) else None
+        if isinstance(cell_ref, dict):
+            coordinate = (int(cell_ref["row"]), int(cell_ref["column"]))
+    return "".join(text), coordinate
+
+
+def decode_tsv_value(value: str) -> str:
+    output: list[str] = []
+    index = 0
+    escapes = {"t": "\t", "r": "\r", "n": "\n", "\\": "\\", "`": "`"}
+    while index < len(value):
+        if value[index] == "\\" and index + 1 < len(value) and value[index + 1] in escapes:
+            output.append(escapes[value[index + 1]])
+            index += 2
+        else:
+            output.append(value[index])
+            index += 1
+    return "".join(output)
+
+
+def candidate_sheet(sheet_node: dict[str, object]) -> dict[str, object]:
+    sheet = sheet_node.get("block", {}).get("data", {})
+    values: dict[tuple[int, int], str] = {}
+    merges: list[list[int]] = []
+    rows_seen = 0
+    columns_seen = 0
+    provenance_order = True
+    paged_row = 0
+    for node in sheet.get("blocks", []):
+        block = node.get("block", {})
+        if block.get("type") == "table":
+            occupied_until: dict[int, int] = {}
+            for row_index, row in enumerate(block.get("data", {}).get("rows", [])):
+                column = 0
+                for cell in row.get("cells", []):
+                    while occupied_until.get(column, -1) >= row_index:
+                        column += 1
+                    row_span = int(cell.get("rowSpan", 1))
+                    column_span = int(cell.get("columnSpan", 1))
+                    text, provenance = candidate_cell_text(cell)
+                    if provenance is not None and provenance != (row_index, column):
+                        provenance_order = False
+                    values[(row_index, column)] = text
+                    if row_span > 1 or column_span > 1:
+                        merges.append(
+                            [
+                                row_index,
+                                column,
+                                row_index + row_span - 1,
+                                column + column_span - 1,
+                            ]
+                        )
+                    for covered in range(column, column + column_span):
+                        if row_span > 1:
+                            occupied_until[covered] = row_index + row_span - 1
+                    column += column_span
+                columns_seen = max(columns_seen, column)
+                rows_seen = max(rows_seen, row_index + 1)
+        elif block.get("type") == "code" and block.get("data", {}).get("language") == "tsv":
+            text = str(block.get("data", {}).get("text", ""))
+            for line in text.splitlines():
+                fields = line.split("\t")
+                for column, field in enumerate(fields):
+                    values[(paged_row, column)] = decode_tsv_value(field)
+                columns_seen = max(columns_seen, len(fields))
+                paged_row += 1
+            rows_seen = max(rows_seen, paged_row)
+    return {
+        "name": str(sheet.get("name", "")),
+        "rows": rows_seen,
+        "columns": columns_seen,
+        "values": values,
+        "merges": merges,
+        "provenanceOrder": provenance_order,
+    }
+
+
+def cached_display(value: str) -> str | None:
+    marker = " [cached: "
+    if value.startswith("=") and marker in value and value.endswith("]"):
+        return value.rsplit(marker, 1)[1][:-1]
+    return None
+
+
+def value_matches(expected: dict[str, object], actual: str) -> bool:
+    cached = cached_display(actual)
+    display = cached if cached is not None else actual
+    kind = expected["kind"]
+    value = expected["value"]
+    if kind == "number":
+        try:
+            candidate = float(display)
+        except ValueError:
+            return False
+        reference = float(value)
+        return abs(candidate - reference) <= max(1e-12, abs(reference) * 1e-12)
+    if kind == "boolean":
+        return display == str(value).lower()
+    if kind == "error":
+        normalize = lambda text: "".join(character for character in text.upper() if character.isalnum())
+        return normalize(display) == normalize(str(value))
+    return display == str(value)
+
+
+def verify_xls_oracle(
+    output_path: pathlib.Path,
+    oracle: dict[str, object],
+) -> dict[str, object]:
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    candidate_sheets = [
+        candidate_sheet(node)
+        for node in document.get("blocks", [])
+        if node.get("block", {}).get("type") == "sheet"
+    ]
+    oracle_sheets = oracle.get("sheets", [])
+    errors: list[str] = []
+    sheet_order = [sheet["name"] for sheet in candidate_sheets] == [
+        str(sheet["name"]) for sheet in oracle_sheets
+    ]
+    if not sheet_order:
+        errors.append("sheet order or names differ from xlrd")
+    expected_cells = 0
+    matched_cells = 0
+    kinds = {"text": 0, "number": 0, "date": 0, "boolean": 0, "error": 0}
+    merges_match = len(candidate_sheets) == len(oracle_sheets)
+    row_cell_order = True
+    for index, expected_sheet in enumerate(oracle_sheets):
+        if index >= len(candidate_sheets):
+            break
+        actual_sheet = candidate_sheets[index]
+        row_cell_order = row_cell_order and bool(actual_sheet["provenanceOrder"])
+        expected_merges = sorted(expected_sheet["merges"])
+        actual_merges = sorted(actual_sheet["merges"])
+        if actual_merges != expected_merges:
+            merges_match = False
+            errors.append(f"sheet {index} merged ranges differ from xlrd")
+        for cell in expected_sheet["cells"]:
+            expected_cells += 1
+            kinds[str(cell["kind"])] += 1
+            coordinate = (int(cell["row"]), int(cell["column"]))
+            actual = actual_sheet["values"].get(coordinate)
+            if actual is not None and value_matches(cell, actual):
+                matched_cells += 1
+            else:
+                errors.append(f"sheet {index} cell {coordinate} differs from xlrd")
+                if len(errors) >= 32:
+                    break
+    if not row_cell_order:
+        errors.append("cell provenance order differs from row/cell emission order")
+    recall = 1.0 if expected_cells == 0 else matched_cells / expected_cells
+    digest = hashlib.sha256(
+        json.dumps(oracle, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "verified": not errors and recall == 1.0 and merges_match and sheet_order and row_cell_order,
+        "oracleSha256": digest,
+        "expectedNonEmptyCells": expected_cells,
+        "matchedNonEmptyCells": matched_cells,
+        "recall": round(recall, 9),
+        "valueKinds": kinds,
+        "sheetOrder": sheet_order,
+        "rowCellOrder": row_cell_order,
+        "mergedRanges": merges_match,
+        "errors": errors[:32],
+    }
+
+
 def summarize_xls_file(
     item: dict[str, object],
     observations: list[XlsObservation],
+    oracle: dict[str, object] | None,
 ) -> dict[str, object]:
     successful = [
         observation
@@ -433,8 +724,26 @@ def summarize_xls_file(
     output_hashes = sorted(
         {observation.output_sha256 for observation in successful if observation.output_sha256}
     )
-    hard_limit = not successful and all(
-        "resourceLimit" in observation.stderr for observation in observations
+    structured_failures = []
+    for observation in observations:
+        report_items = observation.report.get("items") if observation.report else None
+        report_item = report_items[0] if isinstance(report_items, list) and len(report_items) == 1 else None
+        structured_failures.append(
+            isinstance(report_item, dict)
+            and report_item.get("status") == "failed"
+            and report_item.get("errorCode") == "resourceLimit"
+            and report_item.get("reasonCode") == "documentNodes"
+            and isinstance(report_item.get("limit"), dict)
+            and report_item["limit"].get("name") == "documentNodes"
+            and observation.output_bytes == 0
+            and not observation.residual_paths
+            and observation.temporary_bytes_after == 0
+        )
+    hard_limit = not successful and len(observations) > 0 and all(structured_failures)
+    quality = (
+        verify_xls_oracle(successful[0].output_path, oracle)
+        if successful and oracle is not None
+        else None
     )
     return {
         "file": item["file"],
@@ -445,10 +754,14 @@ def summarize_xls_file(
         "nonEmptyRuns": sum(observation.output_bytes > 0 for observation in observations),
         "deterministic": len(successful) == len(observations) and len(output_hashes) == 1,
         "hardLimit": hard_limit,
+        "structuredDocumentNodesRuns": sum(structured_failures),
+        "qualityOracle": quality,
         "meanMillis": round(statistics.mean(o.elapsed_ms for o in observations), 3),
         "maximumMillis": round(max(o.elapsed_ms for o in observations), 3),
         "peakRssBytes": max((o.peak_rss_bytes or 0) for o in observations) or None,
+        "peakTemporaryBytes": max(o.peak_temporary_bytes for o in observations),
         "temporaryBytesAfter": max(o.temporary_bytes_after for o in observations),
+        "residualPaths": sorted({path for o in observations for path in o.residual_paths}),
         "exitCodes": sorted({o.returncode for o in observations}),
         "outputSha256": output_hashes,
         "failureEvidence": sorted(
@@ -457,21 +770,17 @@ def summarize_xls_file(
     }
 
 
-def measure_xls_corpus(
+def summarize_xls_corpus(
     cli: pathlib.Path,
-    corpus: pathlib.Path,
     authority: list[dict[str, object]],
-    root: pathlib.Path,
-    iterations: int,
+    observations_by_file: dict[str, list[XlsObservation]],
+    oracle: dict[str, dict[str, object]] | None,
 ) -> dict[str, object]:
     items = []
     for item in authority:
         name = str(item["file"])
-        observations = [
-            observe_xls(cli, corpus / name, corpus, root / name / str(iteration))
-            for iteration in range(iterations)
-        ]
-        items.append(summarize_xls_file(item, observations))
+        observations = observations_by_file[name]
+        items.append(summarize_xls_file(item, observations, oracle.get(name) if oracle else None))
     passed = {item["file"] for item in items if item["deterministic"]}
     valid = {str(item["file"]) for item in authority if item["valid"] is True}
     hard_limits = {item["file"] for item in items if item["valid"] and item["hardLimit"]}
@@ -482,6 +791,7 @@ def measure_xls_corpus(
         "validPass": {"passed": len(passed & valid), "total": len(valid)},
         "validHardLimits": sorted(hard_limits),
         "maximumPeakRssBytes": max((item["peakRssBytes"] or 0) for item in items) or None,
+        "maximumPeakTemporaryBytes": max(item["peakTemporaryBytes"] for item in items),
         "maximumTemporaryBytesAfter": max(item["temporaryBytesAfter"] for item in items),
         "items": items,
     }
@@ -495,9 +805,43 @@ def xls_corpus_report(
     root: pathlib.Path,
     iterations: int,
     regression_limit: float,
+    oracle: dict[str, dict[str, object]],
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
-    baseline = measure_xls_corpus(baseline_cli, corpus, authority, root / "baseline", iterations)
-    candidate = measure_xls_corpus(candidate_cli, corpus, authority, root / "candidate", iterations)
+    warm_item = next(item for item in authority if item["valid"] is True)
+    warm_source = corpus / str(warm_item["file"])
+    observe_xls(baseline_cli, warm_source, corpus, root / "warmup" / "baseline")
+    observe_xls(candidate_cli, warm_source, corpus, root / "warmup" / "candidate")
+    baseline_observations = {str(item["file"]): [] for item in authority}
+    candidate_observations = {str(item["file"]): [] for item in authority}
+    for file_index, item in enumerate(authority):
+        name = str(item["file"])
+        for iteration in range(iterations):
+            order = (
+                (
+                    ("baseline", baseline_cli, baseline_observations),
+                    ("candidate", candidate_cli, candidate_observations),
+                )
+                if (file_index + iteration) % 2 == 0
+                else (
+                    ("candidate", candidate_cli, candidate_observations),
+                    ("baseline", baseline_cli, baseline_observations),
+                )
+            )
+            for label, cli, destination in order:
+                destination[name].append(
+                    observe_xls(
+                        cli,
+                        corpus / name,
+                        corpus,
+                        root / "runs" / name / str(iteration) / label,
+                    )
+                )
+    baseline = summarize_xls_corpus(
+        baseline_cli, authority, baseline_observations, None
+    )
+    candidate = summarize_xls_corpus(
+        candidate_cli, authority, candidate_observations, oracle
+    )
     baseline_items = {item["file"]: item for item in baseline["items"]}
     candidate_items = {item["file"]: item for item in candidate["items"]}
     common = sorted(
@@ -505,17 +849,57 @@ def xls_corpus_report(
         for name in baseline_items.keys() & candidate_items.keys()
         if baseline_items[name]["deterministic"] and candidate_items[name]["deterministic"]
     )
+    common_hash_matches = [
+        name
+        for name in common
+        if baseline_items[name]["outputSha256"] == candidate_items[name]["outputSha256"]
+    ]
     baseline_mean = statistics.mean(baseline_items[name]["meanMillis"] for name in common)
     candidate_mean = statistics.mean(candidate_items[name]["meanMillis"] for name in common)
     regression = candidate_mean / baseline_mean - 1
     valid_passed = int(candidate["validPass"]["passed"])
     valid_total = int(candidate["validPass"]["total"])
     hard_limits = len(candidate["validHardLimits"])
+    oracle_verified = [
+        item["file"]
+        for item in candidate["items"]
+        if item["valid"]
+        and item["deterministic"]
+        and item["qualityOracle"] is not None
+        and item["qualityOracle"]["verified"]
+    ]
+    invalid_successes = [
+        item["file"] for item in candidate["items"] if not item["valid"] and item["deterministic"]
+    ]
+    residuals = [item["file"] for item in candidate["items"] if item["residualPaths"]]
     checks = [
         {
             "name": "xls-valid-accounted",
-            "passed": valid_passed + hard_limits == valid_total,
+            "passed": valid_passed == valid_total - 1
+            and hard_limits == 1
+            and valid_passed + hard_limits == valid_total,
             "detail": f"passed={valid_passed}, hardLimits={hard_limits}, total={valid_total}",
+        },
+        {
+            "name": "xls-quality-oracle",
+            "passed": len(oracle_verified) == valid_passed == 55,
+            "detail": (
+                f"verified={len(oracle_verified)}, successfulValid={valid_passed}, required=55"
+            ),
+        },
+        {
+            "name": "xls-invalid-inputs-fail-closed",
+            "passed": not invalid_successes,
+            "detail": f"invalidSuccesses={invalid_successes}",
+        },
+        {
+            "name": "xls-common-success-byte-stability",
+            "passed": len(common) == int(baseline["validPass"]["passed"])
+            and len(common_hash_matches) == len(common),
+            "detail": (
+                f"common={len(common)}, byteIdentical={len(common_hash_matches)}, "
+                f"baselineValid={baseline['validPass']['passed']}"
+            ),
         },
         {
             "name": "xls-valid-coverage-not-regressed",
@@ -544,19 +928,42 @@ def xls_corpus_report(
             ),
         },
         {
+            "name": "xls-peak-temporary-storage",
+            "passed": int(candidate["maximumPeakTemporaryBytes"]) <= 2 * 1024 * MIB,
+            "detail": (
+                f"peak={candidate['maximumPeakTemporaryBytes']}, limit={2 * 1024 * MIB}"
+            ),
+        },
+        {
             "name": "xls-temporary-cleanup",
-            "passed": candidate["maximumTemporaryBytesAfter"] == 0,
-            "detail": f"maximumTemporaryBytesAfter={candidate['maximumTemporaryBytesAfter']}",
+            "passed": candidate["maximumTemporaryBytesAfter"] == 0 and not residuals,
+            "detail": (
+                f"maximumTemporaryBytesAfter={candidate['maximumTemporaryBytesAfter']}, "
+                f"residualFiles={residuals}"
+            ),
         },
     ]
     return (
         {
             "authority": "xlrd-2.0.2-eager-cell-read",
             "iterations": iterations,
+            "measurementOrder": (
+                "baseline and candidate warmed once, then alternated by file-and-iteration parity"
+            ),
+            "errorPolicy": "best-effort",
+            "sharedLeaseTelemetry": {
+                "status": "unavailable",
+                "dependency": "#269",
+                "evidence": (
+                    "actual CompoundFile::open exact/limit-minus-one/cancellation/release tests; "
+                    "process RSS is measured here"
+                ),
+            },
             "baseline": baseline,
             "candidate": candidate,
             "commonSuccess": {
                 "files": common,
+                "byteIdenticalFiles": common_hash_matches,
                 "baselineMeanMillis": round(baseline_mean, 3),
                 "candidateMeanMillis": round(candidate_mean, 3),
                 "regressionFraction": round(regression, 6),
@@ -611,8 +1018,13 @@ def main() -> int:
     args = parse_args()
     if args.iterations < 3 or not 2 <= args.parallelism <= len(FORMATS):
         raise SystemExit("iterations must be >= 3 and parallelism must be between 2 and 3")
-    if (args.xls_corpus is None) != (args.xls_authority is None):
-        raise SystemExit("--xls-corpus and --xls-authority must be supplied together")
+    xls_arguments = (args.xls_corpus, args.xls_authority, args.xls_xlrd_path)
+    if any(value is not None for value in xls_arguments) and any(
+        value is None for value in xls_arguments
+    ):
+        raise SystemExit(
+            "--xls-corpus, --xls-authority, and --xls-xlrd-path must be supplied together"
+        )
     if not 0 <= args.xls_regression_limit < 1:
         raise SystemExit("--xls-regression-limit must be in the range 0..1")
     baseline = args.baseline_cli.resolve(strict=True)
@@ -626,9 +1038,23 @@ def main() -> int:
             raise SystemExit(f"missing normal.{format_name}")
     xls_corpus = args.xls_corpus.resolve(strict=True) if args.xls_corpus else None
     xls_authority = args.xls_authority.resolve(strict=True) if args.xls_authority else None
+    xls_xlrd_path = args.xls_xlrd_path.resolve(strict=True) if args.xls_xlrd_path else None
     authority = (
         load_xls_authority(xls_authority, xls_corpus)
         if xls_authority is not None and xls_corpus is not None
+        else None
+    )
+    oracle_tool = pathlib.Path(__file__).with_name("legacy-xls-oracle.py").resolve(strict=True)
+    oracle = (
+        load_xls_oracle(
+            oracle_tool,
+            xls_xlrd_path,
+            xls_corpus,
+            xls_authority,
+        )
+        if xls_xlrd_path is not None
+        and xls_corpus is not None
+        and xls_authority is not None
         else None
     )
     with tempfile.TemporaryDirectory(prefix="into-md-office-performance-") as temporary:
@@ -646,15 +1072,16 @@ def main() -> int:
                 root / "xls-corpus",
                 args.iterations,
                 args.xls_regression_limit,
+                oracle,
             )
-            if xls_corpus is not None and authority is not None
+            if xls_corpus is not None and authority is not None and oracle is not None
             else (None, [])
         )
     checks, checks_passed = gate(candidate_metrics, baseline_metrics)
     checks.extend(xls_checks)
     checks_passed = checks_passed and all(check["passed"] for check in xls_checks)
     report = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "corpus": "repository-authored-office-97-2003",
         "baseline": baseline_metrics,
         "candidate": candidate_metrics,

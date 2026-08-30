@@ -4,8 +4,8 @@ use super::normalize_xls_output;
 use crate::msg::ole::Storage;
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionContext, NodeId, Provenance,
-    ProvenanceKind,
+    Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, IrErrorCode, NodeId,
+    Provenance, ProvenanceKind, ValidationLimits,
 };
 
 const WORKBOOK: &str = "Workbook";
@@ -16,9 +16,21 @@ const BIFF5: u16 = 0x0500;
 const BIFF4: u16 = 0x0400;
 const FILE_PASS: u16 = 0x002f;
 const EOF: u16 = 0x000a;
+const FORMULA: u16 = 0x0006;
+const STRING: u16 = 0x0207;
+const CONTINUE: u16 = 0x003c;
+const SHARED_FORMULA: u16 = 0x04bc;
 const DIMENSIONS: u16 = 0x0200;
 const SUP_BOOK: u16 = 0x01ae;
 const EXTERN_SHEET: u16 = 0x0017;
+const WINDOW1: u16 = 0x003d;
+const WINDOW2: u16 = 0x023e;
+const PANE: u16 = 0x0041;
+const SELECTION: u16 = 0x001d;
+const SCL: u16 = 0x00a0;
+const OBJ: u16 = 0x005d;
+const MSO_DRAWING_GROUP: u16 = 0x00eb;
+const MSO_DRAWING: u16 = 0x00ec;
 const CFB_FREE: u32 = 0xffff_ffff;
 const CFB_END: u32 = 0xffff_fffe;
 const CFB_FAT: u32 = 0xffff_fffd;
@@ -52,14 +64,23 @@ pub(super) fn convert_raw(
         .ok_or_else(|| limit("max_memory_bytes", "normalized BIFF4 size overflowed"))?;
     let _normalized_memory =
         context.reserve_memory(u64::try_from(normalized_limit).unwrap_or(u64::MAX))?;
-    let normalized = normalize_raw_biff4(bytes)?;
+    let normalized = normalize_raw_biff4(&bytes[..preflight.logical_end])?;
     let layout = cfb_wrapper_layout(normalized.len())?;
-    let _wrapper_memory = context.reserve_memory(
+    let wrapper_memory = context.reserve_memory(
         u64::try_from(layout.output_bytes.saturating_add(layout.total_sectors * 4))
             .unwrap_or(u64::MAX),
     )?;
-    let wrapper = build_cfb_wrapper(&normalized, &[], layout)?;
+    let wrapper = build_cfb_wrapper(
+        &normalized,
+        preflight.has(PreflightFlag::DimensionMetadata),
+        preflight.has(PreflightFlag::FormulaCacheMetadata),
+        BIFF4,
+        layout,
+    )?;
     let mut output = crate::workbook::convert_legacy_xls(&wrapper, options, context)?;
+    drop(wrapper);
+    drop(wrapper_memory);
+    enforce_document_node_limit(&output)?;
     normalize_xls_output(&mut output);
     output.document.metadata.properties.insert("legacyOffice.xls.biff".into(), "4".into());
     output.diagnostics.push(Diagnostic {
@@ -69,6 +90,7 @@ pub(super) fn convert_raw(
             .into(),
         locator: Some(locator(WORKBOOK)),
     });
+    append_preflight_diagnostics(&mut output, &preflight, WORKBOOK);
     Ok(output)
 }
 
@@ -87,9 +109,12 @@ pub(super) fn convert(
         .ok_or_else(|| malformed("CFB directory", "XLS has no Workbook stream"))?;
     let preflight = preflight(workbook, part, budget, options.error_policy)?;
 
+    let workbook_view = &workbook[..preflight.logical_end];
     let wrapper_layout = (container_view_required
-        || !preflight.omitted_dimension_records.is_empty())
-    .then(|| cfb_wrapper_layout(workbook.len()))
+        || preflight.has(PreflightFlag::DimensionMetadata)
+        || preflight.has(PreflightFlag::FormulaCacheMetadata)
+        || preflight.logical_end != workbook.len())
+    .then(|| cfb_wrapper_layout(workbook_view.len()))
     .transpose()?;
     let wrapper_memory = wrapper_layout
         .as_ref()
@@ -102,11 +127,26 @@ pub(super) fn convert(
         .transpose()?;
     let wrapper = wrapper_layout
         .as_ref()
-        .map(|layout| build_cfb_wrapper(workbook, &preflight.omitted_dimension_records, *layout))
+        .map(|layout| {
+            build_cfb_wrapper(
+                workbook_view,
+                preflight.has(PreflightFlag::DimensionMetadata),
+                preflight.has(PreflightFlag::FormulaCacheMetadata),
+                preflight.biff_version,
+                *layout,
+            )
+        })
         .transpose()?;
     let conversion_bytes = wrapper.as_deref().unwrap_or(bytes);
     let mut output = crate::workbook::convert_legacy_xls(conversion_bytes, options, context)?;
+    let recovered_formula_continuations = if preflight.has(PreflightFlag::FormulaCacheMetadata) {
+        recover_continued_formula_string_caches(workbook_view, &mut output, part, budget, options)?
+    } else {
+        0
+    };
+    drop(wrapper);
     drop(wrapper_memory);
+    enforce_document_node_limit(&output)?;
     normalize_xls_output(&mut output);
     output.document.metadata.properties.insert(
         "legacyOffice.xls.biff".into(),
@@ -118,7 +158,42 @@ pub(super) fn convert(
         .into(),
     );
 
-    if preflight.external_bindings {
+    append_preflight_diagnostics(&mut output, &preflight, part);
+    if recovered_formula_continuations > 0 {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.formulaStringContinuationRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "recovered {recovered_formula_continuations} cached formula string(s) split across bounded BIFF Continue records"
+            ),
+            locator: Some(locator(part)),
+        });
+    }
+    if !preflight.has(PreflightFlag::EmbeddedObjects)
+        && (root.storage("ObjectPool").is_some() || root.storage("ActiveX").is_some())
+    {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.embeddedObjectsSkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "embedded OLE, drawing, and ActiveX objects were not executed or exported"
+                .into(),
+            locator: Some(locator(part)),
+        });
+    }
+    if root.storage("_VBA_PROJECT_CUR").is_some() || root.stream("_VBA_PROJECT_CUR").is_some() {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.macrosSkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "VBA project data was not executed or exposed as active content".into(),
+            locator: Some(locator("_VBA_PROJECT_CUR")),
+        });
+    }
+    retain_safe_images(workbook, part, &mut output, budget)?;
+    Ok(output)
+}
+
+fn append_preflight_diagnostics(output: &mut ConverterOutput, preflight: &Preflight, part: &str) {
+    if preflight.has(PreflightFlag::ExternalBindings) {
         output.diagnostics.push(Diagnostic {
             code: "legacyOffice.xls.externalBindingsSkipped".into(),
             severity: DiagnosticSeverity::Warning,
@@ -127,7 +202,7 @@ pub(super) fn convert(
             locator: Some(locator(part)),
         });
     }
-    if preflight.tail_padding_ignored {
+    if preflight.has(PreflightFlag::TailPadding) {
         output.diagnostics.push(Diagnostic {
             code: "legacyOffice.xls.trailingPaddingIgnored".into(),
             severity: DiagnosticSeverity::Info,
@@ -146,7 +221,7 @@ pub(super) fn convert(
             locator: Some(locator(part)),
         });
     }
-    if !preflight.omitted_dimension_records.is_empty() {
+    if preflight.has(PreflightFlag::DimensionMetadata) {
         output.diagnostics.push(Diagnostic {
             code: "legacyOffice.xls.dimensionMetadataRecovered".into(),
             severity: DiagnosticSeverity::Info,
@@ -155,24 +230,354 @@ pub(super) fn convert(
             locator: Some(locator(part)),
         });
     }
-    if root.storage("_VBA_PROJECT_CUR").is_some() || root.stream("_VBA_PROJECT_CUR").is_some() {
+    if preflight.has(PreflightFlag::FormulaCacheMetadata) {
         output.diagnostics.push(Diagnostic {
-            code: "legacyOffice.xls.macrosSkipped".into(),
-            severity: DiagnosticSeverity::Warning,
-            message: "VBA project data was not executed or exposed as active content".into(),
-            locator: Some(locator("_VBA_PROJECT_CUR")),
+            code: "legacyOffice.xls.formulaStringCacheRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: "non-canonical reserved bytes in cached formula-string metadata were normalized without evaluating the formula"
+                .into(),
+            locator: Some(locator(part)),
         });
     }
-    retain_safe_images(workbook, part, &mut output, budget)?;
-    Ok(output)
+    if preflight.has(PreflightFlag::OptionalTailRecord) {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.optionalTailRecordIgnored".into(),
+            severity: DiagnosticSeverity::Info,
+            message: "a truncated trailing worksheet-view record after a complete BIFF substream was ignored"
+                .into(),
+            locator: Some(locator(part)),
+        });
+    }
+    if preflight.has(PreflightFlag::EmbeddedObjects) {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.embeddedObjectsSkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "embedded OLE, drawing, and ActiveX objects were not executed or exported"
+                .into(),
+            locator: Some(locator(part)),
+        });
+    }
+}
+
+fn recover_continued_formula_string_caches(
+    workbook: &[u8],
+    output: &mut ConverterOutput,
+    part: &str,
+    budget: &mut LegacyBudget<'_>,
+    options: &ConversionOptions,
+) -> Result<usize, ConversionError> {
+    let mut cursor = 0_usize;
+    let mut sheet = None;
+    let mut next_sheet = 0_usize;
+    let mut recovered = 0_usize;
+    while cursor < workbook.len() {
+        budget.work(1, part)?;
+        let (kind, body, end) = biff_record(workbook, cursor, part)?;
+        if matches!(kind, BOF | BOF4) {
+            let substream = read_u16(body, 2, part)?;
+            if substream == 0x0010 {
+                sheet = Some(next_sheet);
+                next_sheet = next_sheet
+                    .checked_add(1)
+                    .ok_or_else(|| malformed(part, "BIFF worksheet count overflowed"))?;
+            }
+        } else if kind == EOF {
+            sheet = None;
+        } else if kind == FORMULA && has_noncanonical_formula_string_cache(body) && sheet.is_some()
+        {
+            let row = u32::from(read_u16(body, 0, part)?);
+            let column = u32::from(read_u16(body, 2, part)?);
+            if let Some(value) = decode_continued_formula_string(
+                workbook,
+                end,
+                part,
+                budget,
+                options.limits.max_field_bytes,
+            )? {
+                let replaced =
+                    replace_formula_cache(output, sheet.unwrap_or(0), row, column, &value);
+                if !replaced {
+                    cursor = end;
+                    continue;
+                }
+                recovered = recovered
+                    .checked_add(1)
+                    .ok_or_else(|| malformed(part, "formula-cache recovery count overflowed"))?;
+            }
+        }
+        cursor = end;
+    }
+    Ok(recovered)
+}
+
+fn biff_record<'a>(
+    bytes: &'a [u8],
+    cursor: usize,
+    part: &str,
+) -> Result<(u16, &'a [u8], usize), ConversionError> {
+    let header = bytes
+        .get(cursor..cursor.saturating_add(4))
+        .ok_or_else(|| malformed(part, "truncated BIFF record header"))?;
+    let kind = u16::from_le_bytes([header[0], header[1]]);
+    let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+    let body_start =
+        cursor.checked_add(4).ok_or_else(|| malformed(part, "BIFF record offset overflowed"))?;
+    let end = body_start
+        .checked_add(length)
+        .ok_or_else(|| malformed(part, "BIFF record length overflowed"))?;
+    let body =
+        bytes.get(body_start..end).ok_or_else(|| malformed(part, "truncated BIFF record body"))?;
+    Ok((kind, body, end))
+}
+
+fn decode_continued_formula_string(
+    workbook: &[u8],
+    cursor: usize,
+    part: &str,
+    budget: &mut LegacyBudget<'_>,
+    max_field_bytes: u64,
+) -> Result<Option<String>, ConversionError> {
+    let (mut kind, mut body, mut next) = biff_record(workbook, cursor, part)?;
+    if kind == SHARED_FORMULA {
+        (kind, body, next) = biff_record(workbook, next, part)?;
+    }
+    if kind != STRING {
+        return Err(malformed(part, "string-valued Formula is not followed by a String record"));
+    }
+    let characters = usize::from(read_u16(body, 0, part)?);
+    let flags = *body.get(2).ok_or_else(|| malformed(part, "truncated BIFF String flags"))?;
+    let mut offset = 3_usize;
+    if flags & 0x08 != 0 {
+        offset = offset
+            .checked_add(2)
+            .ok_or_else(|| malformed(part, "BIFF rich-string offset overflowed"))?;
+    }
+    if flags & 0x04 != 0 {
+        offset = offset
+            .checked_add(4)
+            .ok_or_else(|| malformed(part, "BIFF phonetic-string offset overflowed"))?;
+    }
+    if offset > body.len() {
+        return Err(malformed(part, "truncated BIFF String metadata"));
+    }
+    let initial_width = if flags & 1 == 0 { 1 } else { 2 };
+    let initial_capacity = body.len().saturating_sub(offset) / initial_width;
+    if characters <= initial_capacity {
+        return Ok(None);
+    }
+    if u64::try_from(characters).unwrap_or(u64::MAX) > max_field_bytes {
+        return Err(limit(
+            "max_field_bytes",
+            "continued cached formula string exceeds the field limit",
+        ));
+    }
+    let capacity = characters
+        .checked_mul(3)
+        .ok_or_else(|| limit("max_memory_bytes", "continued formula string size overflowed"))?;
+    let mut output = String::new();
+    output.try_reserve_exact(capacity).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve continued formula string: {error}"))
+    })?;
+    let mut remaining = characters;
+    let mut segment = &body[offset..];
+    let mut width = initial_width;
+    let mut pending_high_surrogate = None;
+    loop {
+        let available = segment.len() / width;
+        let take = remaining.min(available);
+        budget.work(u64::try_from(take).unwrap_or(u64::MAX), part)?;
+        if width == 1 {
+            if pending_high_surrogate.is_some() {
+                return Err(malformed(part, "BIFF String changes encoding within a surrogate"));
+            }
+            output.extend(segment[..take].iter().map(|byte| char::from(*byte)));
+        } else {
+            append_utf16_string_units(
+                &mut output,
+                &segment[..take * 2],
+                &mut pending_high_surrogate,
+                part,
+            )?;
+        }
+        remaining -= take;
+        if remaining == 0 {
+            break;
+        }
+        let (kind, continuation, end) = biff_record(workbook, next, part)?;
+        if kind != CONTINUE {
+            return Err(malformed(part, "BIFF String continuation is missing"));
+        }
+        let continuation_flags = *continuation
+            .first()
+            .ok_or_else(|| malformed(part, "empty BIFF String continuation"))?;
+        if continuation_flags & !1 != 0 {
+            return Err(malformed(part, "invalid BIFF String continuation flags"));
+        }
+        width = if continuation_flags == 0 { 1 } else { 2 };
+        segment = &continuation[1..];
+        next = end;
+    }
+    if pending_high_surrogate.is_some() {
+        return Err(malformed(part, "BIFF String ends with an incomplete surrogate"));
+    }
+    if u64::try_from(output.len()).unwrap_or(u64::MAX) > max_field_bytes {
+        return Err(limit(
+            "max_field_bytes",
+            "continued cached formula string exceeds the field limit",
+        ));
+    }
+    Ok(Some(output))
+}
+
+fn append_utf16_string_units(
+    output: &mut String,
+    bytes: &[u8],
+    pending_high_surrogate: &mut Option<u16>,
+    part: &str,
+) -> Result<(), ConversionError> {
+    for chunk in bytes.chunks_exact(2) {
+        let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+        if let Some(high) = pending_high_surrogate.take() {
+            if !(0xdc00..=0xdfff).contains(&unit) {
+                return Err(malformed(part, "invalid UTF-16 surrogate in BIFF String"));
+            }
+            let scalar = 0x1_0000 + ((u32::from(high) - 0xd800) << 10) + (u32::from(unit) - 0xdc00);
+            output.push(
+                char::from_u32(scalar)
+                    .ok_or_else(|| malformed(part, "invalid Unicode scalar in BIFF String"))?,
+            );
+        } else if (0xd800..=0xdbff).contains(&unit) {
+            *pending_high_surrogate = Some(unit);
+        } else if (0xdc00..=0xdfff).contains(&unit) {
+            return Err(malformed(part, "orphan UTF-16 surrogate in BIFF String"));
+        } else {
+            output.push(
+                char::from_u32(u32::from(unit))
+                    .ok_or_else(|| malformed(part, "invalid Unicode scalar in BIFF String"))?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn replace_formula_cache(
+    output: &mut ConverterOutput,
+    sheet_index: usize,
+    row: u32,
+    column: u32,
+    cache: &str,
+) -> bool {
+    let Some(blocks) = output
+        .document
+        .blocks
+        .iter_mut()
+        .filter_map(|node| match &mut node.block {
+            Block::Sheet { blocks, .. } => Some(blocks),
+            _ => None,
+        })
+        .nth(sheet_index)
+    else {
+        return false;
+    };
+    for node in blocks {
+        let Block::Table { rows, .. } = &mut node.block else { continue };
+        for table_row in rows {
+            for cell in &mut table_row.cells {
+                if !cell.blocks.iter().any(|node| {
+                    node.provenance
+                        .locator
+                        .cell
+                        .as_ref()
+                        .is_some_and(|reference| reference.row == row && reference.column == column)
+                }) {
+                    continue;
+                }
+                for node in &mut cell.blocks {
+                    let Block::Paragraph(inlines) = &mut node.block else { continue };
+                    for inline in inlines {
+                        match inline {
+                            Inline::Text { value, .. } => {
+                                cache.clone_into(value);
+                                return true;
+                            }
+                            Inline::Code(value) if value.starts_with('=') => {
+                                if let Some(marker) = value.rfind(" [cached: ") {
+                                    value.truncate(marker + " [cached: ".len());
+                                } else {
+                                    value.push_str(" [cached: ");
+                                }
+                                value.push_str(cache);
+                                value.push(']');
+                                return true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                return false;
+            }
+        }
+    }
+    false
+}
+
+fn enforce_document_node_limit(output: &ConverterOutput) -> Result<(), ConversionError> {
+    let Err(error) = output.document.validate() else { return Ok(()) };
+    if error.code == IrErrorCode::ResourceLimit
+        && output
+            .document
+            .validate_with_limits(&ValidationLimits {
+                max_nodes: usize::MAX,
+                ..ValidationLimits::default()
+            })
+            .is_ok()
+    {
+        return Err(limit(
+            "documentNodes",
+            format!(
+                "legacy XLS output exceeds the {} node limit",
+                into_markdown_core::MAX_DOCUMENT_NODES
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum PreflightFlag {
+    ExternalBindings,
+    EmbeddedObjects,
+    TailPadding,
+    OptionalTailRecord,
+    DimensionMetadata,
+    FormulaCacheMetadata,
+}
+
+#[derive(Default)]
+struct PreflightFlags(u8);
+
+impl PreflightFlags {
+    fn insert(&mut self, flag: PreflightFlag) {
+        self.0 |= 1_u8 << flag as u8;
+    }
+
+    fn contains(&self, flag: PreflightFlag) -> bool {
+        self.0 & (1_u8 << flag as u8) != 0
+    }
 }
 
 #[derive(Default)]
 struct Preflight {
-    external_bindings: bool,
-    tail_padding_ignored: bool,
+    flags: PreflightFlags,
     biff_version: u16,
-    omitted_dimension_records: Vec<usize>,
+    logical_end: usize,
+}
+
+impl Preflight {
+    fn has(&self, flag: PreflightFlag) -> bool {
+        self.flags.contains(flag)
+    }
 }
 
 fn preflight(
@@ -185,7 +590,7 @@ fn preflight(
     let mut biff_version = None;
     let mut at_substream_boundary = false;
     let mut zero_padding_start = None;
-    let mut result = Preflight::default();
+    let mut result = Preflight { logical_end: bytes.len(), ..Preflight::default() };
     while cursor < bytes.len() {
         budget.work(1, part)?;
         let Some(header) = bytes.get(cursor..cursor.saturating_add(4)) else {
@@ -193,7 +598,8 @@ fn preflight(
                 && (at_substream_boundary || zero_padding_start.is_some())
                 && bytes[cursor..].iter().all(|byte| *byte == 0)
             {
-                result.tail_padding_ignored = true;
+                result.flags.insert(PreflightFlag::TailPadding);
+                result.logical_end = zero_padding_start.unwrap_or(cursor);
                 break;
             }
             return Err(malformed(part, "truncated BIFF record header"));
@@ -206,9 +612,17 @@ fn preflight(
         let end = body_start
             .checked_add(length)
             .ok_or_else(|| malformed(part, "BIFF record length overflowed"))?;
-        let body = bytes
-            .get(body_start..end)
-            .ok_or_else(|| malformed(part, "truncated BIFF record body"))?;
+        let Some(body) = bytes.get(body_start..end) else {
+            if error_policy == ErrorPolicy::BestEffort
+                && at_substream_boundary
+                && is_ignorable_tail_record(kind)
+            {
+                result.flags.insert(PreflightFlag::OptionalTailRecord);
+                result.logical_end = cursor;
+                break;
+            }
+            return Err(malformed(part, "truncated BIFF record body"));
+        };
         if at_substream_boundary && kind == 0 && length == 0 {
             zero_padding_start.get_or_insert(cursor);
             cursor = end;
@@ -236,16 +650,21 @@ fn preflight(
             }
             FILE_PASS => return Err(ConversionError::Encrypted),
             EOF => at_substream_boundary = true,
-            DIMENSIONS => preflight_dimensions(
-                body,
-                cursor,
-                biff_version,
-                part,
-                budget,
-                error_policy,
-                &mut result.omitted_dimension_records,
-            )?,
-            SUP_BOOK | EXTERN_SHEET => result.external_bindings = true,
+            DIMENSIONS => {
+                if preflight_dimensions(body, biff_version, part, budget, error_policy)? {
+                    result.flags.insert(PreflightFlag::DimensionMetadata);
+                }
+            }
+            FORMULA if has_noncanonical_formula_string_cache(body) => {
+                if error_policy == ErrorPolicy::Strict {
+                    return Err(malformed(part, "non-canonical cached formula-string metadata"));
+                }
+                result.flags.insert(PreflightFlag::FormulaCacheMetadata);
+            }
+            SUP_BOOK | EXTERN_SHEET => result.flags.insert(PreflightFlag::ExternalBindings),
+            OBJ | MSO_DRAWING_GROUP | MSO_DRAWING => {
+                result.flags.insert(PreflightFlag::EmbeddedObjects);
+            }
             _ => {}
         }
         cursor = end;
@@ -254,7 +673,8 @@ fn preflight(
         if error_policy == ErrorPolicy::Strict {
             return Err(malformed(part, "zero padding follows the final BIFF substream"));
         }
-        result.tail_padding_ignored = true;
+        result.flags.insert(PreflightFlag::TailPadding);
+        result.logical_end = zero_padding_start.unwrap_or(bytes.len());
     }
     let Some(biff_version) = biff_version else {
         return Err(malformed(part, "Workbook stream has no BIFF8 BOF record"));
@@ -263,22 +683,28 @@ fn preflight(
     Ok(result)
 }
 
+fn is_ignorable_tail_record(kind: u16) -> bool {
+    matches!(kind, WINDOW1 | WINDOW2 | PANE | SELECTION | SCL)
+}
+
+fn has_noncanonical_formula_string_cache(body: &[u8]) -> bool {
+    body.get(6) == Some(&0)
+        && body.get(12..14) == Some(&[0xff, 0xff])
+        && body.get(7..12).is_some_and(|reserved| reserved.iter().any(|byte| *byte != 0))
+}
+
 fn preflight_dimensions(
     body: &[u8],
-    cursor: usize,
     biff_version: Option<u16>,
     part: &str,
     budget: &mut LegacyBudget<'_>,
     error_policy: ErrorPolicy,
-    omitted_records: &mut Vec<usize>,
-) -> Result<(), ConversionError> {
+) -> Result<bool, ConversionError> {
     let legacy = matches!(biff_version, Some(BIFF4 | BIFF5));
     let expected_length = if legacy { 10 } else { 14 };
-    if body.len() != expected_length {
-        if error_policy == ErrorPolicy::Strict {
-            return Err(malformed(part, "non-canonical BIFF Dimensions record length"));
-        }
-        omitted_records.push(cursor);
+    let recovered_metadata = body.len() != expected_length;
+    if recovered_metadata && error_policy == ErrorPolicy::Strict {
+        return Err(malformed(part, "non-canonical BIFF Dimensions record length"));
     }
     let (first_row, last_row, first_column, last_column) = if legacy {
         if body.len() < 8 {
@@ -307,7 +733,8 @@ fn preflight_dimensions(
     budget.table_shape(
         usize::try_from(last_row - first_row).unwrap_or(usize::MAX),
         usize::try_from(last_column - first_column).unwrap_or(usize::MAX),
-    )
+    )?;
+    Ok(recovered_metadata)
 }
 
 fn normalize_raw_biff4(bytes: &[u8]) -> Result<Vec<u8>, ConversionError> {
@@ -404,7 +831,7 @@ fn normalize_raw_biff4(bytes: &[u8]) -> Result<Vec<u8>, ConversionError> {
 }
 
 fn append_normalized_biff4_sheet_header(output: &mut Vec<u8>) -> Result<(), ConversionError> {
-    let sheet_name = b"Sheet1";
+    let sheet_name = b"Sheet 1";
     let bound_sheet_record_bytes = 4usize
         .checked_add(6)
         .and_then(|value| value.checked_add(1 + sheet_name.len()))
@@ -493,7 +920,9 @@ fn cfb_wrapper_layout(workbook_bytes: usize) -> Result<CfbWrapperLayout, Convers
 
 fn build_cfb_wrapper(
     workbook: &[u8],
-    omitted_dimension_records: &[usize],
+    recover_dimension_metadata: bool,
+    recover_formula_cache_metadata: bool,
+    biff_version: u16,
     layout: CfbWrapperLayout,
 ) -> Result<Vec<u8>, ConversionError> {
     let mut output = Vec::new();
@@ -506,14 +935,11 @@ fn build_cfb_wrapper(
     let difat_start = fat_start + layout.fat_sectors;
     let stream_start = CFB_SECTOR_BYTES;
     output[stream_start..stream_start + workbook.len()].copy_from_slice(workbook);
-    for offset in omitted_dimension_records {
-        let physical = stream_start.checked_add(*offset).ok_or_else(|| {
-            malformed(WORKBOOK, "Dimensions compatibility patch offset overflowed")
-        })?;
-        let record_type = output.get_mut(physical..physical + 2).ok_or_else(|| {
-            malformed(WORKBOOK, "Dimensions compatibility patch is outside Workbook stream")
-        })?;
-        record_type.copy_from_slice(&0xffff_u16.to_le_bytes());
+    if recover_dimension_metadata {
+        patch_noncanonical_dimensions(&mut output, stream_start, workbook, biff_version)?;
+    }
+    if recover_formula_cache_metadata {
+        patch_noncanonical_formula_string_caches(&mut output, stream_start, workbook)?;
     }
 
     let directory_offset = sector_offset_in_wrapper(layout.stream_sectors)?;
@@ -561,6 +987,79 @@ fn build_cfb_wrapper(
     }
     write_cfb_wrapper_allocation_tables(&mut output, &fat, layout, fat_start, difat_start)?;
     Ok(output)
+}
+
+fn patch_noncanonical_formula_string_caches(
+    output: &mut [u8],
+    stream_start: usize,
+    workbook: &[u8],
+) -> Result<(), ConversionError> {
+    let mut cursor = 0_usize;
+    while cursor < workbook.len() {
+        let header = workbook
+            .get(cursor..cursor.saturating_add(4))
+            .ok_or_else(|| malformed(WORKBOOK, "formula-cache patch found a truncated header"))?;
+        let kind = u16::from_le_bytes([header[0], header[1]]);
+        let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+        let end = cursor
+            .checked_add(4)
+            .and_then(|value| value.checked_add(length))
+            .ok_or_else(|| malformed(WORKBOOK, "formula-cache patch offset overflowed"))?;
+        let body = workbook
+            .get(cursor + 4..end)
+            .ok_or_else(|| malformed(WORKBOOK, "formula-cache patch found a truncated record"))?;
+        if kind == FORMULA && has_noncanonical_formula_string_cache(body) {
+            let reserved = stream_start
+                .checked_add(cursor)
+                .and_then(|value| value.checked_add(11))
+                .ok_or_else(|| malformed(WORKBOOK, "formula-cache patch offset overflowed"))?;
+            output
+                .get_mut(reserved..reserved + 5)
+                .ok_or_else(|| {
+                    malformed(WORKBOOK, "formula-cache patch is outside Workbook stream")
+                })?
+                .fill(0);
+        }
+        cursor = end;
+    }
+    Ok(())
+}
+
+fn patch_noncanonical_dimensions(
+    output: &mut [u8],
+    stream_start: usize,
+    workbook: &[u8],
+    biff_version: u16,
+) -> Result<(), ConversionError> {
+    let expected_length = if matches!(biff_version, BIFF4 | BIFF5) { 10 } else { 14 };
+    let mut cursor = 0_usize;
+    while cursor < workbook.len() {
+        let header = workbook
+            .get(cursor..cursor.saturating_add(4))
+            .ok_or_else(|| malformed(WORKBOOK, "compatibility patch found a truncated header"))?;
+        let kind = u16::from_le_bytes([header[0], header[1]]);
+        let length = usize::from(u16::from_le_bytes([header[2], header[3]]));
+        let end = cursor
+            .checked_add(4)
+            .and_then(|value| value.checked_add(length))
+            .ok_or_else(|| malformed(WORKBOOK, "compatibility patch offset overflowed"))?;
+        if end > workbook.len() {
+            return Err(malformed(WORKBOOK, "compatibility patch found a truncated record"));
+        }
+        if kind == DIMENSIONS && length != expected_length {
+            let physical = stream_start.checked_add(cursor).ok_or_else(|| {
+                malformed(WORKBOOK, "Dimensions compatibility patch offset overflowed")
+            })?;
+            output
+                .get_mut(physical..physical + 2)
+                .ok_or_else(|| {
+                    malformed(WORKBOOK, "Dimensions compatibility patch is outside Workbook stream")
+                })?
+                .copy_from_slice(&0xffff_u16.to_le_bytes());
+        }
+        cursor = end;
+    }
+    Ok(())
 }
 
 fn write_cfb_wrapper_header(
@@ -857,7 +1356,7 @@ mod tests {
         push_biff_record(&mut merged, 0x00e5, &[1, 0, 0, 0, 0, 0, 0, 0, 1, 0]).unwrap();
         workbook.splice(final_eof.unwrap()..final_eof.unwrap(), merged);
         let layout = cfb_wrapper_layout(workbook.len()).unwrap();
-        build_cfb_wrapper(&workbook, &[], layout).unwrap()
+        build_cfb_wrapper(&workbook, false, false, BIFF8, layout).unwrap()
     }
 
     #[test]
@@ -906,7 +1405,7 @@ mod tests {
         let recovered =
             preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
                 .unwrap();
-        assert!(recovered.tail_padding_ignored);
+        assert!(recovered.has(PreflightFlag::TailPadding));
 
         assert!(matches!(
             preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::Strict,),
@@ -937,7 +1436,7 @@ mod tests {
         let recovered =
             preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
                 .unwrap();
-        assert_eq!(recovered.omitted_dimension_records.len(), 1);
+        assert!(recovered.has(PreflightFlag::DimensionMetadata));
         assert!(matches!(
             preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::Strict,),
             Err(ConversionError::Malformed { .. })
@@ -945,12 +1444,45 @@ mod tests {
     }
 
     #[test]
+    fn noncanonical_formula_string_cache_reserved_bytes_are_normalized_only_in_best_effort() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut bytes = Vec::new();
+        push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+        let formula_offset = bytes.len();
+        let mut formula = vec![0; 22];
+        formula[7] = 0x5a;
+        formula[12..14].fill(0xff);
+        push_biff_record(&mut bytes, FORMULA, &formula).unwrap();
+        push_biff_record(&mut bytes, EOF, &[]).unwrap();
+
+        let recovered =
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
+                .unwrap();
+        assert!(recovered.has(PreflightFlag::FormulaCacheMetadata));
+        assert!(matches!(
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::Strict),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let layout = cfb_wrapper_layout(bytes.len()).unwrap();
+        let wrapper = build_cfb_wrapper(&bytes, false, true, BIFF8, layout).unwrap();
+        let mut wrapper_budget = LegacyBudget::new(wrapper.len(), &options, &context).unwrap();
+        let compound = CompoundFile::open(&wrapper, &mut wrapper_budget).unwrap();
+        let workbook = compound.root().stream(WORKBOOK).unwrap();
+        assert_eq!(&workbook[formula_offset + 11..formula_offset + 16], &[0; 5]);
+    }
+
+    #[test]
     fn compatibility_wrapper_is_a_bounded_readable_cfb() {
-        let workbook = raw_biff4_with_label(b"ok");
+        let mut workbook = raw_biff4_with_label(b"ok");
         let dimensions_offset =
             workbook.windows(4).position(|window| window == [0x00, 0x02, 0x0a, 0x00]).unwrap();
+        workbook[dimensions_offset + 2..dimensions_offset + 4]
+            .copy_from_slice(&12_u16.to_le_bytes());
+        workbook.splice(dimensions_offset + 14..dimensions_offset + 14, [0, 0]);
         let layout = cfb_wrapper_layout(workbook.len()).unwrap();
-        let wrapper = build_cfb_wrapper(&workbook, &[dimensions_offset], layout).unwrap();
+        let wrapper = build_cfb_wrapper(&workbook, true, false, BIFF4, layout).unwrap();
         let options = ConversionOptions::default();
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
         let mut wrapper_budget = LegacyBudget::new(wrapper.len(), &options, &context).unwrap();
@@ -959,6 +1491,129 @@ mod tests {
 
         assert_eq!(&recovered[dimensions_offset..dimensions_offset + 2], &[0xff, 0xff]);
         assert_eq!(&recovered[..dimensions_offset], &workbook[..dimensions_offset]);
+    }
+
+    #[test]
+    fn large_compatibility_cfb_uses_precise_open_lease_boundary() {
+        let workbook = vec![0x5a; 16 * 1024 * 1024];
+        let layout = cfb_wrapper_layout(workbook.len()).unwrap();
+        let wrapper = build_cfb_wrapper(&workbook, false, false, BIFF8, layout).unwrap();
+
+        let options = ConversionOptions::default();
+        let measuring = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut measuring_budget = LegacyBudget::new(wrapper.len(), &options, &measuring).unwrap();
+        let compound = crate::msg::ole::CompoundFile::open_with_compatibility(
+            &wrapper,
+            &mut measuring_budget,
+            crate::msg::ole::CompoundCompatibility::LegacyOfficeBestEffort,
+        )
+        .unwrap();
+        let required = measuring.reserved_memory_bytes();
+        assert!(required > workbook.len() as u64);
+        assert!(required < wrapper.len() as u64 * 2);
+        drop(compound);
+        assert_eq!(measuring.reserved_memory_bytes(), 0);
+
+        let exact_options = ConversionOptions {
+            limits: ResourceLimits { max_memory_bytes: required, ..options.limits.clone() },
+            ..options.clone()
+        };
+        let exact =
+            ExecutionContext::new(ExecutionOptions::default(), exact_options.limits.clone());
+        let mut exact_budget = LegacyBudget::new(wrapper.len(), &exact_options, &exact).unwrap();
+        let compound = crate::msg::ole::CompoundFile::open_with_compatibility(
+            &wrapper,
+            &mut exact_budget,
+            crate::msg::ole::CompoundCompatibility::LegacyOfficeBestEffort,
+        )
+        .unwrap();
+        drop(compound);
+        assert_eq!(exact.reserved_memory_bytes(), 0);
+
+        let below_options = ConversionOptions {
+            limits: ResourceLimits { max_memory_bytes: required - 1, ..options.limits.clone() },
+            ..options
+        };
+        let below =
+            ExecutionContext::new(ExecutionOptions::default(), below_options.limits.clone());
+        let mut below_budget = LegacyBudget::new(wrapper.len(), &below_options, &below).unwrap();
+        let error = crate::msg::ole::CompoundFile::open_with_compatibility(
+            &wrapper,
+            &mut below_budget,
+            crate::msg::ole::CompoundCompatibility::LegacyOfficeBestEffort,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { .. }));
+        assert_eq!(below.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn dense_noncanonical_dimensions_use_one_streaming_recovery_flag() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut bytes = Vec::new();
+        push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+        let mut dimensions = Vec::new();
+        dimensions.extend_from_slice(&0_u32.to_le_bytes());
+        dimensions.extend_from_slice(&1_u32.to_le_bytes());
+        dimensions.extend_from_slice(&0_u16.to_le_bytes());
+        dimensions.extend_from_slice(&1_u16.to_le_bytes());
+        dimensions.extend_from_slice(&[0; 4]);
+        for _ in 0..4_096 {
+            push_biff_record(&mut bytes, DIMENSIONS, &dimensions).unwrap();
+        }
+        push_biff_record(&mut bytes, EOF, &[]).unwrap();
+
+        let recovered =
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
+                .unwrap();
+        assert!(recovered.has(PreflightFlag::DimensionMetadata));
+        assert_eq!(recovered.logical_end, bytes.len());
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn best_effort_ignores_only_truncated_view_metadata_after_complete_substream() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut bytes = Vec::new();
+        push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+        push_biff_record(&mut bytes, EOF, &[]).unwrap();
+        let complete_end = bytes.len();
+        bytes.extend_from_slice(&WINDOW1.to_le_bytes());
+        bytes.extend_from_slice(&10_u16.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2]);
+
+        let recovered =
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
+                .unwrap();
+        assert!(recovered.has(PreflightFlag::OptionalTailRecord));
+        assert_eq!(recovered.logical_end, complete_end);
+        assert!(
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::Strict)
+                .is_err()
+        );
+
+        bytes[complete_end..complete_end + 2].copy_from_slice(&DIMENSIONS.to_le_bytes());
+        assert!(
+            preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
+                .is_err()
+        );
+
+        let mut incomplete = Vec::new();
+        push_biff_record(&mut incomplete, BOF, &[0, 6, 0, 0]).unwrap();
+        incomplete.extend_from_slice(&WINDOW1.to_le_bytes());
+        incomplete.extend_from_slice(&10_u16.to_le_bytes());
+        incomplete.extend_from_slice(&[1, 2]);
+        assert!(
+            preflight(
+                &incomplete,
+                WORKBOOK,
+                &mut budget(&options, &context),
+                ErrorPolicy::BestEffort,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1018,6 +1673,47 @@ mod tests {
     }
 
     #[test]
+    fn continued_formula_strings_are_bounded_and_decoded_without_evaluation() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut bytes = Vec::new();
+        push_biff_record(&mut bytes, STRING, &[5, 0, 0, b'a', b'b']).unwrap();
+        push_biff_record(&mut bytes, CONTINUE, &[0, b'c', b'd', b'e']).unwrap();
+        let mut conversion_budget = budget(&options, &context);
+        assert_eq!(
+            decode_continued_formula_string(
+                &bytes,
+                0,
+                WORKBOOK,
+                &mut conversion_budget,
+                options.limits.max_field_bytes,
+            )
+            .unwrap()
+            .as_deref(),
+            Some("abcde")
+        );
+
+        let mut limited_budget = budget(&options, &context);
+        assert!(matches!(
+            decode_continued_formula_string(&bytes, 0, WORKBOOK, &mut limited_budget, 4,),
+            Err(ConversionError::ResourceLimit { limit: "max_field_bytes", .. })
+        ));
+    }
+
+    #[test]
+    fn recovered_formula_cache_replaces_only_the_addressed_inert_cell() {
+        const FIXTURE: &[u8] =
+            include_bytes!("../../../../tools/macos-release/fixtures/normal.xls");
+        let mut output = convert_fixture(FIXTURE);
+        assert!(replace_formula_cache(&mut output, 0, 0, 1, "oracle text"));
+        assert!(replace_formula_cache(&mut output, 0, 0, 0, "cached-only text"));
+        let (_, rows) = table(&output);
+        assert_eq!(cell_text(&rows[0].cells[0]), "cached-only text");
+        assert_eq!(cell_text(&rows[0].cells[1]), "=TRUE [cached: oracle text]");
+        assert_eq!(cell_text(&rows[0].cells[2]), "42.5");
+    }
+
+    #[test]
     fn raw_biff4_is_normalized_but_strict_mode_rejects_it() {
         let bytes = raw_biff4_with_label(b"ok");
         let options = ConversionOptions::default();
@@ -1041,5 +1737,44 @@ mod tests {
             convert_raw(&bytes, &mut strict_budget, &strict_options, &strict_context),
             Err(ConversionError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn raw_biff4_applies_recovery_state_and_emits_security_diagnostics() {
+        let mut bytes = raw_biff4_with_label(b"ok");
+        let dimensions =
+            bytes.windows(4).position(|window| window == [0x00, 0x02, 0x0a, 0x00]).unwrap();
+        bytes[dimensions + 2..dimensions + 4].copy_from_slice(&12_u16.to_le_bytes());
+        bytes.splice(dimensions + 14..dimensions + 14, [0, 0]);
+
+        let eof = bytes.windows(4).rposition(|window| window == [0x0a, 0x00, 0x00, 0x00]).unwrap();
+        let mut inert_metadata = Vec::new();
+        push_biff_record(&mut inert_metadata, SUP_BOOK, &[]).unwrap();
+        push_biff_record(&mut inert_metadata, OBJ, &[]).unwrap();
+        bytes.splice(eof..eof, inert_metadata);
+        bytes.extend_from_slice(&WINDOW1.to_le_bytes());
+        bytes.extend_from_slice(&10_u16.to_le_bytes());
+        bytes.extend_from_slice(&[1, 2]);
+
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut conversion_budget = LegacyBudget::new(bytes.len(), &options, &context).unwrap();
+        let output = convert_raw(&bytes, &mut conversion_budget, &options, &context).unwrap();
+        for code in [
+            "legacyOffice.xls.dimensionMetadataRecovered",
+            "legacyOffice.xls.externalBindingsSkipped",
+            "legacyOffice.xls.embeddedObjectsSkipped",
+            "legacyOffice.xls.optionalTailRecordIgnored",
+        ] {
+            assert!(output.diagnostics.iter().any(|item| item.code == code), "missing {code}");
+        }
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .filter(|item| item.code == "legacyOffice.xls.embeddedObjectsSkipped")
+                .count(),
+            1
+        );
     }
 }
