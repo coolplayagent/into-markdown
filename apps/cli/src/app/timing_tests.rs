@@ -89,6 +89,11 @@ fn failures_remain_auditable_with_elapsed_time() {
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
     assert_eq!(report["items"][0]["status"], "failed");
+    assert!(report["resourceUsage"]["sharedLeaseBudgetBytes"].as_u64().unwrap() > 0);
+    assert!(
+        report["resourceUsage"]["sharedLeasePeakBytes"].as_u64().unwrap()
+            <= report["resourceUsage"]["sharedLeaseBudgetBytes"].as_u64().unwrap()
+    );
     assert!(report["items"][0]["durationMs"].as_f64().is_some_and(|value| value >= 0.0));
     assert!(report["items"][0].get("processingDurationMs").is_none());
     assert!(

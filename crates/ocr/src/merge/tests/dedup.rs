@@ -14,15 +14,18 @@ fn nfc_and_whitespace_equivalent_native_text_is_not_duplicated() {
         .collect();
     let detection = detection(&[(polygon(20.0, 20.0, 100.0, 16.0), 0.99)]);
     let recognition = recognition(&[(0, "Ca fé", 0.98)]);
+    let context = context();
     let output = merge_document(
         page_document(native),
         &[input(&detection, &recognition)],
         &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
-        &context(),
+        &context,
     )
     .unwrap();
     assert!(merged_text(&output.document).is_empty());
     assert_eq!(output.diagnostics[0].code, "ocr.nativeDuplicateSuppressed");
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 0);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 0);
 }
 
 #[test]
@@ -32,11 +35,12 @@ fn overlapping_and_crossing_equivalent_boxes_keep_only_best_confidence() {
         ([(18.0, 22.0), (118.0, 18.0), (120.0, 36.0), (20.0, 40.0)], 0.98),
     ]);
     let recognition = recognition(&[(0, "duplicate", 0.97), (1, "duplicate", 0.98)]);
+    let context = context();
     let output = merge_document(
         page_document(Vec::new()),
         &[input(&detection, &recognition)],
         &MergeConfig { policy: OcrPolicy::Always, ..MergeConfig::default() },
-        &context(),
+        &context,
     )
     .unwrap();
     assert_eq!(merged_text(&output.document), "duplicate");
@@ -48,6 +52,8 @@ fn overlapping_and_crossing_equivalent_boxes_keep_only_best_confidence() {
             .count(),
         1
     );
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 9);
 }
 
 #[test]

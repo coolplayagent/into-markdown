@@ -602,11 +602,12 @@ fn remote_vision_ocr_runs_when_local_ocr_is_off_without_fabricating_local_eviden
     let mut options = options();
     options.ai.vision_ocr = AiMode::Only;
     let services = Services { ocr: Some(Arc::new(RemoteOcr)), ..Services::default() };
+    let context = context(&options);
     let output = block_on(convert_image(
         &input(encoded(ImageFormat::Png), "remote.png"),
         &options,
         &services,
-        &context(&options),
+        &context,
     ))
     .unwrap();
     let Block::Page { blocks, .. } = &output.document.blocks[0].block else {
@@ -619,6 +620,8 @@ fn remote_vision_ocr_runs_when_local_ocr_is_off_without_fabricating_local_eviden
     assert_eq!(remote.provenance.kind, ProvenanceKind::AiProvider);
     let Block::Paragraph(inlines) = &remote.block else { panic!("remote paragraph expected") };
     assert!(matches!(inlines.as_slice(), [Inline::Text { value, .. }] if value == "remote text"));
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 11);
 }
 
 impl OcrEngine for WorkingSetOcr {
@@ -752,11 +755,12 @@ fn bound_ocr_emits_exact_geometry_confidence_and_chain() {
     let mut options = options();
     options.ocr.policy = OcrPolicy::Always;
     let services = Services { ocr: Some(Arc::new(BoundOcr)), ..Services::default() };
+    let context = context(&options);
     let output = block_on(convert_image(
         &input(encoded(ImageFormat::Png), "bound.png"),
         &options,
         &services,
-        &context(&options),
+        &context,
     ))
     .unwrap();
     let Block::Page { blocks, .. } = &output.document.blocks[0].block else {
@@ -770,6 +774,8 @@ fn bound_ocr_emits_exact_geometry_confidence_and_chain() {
     assert!((evidence.regions[0].detection_confidence - 0.98).abs() < f32::EPSILON);
     assert_eq!(evidence.chain.len(), 3);
     assert_eq!(evidence.chain[2].stage, OcrEvidenceStage::Merge);
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 22);
 }
 
 #[test]
@@ -778,11 +784,12 @@ fn low_confidence_ocr_omission_is_degraded() {
     options.ocr.policy = OcrPolicy::Always;
     options.ocr.minimum_confidence = 0.99;
     let services = Services { ocr: Some(Arc::new(BoundOcr)), ..Services::default() };
+    let context = context(&options);
     let output = block_on(convert_image(
         &input(encoded(ImageFormat::Png), "low-confidence.png"),
         &options,
         &services,
-        &context(&options),
+        &context,
     ))
     .unwrap();
     let diagnostic = output
@@ -792,6 +799,8 @@ fn low_confidence_ocr_omission_is_degraded() {
         .unwrap();
     assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
     assert_eq!(conversion_outcome(&output.diagnostics), ConversionOutcome::Degraded);
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 0);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 0);
 }
 
 struct LegacyOcr;

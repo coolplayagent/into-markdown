@@ -17,6 +17,8 @@ pub(crate) struct OcrContribution {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(super) accepted_text: bool,
     pub(crate) memory: Option<ResourceReservation>,
+    pub(crate) recognized_regions: u64,
+    pub(crate) recognized_chars: u64,
 }
 
 pub(super) async fn recognize(
@@ -102,7 +104,7 @@ async fn recognize_inner(
     let bound = match recognition {
         OcrRecognition::Bound(bound) => bound,
         OcrRecognition::Remote(result) => {
-            let (document, diagnostics) =
+            let (document, diagnostics, recognized_regions, recognized_chars) =
                 materialize_remote_unbound(result, page, plan, options, context)?;
             let assets = Vec::<Asset>::new();
             let retained = estimate_retained_output(&document, &assets, &diagnostics)?;
@@ -120,6 +122,8 @@ async fn recognize_inner(
                 nodes: document.blocks,
                 diagnostics,
                 memory: Some(memory),
+                recognized_regions,
+                recognized_chars,
             });
         }
         OcrRecognition::Unbound(_) => {
@@ -174,7 +178,8 @@ async fn recognize_inner(
         engine_id: engine.id(),
         execution: context,
     };
-    let (document, diagnostics) = materialize_nodes(result, detection_confidences, &materialize)?;
+    let (document, diagnostics, recognized_regions, recognized_chars) =
+        materialize_nodes(result, detection_confidences, &materialize)?;
     let assets = Vec::<Asset>::new();
     let retained = estimate_retained_output(&document, &assets, &diagnostics)?;
     if retained > plan.max_retained_bytes() {
@@ -191,6 +196,8 @@ async fn recognize_inner(
         nodes: document.blocks,
         diagnostics,
         memory: Some(memory),
+        recognized_regions,
+        recognized_chars,
     })
 }
 
@@ -210,7 +217,7 @@ fn materialize_remote_unbound(
     plan: OcrOutputPlan,
     options: &ConversionOptions,
     execution: &ExecutionContext,
-) -> Result<(Document, Vec<Diagnostic>), ConversionError> {
+) -> Result<(Document, Vec<Diagnostic>, u64, u64), ConversionError> {
     let provider = result.provider.clone();
     if provider.trim().is_empty()
         || result.regions.len() > usize::try_from(plan.max_regions()).unwrap_or(usize::MAX)
@@ -221,6 +228,8 @@ fn materialize_remote_unbound(
         });
     }
     let mut total_text = 0_u64;
+    let mut recognized_regions = 0_u64;
+    let mut recognized_chars = 0_u64;
     let mut nodes = Vec::new();
     for (index, region) in result.regions.into_iter().enumerate() {
         if index % 64 == 0 {
@@ -245,6 +254,10 @@ fn materialize_remote_unbound(
                 detail: "remote OCR text exceeds the configured output bound".into(),
             });
         }
+        recognized_regions = recognized_regions.checked_add(1).ok_or_else(payload_limit)?;
+        recognized_chars = recognized_chars
+            .checked_add(u64::try_from(text.chars().count()).map_err(|_| payload_limit())?)
+            .ok_or_else(payload_limit)?;
         nodes.push(BlockNode {
             id: NodeId(format!("remote-ocr-page-{page}-{index}")),
             block: Block::Paragraph(vec![Inline::Text { value: text.into(), marks: Vec::new() }]),
@@ -267,7 +280,7 @@ fn materialize_remote_unbound(
         provider,
         detail: format!("remote OCR returned invalid IR at {}: {}", error.path, error.detail),
     })?;
-    Ok((document, Vec::new()))
+    Ok((document, Vec::new(), recognized_regions, recognized_chars))
 }
 
 struct MaterializeContext<'a> {
@@ -284,9 +297,11 @@ fn materialize_nodes(
     result: OcrResult,
     detection_confidences: Vec<f32>,
     materialize: &MaterializeContext<'_>,
-) -> Result<(Document, Vec<Diagnostic>), ConversionError> {
+) -> Result<(Document, Vec<Diagnostic>, u64, u64), ConversionError> {
     let mut nodes = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut recognized_regions = 0_u64;
+    let mut recognized_chars = 0_u64;
     for (index, (region, detection_confidence)) in
         result.regions.into_iter().zip(detection_confidences).enumerate()
     {
@@ -344,6 +359,10 @@ fn materialize_nodes(
             locator,
             confidence: Some(confidence),
         };
+        recognized_regions = recognized_regions.checked_add(1).ok_or_else(payload_limit)?;
+        recognized_chars = recognized_chars
+            .checked_add(u64::try_from(region.text.chars().count()).map_err(|_| payload_limit())?)
+            .ok_or_else(payload_limit)?;
         nodes.push(BlockNode {
             id: NodeId(format!("image-page-{}-ocr-{}", materialize.page, index + 1)),
             block: Block::Paragraph(vec![Inline::OcrText {
@@ -356,7 +375,7 @@ fn materialize_nodes(
         });
     }
     let document = Document { blocks: nodes, ..Document::default() };
-    Ok((document, diagnostics))
+    Ok((document, diagnostics, recognized_regions, recognized_chars))
 }
 
 fn validate_plan(
@@ -586,6 +605,8 @@ fn degraded(page: u32, message: String) -> OcrContribution {
             locator: Some(SourceLocator { page: Some(page), ..SourceLocator::default() }),
         }],
         memory: None,
+        recognized_regions: 0,
+        recognized_chars: 0,
     }
 }
 
@@ -602,5 +623,12 @@ fn map_unavailable(provider: &str, error: ConversionError) -> ConversionError {
 }
 
 fn empty() -> OcrContribution {
-    OcrContribution { nodes: vec![], diagnostics: vec![], accepted_text: false, memory: None }
+    OcrContribution {
+        nodes: vec![],
+        diagnostics: vec![],
+        accepted_text: false,
+        memory: None,
+        recognized_regions: 0,
+        recognized_chars: 0,
+    }
 }

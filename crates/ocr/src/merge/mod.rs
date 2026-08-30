@@ -141,6 +141,26 @@ pub(crate) struct Candidate {
     geometry: RegionGeometry,
 }
 
+#[derive(Default)]
+struct OcrContributionUsage {
+    regions: u64,
+    characters: u64,
+}
+
+impl OcrContributionUsage {
+    fn add(&mut self, regions: u64, characters: u64) -> Result<(), ConversionError> {
+        self.regions = self
+            .regions
+            .checked_add(regions)
+            .ok_or_else(|| ocr("recognizedRegionTelemetryOverflow"))?;
+        self.characters = self
+            .characters
+            .checked_add(characters)
+            .ok_or_else(|| ocr("recognizedCharacterTelemetryOverflow"))?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct PageBlocks<'a> {
     pub(crate) blocks: &'a [BlockNode],
@@ -183,6 +203,7 @@ pub fn merge_document(
     let mut diagnostics = Vec::new();
     diagnostics.try_reserve_exact(budget.planned_diagnostics()).map_err(|_| memory())?;
     let mut identifiers = BTreeSet::new();
+    let mut usage = OcrContributionUsage::default();
     collect_node_ids(&document.blocks, &mut identifiers, &budget)?;
     if config.policy != OcrPolicy::Off {
         let mut ordered = Vec::<&OcrPageInput>::new();
@@ -204,6 +225,7 @@ pub fn merge_document(
                 &mut identifiers,
                 &mut diagnostics,
                 &mut budget,
+                &mut usage,
             )?;
         }
         if sort_flat_document {
@@ -215,13 +237,15 @@ pub fn merge_document(
         ocr(format!("invalidMergedDocument:{}:{}", error.code.as_str(), error.path))
     })?;
     let reservation = budget.finish()?;
-    ConverterOutput::new_with_memory_reservation(
+    let output = ConverterOutput::new_with_memory_reservation(
         document,
         Vec::new(),
         diagnostics,
         context,
         reservation,
-    )
+    )?;
+    context.record_ocr_contribution(usage.regions, usage.characters)?;
+    Ok(output)
 }
 
 fn merge_page(
@@ -231,6 +255,7 @@ fn merge_page(
     identifiers: &mut BTreeSet<String>,
     diagnostics: &mut Vec<Diagnostic>,
     budget: &mut MergeBudget<'_>,
+    usage: &mut OcrContributionUsage,
 ) -> Result<bool, ConversionError> {
     let page_blocks = existing_page_blocks(document, page.page())?;
     if config.policy == OcrPolicy::Auto
@@ -271,6 +296,13 @@ fn merge_page(
     if candidates.is_empty() {
         return Ok(false);
     }
+    let recognized_regions =
+        u64::try_from(candidates.len()).map_err(|_| ocr("recognizedRegionTelemetryOverflow"))?;
+    let recognized_chars = candidates.iter().try_fold(0_u64, |total, candidate| {
+        let characters = u64::try_from(candidate.text.chars().count())
+            .map_err(|_| ocr("recognizedCharacterTelemetryOverflow"))?;
+        total.checked_add(characters).ok_or_else(|| ocr("recognizedCharacterTelemetryOverflow"))
+    })?;
     let lines = lines::merge_lines(
         candidates,
         page.recognition.result().language_hint.as_deref(),
@@ -279,7 +311,9 @@ fn merge_page(
     )?;
     let paragraphs = paragraphs::merge_paragraphs(lines)?;
     let nodes = provenance::materialize_paragraphs(paragraphs, page, identifiers)?;
-    insert_page_nodes(document, page, nodes, identifiers, budget)
+    let sorted_flat_document = insert_page_nodes(document, page, nodes, identifiers, budget)?;
+    usage.add(recognized_regions, recognized_chars)?;
+    Ok(sorted_flat_document)
 }
 
 fn validate_page(page: &OcrPageInput, context: &ExecutionContext) -> Result<(), ConversionError> {

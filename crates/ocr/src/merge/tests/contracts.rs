@@ -38,6 +38,9 @@ fn stable_source_indexes_form_structured_page_ir_and_chain() {
     assert_eq!(provenance.locator.page, Some(1));
     assert!(provenance.locator.bounds.is_some());
     output.document.validate().unwrap();
+    let usage = auto_context.resource_usage();
+    assert_eq!(usage.ocr_recognized_regions, 3);
+    assert_eq!(usage.ocr_recognized_chars, 21);
 }
 
 #[test]
@@ -64,6 +67,8 @@ fn policy_off_is_a_true_no_op_and_auto_respects_native_text() {
     )
     .unwrap();
     assert_eq!(auto.document, document);
+    assert_eq!(auto_context.resource_usage().ocr_recognized_regions, 0);
+    assert_eq!(auto_context.resource_usage().ocr_recognized_chars, 0);
 
     let oversized_detection = detection(&[
         (polygon(20.0, 20.0, 80.0, 16.0), 0.99),

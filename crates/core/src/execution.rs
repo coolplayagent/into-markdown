@@ -173,6 +173,24 @@ pub struct ExecutionContext {
     memory_credit: Option<Arc<MemoryCredit>>,
 }
 
+/// Invocation-wide resource accounting shared by a root context and every fork.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionResourceUsage {
+    /// Configured shared memory lease budget.
+    pub shared_lease_budget_bytes: u64,
+    /// Historical shared memory lease high-water mark.
+    pub shared_lease_peak_bytes: u64,
+    /// Configured shared temporary-storage lease budget.
+    pub temporary_lease_budget_bytes: u64,
+    /// Historical shared temporary-storage lease high-water mark.
+    pub temporary_lease_peak_bytes: u64,
+    /// OCR regions that survived component filtering and merge.
+    pub ocr_recognized_regions: u64,
+    /// Unicode scalar values contributed by those OCR regions.
+    pub ocr_recognized_chars: u64,
+}
+
 impl Clone for ExecutionContext {
     fn clone(&self) -> Self {
         // A preflight credit is a scoped capability borrowed from one mutable
@@ -197,8 +215,26 @@ struct MemoryBacking {
 
 impl Drop for MemoryBacking {
     fn drop(&mut self) {
-        self.shared.memory_bytes.fetch_sub(self.bytes.load(Ordering::Acquire), Ordering::AcqRel);
+        self.shared
+            .resources
+            .memory_bytes
+            .fetch_sub(self.bytes.load(Ordering::Acquire), Ordering::AcqRel);
     }
+}
+
+#[derive(Clone, Default)]
+struct SharedResourceAccounting {
+    memory_bytes: Arc<AtomicU64>,
+    memory_peak_bytes: Arc<AtomicU64>,
+    temporary_bytes: Arc<AtomicU64>,
+    temporary_peak_bytes: Arc<AtomicU64>,
+    ocr: Arc<Mutex<OcrAccounting>>,
+}
+
+#[derive(Default)]
+struct OcrAccounting {
+    recognized_regions: u64,
+    recognized_chars: u64,
 }
 
 struct ExecutionShared {
@@ -211,8 +247,7 @@ struct ExecutionShared {
     detected_format: Mutex<Option<InputFormat>>,
     dispatcher: Option<ProgressDispatcher>,
     limits: ResourceLimits,
-    memory_bytes: Arc<AtomicU64>,
-    temporary_bytes: Arc<AtomicU64>,
+    resources: SharedResourceAccounting,
     temporary_directory: PathBuf,
     media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
 }
@@ -295,8 +330,7 @@ impl ExecutionContext {
             options,
             limits,
             temporary_directory,
-            Arc::new(AtomicU64::new(0)),
-            Arc::new(AtomicU64::new(0)),
+            SharedResourceAccounting::default(),
             spawn,
         )
     }
@@ -305,8 +339,7 @@ impl ExecutionContext {
         options: ExecutionOptions,
         limits: ResourceLimits,
         temporary_directory: PathBuf,
-        memory_bytes: Arc<AtomicU64>,
-        temporary_bytes: Arc<AtomicU64>,
+        resources: SharedResourceAccounting,
         spawn: F,
     ) -> Self
     where
@@ -330,8 +363,7 @@ impl ExecutionContext {
             detected_format: Mutex::new(None),
             dispatcher,
             limits,
-            memory_bytes,
-            temporary_bytes,
+            resources,
             temporary_directory,
             media_checkpoint: Mutex::new(None),
         });
@@ -378,8 +410,7 @@ impl ExecutionContext {
             options,
             self.shared.limits.clone(),
             self.shared.temporary_directory.clone(),
-            Arc::clone(&self.shared.memory_bytes),
-            Arc::clone(&self.shared.temporary_bytes),
+            self.shared.resources.clone(),
             std::thread::Builder::spawn,
         )
     }
@@ -565,7 +596,7 @@ impl ExecutionContext {
         if let Some(credit) = &self.memory_credit {
             credit.bytes.load(Ordering::Acquire)
         } else {
-            self.shared.memory_bytes.load(Ordering::Acquire)
+            self.shared.resources.memory_bytes.load(Ordering::Acquire)
         }
     }
 
@@ -583,8 +614,64 @@ impl ExecutionContext {
             self.shared
                 .limits
                 .max_memory_bytes
-                .saturating_sub(self.shared.memory_bytes.load(Ordering::Acquire))
+                .saturating_sub(self.shared.resources.memory_bytes.load(Ordering::Acquire))
         }
+    }
+
+    /// Return the invocation-wide historical resource accounting shared with every fork.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn resource_usage(&self) -> ExecutionResourceUsage {
+        let ocr = lock_unpoisoned(&self.shared.resources.ocr);
+        ExecutionResourceUsage {
+            shared_lease_budget_bytes: self.shared.limits.max_memory_bytes,
+            shared_lease_peak_bytes: self
+                .shared
+                .resources
+                .memory_peak_bytes
+                .load(Ordering::Acquire),
+            temporary_lease_budget_bytes: self.shared.limits.max_temporary_bytes,
+            temporary_lease_peak_bytes: self
+                .shared
+                .resources
+                .temporary_peak_bytes
+                .load(Ordering::Acquire),
+            ocr_recognized_regions: ocr.recognized_regions,
+            ocr_recognized_chars: ocr.recognized_chars,
+        }
+    }
+
+    /// Record OCR text only after recognized regions survive filtering, deduplication, and merge.
+    #[doc(hidden)]
+    pub fn record_ocr_contribution(
+        &self,
+        regions: u64,
+        characters: u64,
+    ) -> Result<(), ConversionError> {
+        if regions == 0 && characters == 0 {
+            return Ok(());
+        }
+        if regions == 0 || characters == 0 {
+            return Err(ConversionError::Internal {
+                detail: "OCR contribution regions and characters must both be positive".into(),
+            });
+        }
+        let mut ocr = lock_unpoisoned(&self.shared.resources.ocr);
+        let recognized_regions = ocr.recognized_regions.checked_add(regions).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_archive_entries",
+                detail: "OCR region telemetry overflow".into(),
+            }
+        })?;
+        let recognized_chars = ocr.recognized_chars.checked_add(characters).ok_or_else(|| {
+            ConversionError::ResourceLimit {
+                limit: "max_field_bytes",
+                detail: "OCR character telemetry overflow".into(),
+            }
+        })?;
+        ocr.recognized_regions = recognized_regions;
+        ocr.recognized_chars = recognized_chars;
+        Ok(())
     }
 
     /// Return the immutable request resource envelope carried by this context.
@@ -684,7 +771,7 @@ impl ExecutionContext {
     #[doc(hidden)]
     #[must_use]
     pub fn reserved_temporary_bytes(&self) -> u64 {
-        self.shared.temporary_bytes.load(Ordering::Acquire)
+        self.shared.resources.temporary_bytes.load(Ordering::Acquire)
     }
 
     /// Remaining request temporary storage available to a bounded streaming
@@ -695,7 +782,7 @@ impl ExecutionContext {
         self.shared
             .limits
             .max_temporary_bytes
-            .saturating_sub(self.shared.temporary_bytes.load(Ordering::Acquire))
+            .saturating_sub(self.shared.resources.temporary_bytes.load(Ordering::Acquire))
     }
 
     /// Create an automatically cleaned temporary file charged as bytes are written.
@@ -781,15 +868,16 @@ impl ExecutionContext {
         bytes: u64,
     ) -> Result<ResourceReservation, ConversionError> {
         self.checkpoint()?;
-        let (counter, limit, name) = match kind {
+        let (counter, peak, limit, name) = match kind {
             ResourceKind::Memory => self.memory_account(),
             ResourceKind::Temporary => (
-                self.shared.temporary_bytes.as_ref(),
+                self.shared.resources.temporary_bytes.as_ref(),
+                Some(self.shared.resources.temporary_peak_bytes.as_ref()),
                 self.shared.limits.max_temporary_bytes,
                 "max_temporary_bytes",
             ),
         };
-        checked_charge(counter, bytes, limit, name)?;
+        checked_charge(counter, peak, bytes, limit, name)?;
         let global_memory_backing =
             if matches!(kind, ResourceKind::Memory) && self.memory_credit.is_none() {
                 Some(Arc::new(MemoryBacking {
@@ -815,11 +903,16 @@ impl ExecutionContext {
         }
     }
 
-    fn memory_account(&self) -> (&AtomicU64, u64, &'static str) {
+    fn memory_account(&self) -> (&AtomicU64, Option<&AtomicU64>, u64, &'static str) {
         if let Some(credit) = &self.memory_credit {
-            (&credit.bytes, credit.backing.bytes.load(Ordering::Acquire), "max_memory_bytes")
+            (&credit.bytes, None, credit.backing.bytes.load(Ordering::Acquire), "max_memory_bytes")
         } else {
-            (&self.shared.memory_bytes, self.shared.limits.max_memory_bytes, "max_memory_bytes")
+            (
+                &self.shared.resources.memory_bytes,
+                Some(&self.shared.resources.memory_peak_bytes),
+                self.shared.limits.max_memory_bytes,
+                "max_memory_bytes",
+            )
         }
     }
 }
@@ -929,15 +1022,16 @@ impl ResourceReservation {
             },
             detail: "resource reservation overflowed".into(),
         })?;
-        let (counter, limit, name) = match self.kind {
+        let (counter, peak, limit, name) = match self.kind {
             ResourceKind::Memory => self.context.memory_account(),
             ResourceKind::Temporary => (
-                self.context.shared.temporary_bytes.as_ref(),
+                self.context.shared.resources.temporary_bytes.as_ref(),
+                Some(self.context.shared.resources.temporary_peak_bytes.as_ref()),
                 self.context.shared.limits.max_temporary_bytes,
                 "max_temporary_bytes",
             ),
         };
-        checked_charge(counter, bytes, limit, name)?;
+        checked_charge(counter, peak, bytes, limit, name)?;
         self.bytes = next;
         if let Some(backing) = &self.global_memory_backing {
             backing.bytes.fetch_add(bytes, Ordering::AcqRel);
@@ -965,7 +1059,7 @@ impl ResourceReservation {
         }
         let counter = match self.kind {
             ResourceKind::Memory => self.context.memory_account().0,
-            ResourceKind::Temporary => &self.context.shared.temporary_bytes,
+            ResourceKind::Temporary => &self.context.shared.resources.temporary_bytes,
         };
         counter.fetch_sub(bytes, Ordering::AcqRel);
         Ok(())
@@ -1010,7 +1104,7 @@ impl Drop for ResourceReservation {
         }
         let counter = match self.kind {
             ResourceKind::Memory => self.context.memory_account().0,
-            ResourceKind::Temporary => &self.context.shared.temporary_bytes,
+            ResourceKind::Temporary => &self.context.shared.resources.temporary_bytes,
         };
         counter.fetch_sub(self.bytes, Ordering::AcqRel);
     }
@@ -1071,7 +1165,7 @@ impl TemporaryFile {
     #[must_use]
     pub fn persist(mut self) -> PathBuf {
         self.file.take();
-        self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
+        self.context.shared.resources.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
         self.charged = 0;
         std::mem::take(&mut self.path)
     }
@@ -1109,13 +1203,14 @@ impl TemporaryFile {
                 detail: "temporary byte accounting overflowed".into(),
             })?;
         checked_charge(
-            &self.context.shared.temporary_bytes,
+            &self.context.shared.resources.temporary_bytes,
+            Some(&self.context.shared.resources.temporary_peak_bytes),
             amount,
             self.context.shared.limits.max_temporary_bytes,
             "max_temporary_bytes",
         )?;
         let Some(file) = self.file.as_mut() else {
-            self.context.shared.temporary_bytes.fetch_sub(amount, Ordering::AcqRel);
+            self.context.shared.resources.temporary_bytes.fetch_sub(amount, Ordering::AcqRel);
             return Err(ConversionError::Internal { detail: "temporary file is closed".into() });
         };
         match file.write(bytes) {
@@ -1128,13 +1223,14 @@ impl TemporaryFile {
                 if written_u64 < amount {
                     self.context
                         .shared
+                        .resources
                         .temporary_bytes
                         .fetch_sub(amount - written_u64, Ordering::AcqRel);
                 }
                 Ok(written)
             }
             Err(error) => {
-                self.context.shared.temporary_bytes.fetch_sub(amount, Ordering::AcqRel);
+                self.context.shared.resources.temporary_bytes.fetch_sub(amount, Ordering::AcqRel);
                 Err(error.into())
             }
         }
@@ -1168,7 +1264,7 @@ impl Drop for TemporaryFile {
         if !self.path.as_os_str().is_empty() {
             let _ = std::fs::remove_file(&self.path);
         }
-        self.context.shared.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
+        self.context.shared.resources.temporary_bytes.fetch_sub(self.charged, Ordering::AcqRel);
     }
 }
 
@@ -1376,6 +1472,7 @@ where
 
 fn checked_charge(
     counter: &AtomicU64,
+    peak: Option<&AtomicU64>,
     amount: u64,
     limit: u64,
     name: &'static str,
@@ -1383,10 +1480,19 @@ fn checked_charge(
     let result = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         current.checked_add(amount).filter(|next| *next <= limit)
     });
-    result.map(|_| ()).map_err(|current| ConversionError::ResourceLimit {
-        limit: name,
-        detail: format!("{current} + {amount} exceeds {limit}"),
-    })
+    result
+        .map(|previous| {
+            if let Some(peak) = peak {
+                let current = previous
+                    .checked_add(amount)
+                    .expect("a successful checked charge cannot overflow");
+                peak.fetch_max(current, Ordering::AcqRel);
+            }
+        })
+        .map_err(|current| ConversionError::ResourceLimit {
+            limit: name,
+            detail: format!("{current} + {amount} exceeds {limit}"),
+        })
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -2209,5 +2315,121 @@ mod tests {
         drop(temporary);
         assert!(second.reserve_memory(10).is_ok());
         assert!(first.reserve_temporary(10).is_ok());
+    }
+
+    #[test]
+    fn concurrent_forks_publish_one_stable_historical_peak() {
+        let pool = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 10, ..ResourceLimits::default() },
+        );
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let (ready, observed) = std::sync::mpsc::channel();
+        let mut workers = Vec::new();
+        for amount in [4, 6] {
+            let context = pool.fork_with_shared_resources(ExecutionOptions::default());
+            let barrier = Arc::clone(&barrier);
+            let ready = ready.clone();
+            workers.push(std::thread::spawn(move || {
+                let reservation = context.reserve_memory(amount).unwrap();
+                ready.send(()).unwrap();
+                barrier.wait();
+                drop(reservation);
+            }));
+        }
+        observed.recv().unwrap();
+        observed.recv().unwrap();
+
+        assert_eq!(pool.reserved_memory_bytes(), 10);
+        assert_eq!(pool.resource_usage().shared_lease_peak_bytes, 10);
+        assert!(pool.reserve_memory(1).is_err());
+        assert_eq!(pool.resource_usage().shared_lease_peak_bytes, 10);
+        barrier.wait();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(pool.reserved_memory_bytes(), 0);
+        assert_eq!(pool.resource_usage().shared_lease_peak_bytes, 10);
+    }
+
+    #[test]
+    fn grow_shrink_drop_temporary_and_preflight_credit_preserve_true_peaks() {
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits {
+                max_memory_bytes: 12,
+                max_temporary_bytes: 12,
+                ..ResourceLimits::default()
+            },
+        );
+        let mut memory = context.reserve_memory(3).unwrap();
+        memory.grow(4).unwrap();
+        memory.shrink(5).unwrap();
+        assert_eq!(context.resource_usage().shared_lease_peak_bytes, 7);
+        drop(memory);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+
+        let mut parent = context.reserve_memory(10).unwrap();
+        {
+            let credit = context.with_memory_credit(&mut parent).unwrap();
+            let mut child = credit.reserve_memory(4).unwrap();
+            child.grow(6).unwrap();
+            assert_eq!(credit.reserved_memory_bytes(), 10);
+            assert_eq!(context.resource_usage().shared_lease_peak_bytes, 10);
+        }
+        drop(parent);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+
+        let mut temporary = context.reserve_temporary(3).unwrap();
+        temporary.grow(2).unwrap();
+        temporary.shrink(4).unwrap();
+        drop(temporary);
+        let mut file = context.temporary_file("usage-peak").unwrap();
+        file.write_all_checked(b"1234567").unwrap();
+        drop(file);
+        let usage = context.resource_usage();
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+        assert_eq!(usage.temporary_lease_peak_bytes, 7);
+        assert_eq!(usage.temporary_lease_budget_bytes, 12);
+    }
+
+    #[test]
+    fn rejected_cancelled_and_timed_out_reserves_do_not_raise_peak() {
+        let limits = ResourceLimits { max_memory_bytes: 5, ..ResourceLimits::default() };
+        let ordinary = ExecutionContext::new(ExecutionOptions::default(), limits.clone());
+        assert!(ordinary.reserve_memory(6).is_err());
+        assert_eq!(ordinary.resource_usage().shared_lease_peak_bytes, 0);
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = ExecutionContext::new(
+            ExecutionOptions { cancellation, ..ExecutionOptions::default() },
+            limits.clone(),
+        );
+        assert!(matches!(cancelled.reserve_memory(1), Err(ConversionError::Cancelled)));
+        assert_eq!(cancelled.resource_usage().shared_lease_peak_bytes, 0);
+
+        let timed_out = ExecutionContext::new(
+            ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
+            limits,
+        );
+        assert!(matches!(timed_out.reserve_memory(1), Err(ConversionError::Timeout)));
+        assert_eq!(timed_out.resource_usage().shared_lease_peak_bytes, 0);
+    }
+
+    #[test]
+    fn ocr_contributions_aggregate_across_forks_and_zeroes_are_not_hits() {
+        let pool = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let fork = pool.fork_with_shared_resources(ExecutionOptions::default());
+        pool.record_ocr_contribution(0, 0).unwrap();
+        assert!(matches!(
+            pool.record_ocr_contribution(1, 0),
+            Err(ConversionError::Internal { .. })
+        ));
+        pool.record_ocr_contribution(1, 2).unwrap();
+        fork.record_ocr_contribution(2, 5).unwrap();
+        let usage = pool.resource_usage();
+        assert_eq!(usage.ocr_recognized_regions, 3);
+        assert_eq!(usage.ocr_recognized_chars, 7);
     }
 }

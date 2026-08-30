@@ -846,6 +846,8 @@ async fn enrich(
         resource("max_memory_bytes", format!("allocate OCR contribution cache: {error}"))
     })?;
     cache.resize_with(grouping.groups.len(), || None);
+    let mut recognized_regions = 0_u64;
+    let mut recognized_chars = 0_u64;
     for (ordinal, group_index) in grouping.digest_order.iter().copied().enumerate() {
         context.checkpoint()?;
         let candidate = &candidates[grouping.groups[group_index].representative];
@@ -911,6 +913,12 @@ async fn enrich(
         if let Some(memory) = contribution.memory.take() {
             output.attach_memory_reservation(context, memory)?;
         }
+        recognized_regions = recognized_regions
+            .checked_add(contribution.recognized_regions)
+            .ok_or_else(|| resource("max_archive_entries", "OCR region telemetry overflow"))?;
+        recognized_chars = recognized_chars
+            .checked_add(contribution.recognized_chars)
+            .ok_or_else(|| resource("max_field_bytes", "OCR character telemetry overflow"))?;
         cache[group_index] = Some(CachedContribution {
             nodes: contribution.nodes,
             diagnostics: contribution.diagnostics,
@@ -956,6 +964,7 @@ async fn enrich(
     if input_format == InputFormat::Pdf && !contributions_by_asset.is_empty() {
         output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
     }
+    context.record_ocr_contribution(recognized_regions, recognized_chars)?;
     Ok(output)
 }
 
@@ -2032,6 +2041,9 @@ mod tests {
             provenance.locator.bounds,
             Some(into_markdown_core::Rect { x: 10.0, y: 20.0, width: 20.0, height: 10.0 })
         );
+        let usage = context.resource_usage();
+        assert_eq!(usage.ocr_recognized_regions, 1);
+        assert_eq!(usage.ocr_recognized_chars, 14);
     }
 
     #[test]

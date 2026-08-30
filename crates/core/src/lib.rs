@@ -24,17 +24,18 @@ mod summary;
 pub use artifact::{ArtifactSinkCapabilities, DocumentStreamEvent};
 pub use dto::{
     AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
-    BatchLimitDto, BatchReportDto, BundleAssetDto, BundleManifestDto, DTO_SCHEMA_VERSION,
-    DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto, DtoError, DtoErrorCode, DtoJsonStyle,
-    DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES, MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH,
-    MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES, MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES,
-    MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES, ProvenanceDto, ProvenanceKindDto,
-    ProvenanceListDto, ResultDto, canonical_external_asset_uri,
+    BatchLimitDto, BatchOcrUsageDto, BatchReportDto, BatchResourceUsageDto, BundleAssetDto,
+    BundleManifestDto, DTO_SCHEMA_VERSION, DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto,
+    DtoError, DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
+    MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH, MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES,
+    MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES, MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES,
+    ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto, canonical_external_asset_uri,
 };
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{
-    CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions, ExecutionStage,
-    PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation, TemporaryFile,
+    CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions, ExecutionResourceUsage,
+    ExecutionStage, PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation,
+    TemporaryFile,
 };
 pub use format::{FormatCandidate, InputFormat};
 pub use input::{

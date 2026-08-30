@@ -92,6 +92,14 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   "succeeded": 1,
   "failed": 0,
   "wallDurationMs": 15.72,
+  "resourceUsage": {
+    "sharedLeaseBudgetBytes": 2147483648,
+    "sharedLeasePeakBytes": 123456789,
+    "ocr": {
+      "recognizedRegions": 2,
+      "recognizedChars": 21
+    }
+  },
   "items": [
     {
       "input": "report.pdf",
@@ -109,6 +117,13 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   ]
 }
 ```
+
+`resourceUsage` 是一次 CLI invocation 的共享资源快照，不按并发 `jobs` 倍增。
+`sharedLeasePeakBytes` 是根 `ExecutionContext` 与全部 fork 的真实历史高水位，拒绝的
+reserve 不抬高它，且任务释放 lease 后仍保留。OCR 计数只累计经过非空/置信度过滤、
+原生文本去重并完成结构化合并的 region 与 Unicode scalar；OCR 已启用但无命中时两个
+字段都为 `0`，关闭时省略 `ocr`。旧 schema 1 报告可缺少 `resourceUsage`；新生产者
+必须提供大于零的 budget，并保证 `0 <= peak <= budget`。
 
 ## 不可信输入边界
 
