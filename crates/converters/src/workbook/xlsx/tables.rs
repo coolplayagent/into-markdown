@@ -1,7 +1,7 @@
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::model::WorkbookInventory;
 use crate::workbook::opc::relationships::{
-    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace,
+    decode_attr, decode_xml_reference, is_spreadsheet_namespace, require_spreadsheet_namespace,
 };
 use crate::workbook::xlsx::formulas::{DisplayProfile, builtin_number_kind, detect_number_kind};
 use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
@@ -56,6 +56,17 @@ pub(in crate::workbook) fn scan_xml_shared_strings_selected(
                         },
                     )?;
                 state.text(text.iter().len(), decoded.as_deref(), options)?;
+            }
+            Ok((_, Event::GeneralRef(reference))) => {
+                let decoded = decode_xml_reference(reference.as_ref(), part)?;
+                if state.string_depth.is_some() {
+                    let mut utf8 = [0_u8; 4];
+                    let decoded = state
+                        .selected_value
+                        .is_some()
+                        .then(|| decoded.encode_utf8(&mut utf8) as &str);
+                    state.text(reference.iter().len().saturating_add(2), decoded, options)?;
+                }
             }
             Ok((namespace, Event::End(event))) => {
                 require_spreadsheet_namespace(&namespace, part)?;
@@ -641,10 +652,11 @@ fn style_collection_count(
 
 #[cfg(test)]
 mod tests {
-    use super::scan_xml_shared_strings;
+    use super::{scan_xml_shared_strings, scan_xml_shared_strings_selected};
     use into_markdown_core::{
         ConversionOptions, ExecutionContext, ExecutionOptions, ResourceLimits,
     };
+    use std::collections::BTreeSet;
 
     #[test]
     fn declared_reference_count_does_not_allocate_shared_strings() {
@@ -653,5 +665,19 @@ mod tests {
         let inventory =
             scan_xml_shared_strings(xml, &ConversionOptions::default(), &context).unwrap();
         assert_eq!(inventory.shared_strings, 1);
+    }
+
+    #[test]
+    fn selected_production_shared_strings_restore_xml_references() {
+        let xml = br#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>R&amp;D &quot;Q&quot; &#x4E2D;</t></si></sst>"#;
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let (_, selected) = scan_xml_shared_strings_selected(
+            xml,
+            &BTreeSet::from([0]),
+            &ConversionOptions::default(),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(selected.get(&0).map(String::as_str), Some("R&D \"Q\" 中"));
     }
 }
