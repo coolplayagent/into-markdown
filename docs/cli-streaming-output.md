@@ -56,8 +56,25 @@ while an asset is open or when the semantic document is incomplete.
 
 Cancellation is checked before every spool write, replay chunk, Base64 chunk,
 ZIP entry, stdout write, and commit. Serialization, disk-full, cancellation,
-and pipe errors all use the same idempotent abort path. File targets are never
-visible before successful serialization and fsync.
+and non-pipe I/O errors use the same idempotent abort path; broken pipe follows
+the terminal-consumer rule above. File targets are never visible before
+successful serialization and fsync.
+
+## Engine seam invariants
+
+- Preparation resolves, probes, plans admission, and freezes sink capabilities;
+  it does not execute a converter, render Markdown, or create a result object.
+- A prepared conversion is consumed exactly once. Execution rejects a different
+  capability set instead of silently selecting another converter path.
+- Semantic events are protocol-validated while they are written. Document
+  finalization succeeds exactly once and precedes the successful summary and
+  terminal `Completed` progress event.
+- Native and compatibility converter paths move their outputs through the same
+  event adapter. A compatibility adapter may drain a converter-owned document
+  and assets, but it must not assemble a `ConversionResult` before spooling.
+- The selected primary representation is serialized exactly once after the
+  conversion sink is finalized. Sink, finalization, and serialization failures
+  cannot publish a primary file or report completion.
 
 ## Compatibility and performance gates
 
