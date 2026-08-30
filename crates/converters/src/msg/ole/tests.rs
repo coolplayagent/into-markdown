@@ -118,6 +118,52 @@ fn open_budget(max_memory_bytes: u64) -> OpenBudget {
     }
 }
 
+fn directory_name_raw(name: &str, declared_units: usize) -> [u8; 128] {
+    let mut raw = [0_u8; 128];
+    for (index, unit) in name.encode_utf16().chain([0]).enumerate() {
+        raw[index * 2..index * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+    raw[64..66].copy_from_slice(&u16::try_from(declared_units * 2).unwrap().to_le_bytes());
+    raw
+}
+
+#[test]
+fn best_effort_directory_name_recovery_requires_zero_redundancy() {
+    let mut recoveries = CompoundRecoveries::default();
+    let zero_redundancy = directory_name_raw("Workbook", 12);
+    assert_eq!(
+        parse_directory_name(
+            &zero_redundancy,
+            CompoundCompatibility::LegacyOfficeBestEffort,
+            &mut recoveries,
+        )
+        .unwrap(),
+        "Workbook"
+    );
+
+    let mut disguised = directory_name_raw("Workbook", 12);
+    disguised[18..26].copy_from_slice(&[b'E', 0, b'v', 0, b'i', 0, b'l', 0]);
+    assert!(
+        parse_directory_name(
+            &disguised,
+            CompoundCompatibility::LegacyOfficeBestEffort,
+            &mut CompoundRecoveries::default(),
+        )
+        .is_err()
+    );
+
+    let mut book_alias = directory_name_raw("Book", 8);
+    book_alias[10..16].copy_from_slice(&[b'E', 0, b'v', 0, b'l', 0]);
+    assert!(
+        parse_directory_name(
+            &book_alias,
+            CompoundCompatibility::LegacyOfficeBestEffort,
+            &mut CompoundRecoveries::default(),
+        )
+        .is_err()
+    );
+}
+
 #[test]
 fn regular_stream_budget_is_checked_before_materialization() {
     let mut budget = RejectExpandedBudget {

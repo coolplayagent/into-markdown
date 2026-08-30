@@ -526,6 +526,33 @@ mod native_tests {
     }
 
     #[test]
+    fn xls_best_effort_rejects_disguised_and_ambiguous_workbook_names() {
+        let best_effort = options(ErrorPolicy::BestEffort);
+        let mut disguised_workbook = XLS.to_vec();
+        let workbook = directory_entry(&disguised_workbook, "Workbook");
+        disguised_workbook[workbook + 18..workbook + 26]
+            .copy_from_slice(&[b'E', 0, b'v', 0, b'i', 0, b'l', 0]);
+        disguised_workbook[workbook + 64..workbook + 66].copy_from_slice(&26_u16.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&disguised_workbook, InputFormat::Xls, &best_effort),
+            Err(ConversionError::Malformed { .. })
+        ));
+
+        let mut ambiguous_alias = XLS.to_vec();
+        let comp_obj = directory_entry(&ambiguous_alias, "\u{1}CompObj");
+        ambiguous_alias[comp_obj..comp_obj + 64].fill(0);
+        for (index, unit) in "Book".encode_utf16().chain([0]).enumerate() {
+            ambiguous_alias[comp_obj + index * 2..comp_obj + index * 2 + 2]
+                .copy_from_slice(&unit.to_le_bytes());
+        }
+        ambiguous_alias[comp_obj + 64..comp_obj + 66].copy_from_slice(&10_u16.to_le_bytes());
+        assert!(matches!(
+            convert_with_options(&ambiguous_alias, InputFormat::Xls, &best_effort),
+            Err(ConversionError::Malformed { .. })
+        ));
+    }
+
+    #[test]
     fn xls_best_effort_still_rejects_mini_chain_cycles_and_overlaps() {
         let best_effort = options(ErrorPolicy::BestEffort);
         let mut cycle = XLS.to_vec();

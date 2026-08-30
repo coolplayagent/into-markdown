@@ -20,6 +20,10 @@ def summarized(observations: list[Observation]) -> dict[str, object]:
         "exitCodes": sorted({item.returncode for item in observations}),
         "stdoutSha256": sorted({item.stdout_sha256 for item in observations}),
         "stderrSha256": sorted({item.stderr_sha256 for item in observations}),
+        "peakTemporaryBytes": max(item.peak_temporary_bytes for item in observations),
+        "maximumTemporaryBytesAfter": max(
+            item.temporary_bytes_after for item in observations
+        ),
     }
 
 
@@ -109,32 +113,11 @@ def baseline_report(
     iterations: int,
 ) -> dict[str, object]:
     cold = [observe(cli, ["--version"], fixtures, root / f"cold-{i}") for i in range(iterations)]
-    formats: dict[str, object] = {}
-    for format_name in FORMATS:
-        result = observe(
-            cli,
-            [
-                "--no-config",
-                str(fixtures / f"normal.{format_name}"),
-                "--format",
-                format_name,
-                "--asset-mode",
-                "embed",
-                "--quiet",
-            ],
-            fixtures,
-            root / format_name,
-        )
-        formats[format_name] = summarized([result])
-    available = all(metric["exitCodes"] == [0] for metric in formats.values())
-    note = (
-        "The baseline Core converted the corpus directly; availability is recorded but latency is not compared across different parser implementations."
-        if available
-        else "The baseline Core required an optional runtime, so conversion latency is recorded only as availability evidence and is not compared to native conversion."
-    )
+    formats, failures = individual_conversions(cli, fixtures, root / "individual", iterations)
     return {
         "coreExecutableBytes": cli.stat().st_size,
         "coldStart": summarized(cold),
-        "legacyConversionAvailability": formats,
-        "note": note,
+        "individualConversions": formats,
+        "failures": failures,
+        "note": "Baseline and candidate use the same fixture cohort and iteration count.",
     }

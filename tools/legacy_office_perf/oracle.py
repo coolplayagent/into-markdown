@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -56,7 +57,7 @@ def load_xls_oracle(
     xlrd_path: pathlib.Path,
     corpus: pathlib.Path,
     authority_path: pathlib.Path,
-) -> dict[str, dict[str, object]]:
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = os.pathsep.join(
         filter(None, [str(xlrd_path), environment.get("PYTHONPATH", "")])
@@ -87,13 +88,22 @@ def load_xls_oracle(
         "version": "2.0.2",
     }:
         raise SystemExit("legacy XLS oracle returned an unexpected schema or xlrd version")
+    classifications = decoded.get("classifications")
+    if decoded.get("safetyClassifier") != "cfb-workbook-alias-v1" or not isinstance(
+        classifications, list
+    ) or len(classifications) != 60:
+        raise SystemExit("legacy XLS oracle must return 60 independent safety classifications")
+    classification_index = {str(item.get("file")): item for item in classifications}
+    if len(classification_index) != len(classifications):
+        raise SystemExit("legacy XLS oracle returned duplicate safety classifications")
     items = decoded.get("items")
-    if not isinstance(items, list) or len(items) != 56:
-        raise SystemExit("legacy XLS oracle must describe exactly 56 valid files")
+    effective_valid = sum(item.get("effectiveValid") is True for item in classifications)
+    if not isinstance(items, list) or len(items) != effective_valid:
+        raise SystemExit("legacy XLS oracle item count disagrees with effective classification")
     indexed = {str(item.get("file")): item for item in items}
     if len(indexed) != len(items):
         raise SystemExit("legacy XLS oracle returned duplicate files")
-    return indexed
+    return indexed, classification_index
 
 
 def inline_text(inline: dict[str, object]) -> str:
@@ -136,14 +146,33 @@ def decode_tsv_value(value: str) -> str:
     return "".join(output)
 
 
-def candidate_sheet(sheet_node: dict[str, object]) -> dict[str, object]:
+def candidate_sheet(
+    sheet_node: dict[str, object], metadata_merges: list[list[int]]
+) -> dict[str, object]:
     sheet = sheet_node.get("block", {}).get("data", {})
     values: dict[tuple[int, int], str] = {}
-    merges: list[list[int]] = []
+    merges: list[list[int]] = list(metadata_merges)
+    seen_coordinates: set[tuple[int, int]] = set()
+    duplicates: list[tuple[int, int]] = []
     rows_seen = 0
     columns_seen = 0
     provenance_order = True
+    coordinate_order = True
+    last_coordinate: tuple[int, int] | None = None
     paged_row = 0
+
+    def record(coordinate: tuple[int, int], value: str) -> None:
+        nonlocal coordinate_order, last_coordinate
+        if coordinate in seen_coordinates:
+            duplicates.append(coordinate)
+        else:
+            seen_coordinates.add(coordinate)
+        if last_coordinate is not None and coordinate <= last_coordinate:
+            coordinate_order = False
+        last_coordinate = coordinate
+        if value:
+            values[coordinate] = value
+
     for node in sheet.get("blocks", []):
         block = node.get("block", {})
         if block.get("type") == "table":
@@ -158,7 +187,7 @@ def candidate_sheet(sheet_node: dict[str, object]) -> dict[str, object]:
                     text, provenance = candidate_cell_text(cell)
                     if provenance is not None and provenance != (row_index, column):
                         provenance_order = False
-                    values[(row_index, column)] = text
+                    record((row_index, column), text)
                     if row_span > 1 or column_span > 1:
                         merges.append(
                             [
@@ -179,7 +208,7 @@ def candidate_sheet(sheet_node: dict[str, object]) -> dict[str, object]:
             for line in text.splitlines():
                 fields = line.split("\t")
                 for column, field in enumerate(fields):
-                    values[(paged_row, column)] = decode_tsv_value(field)
+                    record((paged_row, column), decode_tsv_value(field))
                 columns_seen = max(columns_seen, len(fields))
                 paged_row += 1
             rows_seen = max(rows_seen, paged_row)
@@ -189,8 +218,25 @@ def candidate_sheet(sheet_node: dict[str, object]) -> dict[str, object]:
         "columns": columns_seen,
         "values": values,
         "merges": merges,
-        "provenanceOrder": provenance_order,
+        "provenanceOrder": provenance_order and coordinate_order,
+        "duplicateCoordinates": duplicates,
     }
+
+
+def metadata_merges(document: dict[str, object], sheet_index: int) -> list[list[int]]:
+    properties = document.get("metadata", {}).get("properties", {})
+    if not isinstance(properties, dict):
+        return []
+    encoded = properties.get(f"spreadsheet.sheet.{sheet_index}.mergedRanges")
+    if not isinstance(encoded, str) or not encoded:
+        return []
+    output: list[list[int]] = []
+    for item in encoded.split(";"):
+        fields = item.split(",")
+        if len(fields) != 4:
+            raise ValueError("candidate merged-range metadata is malformed")
+        output.append([int(field) for field in fields])
+    return output
 
 
 def cached_display(value: str) -> str | None:
@@ -200,9 +246,42 @@ def cached_display(value: str) -> str | None:
     return None
 
 
+def formula_expression(value: str) -> str | None:
+    if not value.startswith("="):
+        return None
+    marker = " [cached: "
+    expression = value[1:]
+    if marker in expression and expression.endswith("]"):
+        expression = expression.rsplit(marker, 1)[0]
+    return expression
+
+
+def canonical_formula(value: str) -> str:
+    compact = "".join(value.split())
+    return re.sub(r"(?<![A-Za-z0-9_.])(\d+)\.0+(?![A-Za-z0-9_.])", r"\1", compact)
+
+
 def value_matches(expected: dict[str, object], actual: str) -> bool:
+    expected_formula = expected.get("formula")
+    if expected.get("formulaRequired") is True:
+        actual_formula = formula_expression(actual)
+        if actual_formula is None or not actual_formula.strip():
+            return False
+    if expected_formula is not None:
+        actual_formula = formula_expression(actual)
+        if actual_formula is None or canonical_formula(actual_formula) != canonical_formula(
+            str(expected_formula)
+        ):
+            return False
     cached = cached_display(actual)
-    display = cached if cached is not None else actual
+    display = actual
+    if cached is not None:
+        display = cached
+    elif expected.get("formulaRequired") is True and formula_expression(actual) is not None:
+        display = ""
+    formatted = expected.get("formattedDisplay")
+    if formatted is not None:
+        return display == str(formatted)
     kind = expected["kind"]
     value = expected["value"]
     if kind == "number":
@@ -226,8 +305,8 @@ def verify_xls_oracle(
 ) -> dict[str, object]:
     document = json.loads(output_path.read_text(encoding="utf-8"))
     candidate_sheets = [
-        candidate_sheet(node)
-        for node in document.get("blocks", [])
+        candidate_sheet(node, metadata_merges(document, index))
+        for index, node in enumerate(document.get("blocks", []))
         if node.get("block", {}).get("type") == "sheet"
     ]
     oracle_sheets = oracle.get("sheets", [])
@@ -242,20 +321,48 @@ def verify_xls_oracle(
     kinds = {"text": 0, "number": 0, "date": 0, "boolean": 0, "error": 0}
     merges_match = len(candidate_sheets) == len(oracle_sheets)
     row_cell_order = True
+    exact_shape = len(candidate_sheets) == len(oracle_sheets)
+    duplicate_free = True
+    extra_cells = 0
+    missing_cells = 0
     for index, expected_sheet in enumerate(oracle_sheets):
         if index >= len(candidate_sheets):
             break
         actual_sheet = candidate_sheets[index]
         row_cell_order = row_cell_order and bool(actual_sheet["provenanceOrder"])
+        duplicate_free = duplicate_free and not actual_sheet["duplicateCoordinates"]
+        if actual_sheet["duplicateCoordinates"]:
+            errors.append(f"sheet {index} repeats candidate coordinates")
+        if (
+            int(actual_sheet["rows"]) != int(expected_sheet["rows"])
+            or int(actual_sheet["columns"]) != int(expected_sheet["columns"])
+        ):
+            exact_shape = False
+            errors.append(f"sheet {index} row/column bounds differ from xlrd")
         expected_merges = sorted(expected_sheet["merges"])
         actual_merges = sorted(actual_sheet["merges"])
         if actual_merges != expected_merges:
             merges_match = False
             errors.append(f"sheet {index} merged ranges differ from xlrd")
+        expected_by_coordinate: dict[tuple[int, int], dict[str, object]] = {}
         for cell in expected_sheet["cells"]:
+            coordinate = (int(cell["row"]), int(cell["column"]))
+            if coordinate in expected_by_coordinate:
+                errors.append(f"sheet {index} oracle repeats coordinate {coordinate}")
+            expected_by_coordinate[coordinate] = cell
+        actual_coordinates = set(actual_sheet["values"])
+        expected_coordinates = set(expected_by_coordinate)
+        extra = sorted(actual_coordinates - expected_coordinates)
+        missing = sorted(expected_coordinates - actual_coordinates)
+        extra_cells += len(extra)
+        missing_cells += len(missing)
+        if extra:
+            errors.append(f"sheet {index} has extra candidate cells: {extra[:4]}")
+        if missing:
+            errors.append(f"sheet {index} is missing candidate cells: {missing[:4]}")
+        for coordinate, cell in expected_by_coordinate.items():
             expected_cells += 1
             kinds[str(cell["kind"])] += 1
-            coordinate = (int(cell["row"]), int(cell["column"]))
             actual = actual_sheet["values"].get(coordinate)
             if actual is not None and value_matches(cell, actual):
                 matched_cells += 1
@@ -270,7 +377,17 @@ def verify_xls_oracle(
         json.dumps(oracle, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return {
-        "verified": not errors and recall == 1.0 and merges_match and sheet_order and row_cell_order,
+        "verified": (
+            not errors
+            and recall == 1.0
+            and merges_match
+            and sheet_order
+            and row_cell_order
+            and exact_shape
+            and duplicate_free
+            and extra_cells == 0
+            and missing_cells == 0
+        ),
         "oracleSha256": digest,
         "expectedNonEmptyCells": expected_cells,
         "matchedNonEmptyCells": matched_cells,
@@ -278,6 +395,10 @@ def verify_xls_oracle(
         "valueKinds": kinds,
         "sheetOrder": sheet_order,
         "rowCellOrder": row_cell_order,
+        "exactShape": exact_shape,
+        "duplicateFree": duplicate_free,
+        "extraCells": extra_cells,
+        "missingCells": missing_cells,
         "mergedRanges": merges_match,
         "errors": errors[:32],
     }

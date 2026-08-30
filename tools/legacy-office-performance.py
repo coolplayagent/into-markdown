@@ -64,7 +64,7 @@ def main() -> int:
         else None
     )
     oracle_tool = pathlib.Path(__file__).with_name("legacy-xls-oracle.py").resolve(strict=True)
-    oracle = (
+    oracle_bundle = (
         load_xls_oracle(
             oracle_tool,
             xls_xlrd_path,
@@ -76,12 +76,26 @@ def main() -> int:
         and xls_authority is not None
         else None
     )
+    if oracle_bundle is not None:
+        oracle, classifications = oracle_bundle
+        authority = [
+            {
+                **item,
+                "authorityValid": item["valid"],
+                "valid": classifications[str(item["file"])]["effectiveValid"],
+                "classificationReason": classifications[str(item["file"])]["reason"],
+            }
+            for item in authority
+        ]
+    else:
+        oracle = None
     with tempfile.TemporaryDirectory(prefix="into-md-office-performance-") as temporary:
         root = pathlib.Path(temporary)
         baseline_metrics = baseline_report(baseline, fixtures, root / "baseline", args.iterations)
-        candidate_metrics, failures = executable_report(
+        candidate_metrics, candidate_failures = executable_report(
             candidate, fixtures, root / "candidate", args.iterations, args.parallelism
         )
+        failures = [*baseline_metrics["failures"], *candidate_failures]
         xls_metrics, xls_checks = (
             xls_corpus_report(
                 baseline,

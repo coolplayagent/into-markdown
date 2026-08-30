@@ -42,6 +42,10 @@ impl<'a> LegacyBudget<'a> {
         self.context.checkpoint()
     }
 
+    pub(super) fn max_field_bytes(&self) -> u64 {
+        self.options.limits.max_field_bytes
+    }
+
     pub(super) fn work(&mut self, units: u64, part: &str) -> Result<(), ConversionError> {
         let maximum = self
             .options

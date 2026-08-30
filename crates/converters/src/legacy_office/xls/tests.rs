@@ -1,3 +1,4 @@
+use super::inventory::{inventory_memory_plan, scan_workbook_inventory};
 use super::preflight::*;
 use super::wrapper::*;
 use super::*;
@@ -94,7 +95,7 @@ fn workbook_with_merge() -> Vec<u8> {
 fn rejects_pre_biff8_and_filepass() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    let mut old = vec![0x09, 0x08, 4, 0, 0x00, 0x05, 0, 0];
+    let mut old = vec![0x09, 0x08, 4, 0, 0x00, 0x05, 0x05, 0, 0x0a, 0, 0, 0];
     assert!(matches!(
         preflight(&old, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::Strict),
         Err(ConversionError::Unsupported { .. })
@@ -132,7 +133,7 @@ fn dimensions_use_table_resource_limits() {
 fn best_effort_accepts_only_zero_tail_after_complete_substream() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    let mut bytes = vec![0x09, 0x08, 4, 0, 0, 6, 0, 0, 0x0a, 0, 0, 0, 0];
+    let mut bytes = vec![0x09, 0x08, 4, 0, 0, 6, 5, 0, 0x0a, 0, 0, 0, 0];
     let recovered =
         preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort)
             .unwrap();
@@ -154,7 +155,7 @@ fn noncanonical_dimensions_are_omitted_only_in_best_effort() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let mut bytes = Vec::new();
-    push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+    push_biff_record(&mut bytes, BOF, &[0, 6, 5, 0]).unwrap();
     let mut dimensions = Vec::new();
     dimensions.extend_from_slice(&0u32.to_le_bytes());
     dimensions.extend_from_slice(&1u32.to_le_bytes());
@@ -179,7 +180,7 @@ fn noncanonical_formula_string_cache_reserved_bytes_are_normalized_only_in_best_
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let mut bytes = Vec::new();
-    push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+    push_biff_record(&mut bytes, BOF, &[0, 6, 5, 0]).unwrap();
     let formula_offset = bytes.len();
     let mut formula = vec![0; 22];
     formula[7] = 0x5a;
@@ -221,6 +222,149 @@ fn compatibility_wrapper_is_a_bounded_readable_cfb() {
 
     assert_eq!(&recovered[dimensions_offset..dimensions_offset + 2], &[0xff, 0xff]);
     assert_eq!(&recovered[..dimensions_offset], &workbook[..dimensions_offset]);
+}
+
+#[test]
+fn raw_biff4_and_inventory_leases_honor_exact_capacity_and_release() {
+    let bytes = raw_biff4_with_label(b"lease");
+    let plan = raw_biff4_plan(&bytes).unwrap();
+    let normalized_required = u64::try_from(plan.capacity).unwrap();
+    let normalized_options = ConversionOptions {
+        limits: ResourceLimits {
+            max_memory_bytes: normalized_required,
+            ..ResourceLimits::default()
+        },
+        ..ConversionOptions::default()
+    };
+    let normalized_context =
+        ExecutionContext::new(ExecutionOptions::default(), normalized_options.limits.clone());
+    let normalized_memory = normalized_context.reserve_memory(normalized_required).unwrap();
+    let normalized = normalize_raw_biff4(&bytes, plan).unwrap();
+    assert_eq!(normalized.capacity(), plan.capacity);
+    assert_eq!(normalized_context.reserved_memory_bytes(), normalized_required);
+    drop(normalized);
+    drop(normalized_memory);
+    assert_eq!(normalized_context.reserved_memory_bytes(), 0);
+
+    let below_options = ConversionOptions {
+        limits: ResourceLimits {
+            max_memory_bytes: normalized_required - 1,
+            ..ResourceLimits::default()
+        },
+        ..ConversionOptions::default()
+    };
+    let below = ExecutionContext::new(ExecutionOptions::default(), below_options.limits.clone());
+    assert!(below.reserve_memory(normalized_required).is_err());
+    assert_eq!(below.reserved_memory_bytes(), 0);
+
+    let normalized = normalize_raw_biff4(&bytes, plan).unwrap();
+    let inventory_required = inventory_memory_plan(normalized.len()).unwrap();
+    let inventory_options = ConversionOptions {
+        limits: ResourceLimits {
+            max_memory_bytes: inventory_required,
+            ..ResourceLimits::default()
+        },
+        ..ConversionOptions::default()
+    };
+    let inventory_context =
+        ExecutionContext::new(ExecutionOptions::default(), inventory_options.limits.clone());
+    let mut inventory_budget =
+        LegacyBudget::new(normalized.len(), &inventory_options, &inventory_context).unwrap();
+    let hints = scan_workbook_inventory(
+        &normalized,
+        BIFF4,
+        WORKBOOK,
+        &mut inventory_budget,
+        &inventory_context,
+        ErrorPolicy::BestEffort,
+    )
+    .unwrap();
+    assert_eq!(inventory_context.reserved_memory_bytes(), inventory_required);
+    drop(hints);
+    assert_eq!(inventory_context.reserved_memory_bytes(), 0);
+
+    let inventory_below_options = ConversionOptions {
+        limits: ResourceLimits {
+            max_memory_bytes: inventory_required - 1,
+            ..ResourceLimits::default()
+        },
+        ..ConversionOptions::default()
+    };
+    let inventory_below =
+        ExecutionContext::new(ExecutionOptions::default(), inventory_below_options.limits.clone());
+    let mut inventory_below_budget =
+        LegacyBudget::new(normalized.len(), &inventory_below_options, &inventory_below).unwrap();
+    assert!(matches!(
+        scan_workbook_inventory(
+            &normalized,
+            BIFF4,
+            WORKBOOK,
+            &mut inventory_below_budget,
+            &inventory_below,
+            ErrorPolicy::BestEffort,
+        ),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(inventory_below.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn biff4_formats_use_ordinal_keys_and_only_malformed_optional_records_recover() {
+    let mut bytes = raw_biff4_with_label(b"formatted");
+    let mut globals = Vec::new();
+    push_biff_record(&mut globals, 0x041e, b"\0\0\x05$0.00").unwrap();
+    push_biff_record(&mut globals, 0x00e0, &[0, 0, 0, 0]).unwrap();
+    bytes.splice(10..10, globals);
+    let normalized = normalize_raw_biff4(&bytes, raw_biff4_plan(&bytes).unwrap()).unwrap();
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut scan_budget = LegacyBudget::new(normalized.len(), &options, &context).unwrap();
+    let hints = scan_workbook_inventory(
+        &normalized,
+        BIFF4,
+        WORKBOOK,
+        &mut scan_budget,
+        &context,
+        ErrorPolicy::BestEffort,
+    )
+    .unwrap();
+    assert_eq!(hints.recovered_format_records, 0);
+    assert_eq!(hints.cell_formats.len(), 1);
+    assert_eq!(hints.cell_formats[0].format_code, "$0.00");
+
+    let mut malformed_bytes = raw_biff4_with_label(b"malformed");
+    let mut malformed_format = Vec::new();
+    push_biff_record(&mut malformed_format, 0x041e, b"\0\0\x05x").unwrap();
+    malformed_bytes.splice(10..10, malformed_format);
+    let malformed_normalized =
+        normalize_raw_biff4(&malformed_bytes, raw_biff4_plan(&malformed_bytes).unwrap()).unwrap();
+    let mut best_effort_budget =
+        LegacyBudget::new(malformed_normalized.len(), &options, &context).unwrap();
+    let recovered = scan_workbook_inventory(
+        &malformed_normalized,
+        BIFF4,
+        WORKBOOK,
+        &mut best_effort_budget,
+        &context,
+        ErrorPolicy::BestEffort,
+    )
+    .unwrap();
+    assert_eq!(recovered.recovered_format_records, 1);
+    drop(recovered);
+
+    let mut strict_budget =
+        LegacyBudget::new(malformed_normalized.len(), &options, &context).unwrap();
+    assert!(
+        scan_workbook_inventory(
+            &malformed_normalized,
+            BIFF4,
+            WORKBOOK,
+            &mut strict_budget,
+            &context,
+            ErrorPolicy::Strict,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -280,7 +424,7 @@ fn dense_noncanonical_dimensions_use_one_streaming_recovery_flag() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let mut bytes = Vec::new();
-    push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+    push_biff_record(&mut bytes, BOF, &[0, 6, 5, 0]).unwrap();
     let mut dimensions = Vec::new();
     dimensions.extend_from_slice(&0_u32.to_le_bytes());
     dimensions.extend_from_slice(&1_u32.to_le_bytes());
@@ -305,7 +449,7 @@ fn best_effort_ignores_only_truncated_view_metadata_after_complete_substream() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
     let mut bytes = Vec::new();
-    push_biff_record(&mut bytes, BOF, &[0, 6, 0, 0]).unwrap();
+    push_biff_record(&mut bytes, BOF, &[0, 6, 5, 0]).unwrap();
     push_biff_record(&mut bytes, EOF, &[]).unwrap();
     let complete_end = bytes.len();
     bytes.extend_from_slice(&WINDOW1.to_le_bytes());
@@ -328,7 +472,7 @@ fn best_effort_ignores_only_truncated_view_metadata_after_complete_substream() {
     );
 
     let mut incomplete = Vec::new();
-    push_biff_record(&mut incomplete, BOF, &[0, 6, 0, 0]).unwrap();
+    push_biff_record(&mut incomplete, BOF, &[0, 6, 5, 0]).unwrap();
     incomplete.extend_from_slice(&WINDOW1.to_le_bytes());
     incomplete.extend_from_slice(&10_u16.to_le_bytes());
     incomplete.extend_from_slice(&[1, 2]);
@@ -336,6 +480,26 @@ fn best_effort_ignores_only_truncated_view_metadata_after_complete_substream() {
         preflight(&incomplete, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort,)
             .is_err()
     );
+}
+
+#[test]
+fn optional_tail_recovery_requires_every_bound_sheet_substream() {
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut bytes = Vec::new();
+    push_biff_record(&mut bytes, BOF, &[0, 6, 5, 0]).unwrap();
+    let mut bound_sheet = 128_u32.to_le_bytes().to_vec();
+    bound_sheet.extend_from_slice(&[0, 0, 1, 0, b'A']);
+    push_biff_record(&mut bytes, BOUND_SHEET, &bound_sheet).unwrap();
+    push_biff_record(&mut bytes, EOF, &[]).unwrap();
+    bytes.extend_from_slice(&WINDOW1.to_le_bytes());
+    bytes.extend_from_slice(&10_u16.to_le_bytes());
+    bytes.extend_from_slice(&[1, 2]);
+
+    assert!(matches!(
+        preflight(&bytes, WORKBOOK, &mut budget(&options, &context), ErrorPolicy::BestEffort),
+        Err(ConversionError::Malformed { .. })
+    ));
 }
 
 #[test]
@@ -419,18 +583,6 @@ fn continued_formula_strings_are_bounded_and_decoded_without_evaluation() {
         decode_continued_formula_string(&bytes, 0, WORKBOOK, &mut limited_budget, 4,),
         Err(ConversionError::ResourceLimit { limit: "max_field_bytes", .. })
     ));
-}
-
-#[test]
-fn recovered_formula_cache_replaces_only_the_addressed_inert_cell() {
-    const FIXTURE: &[u8] = include_bytes!("../../../../../tools/macos-release/fixtures/normal.xls");
-    let mut output = convert_fixture(FIXTURE);
-    assert!(replace_formula_cache(&mut output, 0, 0, 1, "oracle text"));
-    assert!(replace_formula_cache(&mut output, 0, 0, 0, "cached-only text"));
-    let (_, rows) = table(&output);
-    assert_eq!(cell_text(&rows[0].cells[0]), "cached-only text");
-    assert_eq!(cell_text(&rows[0].cells[1]), "=TRUE [cached: oracle text]");
-    assert_eq!(cell_text(&rows[0].cells[2]), "42.5");
 }
 
 #[test]

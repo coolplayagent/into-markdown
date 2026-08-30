@@ -11,6 +11,7 @@ mod cell;
 mod error;
 mod extras;
 mod images;
+mod legacy_xls_emit;
 mod model;
 mod opc;
 mod orchestrator;
@@ -26,9 +27,11 @@ mod tests;
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink, ConverterOutput,
     ConverterStream, ConverterStreamCompletion, ConverterStreamMode, ExecutionContext,
-    FormatCandidate, InputFormat, LocalBoxFuture, ProbeOutcome, ResolvedInput, Services,
-    SourceContentEvidence, StreamConsumerKind, document_is_empty, stream_converter_output,
+    FormatCandidate, InputFormat, LocalBoxFuture, ProbeOutcome, ResolvedInput, ResourceReservation,
+    Services, SourceContentEvidence, StreamConsumerKind, document_is_empty,
+    stream_converter_output,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 const FORMATS: &[InputFormat] = &[InputFormat::Xlsx];
 const PROVIDER_ID: &str = "builtin.converter.workbook";
@@ -38,12 +41,48 @@ const COLLECTING_STREAM_MIN_WORKSHEET_BYTES: u64 = 256 * 1024;
 #[derive(Debug, Default)]
 pub struct WorkbookConverter;
 
+#[derive(Debug)]
+pub(crate) struct LegacyFormulaCache {
+    pub(crate) sheet_index: usize,
+    pub(crate) row: u32,
+    pub(crate) column: u32,
+    pub(crate) value: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct LegacyCellFormat {
+    pub(crate) sheet_index: usize,
+    pub(crate) row: u32,
+    pub(crate) column: u32,
+    pub(crate) format_code: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct LegacyFormulaExpression {
+    pub(crate) sheet_index: usize,
+    pub(crate) row: u32,
+    pub(crate) column: u32,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LegacyXlsHints {
+    pub(crate) authenticated_bounds: BTreeMap<String, (u32, u32)>,
+    pub(crate) authenticated_empty_sheets: BTreeSet<String>,
+    pub(crate) formula_caches: Vec<LegacyFormulaCache>,
+    pub(crate) cell_formats: Vec<LegacyCellFormat>,
+    pub(crate) formula_expressions: Vec<LegacyFormulaExpression>,
+    pub(crate) recovered_format_records: usize,
+    pub(crate) _memory: Option<ResourceReservation>,
+}
+
 pub(crate) fn convert_legacy_xls(
     bytes: &[u8],
+    hints: &LegacyXlsHints,
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    let output = calamine_adapter::convert_xls(bytes, options, context)?;
+    let output = calamine_adapter::convert_xls(bytes, hints, options, context)?;
     if document_is_empty(&output.document)
         && output.assets.is_empty()
         && output.diagnostics.is_empty()

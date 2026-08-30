@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,8 @@ class Observation:
     returncode: int
     stdout_sha256: str
     stderr_sha256: str
+    peak_temporary_bytes: int
+    temporary_bytes_after: int
 
 
 @dataclass(frozen=True)
@@ -136,10 +139,12 @@ def observe(
         stderr=subprocess.PIPE,
     )
     peak = 0
+    peak_temporary = 0
     deadline = time.monotonic() + 30
     while True:
         sample = resident_bytes(process)
         peak = max(peak, sample or 0)
+        peak_temporary = max(peak_temporary, directory_file_bytes(home / "tmp"))
         if process.poll() is not None:
             break
         if time.monotonic() >= deadline:
@@ -150,12 +155,15 @@ def observe(
     stdout, stderr = process.communicate()
     sample = resident_bytes(process)
     peak = max(peak, sample or 0)
+    peak_temporary = max(peak_temporary, directory_file_bytes(home / "tmp"))
     return Observation(
         elapsed_ms=(time.perf_counter() - started) * 1000,
         peak_rss_bytes=peak or None,
         returncode=process.returncode,
         stdout_sha256=hashlib.sha256(stdout).hexdigest(),
         stderr_sha256=hashlib.sha256(stderr).hexdigest(),
+        peak_temporary_bytes=peak_temporary,
+        temporary_bytes_after=directory_file_bytes(home / "tmp"),
     )
 
 
@@ -232,8 +240,6 @@ def observe_xls(
             str(output),
             "--conflict",
             "error",
-            "--report",
-            str(report_path),
         ],
         cwd=current_dir,
         env=private_environment(home),
@@ -270,6 +276,8 @@ def observe_xls(
     output_bytes = output.stat().st_size if output.is_file() else 0
     temporary = home / "tmp"
     report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.is_file() else None
+    if process.returncode != 0 and report is None:
+        report = isolated_failure_report(cli, source, current_dir, run_root / "diagnostic")
     return XlsObservation(
         elapsed_ms=(time.perf_counter() - started) * 1000,
         peak_rss_bytes=peak or None,
@@ -285,3 +293,57 @@ def observe_xls(
         report=report,
         stderr=stderr.decode("utf-8", errors="replace")[-2048:],
     )
+
+
+def isolated_failure_report(
+    cli: pathlib.Path,
+    source: pathlib.Path,
+    current_dir: pathlib.Path,
+    root: pathlib.Path,
+) -> dict[str, object] | None:
+    inputs = root / "inputs"
+    outputs = root / "outputs"
+    home = root / "home"
+    inputs.mkdir(parents=True)
+    outputs.mkdir(parents=True)
+    first = inputs / "candidate-a.xls"
+    second = inputs / "candidate-b.xls"
+    shutil.copyfile(source, first)
+    shutil.copyfile(source, second)
+    report_path = root / "report.json"
+    result = subprocess.run(
+        [
+            str(cli),
+            "--no-config",
+            str(first),
+            str(second),
+            "--format",
+            "xls",
+            "--error-policy",
+            "best-effort",
+            "--emit",
+            "ir-json",
+            "--quiet",
+            "--output-dir",
+            str(outputs),
+            "--jobs",
+            "1",
+            "--report",
+            str(report_path),
+        ],
+        cwd=current_dir,
+        env=private_environment(home),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode == 0 or not report_path.is_file():
+        return None
+    decoded = json.loads(report_path.read_text(encoding="utf-8"))
+    items = decoded.get("items")
+    if not isinstance(items, list) or len(items) != 2:
+        return None
+    normalized = {**decoded, "items": [items[0]]}
+    return normalized

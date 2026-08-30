@@ -5,7 +5,14 @@ use super::{
     FORMULA, WORKBOOK, limit, malformed, read_u16,
 };
 
-pub(super) fn normalize_raw_biff4(bytes: &[u8]) -> Result<Vec<u8>, ConversionError> {
+#[derive(Clone, Copy)]
+pub(super) struct RawBiff4Plan {
+    global_prefix_start: usize,
+    global_prefix_end: usize,
+    pub(super) capacity: usize,
+}
+
+pub(super) fn raw_biff4_plan(bytes: &[u8]) -> Result<RawBiff4Plan, ConversionError> {
     let first_length = usize::from(read_u16(bytes, 2, WORKBOOK)?);
     let mut cursor = 4usize
         .checked_add(first_length)
@@ -56,15 +63,25 @@ pub(super) fn normalize_raw_biff4(bytes: &[u8]) -> Result<Vec<u8>, ConversionErr
         .and_then(|value| value.checked_add(formula_extra))
         .and_then(|value| value.checked_add(64))
         .ok_or_else(|| malformed(WORKBOOK, "normalized BIFF4 size overflowed"))?;
+    Ok(RawBiff4Plan { global_prefix_start, global_prefix_end, capacity })
+}
+
+pub(super) fn normalize_raw_biff4(
+    bytes: &[u8],
+    plan: RawBiff4Plan,
+) -> Result<Vec<u8>, ConversionError> {
+    let global_prefix = bytes
+        .get(plan.global_prefix_start..plan.global_prefix_end)
+        .ok_or_else(|| malformed(WORKBOOK, "raw BIFF4 global record range is invalid"))?;
     let mut output = Vec::new();
-    output.try_reserve_exact(capacity).map_err(|error| {
+    output.try_reserve_exact(plan.capacity).map_err(|error| {
         limit("max_memory_bytes", format!("cannot reserve normalized BIFF4 stream: {error}"))
     })?;
     push_biff_record(&mut output, BOF, &[0x00, 0x04, 0x05, 0x00, 0, 0, 0, 0])?;
     output.extend_from_slice(global_prefix);
     append_normalized_biff4_sheet_header(&mut output)?;
 
-    cursor = 0;
+    let mut cursor = 0;
     while cursor < bytes.len() {
         let body_start = cursor
             .checked_add(4)

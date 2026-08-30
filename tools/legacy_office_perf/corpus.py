@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pathlib
 import statistics
+import json
 
 from .constants import MIB
 from .monitor import XlsObservation, file_sha256, observe_xls
@@ -24,21 +25,44 @@ def summarize_xls_file(
         {observation.output_sha256 for observation in successful if observation.output_sha256}
     )
     structured_failures = []
+    failure_signatures: list[str] = []
     for observation in observations:
         report_items = observation.report.get("items") if observation.report else None
         report_item = report_items[0] if isinstance(report_items, list) and len(report_items) == 1 else None
-        structured_failures.append(
+        structured = (
             isinstance(report_item, dict)
             and report_item.get("status") == "failed"
-            and report_item.get("errorCode") == "resourceLimit"
-            and report_item.get("reasonCode") == "documentNodes"
-            and isinstance(report_item.get("limit"), dict)
-            and report_item["limit"].get("name") == "documentNodes"
+            and report_item.get("errorCode")
+            in {"encrypted", "malformed", "resourceLimit", "unsupported"}
+            and observation.returncode != 0
             and observation.output_bytes == 0
             and not observation.residual_paths
             and observation.temporary_bytes_after == 0
         )
-    hard_limit = not successful and len(observations) > 0 and all(structured_failures)
+        structured_failures.append(structured)
+        if structured:
+            limit_value = report_item.get("limit")
+            failure_signatures.append(
+                json.dumps(
+                    {
+                        "errorCode": report_item.get("errorCode"),
+                        "reasonCode": report_item.get("reasonCode"),
+                        "part": report_item.get("part"),
+                        "limit": limit_value.get("name")
+                        if isinstance(limit_value, dict)
+                        else None,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+    fail_closed = (
+        not successful
+        and len(observations) > 0
+        and all(structured_failures)
+        and len(set(failure_signatures)) == 1
+    )
+    hard_limit = fail_closed and "documentNodes" in failure_signatures[0]
     quality = (
         verify_xls_oracle(successful[0].output_path, oracle)
         if successful and oracle is not None
@@ -47,12 +71,16 @@ def summarize_xls_file(
     return {
         "file": item["file"],
         "valid": item["valid"],
+        "authorityValid": item.get("authorityValid", item["valid"]),
+        "classificationReason": item.get("classificationReason"),
         "container": item["container"],
         "runs": len(observations),
         "successfulRuns": len(successful),
         "nonEmptyRuns": sum(observation.output_bytes > 0 for observation in observations),
         "deterministic": len(successful) == len(observations) and len(output_hashes) == 1,
         "hardLimit": hard_limit,
+        "failClosed": fail_closed,
+        "failureSignatures": sorted(set(failure_signatures)),
         "structuredDocumentNodesRuns": sum(structured_failures),
         "qualityOracle": quality,
         "meanMillis": round(statistics.mean(o.elapsed_ms for o in observations), 3),
@@ -156,6 +184,20 @@ def xls_corpus_report(
     baseline_mean = statistics.mean(baseline_items[name]["meanMillis"] for name in common)
     candidate_mean = statistics.mean(candidate_items[name]["meanMillis"] for name in common)
     regression = candidate_mean / baseline_mean - 1
+    baseline_common_rss = max(int(baseline_items[name]["peakRssBytes"] or 0) for name in common)
+    candidate_common_rss = max(int(candidate_items[name]["peakRssBytes"] or 0) for name in common)
+    rss_regression = (
+        candidate_common_rss / baseline_common_rss - 1
+        if baseline_common_rss > 0
+        else (0.0 if candidate_common_rss == 0 else float("inf"))
+    )
+    baseline_common_temp = max(int(baseline_items[name]["peakTemporaryBytes"]) for name in common)
+    candidate_common_temp = max(int(candidate_items[name]["peakTemporaryBytes"]) for name in common)
+    temp_regression = (
+        candidate_common_temp / baseline_common_temp - 1
+        if baseline_common_temp > 0
+        else (0.0 if candidate_common_temp == 0 else float("inf"))
+    )
     valid_passed = int(candidate["validPass"]["passed"])
     valid_total = int(candidate["validPass"]["total"])
     hard_limits = len(candidate["validHardLimits"])
@@ -168,28 +210,36 @@ def xls_corpus_report(
         and item["qualityOracle"]["verified"]
     ]
     invalid_successes = [
-        item["file"] for item in candidate["items"] if not item["valid"] and item["deterministic"]
+        item["file"]
+        for item in candidate["items"]
+        if not item["valid"] and int(item["successfulRuns"]) > 0
+    ]
+    invalid_failures = [
+        item["file"]
+        for item in candidate["items"]
+        if not item["valid"] and not item["failClosed"]
     ]
     residuals = [item["file"] for item in candidate["items"] if item["residualPaths"]]
     checks = [
         {
             "name": "xls-valid-accounted",
-            "passed": valid_passed == valid_total - 1
-            and hard_limits == 1
-            and valid_passed + hard_limits == valid_total,
+            "passed": valid_passed == valid_total and hard_limits == 0,
             "detail": f"passed={valid_passed}, hardLimits={hard_limits}, total={valid_total}",
         },
         {
             "name": "xls-quality-oracle",
-            "passed": len(oracle_verified) == valid_passed == 55,
+            "passed": len(oracle_verified) == valid_passed == valid_total,
             "detail": (
-                f"verified={len(oracle_verified)}, successfulValid={valid_passed}, required=55"
+                f"verified={len(oracle_verified)}, successfulValid={valid_passed}, "
+                f"required={valid_total}"
             ),
         },
         {
             "name": "xls-invalid-inputs-fail-closed",
-            "passed": not invalid_successes,
-            "detail": f"invalidSuccesses={invalid_successes}",
+            "passed": not invalid_successes and not invalid_failures,
+            "detail": (
+                f"invalidSuccesses={invalid_successes}, invalidUnstableFailures={invalid_failures}"
+            ),
         },
         {
             "name": "xls-common-success-byte-stability",
@@ -214,6 +264,24 @@ def xls_corpus_report(
             "detail": (
                 f"common={len(common)}, baseline={baseline_mean:.3f}ms, "
                 f"candidate={candidate_mean:.3f}ms, regression={regression:.3%}, "
+                f"limit={regression_limit:.3%}"
+            ),
+        },
+        {
+            "name": "xls-common-success-peak-rss-regression",
+            "passed": rss_regression < regression_limit,
+            "detail": (
+                f"common={len(common)}, baseline={baseline_common_rss}, "
+                f"candidate={candidate_common_rss}, regression={rss_regression:.3%}, "
+                f"limit={regression_limit:.3%}"
+            ),
+        },
+        {
+            "name": "xls-common-success-peak-temporary-regression",
+            "passed": temp_regression < regression_limit,
+            "detail": (
+                f"common={len(common)}, baseline={baseline_common_temp}, "
+                f"candidate={candidate_common_temp}, regression={temp_regression:.3%}, "
                 f"limit={regression_limit:.3%}"
             ),
         },
@@ -252,7 +320,7 @@ def xls_corpus_report(
             "errorPolicy": "best-effort",
             "sharedLeaseTelemetry": {
                 "status": "unavailable",
-                "dependency": "#269",
+                "dependency": "#288",
                 "evidence": (
                     "actual CompoundFile::open exact/limit-minus-one/cancellation/release tests; "
                     "process RSS is measured here"
@@ -266,6 +334,12 @@ def xls_corpus_report(
                 "baselineMeanMillis": round(baseline_mean, 3),
                 "candidateMeanMillis": round(candidate_mean, 3),
                 "regressionFraction": round(regression, 6),
+                "baselinePeakRssBytes": baseline_common_rss,
+                "candidatePeakRssBytes": candidate_common_rss,
+                "rssRegressionFraction": round(rss_regression, 6),
+                "baselinePeakTemporaryBytes": baseline_common_temp,
+                "candidatePeakTemporaryBytes": candidate_common_temp,
+                "temporaryRegressionFraction": round(temp_regression, 6),
             },
         },
         checks,

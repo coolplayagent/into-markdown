@@ -1,10 +1,11 @@
 use super::{
-    BIFF4, BIFF5, BIFF8, BOF, BOF4, Block, CONTINUE, ConversionError, ConversionOptions,
+    BIFF4, BIFF5, BIFF8, BOF, BOF4, BOUND_SHEET, Block, BlockNode, CONTINUE, ConversionError,
     ConverterOutput, DIMENSIONS, Diagnostic, DiagnosticSeverity, EOF, EXTERN_SHEET, ErrorPolicy,
-    FILE_PASS, FORMULA, Inline, IrErrorCode, LegacyBudget, MSO_DRAWING, MSO_DRAWING_GROUP, OBJ,
-    PANE, SCL, SELECTION, SHARED_FORMULA, STRING, SUP_BOOK, ValidationLimits, WINDOW1, WINDOW2,
-    limit, locator, malformed, read_u16, read_u32,
+    FILE_PASS, FORMULA, LegacyBudget, MSO_DRAWING, MSO_DRAWING_GROUP, OBJ, PANE, SCL, SELECTION,
+    SHARED_FORMULA, STRING, SUP_BOOK, WINDOW1, WINDOW2, limit, locator, malformed, read_u16,
+    read_u32,
 };
+use std::collections::BTreeSet;
 
 pub(super) fn append_preflight_diagnostics(
     output: &mut ConverterOutput,
@@ -75,57 +76,6 @@ pub(super) fn append_preflight_diagnostics(
             locator: Some(locator(part)),
         });
     }
-}
-
-pub(super) fn recover_continued_formula_string_caches(
-    workbook: &[u8],
-    output: &mut ConverterOutput,
-    part: &str,
-    budget: &mut LegacyBudget<'_>,
-    options: &ConversionOptions,
-) -> Result<usize, ConversionError> {
-    let mut cursor = 0_usize;
-    let mut sheet = None;
-    let mut next_sheet = 0_usize;
-    let mut recovered = 0_usize;
-    while cursor < workbook.len() {
-        budget.work(1, part)?;
-        let (kind, body, end) = biff_record(workbook, cursor, part)?;
-        if matches!(kind, BOF | BOF4) {
-            let substream = read_u16(body, 2, part)?;
-            if substream == 0x0010 {
-                sheet = Some(next_sheet);
-                next_sheet = next_sheet
-                    .checked_add(1)
-                    .ok_or_else(|| malformed(part, "BIFF worksheet count overflowed"))?;
-            }
-        } else if kind == EOF {
-            sheet = None;
-        } else if kind == FORMULA && has_noncanonical_formula_string_cache(body) && sheet.is_some()
-        {
-            let row = u32::from(read_u16(body, 0, part)?);
-            let column = u32::from(read_u16(body, 2, part)?);
-            if let Some(value) = decode_continued_formula_string(
-                workbook,
-                end,
-                part,
-                budget,
-                options.limits.max_field_bytes,
-            )? {
-                let replaced =
-                    replace_formula_cache(output, sheet.unwrap_or(0), row, column, &value);
-                if !replaced {
-                    cursor = end;
-                    continue;
-                }
-                recovered = recovered
-                    .checked_add(1)
-                    .ok_or_else(|| malformed(part, "formula-cache recovery count overflowed"))?;
-            }
-        }
-        cursor = end;
-    }
-    Ok(recovered)
 }
 
 pub(super) fn biff_record<'a>(
@@ -278,85 +228,54 @@ pub(super) fn append_utf16_string_units(
     Ok(())
 }
 
-pub(super) fn replace_formula_cache(
-    output: &mut ConverterOutput,
-    sheet_index: usize,
-    row: u32,
-    column: u32,
-    cache: &str,
-) -> bool {
-    let Some(blocks) = output
-        .document
-        .blocks
-        .iter_mut()
-        .filter_map(|node| match &mut node.block {
-            Block::Sheet { blocks, .. } => Some(blocks),
-            _ => None,
-        })
-        .nth(sheet_index)
-    else {
-        return false;
-    };
-    for node in blocks {
-        let Block::Table { rows, .. } = &mut node.block else { continue };
-        for table_row in rows {
-            for cell in &mut table_row.cells {
-                if !cell.blocks.iter().any(|node| {
-                    node.provenance
-                        .locator
-                        .cell
-                        .as_ref()
-                        .is_some_and(|reference| reference.row == row && reference.column == column)
-                }) {
-                    continue;
-                }
-                for node in &mut cell.blocks {
-                    let Block::Paragraph(inlines) = &mut node.block else { continue };
-                    for inline in inlines {
-                        match inline {
-                            Inline::Text { value, .. } => {
-                                cache.clone_into(value);
-                                return true;
-                            }
-                            Inline::Code(value) if value.starts_with('=') => {
-                                if let Some(marker) = value.rfind(" [cached: ") {
-                                    value.truncate(marker + " [cached: ".len());
-                                } else {
-                                    value.push_str(" [cached: ");
-                                }
-                                value.push_str(cache);
-                                value.push(']');
-                                return true;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                return false;
-            }
-        }
-    }
-    false
+pub(super) fn enforce_document_node_limit(output: &ConverterOutput) -> Result<(), ConversionError> {
+    let mut count = 0_usize;
+    count_document_nodes(&output.document.blocks, &mut count)?;
+    Ok(())
 }
 
-pub(super) fn enforce_document_node_limit(output: &ConverterOutput) -> Result<(), ConversionError> {
-    let Err(error) = output.document.validate() else { return Ok(()) };
-    if error.code == IrErrorCode::ResourceLimit
-        && output
-            .document
-            .validate_with_limits(&ValidationLimits {
-                max_nodes: usize::MAX,
-                ..ValidationLimits::default()
-            })
-            .is_ok()
-    {
-        return Err(limit(
-            "documentNodes",
-            format!(
-                "legacy XLS output exceeds the {} node limit",
-                into_markdown_core::MAX_DOCUMENT_NODES
-            ),
-        ));
+fn count_document_nodes(blocks: &[BlockNode], count: &mut usize) -> Result<(), ConversionError> {
+    for node in blocks {
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| limit("documentNodes", "legacy XLS node count overflowed"))?;
+        match &node.block {
+            Block::Footnote { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Sheet { blocks, .. } => count_document_nodes(blocks, count)?,
+            Block::List { items, .. } => {
+                for item in items {
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        limit("documentNodes", "legacy XLS list-node count overflowed")
+                    })?;
+                    count_document_nodes(&item.blocks, count)?;
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    *count = count
+                        .checked_add(1)
+                        .and_then(|value| value.checked_add(row.cells.len()))
+                        .ok_or_else(|| {
+                            limit("documentNodes", "legacy XLS table-node count overflowed")
+                        })?;
+                    for cell in &row.cells {
+                        count_document_nodes(&cell.blocks, count)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if *count > into_markdown_core::MAX_DOCUMENT_NODES {
+            return Err(limit(
+                "documentNodes",
+                format!(
+                    "legacy XLS output exceeds the {} node limit",
+                    into_markdown_core::MAX_DOCUMENT_NODES
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -390,11 +309,187 @@ pub(super) struct Preflight {
     flags: PreflightFlags,
     pub(super) biff_version: u16,
     pub(super) logical_end: usize,
+    pub(super) hints: crate::workbook::LegacyXlsHints,
 }
 
 impl Preflight {
     pub(super) fn has(&self, flag: PreflightFlag) -> bool {
         self.flags.contains(flag)
+    }
+}
+
+#[derive(Default)]
+struct PreflightState {
+    biff_version: Option<u16>,
+    at_substream_boundary: bool,
+    zero_padding_start: Option<usize>,
+    bound_sheet_offsets: BTreeSet<u32>,
+    completed_sheet_offsets: BTreeSet<u32>,
+    open_sheet_offset: Option<u32>,
+    substreams: [u16; 16],
+    substream_depth: usize,
+    completed_globals: usize,
+    completed_worksheets: usize,
+    result: Preflight,
+}
+
+impl PreflightState {
+    fn final_substream_proven(&self) -> bool {
+        final_substream_proven(
+            &self.bound_sheet_offsets,
+            &self.completed_sheet_offsets,
+            (self.substream_depth != 0).then_some(self.substreams[0]),
+            self.completed_globals,
+            self.completed_worksheets,
+        )
+    }
+
+    fn handle_record(
+        &mut self,
+        kind: u16,
+        body: &[u8],
+        cursor: usize,
+        part: &str,
+        budget: &mut LegacyBudget<'_>,
+        error_policy: ErrorPolicy,
+    ) -> Result<(), ConversionError> {
+        self.at_substream_boundary = false;
+        self.zero_padding_start = None;
+        match kind {
+            BOF | BOF4 => self.open_biff_substream(kind, body, cursor, part, error_policy)?,
+            FILE_PASS => return Err(ConversionError::Encrypted),
+            EOF => self.close_biff_substream(part)?,
+            BOUND_SHEET => {
+                let offset = read_u32(body, 0, part)?;
+                if !self.bound_sheet_offsets.insert(offset) {
+                    return Err(malformed(part, "duplicate BoundSheet offset"));
+                }
+            }
+            DIMENSIONS => {
+                if preflight_dimensions(body, self.biff_version, part, budget, error_policy)? {
+                    self.result.flags.insert(PreflightFlag::DimensionMetadata);
+                }
+            }
+            FORMULA if has_noncanonical_formula_string_cache(body) => {
+                if error_policy == ErrorPolicy::Strict {
+                    return Err(malformed(part, "non-canonical cached formula-string metadata"));
+                }
+                self.result.flags.insert(PreflightFlag::FormulaCacheMetadata);
+            }
+            SUP_BOOK | EXTERN_SHEET => {
+                self.result.flags.insert(PreflightFlag::ExternalBindings);
+            }
+            OBJ | MSO_DRAWING_GROUP | MSO_DRAWING => {
+                self.result.flags.insert(PreflightFlag::EmbeddedObjects);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_biff_substream(
+        &mut self,
+        kind: u16,
+        body: &[u8],
+        cursor: usize,
+        part: &str,
+        error_policy: ErrorPolicy,
+    ) -> Result<(), ConversionError> {
+        let version = if kind == BOF4 { BIFF4 } else { read_u16(body, 0, part)? };
+        let supported = version == BIFF8
+            || (matches!(version, BIFF4 | BIFF5) && error_policy == ErrorPolicy::BestEffort);
+        if !supported {
+            return Err(ConversionError::Unsupported {
+                detail: format!("XLS BIFF version 0x{version:04x} predates Office 97-2003 BIFF8"),
+            });
+        }
+        if self.biff_version.is_some_and(|current| current != version) {
+            return Err(malformed(part, "BIFF substreams disagree on workbook version"));
+        }
+        self.biff_version = Some(version);
+        let substream = read_u16(body, 2, part)?;
+        if self.substream_depth == self.substreams.len() {
+            return Err(malformed(part, "BIFF substream nesting is too deep"));
+        }
+        if self.substream_depth != 0 {
+            let parent = self.substreams[self.substream_depth - 1];
+            if parent != 0x0010 || substream != 0x0020 {
+                return Err(malformed(part, "unsupported nested BIFF substream"));
+            }
+        }
+        self.substreams[self.substream_depth] = substream;
+        self.substream_depth += 1;
+        if substream == 0x0010 {
+            if self.substream_depth != 1 {
+                return Err(malformed(part, "nested BIFF worksheet substream"));
+            }
+            let offset = u32::try_from(cursor)
+                .map_err(|_| malformed(part, "worksheet BOF offset overflowed"))?;
+            if !self.bound_sheet_offsets.is_empty() && !self.bound_sheet_offsets.contains(&offset) {
+                return Err(malformed(part, "worksheet BOF is not authenticated by BoundSheet"));
+            }
+            self.open_sheet_offset = Some(offset);
+        }
+        Ok(())
+    }
+
+    fn close_biff_substream(&mut self, part: &str) -> Result<(), ConversionError> {
+        if self.substream_depth == 0 {
+            return Err(malformed(part, "BIFF EOF has no open substream"));
+        }
+        self.substream_depth -= 1;
+        let substream = self.substreams[self.substream_depth];
+        if substream == 0x0010 {
+            if self.substream_depth != 0 {
+                return Err(malformed(part, "worksheet substream closes inside another substream"));
+            }
+            let offset = self
+                .open_sheet_offset
+                .take()
+                .ok_or_else(|| malformed(part, "worksheet EOF has no BOF offset"))?;
+            if !self.completed_sheet_offsets.insert(offset) {
+                return Err(malformed(part, "duplicate worksheet substream"));
+            }
+            self.completed_worksheets = self
+                .completed_worksheets
+                .checked_add(1)
+                .ok_or_else(|| malformed(part, "worksheet count overflowed"))?;
+        } else if substream == 0x0005 {
+            if self.substream_depth != 0 {
+                return Err(malformed(part, "workbook globals close inside another substream"));
+            }
+            self.completed_globals = self
+                .completed_globals
+                .checked_add(1)
+                .ok_or_else(|| malformed(part, "workbook globals count overflowed"))?;
+            if self.completed_globals > 1 {
+                return Err(malformed(part, "duplicate workbook globals substream"));
+            }
+        }
+        self.at_substream_boundary = self.substream_depth == 0;
+        Ok(())
+    }
+
+    fn finish(
+        mut self,
+        bytes_len: usize,
+        part: &str,
+        error_policy: ErrorPolicy,
+    ) -> Result<Preflight, ConversionError> {
+        if self.zero_padding_start.is_some() {
+            if error_policy == ErrorPolicy::Strict {
+                return Err(malformed(part, "zero padding follows the final BIFF substream"));
+            }
+            self.result.flags.insert(PreflightFlag::TailPadding);
+            self.result.logical_end = self.zero_padding_start.unwrap_or(bytes_len);
+        }
+        self.result.biff_version = self
+            .biff_version
+            .ok_or_else(|| malformed(part, "Workbook stream has no BIFF8 BOF record"))?;
+        if !self.final_substream_proven() {
+            return Err(malformed(part, "BIFF workbook substreams are incomplete or ambiguous"));
+        }
+        Ok(self.result)
     }
 }
 
@@ -405,19 +500,20 @@ pub(super) fn preflight(
     error_policy: ErrorPolicy,
 ) -> Result<Preflight, ConversionError> {
     let mut cursor = 0usize;
-    let mut biff_version = None;
-    let mut at_substream_boundary = false;
-    let mut zero_padding_start = None;
-    let mut result = Preflight { logical_end: bytes.len(), ..Preflight::default() };
+    let mut state = PreflightState {
+        result: Preflight { logical_end: bytes.len(), ..Preflight::default() },
+        ..PreflightState::default()
+    };
     while cursor < bytes.len() {
         budget.work(1, part)?;
         let Some(header) = bytes.get(cursor..cursor.saturating_add(4)) else {
             if error_policy == ErrorPolicy::BestEffort
-                && (at_substream_boundary || zero_padding_start.is_some())
+                && (state.at_substream_boundary || state.zero_padding_start.is_some())
                 && bytes[cursor..].iter().all(|byte| *byte == 0)
+                && state.final_substream_proven()
             {
-                result.flags.insert(PreflightFlag::TailPadding);
-                result.logical_end = zero_padding_start.unwrap_or(cursor);
+                state.result.flags.insert(PreflightFlag::TailPadding);
+                state.result.logical_end = state.zero_padding_start.unwrap_or(cursor);
                 break;
             }
             return Err(malformed(part, "truncated BIFF record header"));
@@ -432,73 +528,41 @@ pub(super) fn preflight(
             .ok_or_else(|| malformed(part, "BIFF record length overflowed"))?;
         let Some(body) = bytes.get(body_start..end) else {
             if error_policy == ErrorPolicy::BestEffort
-                && at_substream_boundary
+                && state.at_substream_boundary
                 && is_ignorable_tail_record(kind)
+                && state.final_substream_proven()
             {
-                result.flags.insert(PreflightFlag::OptionalTailRecord);
-                result.logical_end = cursor;
+                state.result.flags.insert(PreflightFlag::OptionalTailRecord);
+                state.result.logical_end = cursor;
                 break;
             }
             return Err(malformed(part, "truncated BIFF record body"));
         };
-        if at_substream_boundary && kind == 0 && length == 0 {
-            zero_padding_start.get_or_insert(cursor);
+        if state.at_substream_boundary && kind == 0 && length == 0 {
+            state.zero_padding_start.get_or_insert(cursor);
             cursor = end;
             continue;
         }
-        at_substream_boundary = false;
-        zero_padding_start = None;
-        match kind {
-            BOF | BOF4 => {
-                let version = if kind == BOF4 { BIFF4 } else { read_u16(body, 0, part)? };
-                let supported = version == BIFF8
-                    || (matches!(version, BIFF4 | BIFF5)
-                        && error_policy == ErrorPolicy::BestEffort);
-                if !supported {
-                    return Err(ConversionError::Unsupported {
-                        detail: format!(
-                            "XLS BIFF version 0x{version:04x} predates Office 97-2003 BIFF8"
-                        ),
-                    });
-                }
-                if biff_version.is_some_and(|current| current != version) {
-                    return Err(malformed(part, "BIFF substreams disagree on workbook version"));
-                }
-                biff_version = Some(version);
-            }
-            FILE_PASS => return Err(ConversionError::Encrypted),
-            EOF => at_substream_boundary = true,
-            DIMENSIONS => {
-                if preflight_dimensions(body, biff_version, part, budget, error_policy)? {
-                    result.flags.insert(PreflightFlag::DimensionMetadata);
-                }
-            }
-            FORMULA if has_noncanonical_formula_string_cache(body) => {
-                if error_policy == ErrorPolicy::Strict {
-                    return Err(malformed(part, "non-canonical cached formula-string metadata"));
-                }
-                result.flags.insert(PreflightFlag::FormulaCacheMetadata);
-            }
-            SUP_BOOK | EXTERN_SHEET => result.flags.insert(PreflightFlag::ExternalBindings),
-            OBJ | MSO_DRAWING_GROUP | MSO_DRAWING => {
-                result.flags.insert(PreflightFlag::EmbeddedObjects);
-            }
-            _ => {}
-        }
+        state.handle_record(kind, body, cursor, part, budget, error_policy)?;
         cursor = end;
     }
-    if zero_padding_start.is_some() {
-        if error_policy == ErrorPolicy::Strict {
-            return Err(malformed(part, "zero padding follows the final BIFF substream"));
+    state.finish(bytes.len(), part, error_policy)
+}
+
+fn final_substream_proven(
+    bound_sheet_offsets: &BTreeSet<u32>,
+    completed_sheet_offsets: &BTreeSet<u32>,
+    open_substream: Option<u16>,
+    completed_globals: usize,
+    completed_worksheets: usize,
+) -> bool {
+    open_substream.is_none()
+        && if bound_sheet_offsets.is_empty() {
+            (completed_globals == 1 && completed_worksheets == 0)
+                || (completed_globals == 0 && completed_worksheets == 1)
+        } else {
+            completed_globals == 1 && bound_sheet_offsets == completed_sheet_offsets
         }
-        result.flags.insert(PreflightFlag::TailPadding);
-        result.logical_end = zero_padding_start.unwrap_or(bytes.len());
-    }
-    let Some(biff_version) = biff_version else {
-        return Err(malformed(part, "Workbook stream has no BIFF8 BOF record"));
-    };
-    result.biff_version = biff_version;
-    Ok(result)
 }
 
 pub(super) fn is_ignorable_tail_record(kind: u16) -> bool {

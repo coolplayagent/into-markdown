@@ -68,7 +68,15 @@ pub(super) fn parse_directory<B: CompoundBudget + ?Sized>(
         if !matches!(raw[67], 0 | 1) {
             return Err(malformed("cfb/directory", "invalid red-black directory color"));
         }
-        let name = parse_directory_name(raw, compatibility, recoveries)?;
+        let name = match parse_directory_name(raw, compatibility, recoveries) {
+            Ok(name) => name,
+            Err(_)
+                if index == 0 && compatibility == CompoundCompatibility::LegacyOfficeBestEffort =>
+            {
+                recover_root_name_with_uncounted_terminator(raw)?
+            }
+            Err(error) => return Err(error),
+        };
         let child = le32(raw, 76, "cfb/directory")?;
         if kind == EntryKind::Stream && child != NONE {
             return Err(malformed("cfb/directory", "stream directory entry has children"));
@@ -115,6 +123,28 @@ pub(super) fn parse_directory<B: CompoundBudget + ?Sized>(
     Ok(entries)
 }
 
+fn recover_root_name_with_uncounted_terminator(raw: &[u8]) -> Result<String, ConversionError> {
+    let name_len = usize::from(le16(raw, 64, "cfb/directory")?);
+    if !(2..=62).contains(&name_len) || !name_len.is_multiple_of(2) {
+        return Err(malformed("cfb/directory", "invalid UTF-16 directory name length"));
+    }
+    let units = raw[..64]
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    let declared_units = name_len / 2;
+    if units[..declared_units].contains(&0) || units[declared_units..].iter().any(|unit| *unit != 0)
+    {
+        return Err(malformed("cfb/directory", "directory name is not singly NUL terminated"));
+    }
+    let name = String::from_utf16(&units[..declared_units])
+        .map_err(|_| malformed("cfb/directory", "directory name contains invalid UTF-16"))?;
+    if name.is_empty() || name.contains(['/', '\\']) {
+        return Err(malformed("cfb/directory", "directory name is empty or contains a separator"));
+    }
+    Ok(name)
+}
+
 pub(super) fn parse_directory_name(
     raw: &[u8],
     compatibility: CompoundCompatibility,
@@ -135,7 +165,8 @@ pub(super) fn parse_directory_name(
         Some(index)
             if compatibility == CompoundCompatibility::LegacyOfficeBestEffort
                 && index > 0
-                && index <= declared_units =>
+                && index < declared_units
+                && units[index + 1..].iter().all(|unit| *unit == 0) =>
         {
             recoveries.insert(CompoundRecovery::DirectoryNameTerminator);
             &units[..index]

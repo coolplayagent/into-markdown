@@ -4,22 +4,23 @@ use super::normalize_xls_output;
 use crate::msg::ole::Storage;
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, IrErrorCode, NodeId,
-    Provenance, ProvenanceKind, ValidationLimits,
+    Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionContext, NodeId, Provenance,
+    ProvenanceKind,
 };
 
 mod binary;
+mod inventory;
 mod objects;
 mod preflight;
 mod wrapper;
 
 use binary::{read_u16, read_u32};
+use inventory::scan_workbook_inventory;
 use objects::retain_safe_images;
 use preflight::{
     PreflightFlag, append_preflight_diagnostics, enforce_document_node_limit, preflight,
-    recover_continued_formula_string_caches,
 };
-use wrapper::{build_cfb_wrapper, cfb_wrapper_layout, normalize_raw_biff4};
+use wrapper::{build_cfb_wrapper, cfb_wrapper_layout, normalize_raw_biff4, raw_biff4_plan};
 
 const WORKBOOK: &str = "Workbook";
 const BOF: u16 = 0x0809;
@@ -34,6 +35,7 @@ const STRING: u16 = 0x0207;
 const CONTINUE: u16 = 0x003c;
 const SHARED_FORMULA: u16 = 0x04bc;
 const DIMENSIONS: u16 = 0x0200;
+const BOUND_SHEET: u16 = 0x0085;
 const SUP_BOOK: u16 = 0x01ae;
 const EXTERN_SHEET: u16 = 0x0017;
 const WINDOW1: u16 = 0x003d;
@@ -66,18 +68,14 @@ pub(super) fn convert_raw(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    let preflight = preflight(bytes, WORKBOOK, budget, options.error_policy)?;
+    let mut preflight = preflight(bytes, WORKBOOK, budget, options.error_policy)?;
     if preflight.biff_version != BIFF4 {
         return Err(malformed(WORKBOOK, "raw XLS stream is not BIFF4"));
     }
-    let normalized_limit = bytes
-        .len()
-        .checked_mul(2)
-        .and_then(|value| value.checked_add(64))
-        .ok_or_else(|| limit("max_memory_bytes", "normalized BIFF4 size overflowed"))?;
-    let _normalized_memory =
-        context.reserve_memory(u64::try_from(normalized_limit).unwrap_or(u64::MAX))?;
-    let normalized = normalize_raw_biff4(&bytes[..preflight.logical_end])?;
+    let plan = raw_biff4_plan(&bytes[..preflight.logical_end])?;
+    let normalized_memory =
+        context.reserve_memory(u64::try_from(plan.capacity).unwrap_or(u64::MAX))?;
+    let normalized = normalize_raw_biff4(&bytes[..preflight.logical_end], plan)?;
     let layout = cfb_wrapper_layout(normalized.len())?;
     let wrapper_memory = context.reserve_memory(
         u64::try_from(layout.output_bytes.saturating_add(layout.total_sectors * 4))
@@ -90,10 +88,20 @@ pub(super) fn convert_raw(
         BIFF4,
         layout,
     )?;
-    let mut output = crate::workbook::convert_legacy_xls(&wrapper, options, context)?;
+    preflight.hints = scan_workbook_inventory(
+        &normalized,
+        preflight.biff_version,
+        WORKBOOK,
+        budget,
+        context,
+        options.error_policy,
+    )?;
+    drop(normalized);
+    drop(normalized_memory);
+    let mut output =
+        crate::workbook::convert_legacy_xls(&wrapper, &preflight.hints, options, context)?;
     drop(wrapper);
     drop(wrapper_memory);
-    enforce_document_node_limit(&output)?;
     normalize_xls_output(&mut output);
     output.document.metadata.properties.insert("legacyOffice.xls.biff".into(), "4".into());
     output.diagnostics.push(Diagnostic {
@@ -104,6 +112,8 @@ pub(super) fn convert_raw(
         locator: Some(locator(WORKBOOK)),
     });
     append_preflight_diagnostics(&mut output, &preflight, WORKBOOK);
+    append_inventory_diagnostics(&mut output, &preflight.hints, WORKBOOK);
+    enforce_document_node_limit(&output)?;
     Ok(output)
 }
 
@@ -115,14 +125,27 @@ pub(super) fn convert(
     context: &ExecutionContext,
     container_view_required: bool,
 ) -> Result<ConverterOutput, ConversionError> {
-    let (part, workbook) = root
-        .stream(WORKBOOK)
-        .map(|stream| (WORKBOOK, stream))
-        .or_else(|| root.stream("Book").map(|stream| ("Book", stream)))
-        .ok_or_else(|| malformed("CFB directory", "XLS has no Workbook stream"))?;
-    let preflight = preflight(workbook, part, budget, options.error_policy)?;
+    let workbook_stream = root.stream(WORKBOOK);
+    let book_stream = root.stream("Book");
+    let (part, workbook) = match (workbook_stream, book_stream) {
+        (Some(_), Some(_)) => {
+            return Err(malformed("CFB directory", "XLS has ambiguous Workbook and Book streams"));
+        }
+        (Some(stream), None) => (WORKBOOK, stream),
+        (None, Some(stream)) => ("Book", stream),
+        (None, None) => return Err(malformed("CFB directory", "XLS has no Workbook stream")),
+    };
+    let mut preflight = preflight(workbook, part, budget, options.error_policy)?;
 
     let workbook_view = &workbook[..preflight.logical_end];
+    preflight.hints = scan_workbook_inventory(
+        workbook_view,
+        preflight.biff_version,
+        part,
+        budget,
+        context,
+        options.error_policy,
+    )?;
     let wrapper_layout = (container_view_required
         || preflight.has(PreflightFlag::DimensionMetadata)
         || preflight.has(PreflightFlag::FormulaCacheMetadata)
@@ -151,15 +174,10 @@ pub(super) fn convert(
         })
         .transpose()?;
     let conversion_bytes = wrapper.as_deref().unwrap_or(bytes);
-    let mut output = crate::workbook::convert_legacy_xls(conversion_bytes, options, context)?;
-    let recovered_formula_continuations = if preflight.has(PreflightFlag::FormulaCacheMetadata) {
-        recover_continued_formula_string_caches(workbook_view, &mut output, part, budget, options)?
-    } else {
-        0
-    };
+    let mut output =
+        crate::workbook::convert_legacy_xls(conversion_bytes, &preflight.hints, options, context)?;
     drop(wrapper);
     drop(wrapper_memory);
-    enforce_document_node_limit(&output)?;
     normalize_xls_output(&mut output);
     output.document.metadata.properties.insert(
         "legacyOffice.xls.biff".into(),
@@ -172,16 +190,7 @@ pub(super) fn convert(
     );
 
     append_preflight_diagnostics(&mut output, &preflight, part);
-    if recovered_formula_continuations > 0 {
-        output.diagnostics.push(Diagnostic {
-            code: "legacyOffice.xls.formulaStringContinuationRecovered".into(),
-            severity: DiagnosticSeverity::Info,
-            message: format!(
-                "recovered {recovered_formula_continuations} cached formula string(s) split across bounded BIFF Continue records"
-            ),
-            locator: Some(locator(part)),
-        });
-    }
+    append_inventory_diagnostics(&mut output, &preflight.hints, part);
     if !preflight.has(PreflightFlag::EmbeddedObjects)
         && (root.storage("ObjectPool").is_some() || root.storage("ActiveX").is_some())
     {
@@ -201,8 +210,38 @@ pub(super) fn convert(
             locator: Some(locator("_VBA_PROJECT_CUR")),
         });
     }
-    retain_safe_images(workbook, part, &mut output, budget)?;
+    retain_safe_images(workbook_view, part, &mut output, budget, options.error_policy)?;
+    enforce_document_node_limit(&output)?;
     Ok(output)
+}
+
+fn append_inventory_diagnostics(
+    output: &mut ConverterOutput,
+    hints: &crate::workbook::LegacyXlsHints,
+    part: &str,
+) {
+    let recovered_formula_continuations = hints.formula_caches.len();
+    if recovered_formula_continuations > 0 {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.formulaStringContinuationRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "recovered {recovered_formula_continuations} cached formula string(s) split across bounded BIFF Continue records"
+            ),
+            locator: Some(locator(part)),
+        });
+    }
+    let recovered_format_records = hints.recovered_format_records;
+    if recovered_format_records > 0 {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.formatMetadataRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "ignored {recovered_format_records} malformed or duplicate optional BIFF Format record(s) while retaining the first authenticated definition"
+            ),
+            locator: Some(locator(part)),
+        });
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,11 @@
+use crate::workbook::LegacyXlsHints;
 use crate::workbook::budget::{checked_field_bytes, enforce_grid, requires_paged_grid};
 use crate::workbook::cell::{cell_name, within};
 use crate::workbook::error::{limit, malformed, map_calamine};
 use crate::workbook::extras::metadata::display_ranges;
+use crate::workbook::legacy_xls_emit::{
+    LegacyHintCursor, PagedSheet, formatted_numeric, paged_tsv_blocks, serialized_merges,
+};
 use crate::workbook::model::{CellCoordinate, Hyperlink, SheetExtras};
 use crate::workbook::output::{data_text, provenance, stable_id};
 use crate::workbook::xlsb::merges::extract_xlsb_merges;
@@ -38,11 +42,23 @@ pub(super) fn convert_xlsx(
             merges.insert(sheet.name.clone(), value);
         }
     }
-    convert_reader(&mut workbook, &sheets, &merges, extras, sheet_bounds, options, context)
+    convert_reader(
+        &mut workbook,
+        ReaderInputs {
+            sheets: &sheets,
+            merges: &merges,
+            extras,
+            authenticated_bounds: sheet_bounds,
+            legacy_hints: None,
+        },
+        options,
+        context,
+    )
 }
 
 pub(crate) fn convert_xls(
     bytes: &[u8],
+    hints: &LegacyXlsHints,
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
@@ -62,10 +78,13 @@ pub(crate) fn convert_xls(
     }
     convert_reader(
         &mut workbook,
-        &sheets,
-        &merges,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
+        ReaderInputs {
+            sheets: &sheets,
+            merges: &merges,
+            extras: &BTreeMap::new(),
+            authenticated_bounds: &hints.authenticated_bounds,
+            legacy_hints: Some(hints),
+        },
         options,
         context,
     )
@@ -88,16 +107,33 @@ pub(super) fn convert_xlsb(
     context.checkpoint()?;
     let sheets = workbook.sheets_metadata().to_vec();
     let merges = extract_xlsb_merges(bytes, &sheets, sheet_parts, options, context)?;
-    convert_reader(&mut workbook, &sheets, &merges, extras, sheet_bounds, options, context)
+    convert_reader(
+        &mut workbook,
+        ReaderInputs {
+            sheets: &sheets,
+            merges: &merges,
+            extras,
+            authenticated_bounds: sheet_bounds,
+            legacy_hints: None,
+        },
+        options,
+        context,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ReaderInputs<'a> {
+    sheets: &'a [calamine::Sheet],
+    merges: &'a BTreeMap<String, Vec<Dimensions>>,
+    extras: &'a BTreeMap<String, SheetExtras>,
+    authenticated_bounds: &'a BTreeMap<String, CellCoordinate>,
+    legacy_hints: Option<&'a LegacyXlsHints>,
 }
 
 #[allow(clippy::too_many_lines)]
 fn convert_reader<RS, R, E>(
     workbook: &mut R,
-    sheets: &[calamine::Sheet],
-    merges: &BTreeMap<String, Vec<Dimensions>>,
-    extras: &BTreeMap<String, SheetExtras>,
-    authenticated_bounds: &BTreeMap<String, CellCoordinate>,
+    inputs: ReaderInputs<'_>,
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError>
@@ -106,6 +142,7 @@ where
     R: Reader<RS, Error = E>,
     E: std::fmt::Debug + From<std::io::Error>,
 {
+    let ReaderInputs { sheets, merges, extras, authenticated_bounds, legacy_hints } = inputs;
     let mut document = Document::default();
     let mut diagnostics = Vec::new();
     let mut sheet_blocks = Vec::<(String, Vec<BlockNode>)>::new();
@@ -113,7 +150,7 @@ where
         total.saturating_add((u64::from(*row) + 1).saturating_mul(u64::from(*column) + 1))
     });
     let paged_workbook = requires_paged_grid(authenticated_cells, 1);
-
+    let mut legacy = LegacyHintCursor::new(legacy_hints);
     for (sheet_index, sheet) in sheets.iter().enumerate() {
         context.checkpoint()?;
         document
@@ -216,13 +253,19 @@ where
             .map_err(|error| map_calamine("worksheet formulae", error))?;
         context.checkpoint()?;
         let sheet_merges = merges.get(&sheet.name).cloned().unwrap_or_default();
-        let bounds = combined_bounds(
-            &values,
-            &formulas,
-            &sheet_merges,
-            &sheet_extras,
-            authenticated_bounds.get(&sheet.name).copied(),
-        );
+        let bounds = if legacy_hints
+            .is_some_and(|hints| hints.authenticated_empty_sheets.contains(&sheet.name))
+        {
+            None
+        } else {
+            combined_bounds(
+                &values,
+                &formulas,
+                &sheet_merges,
+                &sheet_extras,
+                authenticated_bounds.get(&sheet.name).copied(),
+            )
+        };
         let mut blocks = Vec::new();
         if let Some((last_row, last_column)) = bounds {
             enforce_grid(u64::from(last_row) + 1, u64::from(last_column) + 1, options)?;
@@ -230,16 +273,25 @@ where
                 format!("spreadsheet.sheet.{sheet_index}.bounds"),
                 format!("A1:{}", cell_name(last_row, last_column)),
             );
-            if paged_workbook
-                || requires_paged_grid(u64::from(last_row) + 1, u64::from(last_column) + 1)
-            {
+            let paged_sheet = paged_workbook
+                || requires_paged_grid(u64::from(last_row) + 1, u64::from(last_column) + 1);
+            if paged_sheet && !sheet_merges.is_empty() {
+                document.metadata.properties.insert(
+                    format!("spreadsheet.sheet.{sheet_index}.mergedRanges"),
+                    serialized_merges(&sheet_merges, last_row, last_column, options, context)?,
+                );
+            }
+            if paged_sheet {
                 blocks = paged_tsv_blocks(
-                    &values,
-                    &formulas,
-                    &sheet.name,
-                    sheet_index,
-                    last_row,
-                    last_column,
+                    &PagedSheet {
+                        values: &values,
+                        formulas: &formulas,
+                        name: &sheet.name,
+                        index: sheet_index,
+                        last_row,
+                        last_column,
+                    },
+                    &mut legacy,
                     options,
                     context,
                 )?;
@@ -282,8 +334,19 @@ where
                             continue;
                         }
                         let value = values.get_value((row, column)).unwrap_or(&Data::Empty);
-                        let formula = formulas.get_value((row, column)).map_or("", String::as_str);
-                        let cached = data_text(value);
+                        let parsed_formula =
+                            formulas.get_value((row, column)).map_or("", String::as_str);
+                        let formula = legacy
+                            .formula_expression_at(sheet_index, row, column)
+                            .unwrap_or(parsed_formula);
+                        let recovered_cache = legacy.formula_cache_at(sheet_index, row, column);
+                        let parsed_cache = data_text(value);
+                        let format = legacy.cell_format_at(sheet_index, row, column);
+                        let formatted_cache =
+                            format.and_then(|code| formatted_numeric(value, code));
+                        let cached = recovered_cache
+                            .or(formatted_cache.as_deref())
+                            .unwrap_or(parsed_cache.as_ref());
                         let cached_bytes = u64::try_from(cached.len()).unwrap_or(u64::MAX);
                         let formula_bytes = u64::try_from(formula.len()).unwrap_or(u64::MAX);
                         if cached_bytes.max(formula_bytes) > options.limits.max_field_bytes {
@@ -356,7 +419,7 @@ where
                                 .label
                                 .clone()
                                 .filter(|value| !value.is_empty())
-                                .unwrap_or_else(|| cached.as_ref().to_owned());
+                                .unwrap_or_else(|| cached.to_owned());
                             vec![Inline::Link {
                                 target: link.target.clone(),
                                 content: vec![Inline::Text { value: label, marks }],
@@ -364,11 +427,11 @@ where
                         } else if cached.starts_with(['=', '+', '-', '@']) {
                             // Spreadsheet-control prefixes remain literal code and
                             // cannot become a formula if exported by a downstream UI.
-                            vec![Inline::Code(cached.into_owned())]
+                            vec![Inline::Code(cached.to_owned())]
                         } else if cached.is_empty() {
                             Vec::new()
                         } else {
-                            vec![Inline::Text { value: cached.into_owned(), marks }]
+                            vec![Inline::Text { value: cached.to_owned(), marks }]
                         };
                         let cell_provenance = provenance(&sheet.name, Some(row), Some(column));
                         let cell_blocks = if inlines.is_empty() {
@@ -427,103 +490,6 @@ where
         });
     }
     Ok(ConverterOutput::new(document, assets, diagnostics))
-}
-
-const PAGED_TSV_ROWS: u32 = 2_048;
-
-#[allow(clippy::too_many_arguments)]
-fn paged_tsv_blocks(
-    values: &Range<Data>,
-    formulas: &Range<String>,
-    sheet_name: &str,
-    sheet_index: usize,
-    last_row: u32,
-    last_column: u32,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<Vec<BlockNode>, ConversionError> {
-    let page_count = last_row / PAGED_TSV_ROWS + 1;
-    let mut blocks = Vec::new();
-    blocks.try_reserve_exact(usize::try_from(page_count).unwrap_or(usize::MAX)).map_err(
-        |error| limit("max_memory_bytes", format!("cannot reserve worksheet pages: {error}")),
-    )?;
-    let mut page = String::new();
-    let mut page_index = 0_u32;
-    for row in 0..=last_row {
-        context.checkpoint()?;
-        for column in 0..=last_column {
-            if column != 0 {
-                page.push('\t');
-            }
-            let cached = data_text(values.get_value((row, column)).unwrap_or(&Data::Empty));
-            let formula = formulas.get_value((row, column)).map_or("", String::as_str);
-            let field_bytes = u64::try_from(cached.len().max(formula.len())).unwrap_or(u64::MAX);
-            if field_bytes > options.limits.max_field_bytes {
-                return Err(limit(
-                    "max_field_bytes",
-                    format!("{sheet_name}!{} exceeds field limit", cell_name(row, column)),
-                ));
-            }
-            if formula.is_empty() {
-                append_tsv_value(&mut page, &cached)?;
-            } else {
-                append_tsv_value(&mut page, "=")?;
-                append_tsv_value(&mut page, formula.strip_prefix('=').unwrap_or(formula))?;
-                if !cached.is_empty() {
-                    append_tsv_value(&mut page, " [cached: ")?;
-                    append_tsv_value(&mut page, &cached)?;
-                    append_tsv_value(&mut page, "]")?;
-                }
-            }
-        }
-        page.push('\n');
-        if (row + 1) % PAGED_TSV_ROWS == 0 || row == last_row {
-            blocks.push(BlockNode {
-                id: NodeId(format!("workbook-page-{sheet_index}-{page_index}")),
-                block: Block::Code {
-                    language: Some("tsv".into()),
-                    text: std::mem::take(&mut page),
-                },
-                provenance: provenance(sheet_name, Some(row + 1 - (row % PAGED_TSV_ROWS)), None),
-            });
-            page_index += 1;
-        }
-    }
-    Ok(blocks)
-}
-
-fn append_tsv_value(output: &mut String, value: &str) -> Result<(), ConversionError> {
-    let extra = value
-        .len()
-        .checked_mul(2)
-        .ok_or_else(|| limit("max_memory_bytes", "TSV field size overflow"))?;
-    output.try_reserve(extra).map_err(|error| {
-        limit("max_memory_bytes", format!("cannot reserve paged TSV output: {error}"))
-    })?;
-    for character in value.chars() {
-        match character {
-            '\t' => output.push_str("\\t"),
-            '\r' => output.push_str("\\r"),
-            '\n' => output.push_str("\\n"),
-            '\\' => output.push_str("\\\\"),
-            '`' => output.push_str("\\`"),
-            value => output.push(value),
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod paged_tests {
-    use super::append_tsv_value;
-
-    #[test]
-    fn paged_tsv_uses_reversible_single_line_escaping_and_bounds_fences() {
-        let mut output = String::new();
-        append_tsv_value(&mut output, "a\tb\r\nc\\d```").unwrap();
-        assert_eq!(output, "a\\tb\\r\\nc\\\\d\\`\\`\\`");
-        assert!(!output.contains("```"));
-    }
 }
 
 fn combined_bounds(
