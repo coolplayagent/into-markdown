@@ -32,6 +32,7 @@ struct GlobalInventory {
     formats: BTreeMap<u16, String>,
     xfs: Vec<u16>,
     recovered_format_records: usize,
+    references: super::formula::References,
 }
 
 #[derive(Default)]
@@ -59,13 +60,14 @@ pub(super) fn scan_workbook_inventory(
     context: &ExecutionContext,
     error_policy: ErrorPolicy,
 ) -> Result<LegacyXlsHints, ConversionError> {
-    let memory = context.reserve_memory(inventory_memory_plan(bytes.len())?)?;
+    let mut memory = context.reserve_memory(inventory_memory_plan(bytes.len())?)?;
     let mut global = collect_globals(bytes, biff_version, part, budget, error_policy)?;
     if global.sheets.is_empty() {
         global.sheets.push(BoundSheet { offset: 0, substream: 0x0010, name: "Sheet 1".into() });
     }
     let offsets = authenticate_sheets(&global.sheets, bytes.len(), part)?;
-    let inventory = collect_sheet_inventory(bytes, biff_version, part, budget, &global, &offsets)?;
+    let inventory =
+        collect_sheet_inventory(bytes, biff_version, part, budget, &global, &offsets, &mut memory)?;
     finalize_inventory(global, inventory, memory, part)
 }
 
@@ -164,6 +166,7 @@ fn collect_sheet_inventory(
     budget: &mut LegacyBudget<'_>,
     global: &GlobalInventory,
     offsets: &BTreeMap<usize, (usize, u16)>,
+    memory: &mut into_markdown_core::ResourceReservation,
 ) -> Result<SheetInventory, ConversionError> {
     let mut output = SheetInventory {
         bounds: (0..global.sheets.len()).map(|_| SheetBounds::default()).collect(),
@@ -221,6 +224,7 @@ fn collect_sheet_inventory(
                     &mut output,
                     part,
                     budget,
+                    memory,
                 )?;
             }
             _ if substreams.in_worksheet() && is_single_cell_record(kind, biff_version) => {
@@ -266,6 +270,7 @@ fn collect_formula(
     output: &mut SheetInventory,
     part: &str,
     budget: &mut LegacyBudget<'_>,
+    memory: &mut into_markdown_core::ResourceReservation,
 ) -> Result<(), ConversionError> {
     let row = u32::from(read_u16(record.body, 0, part)?);
     let column = u32::from(read_u16(record.body, 2, part)?);
@@ -295,7 +300,9 @@ fn collect_formula(
             value,
         });
     }
-    let (value, tokens) = formula_expression(record.body, record.biff_version, part)?;
+    let tokens = formula_tokens(record.body, part)?;
+    let value =
+        super::formula::decode(tokens, record.biff_version, &global.references, budget, memory)?;
     output.formula_expressions.push(LegacyFormulaExpression {
         sheet_index: record.sheet_index,
         row,
@@ -373,11 +380,7 @@ pub(super) fn inventory_memory_plan(bytes: usize) -> Result<u64, ConversionError
         .ok_or_else(|| super::limit("max_memory_bytes", "legacy XLS inventory plan overflowed"))
 }
 
-fn formula_expression<'a>(
-    body: &'a [u8],
-    _biff_version: u16,
-    part: &str,
-) -> Result<(Option<String>, &'a [u8]), ConversionError> {
+fn formula_tokens<'a>(body: &'a [u8], part: &str) -> Result<&'a [u8], ConversionError> {
     // Raw BIFF4 Formula records are normalized to the shared four-byte-reserved
     // framing before inventory; container BIFF5/8 records already use it.
     let length_offset = 20;
@@ -385,13 +388,7 @@ fn formula_expression<'a>(
     let tokens = body
         .get(length_offset + 2..length_offset + 2 + token_bytes)
         .ok_or_else(|| malformed(part, "truncated Formula token stream"))?;
-    if tokens.len() != 5 || !matches!(tokens[0], 0x01 | 0x02) {
-        return Ok((None, tokens));
-    }
-    let row = u32::from(u16::from_le_bytes([tokens[1], tokens[2]])) + 1;
-    let column = u32::from(u16::from_le_bytes([tokens[3], tokens[4]])) + 1;
-    let function = if tokens[0] == 0x01 { "SHARED" } else { "TABLE" };
-    Ok((Some(format!("{function}(R{row}C{column})")), tokens))
+    Ok(tokens)
 }
 
 fn collect_globals(
@@ -410,8 +407,11 @@ fn collect_globals(
         let (kind, body, end) = biff_record(bytes, cursor, part)?;
         match kind {
             BOUND_SHEET => {
-                output.sheets.push(parse_bound_sheet(body, biff_version, part, error_policy)?);
+                let sheet = parse_bound_sheet(body, biff_version, part, error_policy)?;
+                output.references.add_sheet(&sheet.name);
+                output.sheets.push(sheet);
             }
+            0x01ae | 0x0017 if biff_version == super::BIFF8 => output.references.record(kind, body),
             FORMAT => {
                 let index = if biff_version == BIFF4 {
                     let index = legacy_format_index;

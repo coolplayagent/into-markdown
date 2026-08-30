@@ -7,7 +7,7 @@
 
 mod budget;
 mod calamine_adapter;
-mod cell;
+pub(crate) mod cell;
 mod error;
 mod extras;
 mod images;
@@ -57,11 +57,17 @@ pub(crate) struct LegacyCellFormat {
 }
 
 #[derive(Debug)]
+pub(crate) enum LegacyFormulaValue {
+    Decoded(String),
+    CachedOnly { reason: &'static str, tokens: Vec<u8> },
+}
+
+#[derive(Debug)]
 pub(crate) struct LegacyFormulaExpression {
     pub(crate) sheet_index: usize,
     pub(crate) row: u32,
     pub(crate) column: u32,
-    pub(crate) value: Option<String>,
+    pub(crate) value: LegacyFormulaValue,
     pub(crate) token_sha256: [u8; 32],
 }
 

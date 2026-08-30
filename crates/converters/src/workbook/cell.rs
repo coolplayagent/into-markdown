@@ -5,7 +5,7 @@ use crate::workbook::model::CellCoordinate;
 use crate::workbook::schema::{MAX_EXCEL_COLUMNS, MAX_EXCEL_ROWS};
 use into_markdown_core::ConversionError;
 
-pub(super) fn cell_name(row: u32, column: u32) -> String {
+pub(crate) fn cell_name(row: u32, column: u32) -> String {
     let mut value = column + 1;
     let mut letters = Vec::new();
     while value > 0 {

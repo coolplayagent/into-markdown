@@ -21,6 +21,7 @@ pub(super) fn prepare_wrapper(
         || preflight.has(PreflightFlag::FormulaCacheMetadata)
         || preflight.has(PreflightFlag::NestedCharts)
         || !remap.is_empty()
+        || !preflight.hints.formula_expressions.is_empty()
         || preflight.logical_end != workbook.len();
     if !required {
         return Ok(None);
@@ -38,7 +39,10 @@ pub(super) fn prepare_wrapper(
         preflight.biff_version,
         layout,
     )?;
-    if preflight.has(PreflightFlag::NestedCharts) || !remap.is_empty() {
+    if preflight.has(PreflightFlag::NestedCharts)
+        || !remap.is_empty()
+        || !preflight.hints.formula_expressions.is_empty()
+    {
         patch_reader_view(
             &mut wrapper[super::CFB_SECTOR_BYTES..super::CFB_SECTOR_BYTES + workbook.len()],
             workbook,
@@ -110,6 +114,11 @@ pub(super) fn patch_reader_view(
             // Nested chart caches are not worksheet cells. Hide even the chart BOF/EOF,
             // retaining framing so the reader reaches the enclosing worksheet's EOF.
             super::wrapper::put_u16(output, cursor, 0xffff)?;
+        } else if kind == super::FORMULA {
+            // Formula identity/text comes from the original inventory. Calamine eagerly
+            // parses formula tokens on open; give that unused parser an empty token view
+            // without changing the cached result, record framing, or any stream offset.
+            super::wrapper::put_u16(output, cursor + 4 + 20, 0)?;
         } else if matches!(kind, FORMAT | XF) && !remap.is_empty() {
             let field = if kind == FORMAT { 0 } else { 2 };
             let index = read_u16(body, field, WORKBOOK)?;

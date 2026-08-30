@@ -9,6 +9,7 @@ use into_markdown_core::{
 };
 
 mod binary;
+mod formula;
 mod inventory;
 mod objects;
 mod preflight;
@@ -84,7 +85,7 @@ pub(super) fn convert_raw(
         u64::try_from(layout.output_bytes.saturating_add(layout.total_sectors * 4))
             .unwrap_or(u64::MAX),
     )?;
-    let wrapper = build_cfb_wrapper(
+    let mut wrapper = build_cfb_wrapper(
         &normalized,
         preflight.has(PreflightFlag::DimensionMetadata),
         preflight.has(PreflightFlag::FormulaCacheMetadata),
@@ -99,6 +100,13 @@ pub(super) fn convert_raw(
         context,
         options.error_policy,
     )?;
+    if !preflight.hints.formula_expressions.is_empty() {
+        reader_view::patch_reader_view(
+            &mut wrapper[CFB_SECTOR_BYTES..CFB_SECTOR_BYTES + normalized.len()],
+            &normalized,
+            &std::collections::BTreeMap::new(),
+        )?;
+    }
     drop(normalized);
     drop(normalized_memory);
     let mut output =
@@ -215,6 +223,7 @@ fn append_inventory_diagnostics(
     hints: &crate::workbook::LegacyXlsHints,
     part: &str,
 ) {
+    formula::append_diagnostics(output, hints, part);
     let recovered_formula_continuations = hints.formula_caches.len();
     if recovered_formula_continuations > 0 {
         output.diagnostics.push(Diagnostic {
