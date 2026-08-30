@@ -20,7 +20,14 @@ pub(crate) async fn execute(
         });
     }
     let PreparedArtifactConversion { inner, capabilities } = prepared;
-    let crate::preparation::PreparedConversion { request, context, source, attempt } = inner;
+    let crate::preparation::PreparedConversion {
+        request,
+        context,
+        source,
+        attempt,
+        preparation_duration,
+    } = inner;
+    let execution_timer = crate::timing::ProcessingTimer::start();
     context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
     let native = attempt.converter.stream_support().filter(|stream| {
         stream.stream_mode_for(
@@ -75,8 +82,10 @@ pub(crate) async fn execute(
         context: &context,
     })
     .await?;
-    let summary =
+    let processing_duration = preparation_duration.saturating_add(execution_timer.elapsed());
+    let mut summary =
         artifact_output::emit(artifacts, attempt.candidate.format, capabilities, sink, &context)?;
+    summary.processing_duration_ms = Some(processing_duration.as_secs_f64() * 1_000.0);
     drop(source);
     context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
     Ok(summary)

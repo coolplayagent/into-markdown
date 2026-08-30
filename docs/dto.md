@@ -48,7 +48,10 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   只有 `success`、`failed`。`outcome` 区分 `complete`、`degraded`、`failed`；
   `reasonCode` 细分 `emptySource`、`assetOnly`、`emptyContent` 或首个有损诊断。失败项
   必须有 `errorCode`，成功项不得有 `errorCode`。旧报告缺少 additive 的 `outcome` 或
-  `reasonCode` 时仍按原有 status 解码。
+  `reasonCode` 时仍按原有 status 解码。可选 `durationMs` 表示 worker 获得批量准入后到
+  输出提交或失败清理完成的逐项端到端耗时；可选 `processingDurationMs` 表示检测、解析、
+  IR 和渲染的 Engine 处理耗时，排除输出 sink 与持久化。顶层可选 `wallDurationMs` 从
+  命令开始独立计量到最后一次提交或回滚结束，并发执行时不能以逐项耗时之和替代。
 
 `ResultDto` 保持 schema 1，不新增重复 outcome 字段。显式 `emptySource` / `assetOnly`
 证据作为稳定 diagnostics code 随 Result JSON、Web diagnostics artifact 和 bundle
@@ -88,12 +91,16 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   "schemaVersion": 1,
   "succeeded": 1,
   "failed": 0,
+  "wallDurationMs": 15.72,
   "items": [
     {
       "input": "report.pdf",
       "output": "report.md",
       "format": "pdf",
       "status": "success",
+      "outcome": "complete",
+      "durationMs": 12.34,
+      "processingDurationMs": 9.81,
       "diagnostics": [],
       "errorCode": null,
       "message": null,

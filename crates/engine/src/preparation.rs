@@ -6,12 +6,14 @@ use into_markdown_core::{
     ResolvedSource,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 pub(crate) struct PreparedConversion {
     pub(crate) request: ConversionRequest,
     pub(crate) context: ExecutionContext,
     pub(crate) source: ResolvedSource,
     pub(crate) attempt: Attempt,
+    pub(crate) preparation_duration: Duration,
 }
 
 pub(crate) async fn prepare(
@@ -19,6 +21,7 @@ pub(crate) async fn prepare(
     mut request: ConversionRequest,
     context: ExecutionContext,
 ) -> Result<PreparedConversion, ConversionError> {
+    let timer = crate::timing::ProcessingTimer::start();
     if context.resource_limits() != &request.options.limits {
         return Err(ConversionError::Internal {
             detail: "shared execution context limits do not match conversion request".into(),
@@ -77,5 +80,11 @@ pub(crate) async fn prepare(
         return Err(ConversionError::NoConverter { format: formats });
     };
     context.record_detected_format(attempt.candidate.format);
-    Ok(PreparedConversion { request, context, source, attempt })
+    Ok(PreparedConversion {
+        request,
+        context,
+        source,
+        attempt,
+        preparation_duration: timer.elapsed(),
+    })
 }

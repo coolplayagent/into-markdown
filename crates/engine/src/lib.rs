@@ -11,6 +11,7 @@ mod rendering;
 mod result_policy;
 mod result_sink;
 mod stream_execution;
+mod timing;
 
 pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
@@ -375,8 +376,14 @@ impl Engine {
         request: ConversionRequest,
         context: ExecutionContext,
     ) -> Result<ConversionResult, ConversionError> {
-        let preparation::PreparedConversion { request, context, source, attempt } =
-            preparation::prepare(self, request, context).await?;
+        let preparation::PreparedConversion {
+            request,
+            context,
+            source,
+            attempt,
+            preparation_duration,
+        } = preparation::prepare(self, request, context).await?;
+        let execution_timer = timing::ProcessingTimer::start();
 
         // A successful probe makes conversion authoritative. Conversion errors
         // are returned immediately rather than being hidden by another parser.
@@ -425,7 +432,7 @@ impl Engine {
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
-        let result = rendering::render(rendering::RenderRequest {
+        let mut result = rendering::render(rendering::RenderRequest {
             renderer: renderer.as_ref(),
             output,
             source: source.input(),
@@ -434,6 +441,8 @@ impl Engine {
             context: &context,
         })
         .await?;
+        let processing_duration = preparation_duration.saturating_add(execution_timer.elapsed());
+        result.set_processing_duration_ms(processing_duration.as_secs_f64() * 1_000.0);
         // Keep the resolver's source-memory lease through conversion,
         // rendering, and result assembly. The artifact boundary owns the
         // terminal event so sink/finalization failures cannot follow Completed.
@@ -1651,6 +1660,7 @@ mod tests {
         assert_eq!(summary.outcome, ConversionOutcome::Complete);
         assert_eq!(summary.markdown_bytes, 130 * 1024);
         assert_eq!(summary.assets, 0);
+        assert!(summary.processing_duration_ms.is_some_and(|value| value >= 0.0));
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod output;
 mod proxy_env;
 mod result_policy;
 mod services;
+mod timing;
 mod transaction;
 mod ui;
 mod ui_assets;
@@ -70,14 +71,45 @@ fn write_error(
     json_log: bool,
 ) -> std::io::Result<()> {
     if json_log {
-        let event = serde_json::json!({
+        let mut event = serde_json::json!({
             "code": error.code(),
             "message": error.message(),
             "exitCode": error.exit_code(),
         });
+        if let Some(duration_ms) = error.duration_ms() {
+            event["durationMs"] = duration_ms.into();
+        }
+        if let Some(duration_ms) = error.processing_duration_ms() {
+            event["processingDurationMs"] = duration_ms.into();
+        }
+        if let Some(duration_ms) = error.wall_duration_ms() {
+            event["wallDurationMs"] = duration_ms.into();
+        }
         writeln!(stderr, "{event}")
     } else {
-        writeln!(stderr, "{}: {}", catalog.error_prefix(), error)
+        writeln!(stderr, "{}: {}", catalog.error_prefix(), error)?;
+        if let Some(duration_ms) = error.duration_ms() {
+            let processing = error.processing_duration_ms().map_or_else(
+                || catalog.unavailable_label().to_owned(),
+                |value| format!("{value:.2} ms"),
+            );
+            writeln!(
+                stderr,
+                "{}: {} {duration_ms:.2} ms, {} {processing}",
+                catalog.timing_prefix(),
+                catalog.total_duration_label(),
+                catalog.processing_duration_label(),
+            )?;
+        }
+        if let Some(duration_ms) = error.wall_duration_ms() {
+            writeln!(
+                stderr,
+                "{}: {} {duration_ms:.2} ms",
+                catalog.timing_prefix(),
+                catalog.batch_wall_duration_label(),
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -94,5 +126,22 @@ mod tests {
         assert_eq!(value["code"], "componentUnavailable");
         assert_eq!(value["exitCode"], 9);
         assert_eq!(value["message"], "model runtime missing");
+        assert!(value.get("durationMs").is_none());
+        assert!(value.get("processingDurationMs").is_none());
+        assert!(value.get("wallDurationMs").is_none());
+    }
+
+    #[test]
+    fn json_errors_add_timing_fields_when_one_execution_started() {
+        let error = error::CliError::component("late output failure")
+            .with_duration(12.5)
+            .with_processing_duration(Some(8.25))
+            .with_wall_duration(14.0);
+        let mut bytes = Vec::new();
+        write_error(&mut bytes, &error, i18n::Catalog::new(args::Language::En), true).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["durationMs"], 12.5);
+        assert_eq!(value["processingDurationMs"], 8.25);
+        assert_eq!(value["wallDurationMs"], 14.0);
     }
 }

@@ -11,6 +11,7 @@ impl Clone for ConversionSummary {
             diagnostics: self.diagnostics.clone(),
             markdown_bytes: self.markdown_bytes,
             assets: self.assets,
+            processing_duration_ms: self.processing_duration_ms,
             content: self.content,
             payload_only_assets: self.payload_only_assets,
             external_only_assets: self.external_only_assets,
@@ -27,6 +28,7 @@ impl PartialEq for ConversionSummary {
             && self.diagnostics == other.diagnostics
             && self.markdown_bytes == other.markdown_bytes
             && self.assets == other.assets
+            && self.processing_duration_ms == other.processing_duration_ms
             && self.content == other.content
             && self.payload_only_assets == other.payload_only_assets
             && self.external_only_assets == other.external_only_assets
@@ -65,6 +67,7 @@ impl ConversionResult {
             diagnostics: self.diagnostics,
             markdown_bytes: u64::try_from(self.markdown.len()).unwrap_or(u64::MAX),
             assets: u64::try_from(self.assets.len()).unwrap_or(u64::MAX),
+            processing_duration_ms: self.processing_duration_ms,
             content,
             payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
             external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),
