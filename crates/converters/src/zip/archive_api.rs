@@ -94,11 +94,11 @@ impl<'bytes, 'request> SafeArchive<'bytes, 'request> {
         Ok(OwnedEntry { bytes, memory })
     }
 
-    /// Stream every unread file through the decoder so CRC and declared length
-    /// are validated without retaining unused package members.
+    /// Stream every unread physical member through the decoder so CRC and
+    /// declared length are validated without retaining unused package members.
     pub(crate) fn validate_remaining(&mut self) -> Result<(), ConversionError> {
         for index in 0..self.entries.len() {
-            if self.entries[index].kind != EntryKind::File || self.entries[index].verified {
+            if self.entries[index].verified {
                 continue;
             }
             let meta = self.entries[index].clone();
@@ -138,7 +138,7 @@ pub(crate) fn portable_identity(path: &str, directory: bool) -> Result<String, C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use into_markdown_core::{ExecutionOptions, ResourceLimits};
+    use into_markdown_core::{CancellationToken, ErrorCode, ExecutionOptions, ResourceLimits};
     use std::io::{Cursor, Write as _};
     use zip::write::SimpleFileOptions;
 
@@ -150,6 +150,16 @@ mod tests {
             writer.start_file(*name, options).unwrap();
             writer.write_all(bytes).unwrap();
         }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn stored_with_directory() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("read.txt", options).unwrap();
+        writer.write_all(b"x").unwrap();
+        writer.add_directory("unused-dir/", options).unwrap();
         writer.finish().unwrap().into_inner()
     }
 
@@ -182,6 +192,47 @@ mod tests {
         let error = archive.validate_remaining().unwrap_err();
         assert!(matches!(error, ConversionError::Malformed { .. }));
         assert!(error.to_string().contains("CRC/length"));
+        drop(archive);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+    }
+
+    #[test]
+    fn directory_entries_are_validated_or_nonzero_payloads_are_rejected() {
+        let payload = b"directory-payload";
+        let nonzero = stored(&[("read.txt", b"x"), ("unused-dir/", payload)]);
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let Err(error) = SafeArchive::open(&nonzero, &options, &context) else {
+            panic!("accepted a directory entry with a physical payload");
+        };
+        assert_eq!(error.code(), ErrorCode::Malformed);
+        assert!(error.to_string().contains("directory marker conflicts"));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+
+        let bytes = stored_with_directory();
+        let mut options = ConversionOptions::default();
+        options.limits.max_decompressed_bytes = 1;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut archive = SafeArchive::open(&bytes, &options, &context).unwrap();
+        drop(archive.read("read.txt").unwrap());
+        archive.validate_remaining().unwrap();
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+        drop(archive);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+
+        let cancellation = CancellationToken::new();
+        let context = ExecutionContext::new(
+            ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        let conversion = ConversionOptions::default();
+        let mut archive = SafeArchive::open(&bytes, &conversion, &context).unwrap();
+        drop(archive.read("read.txt").unwrap());
+        cancellation.cancel();
+        let error = archive.validate_remaining().unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Cancelled);
         drop(archive);
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_eq!(context.reserved_temporary_bytes(), 0);

@@ -26,6 +26,7 @@ pub(super) struct PreparedXhtml {
     pub(super) anchors: BTreeSet<String>,
     pub(super) footnotes: Vec<Footnote>,
     pub(super) resource_paths: BTreeSet<String>,
+    pub(super) active_content_removed: bool,
     pub(super) _memory: ResourceReservation,
 }
 
@@ -112,6 +113,7 @@ pub(super) fn prepare(
     let mut inventory = RewriteInventory::default();
     let mut anchors = BTreeSet::new();
     let mut footnotes = Vec::new();
+    let mut active_content_removed = false;
     loop {
         let event = reader.read_event().map_err(|error| match error {
             quick_xml::Error::Syntax(_) | quick_xml::Error::IllFormed(_) => {
@@ -137,7 +139,9 @@ pub(super) fn prepare(
             Event::PI(_) => unreachable!("classified above"),
             Event::Start(element) | Event::Empty(element) => {
                 if stack.is_empty() && root_seen {
-                    return Err(xml::malformed("XHTML has multiple root elements").into());
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "XHTML has multiple root elements",
+                    )));
                 }
                 if !xml::valid_qname(element.name().as_ref()) {
                     return Err(PrepareError::Syntax(xml::malformed(
@@ -157,7 +161,9 @@ pub(super) fn prepare(
                     .map_or_else(|| Ok(parent_base.clone()), |value| parent_base.apply(value))?;
                 if stack.is_empty() {
                     if !name.matches(Some(XHTML_NS), b"html") {
-                        return Err(xml::malformed("spine document root is not XHTML html").into());
+                        return Err(PrepareError::Syntax(xml::malformed(
+                            "spine document root is not XHTML html",
+                        )));
                     }
                     root_seen = true;
                 }
@@ -178,9 +184,9 @@ pub(super) fn prepare(
                     .collect::<BTreeSet<_>>();
                 let is_footnote = types.contains("footnote") || types.contains("endnote");
                 if is_footnote && stack.iter().any(|frame| frame.footnote.is_some()) {
-                    return Err(
-                        xml::malformed("nested EPUB footnote definitions are invalid").into()
-                    );
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "nested EPUB footnote definitions are invalid",
+                    )));
                 }
                 let footnote = if is_footnote {
                     let id = xml::required(&attributes, None, b"id", "footnote id")?;
@@ -197,9 +203,11 @@ pub(super) fn prepare(
                 let suppressed_output = is_footnote
                     || stack.last().is_some_and(|frame| frame.suppressed_output)
                     || name.matches(Some(XHTML_NS), b"script");
+                active_content_removed |= name.matches(Some(XHTML_NS), b"script");
                 if !suppressed_output {
-                    let rewritten =
+                    let (rewritten, sanitized_attributes) =
                         rewrite_element(&reader, &element, &name, &base, archive, &mut inventory)?;
+                    active_content_removed |= sanitized_attributes;
                     writer
                         .write_event(if empty {
                             Event::Empty(rewritten)
@@ -210,7 +218,7 @@ pub(super) fn prepare(
                 }
                 let frame = Frame { name, base, footnote, suppressed_text, suppressed_output };
                 if empty {
-                    finish_frame(frame, &mut footnotes, budget)?;
+                    finish_frame(frame, &mut footnotes, budget).map_err(PrepareError::Syntax)?;
                 } else {
                     stack.push(frame);
                 }
@@ -221,19 +229,25 @@ pub(super) fn prepare(
                         "XHTML contains an invalid end-tag QName",
                     )));
                 }
-                let frame = stack.pop().ok_or_else(|| xml::malformed("orphan XHTML end tag"))?;
+                let frame = stack
+                    .pop()
+                    .ok_or_else(|| PrepareError::Syntax(xml::malformed("orphan XHTML end tag")))?;
                 if xml::end_name(&reader, element.name())? != frame.name {
-                    return Err(xml::malformed("XHTML end tag namespace mismatch").into());
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "XHTML end tag namespace mismatch",
+                    )));
                 }
                 if !frame.suppressed_output {
                     writer.write_event(Event::End(element.into_owned())).map_err(write_error)?;
                 }
-                finish_frame(frame, &mut footnotes, budget)?;
+                finish_frame(frame, &mut footnotes, budget).map_err(PrepareError::Syntax)?;
             }
             Event::Text(_) | Event::CData(_) | Event::GeneralRef(_) => {
                 let decoded = xml::decoded_text(&event)?.unwrap_or_default();
                 if stack.is_empty() && !decoded.chars().all(char::is_whitespace) {
-                    return Err(xml::malformed("character data outside XHTML root").into());
+                    return Err(PrepareError::Syntax(xml::malformed(
+                        "character data outside XHTML root",
+                    )));
                 }
                 let suppressed = stack.last().is_some_and(|frame| frame.suppressed_text);
                 if !decoded.is_empty()
@@ -283,6 +297,7 @@ pub(super) fn prepare(
         anchors,
         footnotes,
         resource_paths: inventory.resource_paths,
+        active_content_removed,
         _memory: memory,
     })
 }
@@ -294,11 +309,12 @@ fn rewrite_element(
     base: &BasePath,
     archive: &SafeArchive<'_, '_>,
     inventory: &mut RewriteInventory,
-) -> Result<BytesStart<'static>, ConversionError> {
+) -> Result<(BytesStart<'static>, bool), ConversionError> {
     let element_name = element.name();
     let qname = std::str::from_utf8(element_name.as_ref())
         .map_err(|_| xml::malformed("XHTML element QName is not UTF-8"))?;
     let mut output = BytesStart::new(qname.to_owned());
+    let mut active_content_removed = false;
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| xml::malformed(error.to_string()))?;
         let raw = std::str::from_utf8(attribute.key.as_ref())
@@ -313,6 +329,14 @@ fn rewrite_element(
         let (namespace, local) = reader.resolve_attribute(attribute.key);
         if matches!(namespace, ResolveResult::Unknown(_)) {
             return Err(xml::malformed("unbound XHTML attribute prefix"));
+        }
+        if matches!(namespace, ResolveResult::Unbound)
+            && name.namespace.as_deref() == Some(XHTML_NS)
+            && raw.len() > 2
+            && raw.as_bytes()[..2].eq_ignore_ascii_case(b"on")
+        {
+            active_content_removed = true;
+            continue;
         }
         let mut value = attribute
             .decode_and_unescape_value(reader.decoder())
@@ -354,7 +378,7 @@ fn rewrite_element(
         }
         output.push_attribute((raw, value.as_str()));
     }
-    Ok(output.into_owned())
+    Ok((output.into_owned(), active_content_removed))
 }
 
 fn finish_frame(

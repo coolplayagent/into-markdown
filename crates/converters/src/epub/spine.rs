@@ -1,15 +1,19 @@
 //! Stable spine selection and nested HTML conversion.
 
 use super::budget::EpubBudget;
+use super::navigation::{self, Navigation};
 use super::package::{ManifestItem, Package};
 use super::xhtml::{self, Footnote};
-use crate::zip_converter::archive_api::{OwnedEntry, SafeArchive};
+use super::xhtml_security;
+use crate::zip_converter::archive_api::SafeArchive;
 use into_markdown_core::{
     ConversionError, ConversionOptions, ConverterOutput, Diagnostic, DiagnosticSeverity,
-    ErrorPolicy, ExecutionContext, FormatHint, InputFormat, NestedConversionRequest, ResolvedInput,
-    ResourceReservation, Services, SourceLocator, SourceMetadata,
+    ErrorPolicy, ExecutionContext, FormatHint, InputFormat, NestedConversionRequest,
+    NestedConversionService, ResolvedInput, ResourceReservation, Services, SourceLocator,
+    SourceMetadata,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 
 const EPUB_ID: &str = "builtin.converter.epub";
@@ -30,13 +34,185 @@ pub(super) struct SpineResult {
     pub(super) chapters: Vec<Chapter>,
     pub(super) skipped_non_linear: usize,
     pub(super) diagnostics: Vec<Diagnostic>,
-    pub(super) omitted_paths: BTreeSet<String>,
+    pub(super) path_resolutions: BTreeMap<String, Option<String>>,
+    pub(super) recovery_memory: ResourceReservation,
+    pub(super) navigation: Option<Navigation>,
+}
+
+struct ChapterDispatch<'a> {
+    options: &'a ConversionOptions,
+    nested: &'a dyn NestedConversionService,
+    context: &'a ExecutionContext,
+}
+
+impl ChapterDispatch<'_> {
+    async fn convert(
+        &self,
+        item: &ManifestItem,
+        original: &ManifestItem,
+        prepared: xhtml::PreparedXhtml,
+        recovery: &mut RecoveryInventory,
+    ) -> Result<Option<Chapter>, ConversionError> {
+        let (input, hint, _shared_memory) = chapter_input(item, &prepared, self.context)?;
+        let mut output = match self
+            .nested
+            .convert(
+                NestedConversionRequest {
+                    input: &input,
+                    hint: &hint,
+                    options: self.options,
+                    excluded_converter_ids: EXCLUDED,
+                },
+                self.context,
+            )
+            .await
+        {
+            Ok(output) => output,
+            Err(error)
+                if self.options.error_policy == ErrorPolicy::BestEffort
+                    && matches!(
+                        error,
+                        ConversionError::Unsupported { .. } | ConversionError::Malformed { .. }
+                    ) =>
+            {
+                recovery.diagnostic(
+                    "epub.spine.chapterOmitted",
+                    DiagnosticSeverity::Warning,
+                    &item.path,
+                    &error,
+                )?;
+                recovery.omit(&original.path, Some(&item.path))?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        normalize_chapter_diagnostics(&mut output);
+        Ok(Some(Chapter {
+            path: item.path.clone(),
+            output,
+            references: prepared.references,
+            internal_targets: prepared.internal_targets,
+            anchors: prepared.anchors,
+            footnotes: prepared.footnotes,
+            resource_paths: prepared.resource_paths,
+        }))
+    }
+}
+
+struct RecoveryInventory {
+    diagnostics: Vec<Diagnostic>,
+    path_resolutions: BTreeMap<String, Option<String>>,
+    selected_paths: BTreeSet<String>,
+    memory: ResourceReservation,
+}
+
+impl RecoveryInventory {
+    fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
+        Ok(Self {
+            diagnostics: Vec::new(),
+            path_resolutions: BTreeMap::new(),
+            selected_paths: BTreeSet::new(),
+            memory: context.reserve_memory(0)?,
+        })
+    }
+
+    fn select(&mut self, path: &str) -> Result<bool, ConversionError> {
+        self.charge(path.len(), 0, 512)?;
+        Ok(self.selected_paths.insert(path.into()))
+    }
+
+    fn resolve(&mut self, original: &str, selected: Option<&str>) -> Result<(), ConversionError> {
+        let selected_bytes = selected.map_or(0, str::len);
+        self.charge(original.len(), selected_bytes, 768)?;
+        let next = selected.map(str::to_owned);
+        if let Some(previous) = self.path_resolutions.insert(original.into(), next.clone())
+            && previous != next
+        {
+            return Err(ConversionError::Malformed {
+                part: Some(original.into()),
+                detail: "one EPUB spine path resolves inconsistently".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn omit(&mut self, original: &str, selected: Option<&str>) -> Result<(), ConversionError> {
+        self.omit_path(original)?;
+        if let Some(selected) = selected
+            && selected != original
+        {
+            self.omit_path(selected)?;
+        }
+        Ok(())
+    }
+
+    fn omit_path(&mut self, path: &str) -> Result<(), ConversionError> {
+        self.charge(path.len(), 0, 768)?;
+        self.path_resolutions.insert(path.into(), None);
+        Ok(())
+    }
+
+    fn diagnostic(
+        &mut self,
+        code: &'static str,
+        severity: DiagnosticSeverity,
+        part: &str,
+        message: impl fmt::Display,
+    ) -> Result<(), ConversionError> {
+        let mut count = ByteCount::default();
+        write!(&mut count, "{message}")
+            .map_err(|_| memory_limit("EPUB recovery diagnostic size overflowed"))?;
+        self.charge(code.len() + part.len(), count.bytes, 1_024)?;
+        let mut rendered = String::new();
+        rendered.try_reserve_exact(count.bytes).map_err(|error| {
+            memory_limit(format!("cannot reserve EPUB spine diagnostic message: {error}"))
+        })?;
+        write!(&mut rendered, "{message}").map_err(|_| ConversionError::Internal {
+            detail: "EPUB recovery diagnostic formatting failed after preflight".into(),
+        })?;
+        self.diagnostics.try_reserve_exact(1).map_err(|error| {
+            memory_limit(format!("cannot reserve EPUB spine diagnostic: {error}"))
+        })?;
+        self.diagnostics.push(Diagnostic {
+            code: code.into(),
+            severity,
+            message: rendered,
+            locator: Some(SourceLocator { part: Some(part.into()), ..SourceLocator::default() }),
+        });
+        Ok(())
+    }
+
+    fn charge(
+        &mut self,
+        first: usize,
+        second: usize,
+        overhead: usize,
+    ) -> Result<(), ConversionError> {
+        let bytes = first
+            .checked_add(second)
+            .and_then(|bytes| bytes.checked_add(overhead))
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| memory_limit("EPUB recovery inventory memory plan overflowed"))?;
+        self.memory.grow(bytes)
+    }
+}
+
+#[derive(Default)]
+struct ByteCount {
+    bytes: usize,
+}
+
+impl fmt::Write for ByteCount {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        self.bytes = self.bytes.checked_add(value.len()).ok_or(fmt::Error)?;
+        Ok(())
+    }
 }
 
 pub(super) async fn convert(
     package: &Package,
     archive: &mut SafeArchive<'_, '_>,
-    mut navigation_entry: Option<(String, OwnedEntry)>,
+    mut deferred_navigation_path: Option<String>,
     options: &ConversionOptions,
     services: &Services,
     budget: &mut EpubBudget<'_>,
@@ -47,106 +223,145 @@ pub(super) async fn convert(
         detail: "the engine did not provide EPUB chapter dispatch".into(),
     })?;
     let mut chapters = Vec::new();
-    let mut selected_paths = BTreeSet::new();
     let mut skipped_non_linear = 0;
-    let mut diagnostics = Vec::new();
-    let mut omitted_paths = BTreeSet::new();
+    let mut recovery = RecoveryInventory::new(context)?;
+    let mut navigation = None;
     let mut offline = options.clone();
     offline.network.enabled = false;
     offline.network.allowed_hosts.clear();
+    let dispatch = ChapterDispatch { options: &offline, nested: nested.as_ref(), context };
     for itemref in &package.spine {
         budget.checkpoint()?;
         if !itemref.linear {
             skipped_non_linear += 1;
             continue;
         }
-        let Some(item) =
-            select_spine_item(package, &itemref.idref, options.error_policy, &mut diagnostics)?
+        let original = package.item(&itemref.idref)?;
+        let Some(item) = select_spine_item(
+            package,
+            original,
+            &itemref.idref,
+            options.error_policy,
+            &mut recovery,
+        )?
         else {
             continue;
         };
-        handle_scripted_item(item, options.error_policy, &mut diagnostics)?;
-        if !selected_paths.insert(item.path.clone()) {
+        recovery.resolve(&original.path, Some(&item.path))?;
+        if !recovery.select(&item.path)? {
             return Err(ConversionError::Malformed {
                 part: Some(item.path.clone()),
                 detail: "multiple spine entries resolve to the same XHTML resource".into(),
             });
         }
-        let entry = if navigation_entry.as_ref().is_some_and(|(path, _)| path == &item.path) {
-            navigation_entry
-                .take()
-                .ok_or_else(|| ConversionError::Internal {
-                    detail: "EPUB navigation chapter entry was lost before spine conversion".into(),
-                })?
-                .1
-        } else {
-            archive.read(&item.path)?
-        };
+        let entry = archive.read(&item.path)?;
+        if deferred_navigation_path.as_deref() == Some(&item.path) {
+            let parsed = navigation::parse_nav(
+                &item.path,
+                &entry.bytes,
+                archive,
+                budget,
+                options.error_policy,
+            )?;
+            if parsed.entries.is_empty() {
+                recovery.diagnostic(
+                    "epub.navigationOmitted",
+                    DiagnosticSeverity::Info,
+                    &item.path,
+                    "an empty EPUB navigation document was omitted",
+                )?;
+            } else {
+                navigation = Some(parsed);
+            }
+            deferred_navigation_path = None;
+        }
+        xhtml_security::audit(&item.path, &entry.bytes, archive, budget, context)
+            .map_err(|error| locate_chapter_error(error, &item.path))?;
         let prepared = match xhtml::prepare(&item.path, &entry.bytes, archive, budget, context) {
             Ok(prepared) => prepared,
             Err(error) if options.error_policy == ErrorPolicy::BestEffort && error.is_syntax() => {
                 drop(entry);
                 let error = locate_chapter_error(error.into_conversion_error(), &item.path);
-                push_chapter_omitted(&mut diagnostics, &item.path, error.to_string())?;
-                omitted_paths.insert(item.path.clone());
+                recovery.diagnostic(
+                    "epub.spine.chapterOmitted",
+                    DiagnosticSeverity::Warning,
+                    &item.path,
+                    &error,
+                )?;
+                recovery.omit(&original.path, Some(&item.path))?;
                 continue;
             }
             Err(error) => {
                 return Err(locate_chapter_error(error.into_conversion_error(), &item.path));
             }
         };
+        handle_scripted_item(
+            item,
+            prepared.active_content_removed,
+            options.error_policy,
+            &mut recovery,
+        )?;
         drop(entry);
-        let (input, hint, _shared_memory) = chapter_input(item, &prepared, context)?;
-        let output = match nested
-            .convert(
-                NestedConversionRequest {
-                    input: &input,
-                    hint: &hint,
-                    options: &offline,
-                    excluded_converter_ids: EXCLUDED,
-                },
-                context,
-            )
-            .await
-        {
-            Ok(output) => output,
-            Err(error)
-                if options.error_policy == ErrorPolicy::BestEffort
-                    && matches!(
-                        error,
-                        ConversionError::Unsupported { .. } | ConversionError::Malformed { .. }
-                    ) =>
-            {
-                push_chapter_omitted(&mut diagnostics, &item.path, error.to_string())?;
-                omitted_paths.insert(item.path.clone());
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        chapters.push(Chapter {
-            path: item.path.clone(),
-            output,
-            references: prepared.references,
-            internal_targets: prepared.internal_targets,
-            anchors: prepared.anchors,
-            footnotes: prepared.footnotes,
-            resource_paths: prepared.resource_paths,
-        });
+        if let Some(chapter) = dispatch.convert(item, original, prepared, &mut recovery).await? {
+            chapters.push(chapter);
+        }
     }
+    finish(
+        package,
+        deferred_navigation_path.is_some(),
+        chapters,
+        skipped_non_linear,
+        recovery,
+        navigation,
+    )
+}
+
+fn finish(
+    package: &Package,
+    deferred_navigation_pending: bool,
+    chapters: Vec<Chapter>,
+    skipped_non_linear: usize,
+    recovery: RecoveryInventory,
+    navigation: Option<Navigation>,
+) -> Result<SpineResult, ConversionError> {
     if chapters.is_empty() {
         return Err(ConversionError::Malformed {
             part: Some(package.path.clone()),
             detail: "EPUB spine has no linear XHTML content".into(),
         });
     }
-    Ok(SpineResult { chapters, skipped_non_linear, diagnostics, omitted_paths })
+    if deferred_navigation_pending {
+        return Err(ConversionError::Internal {
+            detail: "deferred EPUB navigation was not consumed by the linear spine".into(),
+        });
+    }
+    Ok(SpineResult {
+        chapters,
+        skipped_non_linear,
+        diagnostics: recovery.diagnostics,
+        path_resolutions: recovery.path_resolutions,
+        recovery_memory: recovery.memory,
+        navigation,
+    })
+}
+
+fn normalize_chapter_diagnostics(output: &mut ConverterOutput) {
+    for diagnostic in &mut output.diagnostics {
+        if matches!(
+            diagnostic.code.as_str(),
+            "html.parseRecovered" | "html.sourceLocationUnavailable"
+        ) {
+            diagnostic.severity = DiagnosticSeverity::Info;
+        }
+    }
 }
 
 fn select_spine_item<'a>(
     package: &'a Package,
+    original: &'a ManifestItem,
     idref: &str,
     policy: ErrorPolicy,
-    diagnostics: &mut Vec<Diagnostic>,
+    recovery: &mut RecoveryInventory,
 ) -> Result<Option<&'a ManifestItem>, ConversionError> {
     match select_xhtml(package, idref) {
         Ok(item) => Ok(Some(item)),
@@ -154,11 +369,13 @@ fn select_spine_item<'a>(
             if policy == ErrorPolicy::BestEffort
                 && matches!(error, ConversionError::Unsupported { .. }) =>
         {
-            push_chapter_omitted(
-                diagnostics,
-                &package.path,
-                format!("spine item {idref} was omitted: {error}"),
+            recovery.diagnostic(
+                "epub.spine.chapterOmitted",
+                DiagnosticSeverity::Warning,
+                &original.path,
+                format_args!("spine item {idref} was omitted: {error}"),
             )?;
+            recovery.omit(&original.path, None)?;
             Ok(None)
         }
         Err(error) => Err(error),
@@ -167,49 +384,30 @@ fn select_spine_item<'a>(
 
 fn handle_scripted_item(
     item: &ManifestItem,
+    active_content_removed: bool,
     policy: ErrorPolicy,
-    diagnostics: &mut Vec<Diagnostic>,
+    recovery: &mut RecoveryInventory,
 ) -> Result<(), ConversionError> {
-    if !item.properties.contains("scripted") {
+    let declared = item.properties.contains("scripted");
+    if !declared && !active_content_removed {
         return Ok(());
     }
     if policy == ErrorPolicy::Strict {
         return Err(ConversionError::Unsupported {
-            detail: format!("scripted EPUB spine item {} is not supported", item.path),
+            detail: format!("active EPUB spine item {} is not supported", item.path),
         });
     }
-    push_spine_diagnostic(
-        diagnostics,
+    let message = if active_content_removed {
+        "active script content or event handlers were removed while preserving static chapter content"
+    } else {
+        "a producer-declared scripted chapter was converted as inert static content"
+    };
+    recovery.diagnostic(
         "epub.spine.activeContentRemoved",
+        DiagnosticSeverity::Warning,
         &item.path,
-        "active script content was removed while preserving static chapter content".into(),
-    )
-}
-
-fn push_chapter_omitted(
-    diagnostics: &mut Vec<Diagnostic>,
-    part: &str,
-    message: String,
-) -> Result<(), ConversionError> {
-    push_spine_diagnostic(diagnostics, "epub.spine.chapterOmitted", part, message)
-}
-
-fn push_spine_diagnostic(
-    diagnostics: &mut Vec<Diagnostic>,
-    code: &'static str,
-    part: &str,
-    message: String,
-) -> Result<(), ConversionError> {
-    diagnostics
-        .try_reserve(1)
-        .map_err(|error| memory_limit(format!("cannot reserve EPUB spine diagnostic: {error}")))?;
-    diagnostics.push(Diagnostic {
-        code: code.into(),
-        severity: DiagnosticSeverity::Warning,
         message,
-        locator: Some(SourceLocator { part: Some(part.into()), ..SourceLocator::default() }),
-    });
-    Ok(())
+    )
 }
 
 fn select_xhtml<'a>(package: &'a Package, id: &str) -> Result<&'a ManifestItem, ConversionError> {
@@ -220,6 +418,23 @@ fn select_xhtml<'a>(package: &'a Package, id: &str) -> Result<&'a ManifestItem, 
         .ok_or_else(|| ConversionError::Unsupported {
             detail: format!("EPUB spine item {id:?} has no HTML/XHTML fallback"),
         })
+}
+
+pub(super) fn linear_spine_uses_path(
+    package: &Package,
+    path: &str,
+) -> Result<bool, ConversionError> {
+    for itemref in &package.spine {
+        if !itemref.linear {
+            continue;
+        }
+        match select_xhtml(package, &itemref.idref) {
+            Ok(item) if item.path == path => return Ok(true),
+            Ok(_) | Err(ConversionError::Unsupported { .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
 }
 
 fn memory_limit(detail: impl Into<String>) -> ConversionError {
@@ -262,4 +477,77 @@ fn chapter_input(
         charset: Some("utf-8".into()),
     };
     Ok((input, hint, shared_memory))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use into_markdown_core::{CancellationToken, ErrorCode, ExecutionOptions, ResourceLimits};
+
+    fn context(memory: u64) -> ExecutionContext {
+        ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: memory, ..ResourceLimits::default() },
+        )
+    }
+
+    #[test]
+    fn recovery_inventory_leases_one_hundred_thousand_omissions_and_releases() {
+        let context = context(512 * 1024 * 1024);
+        let mut inventory = RecoveryInventory::new(&context).unwrap();
+        for index in 0..100_000 {
+            let path = format!("OPS/chapter-{index:06}.xhtml");
+            inventory
+                .diagnostic(
+                    "epub.spine.chapterOmitted",
+                    DiagnosticSeverity::Warning,
+                    &path,
+                    "locally malformed chapter omitted",
+                )
+                .unwrap();
+            inventory.omit(&path, None).unwrap();
+        }
+        assert_eq!(inventory.diagnostics.len(), 100_000);
+        assert_eq!(inventory.path_resolutions.len(), 100_000);
+        assert!(context.reserved_memory_bytes() > 100_000);
+        drop(inventory);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn recovery_inventory_low_memory_cancellation_and_error_release() {
+        let low = context(2_048);
+        let mut inventory = RecoveryInventory::new(&low).unwrap();
+        let error = inventory
+            .diagnostic(
+                "epub.spine.chapterOmitted",
+                DiagnosticSeverity::Warning,
+                "OPS/large.xhtml",
+                format_args!("{:>4096}", ""),
+            )
+            .unwrap_err();
+        assert_eq!(error.code(), ErrorCode::ResourceLimit);
+        drop(inventory);
+        assert_eq!(low.reserved_memory_bytes(), 0);
+
+        let cancellation = CancellationToken::new();
+        let cancelled = ExecutionContext::new(
+            ExecutionOptions { cancellation: cancellation.clone(), ..ExecutionOptions::default() },
+            ResourceLimits::default(),
+        );
+        let mut inventory = RecoveryInventory::new(&cancelled).unwrap();
+        cancellation.cancel();
+        let error = inventory.omit("OPS/cancelled.xhtml", None).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Cancelled);
+        drop(inventory);
+        assert_eq!(cancelled.reserved_memory_bytes(), 0);
+
+        let context = context(64 * 1024);
+        let mut inventory = RecoveryInventory::new(&context).unwrap();
+        inventory.resolve("OPS/original.svg", Some("OPS/one.xhtml")).unwrap();
+        let error = inventory.resolve("OPS/original.svg", Some("OPS/two.xhtml")).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+        drop(inventory);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
 }

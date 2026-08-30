@@ -1,6 +1,6 @@
 use crate::{
-    Block, ConversionError, ConversionOptions, ConversionRequest, ErrorCode, ErrorPolicy,
-    ExecutionOptions, FormatHint, Inline, InputFormat, InputRef, default_engine,
+    Block, ConversionError, ConversionOptions, ConversionOutcome, ConversionRequest, ErrorCode,
+    ErrorPolicy, ExecutionOptions, FormatHint, Inline, InputFormat, InputRef, default_engine,
 };
 use std::fmt::Write as _;
 use std::future::Future;
@@ -285,6 +285,92 @@ fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
         .expect("linked resources must be disclosed");
     assert!(diagnostic.message.contains("1 reachable CSS"));
     assert!(diagnostic.message.contains("1 reachable font"));
+    assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn authoritative_outcome_distinguishes_compatibility_audit_from_content_loss() {
+    let package = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">outcome-contract</dc:identifier><dc:title>Outcome Contract</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-30T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
+    let navigation = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>"#;
+    let chapter = chapter_two();
+    let common = [
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", package),
+        ("OPS/nav.xhtml", navigation),
+        ("OPS/chapter.xhtml", chapter),
+    ];
+
+    let mut audited_entries = common.to_vec();
+    audited_entries.push(("META-INF/rights.xml", b"<rights/>"));
+    let audited = convert(epub(&audited_entries)).unwrap();
+    assert!(audited.diagnostics.iter().any(|item| item.code == "epub.rightsMetadataIgnored"));
+    assert_eq!(
+        audited.outcome(),
+        ConversionOutcome::Complete,
+        "unexpected diagnostics: {:?}",
+        audited.diagnostics
+    );
+
+    let recovered = convert(noncanonical_mimetype_layout(&common, false, true, None)).unwrap();
+    assert!(recovered.diagnostics.iter().any(|item| item.code == "epub.mimetypeLayoutRecovered"));
+    assert_eq!(recovered.outcome(), ConversionOutcome::Complete);
+
+    let active = br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Active</title></head><body><main><script>discard()</script><p>Usable content.</p></main></body></html>"#;
+    let degraded = convert(epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", package),
+        ("OPS/nav.xhtml", navigation),
+        ("OPS/chapter.xhtml", active),
+    ]))
+    .unwrap();
+    assert!(degraded.diagnostics.iter().any(|item| item.code == "epub.spine.activeContentRemoved"));
+    assert_eq!(degraded.outcome(), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn large_navigation_drops_raw_storage_and_a_late_spine_nav_is_read_once() {
+    let mut state = 0x1234_5678_u32;
+    let mut label = String::with_capacity(512 * 1024 + 4);
+    for _ in 0..512 * 1024 {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        label.push(char::from(b'a' + u8::try_from((state >> 24) % 26).unwrap()));
+    }
+    label.push_str("TAIL");
+    let navigation = format!(
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>Contents</title></head><body><nav epub:type=\"toc\"><ol><li><a href=\"text/one.xhtml\">{label}</a></li></ol></nav></body></html>"
+    );
+    let package = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">nav-memory</dc:identifier><dc:title>Navigation Memory</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-30T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
+    let mut options = ConversionOptions::default();
+    options.limits.max_memory_bytes = 32 * 1024 * 1024;
+    let outside_spine = convert_with(
+        epub(&[
+            ("META-INF/container.xml", container()),
+            ("OPS/content.opf", package),
+            ("OPS/nav.xhtml", navigation.as_bytes()),
+            ("OPS/text/one.xhtml", chapter_two()),
+        ]),
+        options.clone(),
+        ExecutionOptions::default(),
+    )
+    .unwrap();
+    assert!(outside_spine.markdown.contains("TAIL"));
+
+    let late_package = String::from_utf8(package.to_vec())
+        .unwrap()
+        .replace("</spine>", "<itemref idref=\"nav\"/></spine>");
+    let late_spine = convert_with(
+        epub(&[
+            ("META-INF/container.xml", container()),
+            ("OPS/content.opf", late_package.as_bytes()),
+            ("OPS/nav.xhtml", navigation.as_bytes()),
+            ("OPS/text/one.xhtml", chapter_two()),
+        ]),
+        options,
+        ExecutionOptions::default(),
+    )
+    .unwrap();
+    assert!(late_spine.markdown.contains("TAIL"));
+    assert!(late_spine.markdown.contains("Omega"));
 }
 
 #[test]

@@ -14,12 +14,13 @@ mod reachability;
 mod resources;
 mod spine;
 mod xhtml;
+mod xhtml_security;
 mod xml;
 
 #[cfg(test)]
 mod tests;
 
-use crate::zip_converter::archive_api::{OwnedEntry, SafeArchive};
+use crate::zip_converter::archive_api::SafeArchive;
 use budget::EpubBudget;
 use encryption::EncryptionPolicy;
 use into_markdown_core::{
@@ -135,18 +136,19 @@ async fn convert_epub(
         EncryptionPolicy::default()
     };
     let rights_metadata = archive.contains(RIGHTS_PATH);
-    let NavigationRead { navigation, chapter_entry } =
+    let NavigationRead { navigation, deferred_path } =
         read_navigation(&mut package, &mut archive, &mut budget, options.error_policy)?;
     let mut spine = spine::convert(
         &package,
         &mut archive,
-        chapter_entry,
+        deferred_path,
         options,
         services,
         &mut budget,
         context,
     )
     .await?;
+    let navigation = navigation.or_else(|| spine.navigation.take());
     let omitted = reachability::omitted_resources(
         &package,
         navigation.as_ref(),
@@ -243,6 +245,9 @@ fn read_navigation(
                 return Err(malformed(&item.path, "EPUB navigation item is not XHTML"));
             }
             let path = item.path.clone();
+            if spine::linear_spine_uses_path(package, &path)? {
+                return Ok(NavigationRead { navigation: None, deferred_path: Some(path) });
+            }
             let entry = archive.read(&path)?;
             let navigation =
                 navigation::parse_nav(&path, &entry.bytes, archive, budget, error_policy)?;
@@ -256,12 +261,9 @@ fn read_navigation(
                         ..SourceLocator::default()
                     }),
                 });
-                return Ok(NavigationRead { navigation: None, chapter_entry: Some((path, entry)) });
+                return Ok(NavigationRead { navigation: None, deferred_path: None });
             }
-            return Ok(NavigationRead {
-                navigation: Some(navigation),
-                chapter_entry: Some((path, entry)),
-            });
+            return Ok(NavigationRead { navigation: Some(navigation), deferred_path: None });
         }
         return Err(malformed(&package.path, "EPUB 3 navigation document is missing"));
     }
@@ -273,7 +275,7 @@ fn read_navigation(
             }
             let entry = archive.read(&item.path)?;
             return navigation::parse_ncx(&item.path, &entry.bytes, archive, budget).map(
-                |navigation| NavigationRead { navigation: Some(navigation), chapter_entry: None },
+                |navigation| NavigationRead { navigation: Some(navigation), deferred_path: None },
             );
         }
         return Err(malformed(&package.path, "EPUB 2 NCX navigation document is missing"));
@@ -283,7 +285,7 @@ fn read_navigation(
 
 struct NavigationRead {
     navigation: Option<Navigation>,
-    chapter_entry: Option<(String, OwnedEntry)>,
+    deferred_path: Option<String>,
 }
 
 fn malformed(part: &str, detail: impl Into<String>) -> ConversionError {

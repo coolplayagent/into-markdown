@@ -280,7 +280,7 @@ fn xml_name_character(character: char) -> bool {
         )
 }
 
-fn validate_xml_chars(value: &str, label: &str) -> Result<(), ConversionError> {
+pub(super) fn validate_xml_chars(value: &str, label: &str) -> Result<(), ConversionError> {
     if value.chars().all(|character| {
         matches!(character,
             '\u{0009}' | '\u{000a}' | '\u{000d}'

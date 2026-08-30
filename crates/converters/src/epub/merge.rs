@@ -31,12 +31,19 @@ pub(super) fn assemble(
     context.checkpoint()?;
     if let Some(navigation) = &mut navigation {
         for entry in &mut navigation.entries {
-            if entry.target.as_deref().is_some_and(|target| {
-                let path = target.split_once('#').map_or(target, |(path, _)| path);
-                spine.omitted_paths.contains(path)
-            }) {
-                entry.target = None;
-            }
+            let Some(target) = entry.target.take() else { continue };
+            let (path, fragment) = target
+                .split_once('#')
+                .map_or((target.as_str(), None), |(path, fragment)| (path, Some(fragment)));
+            entry.target =
+                match spine.path_resolutions.get(path) {
+                    Some(None) => None,
+                    Some(Some(resolved)) if resolved != path => Some(fragment.map_or_else(
+                        || resolved.clone(),
+                        |fragment| format!("{resolved}#{fragment}"),
+                    )),
+                    _ => Some(target),
+                };
         }
     }
     let anchors = spine
@@ -56,6 +63,7 @@ pub(super) fn assemble(
         }
     }
     validate_targets(&spine, navigation.as_ref(), &anchors, &chapter_paths, &footnote_labels)?;
+    let recovery_memory = spine.recovery_memory;
 
     let metadata = std::mem::take(&mut package.metadata);
     let mut output =
@@ -181,7 +189,9 @@ pub(super) fn assemble(
             }
         }
     })?;
-    output.account_retained(context)
+    let output = output.account_retained(context)?;
+    drop(recovery_memory);
+    Ok(output)
 }
 
 fn non_linear_spine_diagnostic(skipped: usize, package_path: &str) -> Diagnostic {

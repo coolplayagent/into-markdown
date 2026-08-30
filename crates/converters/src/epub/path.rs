@@ -20,6 +20,10 @@ pub(super) enum Reference {
 }
 
 impl BasePath {
+    pub(super) fn retained_path_bytes(&self) -> usize {
+        self.path.capacity()
+    }
+
     pub(super) fn document(path: &str) -> Result<Self, ConversionError> {
         Ok(Self { path: portable_identity(path, false)?, directory: false })
     }

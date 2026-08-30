@@ -427,7 +427,10 @@ fn validate_flags(flags: u16, method: u16) -> Result<(), ConversionError> {
     if !matches!(method, 0 | 8) {
         return Err(malformed(format!("unsupported compression method {method}")));
     }
-    if flags & !0x080e != 0 || method == 0 && flags & 0x0006 != 0 {
+    // Bits 1-2 are compressor hints for methods that define them. Some
+    // producers retain those inert hints on stored members; they do not alter
+    // framing, encryption, sizes, CRC validation, or the selected decoder.
+    if flags & !0x080e != 0 {
         return Err(malformed(format!("unsupported general-purpose flags {flags:#06x}")));
     }
     Ok(())
@@ -560,5 +563,14 @@ mod filename_tests {
     fn invalid_explicit_zip_charset_is_stable() {
         let error = decode_name(&[0x80], 0, &[], Some("definitely-not-an-encoding")).unwrap_err();
         assert!(matches!(error, ConversionError::Malformed { .. }));
+    }
+
+    #[test]
+    fn inert_compression_hints_do_not_broaden_zip_authority() {
+        validate_flags(0x0802, 0).unwrap();
+        validate_flags(0x0806, 8).unwrap();
+        assert!(validate_flags(0x0810, 8).is_err());
+        assert!(matches!(validate_flags(0x0801, 8), Err(ConversionError::Encrypted)));
+        assert!(validate_flags(0x0802, 9).is_err());
     }
 }
