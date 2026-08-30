@@ -14,6 +14,7 @@ use std::io::Cursor;
 
 mod candidate_index;
 mod geometry;
+mod jpeg_input;
 use candidate_index::{
     CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
     validate_visual_references_without_index,
@@ -651,7 +652,11 @@ fn validated_candidate_dimensions(
             detail: "embedded raster media type disagrees with its byte envelope".into(),
         });
     }
-    let summary = envelope::preflight_validate(raster, &asset.bytes, &options.limits, context)?;
+    let summary = if raster == format::RasterFormat::Jpeg {
+        jpeg_input::envelope(&asset.bytes, options, context)?.0
+    } else {
+        envelope::preflight_validate(raster, &asset.bytes, &options.limits, context)?
+    };
     if summary.frames != 1 || summary.animated {
         return Err(ConversionError::Unsupported {
             detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
@@ -724,6 +729,7 @@ struct NormalizedImage {
     bytes: Vec<u8>,
     width: u32,
     height: u32,
+    trailing_bytes: usize,
     _leases: Vec<ResourceReservation>,
 }
 
@@ -876,6 +882,8 @@ async fn enrich(
             normalized.height,
             0,
         )?;
+        let mut diagnostics: Vec<_> =
+            jpeg_input::diagnostic(normalized.trailing_bytes).into_iter().collect();
         let normalized_plan = match services.ocr.as_deref() {
             Some(engine) => engine.planned_normalized_png_output(
                 normalized.width,
@@ -894,10 +902,8 @@ async fn enrich(
                 if effective_ocr_policy(options) == OcrPolicy::Auto
                     && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
             {
-                cache[group_index] = Some(CachedContribution {
-                    nodes: Vec::new(),
-                    diagnostics: vec![visual_diagnostic(None, error.to_string())],
-                });
+                diagnostics.push(visual_diagnostic(None, error.to_string()));
+                cache[group_index] = Some(CachedContribution { nodes: Vec::new(), diagnostics });
                 continue;
             }
             Err(error) => return Err(error),
@@ -923,10 +929,8 @@ async fn enrich(
         recognized_chars = recognized_chars
             .checked_add(contribution.recognized_chars)
             .ok_or_else(|| resource("max_field_bytes", "OCR character telemetry overflow"))?;
-        cache[group_index] = Some(CachedContribution {
-            nodes: contribution.nodes,
-            diagnostics: contribution.diagnostics,
-        });
+        diagnostics.append(&mut contribution.diagnostics);
+        cache[group_index] = Some(CachedContribution { nodes: contribution.nodes, diagnostics });
     }
 
     let mut contributions_by_asset = BTreeMap::new();
@@ -1075,13 +1079,20 @@ fn normalize(
             detail: "embedded raster media type disagrees with its byte envelope".into(),
         });
     }
-    let summary = envelope::validate(raster, &asset.bytes, &options.limits, context)?;
+    let (summary, source) = if raster == format::RasterFormat::Jpeg {
+        jpeg_input::envelope(&asset.bytes, options, context)?
+    } else {
+        (
+            envelope::validate(raster, &asset.bytes, &options.limits, context)?,
+            asset.bytes.as_slice(),
+        )
+    };
     if summary.frames != 1 || summary.animated {
         return Err(ConversionError::Unsupported {
             detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
         });
     }
-    let decoded = decode::decode(raster, &asset.bytes, summary, &options.limits, context)?;
+    let decoded = decode::decode(raster, source, summary, &options.limits, context)?;
     let frame = decoded.frames.first().ok_or_else(|| ConversionError::Malformed {
         part: asset.filename.clone(),
         detail: "embedded raster decoder returned no frame".into(),
@@ -1095,7 +1106,13 @@ fn normalize(
     let height = frame.pixels.height();
     let encoded = encode::png(&frame.pixels, true, &options.limits, context)?;
     let (bytes, memory) = encoded.into_parts();
-    Ok(NormalizedImage { bytes, width, height, _leases: vec![memory] })
+    Ok(NormalizedImage {
+        bytes,
+        width,
+        height,
+        trailing_bytes: asset.bytes.len() - source.len(),
+        _leases: vec![memory],
+    })
 }
 
 fn normalize_gif(
@@ -1163,7 +1180,13 @@ fn normalize_gif(
     }
     let encoded = encode::png(&pixels, true, &options.limits, context)?;
     let (bytes, png_memory) = encoded.into_parts();
-    Ok(NormalizedImage { bytes, width, height, _leases: vec![memory, png_memory] })
+    Ok(NormalizedImage {
+        bytes,
+        width,
+        height,
+        trailing_bytes: 0,
+        _leases: vec![memory, png_memory],
+    })
 }
 
 fn checkpointed_sha256(
@@ -1346,6 +1369,8 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 
 #[cfg(test)]
 mod tests {
+    mod jpeg;
+
     use super::*;
     use image::{DynamicImage, Frame, ImageFormat, Rgba, RgbaImage, codecs::gif::GifEncoder};
     use into_markdown_core::{

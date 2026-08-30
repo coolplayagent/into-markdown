@@ -7,6 +7,19 @@ pub(super) fn validate(
     limits: &ResourceLimits,
     context: &ExecutionContext,
 ) -> Result<Summary, ConversionError> {
+    if codestream_end(bytes, limits, context)? != bytes.len() {
+        return Err(malformed("JPEG EOI must follow a frame and end exactly at EOF"));
+    }
+    Ok(Summary { frames: 1, animated: false })
+}
+
+/// Scan the first complete JPEG envelope; pixel validity still requires codec decoding.
+pub(crate) fn codestream_end(
+    bytes: &[u8],
+    limits: &ResourceLimits,
+    context: &ExecutionContext,
+) -> Result<usize, ConversionError> {
+    context.checkpoint()?;
     if !bytes.starts_with(&[0xff, 0xd8]) {
         return Err(malformed("JPEG SOI signature is invalid"));
     }
@@ -24,10 +37,10 @@ pub(super) fn validate(
         };
         match marker {
             0xd9 => {
-                if cursor != bytes.len() || !saw_frame {
+                if !saw_frame {
                     return Err(malformed("JPEG EOI must follow a frame and end exactly at EOF"));
                 }
-                return Ok(Summary { frames: 1, animated: false });
+                return Ok(cursor);
             }
             0xd8 | 0x00 => return Err(malformed("JPEG contains an invalid structural marker")),
             0x01 | 0xd0..=0xd7 => {}
