@@ -67,6 +67,57 @@ The previous 343 formula discrepancies are not 343 proven semantic errors.
 Every discrepancy is retained in the evidence, including empty/unsupported oracle
 expressions marked `reviewNeeded`; they are not counted as semantic successes.
 
+## Correctness results (authorized delta cohorts)
+
+Tested implementation: `117344be9c3189a8f50290a9f1792d45b1af35f5`.
+Its release executable SHA-256 is
+`1435cdfdd02a7bbbc4b0c9abad75ea10c949bfd28ef1baa45f0d9cff1d1efd83`.
+The initial full 452-path run used `4b63cc2`; subsequent fixes reran only the
+45 named-formula paths at `a0c7864`, then the remaining legal BIFF name case at
+the tested implementation. The consolidated evidence contains 407 initial,
+44 named-formula and 1 final-path results. **It is not a full-corpus run of the
+final executable.** `final-source-cohorts.json` retains each executable identity.
+
+| Gate | Result |
+| --- | --- |
+| Raw conversion success | 412/452 (91.15%), unchanged from #315 |
+| Independently valid conversion success | 409/425 (96.24%), unchanged |
+| Other successful classifications | 2 safely recoverable, 1 invalid; the latter is an unchanged baseline success, not a valid-file claim |
+| Cached/display values, original token SHA, shape/order/merges/duplicate coordinates | 412/412 common successes preserved |
+| Independent cached-value oracle | 8,339 cells across 17 files, zero mismatches |
+| Markdown unchanged from #315 | 265 common-success files |
+| Repeated conversion | Five source-case Markdown and Document outputs identical on the same initial executable |
+| Previously correct ordinary named formulas | 227/227 restored and independently matched |
+
+Across 78,815 formula identities, 30,953 have decoded expressions and 47,862
+retain explicit cached-only evidence. The latter consist of 39,563 shared/array
+formulas, 5,743 invalid local references, 1,787 external defined names, 581 external
+references, 82 data-table formulas, 50 macro names, 21 unsupported 3D references,
+18 array constants, 14 unsupported tokens and 3 unsupported functions. These
+counts describe support boundaries, not independent correctness scores for every
+expression. Of 9,561 original named-formula downgrade candidates, 6,643 now decode;
+the remainder have specific external/macro/reference/function reasons. Name
+definitions are still never expanded or evaluated. The legal name/address check
+uses the BIFF8 grid (256 columns, 65,536 rows), not the larger XLSX grid.
+
+The previous 343 disagreements are accounted for individually in `final-343.json`:
+79 exact matches, 89 cosmetic numeric-normalization matches, 148 explicit
+cached-only unsupported cases, 13 textual differences independently established
+as equivalent, and 14 empty/unsupported oracle expressions still requiring
+review. The 13 retain their mechanical `reviewNeeded-formulaBody` classification
+and a separate identity-bound `independentlyEquivalent` approval: nine redundant
+parentheses and four authenticated same-workbook singleton references. None of
+the 14 empty oracle expressions is treated as ground truth.
+
+Canonical local artifacts are `final-summary.json`, `final-source-cohorts.json`,
+`final-343.json`, `final-named-formulas.json`, and the per-cohort result JSON files.
+`finalize.py` recomputes the independent oracle comparisons against the selected
+delta outputs without another conversion. The five source cases cover INDEX
+areas, `>` versus `>=`, AA–AD columns, relative SUM areas and external-reference
+cached-only fallback. Final release-wide latency/RSS/lease/temp/read-amplification
+acceptance remains pending in the coordinating task; no performance percentage
+is claimed by this correctness evidence.
+
 ## Repository checks
 
 ```text
@@ -75,6 +126,15 @@ cargo clippy -p into-markdown-converters -p into-markdown-engine -p into-markdow
 cargo test -p into-markdown-converters -p into-markdown-engine -p into-markdown-render-markdown -j 2
 cargo build --release -p into-markdown-cli -j 2
 ```
+
+The full related suite passed 650 tests (574 converters, 45 engine, 31 renderer)
+on the initial implementation; three converter tests and one PDF integration
+test remained explicitly ignored. Later changes passed 38 targeted XLS tests
+and then all 10 formula tests, including defined-name scope/ambiguity and BIFF
+grid boundaries. The coordinator requested delta testing instead of repeating
+the 650-test suite. Final-source fmt, related all-target clippy with warnings
+denied, and release build passed. Logs: `tests.log`, `name-tests.log` and
+`clippy-final.log` in the local evidence directory.
 
 The broader `cargo clippy --workspace --all-targets -j 2 -- -D warnings`
 attempt encounters the existing `unused_mut` in unmodified
