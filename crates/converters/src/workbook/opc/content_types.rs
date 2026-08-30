@@ -256,6 +256,7 @@ pub(in crate::workbook) fn require_content_type(
 pub(in crate::workbook) fn validate_content_type_authority(
     content_types: &ContentTypeMap,
     package_parts: &BTreeSet<String>,
+    error_policy: into_markdown_core::ErrorPolicy,
 ) -> Result<(), ConversionError> {
     for part in content_types.overrides.keys() {
         if !package_parts.contains(part) {
@@ -263,7 +264,10 @@ pub(in crate::workbook) fn validate_content_type_authority(
         }
     }
     for part in package_parts {
-        if part != "[Content_Types].xml" && content_types.for_part(part).is_none() {
+        if part != "[Content_Types].xml"
+            && content_types.for_part(part).is_none()
+            && error_policy != into_markdown_core::ErrorPolicy::BestEffort
+        {
             return Err(malformed(Some(part), "OPC part has no content type authority"));
         }
         if has_extension(part, "rels") {

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "construction": "dynamic in-memory ZIP using crates/converters/src/workbook/tests/support.rs",
+  "fixtures": [
+    {
+      "id": "sheet-order-by-index",
+      "parts": ["xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"],
+      "mutation": "reverse ZIP entry and relationship order while workbook.xml declares Beta then Alpha",
+      "assertions": ["sheet order is Beta,Alpha", "each sheet is emitted once", "layoutPassesPerSheet=1", "dataPassesPerSheet=1"]
+    },
+    {
+      "id": "foreign-extension-and-core-spoof",
+      "parts": ["xl/worksheets/sheet1.xml"],
+      "mutation": "add a producer extension subtree and a foreign-namespace node whose local name is c",
+      "assertions": ["best-effort omits the extension with spreadsheet.extensionOmitted", "strict keeps its rejection snapshot", "foreign local-name spoof is never interpreted as a core cell"]
+    },
+    {
+      "id": "optional-object-isolation",
+      "parts": ["xl/externalLinks/externalLink1.xml", "xl/drawings/drawing1.xml", "xl/charts/chart1.xml", "xl/embeddings/object1.bin"],
+      "mutation": "make each optional relationship independently absent or malformed while A1 remains valid",
+      "assertions": ["A1 is retained", "stable external/object omission diagnostic", "root officeDocument ambiguity remains fatal", "no external fetch or active-object export"]
+    },
+    {
+      "id": "formula-cache-and-precision",
+      "parts": ["xl/worksheets/sheet1.xml", "xl/styles.xml"],
+      "mutation": "include 9007199254740993, 0.12345678901234567, 1.2345678901234567E-20, date-style serials, booleans, errors, cached and incomplete shared formulas",
+      "assertions": ["ordinary numeric lexemes are byte-exact", "date display follows authenticated style", "cached formula value survives missing derivation", "missing uncached result omits one cell only", "strict rejects incomplete shared formula"]
+    },
+    {
+      "id": "sparse-extreme-dimension",
+      "parts": ["xl/worksheets/sheet1.xml"],
+      "mutation": "declare A1:XFD1048576 and populate only A1 and XFD1048576",
+      "assertions": ["two ordered bounded regions", "both cells recalled", "no giant empty rectangle", "region count does not increase parse count"]
+    },
+    {
+      "id": "dimension-under-report",
+      "parts": ["xl/worksheets/sheet1.xml"],
+      "mutation": "declare A1 but populate C3 and attach a safe C3 hyperlink",
+      "assertions": ["best-effort retains C3 and link with a stable diagnostic", "strict keeps rejection snapshot", "bounds come from authenticated content"]
+    },
+    {
+      "id": "merge-link-page-boundary",
+      "parts": ["xl/worksheets/sheet1.xml", "xl/worksheets/_rels/sheet1.xml.rels"],
+      "mutation": "place a merge and safe hyperlink across the 4096/4097 cell page boundary",
+      "assertions": ["one logical merge", "one safe link", "real table/cell output", "provenance remains attached"]
+    },
+    {
+      "id": "selected-shared-strings",
+      "parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"],
+      "mutation": "repeat one hot ID, reference sparse rich-text IDs, and include an explicit empty shared string",
+      "assertions": ["all references recalled", "rich runs preserved", "empty is distinct from missing", "sharedStringPasses=1", "bounded hot cache"]
+    },
+    {
+      "id": "shared-string-inflation",
+      "parts": ["xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"],
+      "mutation": "small compressed source with references whose semantic expansion exceeds the low memory budget",
+      "assertions": ["stable hard-limit rejection", "no multi-GiB expansion", "memory lease returns to zero", "temporary lease returns to zero", "no output transaction"]
+    },
+    {
+      "id": "duplicate-cell-coordinate",
+      "parts": ["xl/worksheets/sheet1.xml"],
+      "mutation": "emit A1 twice with different values and repeat a row coordinate",
+      "assertions": ["deterministic malformed rejection before emission", "A1 is never emitted twice", "no partial artifact"]
+    },
+    {
+      "id": "staging-batch-io",
+      "parts": ["xl/worksheets/sheet1.xml"],
+      "mutation": "populate a contiguous 128 by 128 region plus a distant small region",
+      "assertions": ["writeFlushes < physicalCells/32", "contiguousRegionReadSeeks<=1", "dataPassesPerSheet=1", "staged bytes stay within temporary budget", "cleanup after injected write and read failures"]
+    }
+  ]
+}

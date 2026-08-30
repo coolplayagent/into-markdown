@@ -3,7 +3,7 @@ use crate::workbook::calamine_adapter::convert_xlsb;
 use crate::workbook::orchestrator::convert_workbook;
 use crate::workbook::preflight::preflight_package;
 use base64::Engine as _;
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
 
 #[test]
 fn cancellation_after_large_xlsb_preflight_stops_at_calamine_boundary() {
@@ -96,8 +96,9 @@ fn authenticated_workbook_credit_is_exact_and_recovers_on_error_and_unwind() {
     let mut error_parent = error_context.reserve_memory(error_plan).unwrap();
     {
         let credit = error_context.with_memory_credit(&mut error_parent).unwrap();
+        let strict = ConversionOptions { error_policy: ErrorPolicy::Strict, ..options.clone() };
         assert!(matches!(
-            convert_workbook(&corrupt, &options, &credit),
+            convert_workbook(&corrupt, &strict, &credit),
             Err(ConversionError::Malformed { .. })
         ));
         assert_eq!(credit.reserved_memory_bytes(), 0);

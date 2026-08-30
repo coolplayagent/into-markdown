@@ -12,7 +12,7 @@ use crate::workbook::opc::relationships::{
     Relationship, is_relationship_kind, parse_relationships, relationship_part,
 };
 use crate::workbook::schema::{CHART_CT, PACKAGE_REL_CT};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader as XmlReader;
 use std::collections::BTreeSet;
@@ -75,7 +75,7 @@ pub(super) fn extract_drawing_objects(
     assets: &mut ExtractedAssets,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<(), ConversionError> {
+) -> Result<u64, ConversionError> {
     let drawing_part = &drawing_relationship.target;
     let index = zip
         .index_for_name(drawing_part)
@@ -83,7 +83,7 @@ pub(super) fn extract_drawing_objects(
     let drawing_xml = read_entry(zip, index, drawing_part)?;
     let references = parse_drawing_references(&drawing_xml, drawing_part, options, context)?;
     if references.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     let drawing_rels_path = relationship_part(drawing_part);
     require_package_part(package_parts, &drawing_rels_path)?;
@@ -94,11 +94,7 @@ pub(super) fn extract_drawing_objects(
     let rels_xml = read_entry(zip, rels_index, &drawing_rels_path)?;
     let relationships =
         parse_relationships(&rels_xml, drawing_part, &drawing_rels_path, options, context)?;
-    if relationships.values().any(|relationship| relationship.external) {
-        return Err(ConversionError::Unsupported {
-            detail: format!("external drawing relationship is forbidden ({drawing_rels_path})"),
-        });
-    }
+    let mut omitted_images = 0_u64;
     for reference in references {
         context.checkpoint()?;
         let relationship = relationships.get(&reference.relationship_id).ok_or_else(|| {
@@ -107,6 +103,11 @@ pub(super) fn extract_drawing_objects(
                 format!("missing drawing relationship {}", reference.relationship_id),
             )
         })?;
+        if relationship.external {
+            return Err(ConversionError::Unsupported {
+                detail: format!("external drawing object is forbidden ({drawing_rels_path})"),
+            });
+        }
         require_package_part(package_parts, &relationship.target)?;
         match reference.kind {
             DrawingReferenceKind::Chart => {
@@ -138,7 +139,17 @@ pub(super) fn extract_drawing_objects(
                 let declared = content_types.for_part(&relationship.target).ok_or_else(|| {
                     malformed(Some(&relationship.target), "image target has no content type")
                 })?;
-                let image = supported_image(&relationship.target, declared)?;
+                let image = match supported_image(&relationship.target, declared) {
+                    Ok(image) => image,
+                    Err(_)
+                        if options.error_policy == ErrorPolicy::BestEffort
+                            && known_unsupported_image(&relationship.target, declared) =>
+                    {
+                        omitted_images = omitted_images.saturating_add(1);
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let media_index = zip.index_for_name(&relationship.target).ok_or_else(|| {
                     malformed(Some(&relationship.target), "image target is missing")
                 })?;
@@ -181,7 +192,16 @@ pub(super) fn extract_drawing_objects(
             }
         }
     }
-    Ok(())
+    Ok(omitted_images)
+}
+
+fn known_unsupported_image(part: &str, declared: &str) -> bool {
+    let extension =
+        std::path::Path::new(part).extension().and_then(|value| value.to_str()).unwrap_or_default();
+    matches!(
+        (declared, extension.to_ascii_lowercase().as_str()),
+        ("image/x-emf" | "image/emf", "emf") | ("image/x-wmf" | "image/wmf", "wmf")
+    )
 }
 
 fn parse_chart_title(

@@ -1,7 +1,9 @@
-use crate::workbook::calamine_adapter::{convert_xlsb, convert_xlsx};
+use crate::workbook::calamine_adapter::convert_xlsb;
 use crate::workbook::error::limit;
 use crate::workbook::model::WorkbookKind;
 use crate::workbook::preflight::preflight_package;
+use crate::workbook::resource_profile::xlsx_auto_profile;
+use crate::workbook::xlsx::adapter::convert_xlsx;
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput, ExecutionContext,
     SourceContentEvidence, document_is_empty, estimate_retained_output,
@@ -27,7 +29,8 @@ pub(super) fn convert_workbook(
 
     let mut output = match preflight.kind {
         WorkbookKind::Xml => {
-            convert_xlsx(bytes, &preflight.sheet_bounds, &preflight.extras, options, context)?
+            let profiled_options = xlsx_auto_profile(options, available);
+            convert_xlsx(bytes, &preflight, &profiled_options, context)?
         }
         WorkbookKind::Binary => convert_xlsb(
             bytes,
@@ -98,15 +101,13 @@ pub(super) fn convert_workbook(
     output.document.validate().map_err(|error| ConversionError::Internal {
         detail: format!("workbook converter produced invalid IR: {error}"),
     })?;
-    let engine_owned_peak =
-        estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?
-            .checked_add(estimate_validation_working_set(
-                &output.document,
-                &output.assets,
-                &output.diagnostics,
-            )?)
-            .and_then(|value| value.checked_add(workbook_provenance_plan(&output.document.blocks)))
-            .ok_or_else(|| limit("max_memory_bytes", "engine workbook validation peak overflow"))?;
+    let retained = estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
+    let validation =
+        estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?;
+    let engine_owned_peak = retained
+        .checked_add(validation)
+        .and_then(|value| value.checked_add(workbook_provenance_plan(&output.document.blocks)))
+        .ok_or_else(|| limit("max_memory_bytes", "engine workbook validation peak overflow"))?;
     if engine_owned_peak > preflight.memory_peak {
         return Err(limit(
             "max_memory_bytes",

@@ -3,7 +3,7 @@ use crate::workbook::cell::parse_cell_ref;
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::model::CellCoordinate;
 use crate::workbook::opc::relationships::{
-    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace,
+    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace, validate_xml_reference,
 };
 use crate::workbook::schema::{MAX_EXCEL_COLUMNS, MAX_EXCEL_ROWS};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, InlineMark};
@@ -140,13 +140,33 @@ pub(super) fn parse_sheet_cell_metadata(
     let mut current_row = None;
     let mut next_row = 0_u32;
     let mut next_column = 0_u32;
+    let mut opaque_depth = 0_u16;
     loop {
         context.checkpoint()?;
         match reader.read_resolved_event() {
+            Ok((_, Event::DocType(_))) => return Err(malformed(Some(part), "DTD is forbidden")),
+            Ok((_, Event::GeneralRef(reference))) => {
+                validate_xml_reference(reference.as_ref(), part)?;
+            }
+            Ok((_, Event::Start(_))) if opaque_depth > 0 => {
+                opaque_depth = opaque_depth
+                    .checked_add(1)
+                    .ok_or_else(|| limit("max_nesting_depth", "extension depth overflow"))?;
+            }
+            Ok((namespace, Event::Start(_))) if !is_spreadsheet_namespace(&namespace) => {
+                if options.error_policy != into_markdown_core::ErrorPolicy::BestEffort {
+                    return Err(malformed(Some(part), "unsupported worksheet extension namespace"));
+                }
+                opaque_depth = 1;
+            }
+            Ok((namespace, Event::Empty(_)))
+                if opaque_depth > 0 || !is_spreadsheet_namespace(&namespace) => {}
             Ok((namespace, raw_event @ (Event::Start(_) | Event::Empty(_)))) => {
                 let is_empty = matches!(raw_event, Event::Empty(_));
                 let (Event::Start(event) | Event::Empty(event)) = raw_event else { unreachable!() };
-                require_spreadsheet_namespace(&namespace, part)?;
+                if !is_spreadsheet_namespace(&namespace) {
+                    continue;
+                }
                 match event.local_name().as_ref() {
                     b"c" => {
                         let row = current_row.ok_or_else(|| {
@@ -180,9 +200,17 @@ pub(super) fn parse_sheet_cell_metadata(
                             let style_id = style_id
                                 .parse::<usize>()
                                 .map_err(|_| malformed(Some(part), "invalid cell style id"))?;
-                            let style = styles.get(style_id).ok_or_else(|| {
-                                malformed(Some(part), format!("missing cell style {style_id}"))
-                            })?;
+                            let Some(style) = styles.get(style_id) else {
+                                if options.error_policy
+                                    == into_markdown_core::ErrorPolicy::BestEffort
+                                {
+                                    continue;
+                                }
+                                return Err(malformed(
+                                    Some(part),
+                                    format!("missing cell style {style_id}"),
+                                ));
+                            };
                             if !style.is_empty() {
                                 marks.insert(coordinate, style.clone());
                             }
@@ -241,7 +269,11 @@ pub(super) fn parse_sheet_cell_metadata(
                     _ => {}
                 }
             }
-            Ok((_, Event::End(event))) if event.local_name().as_ref() == b"row" => {
+            Ok((_, Event::End(_))) if opaque_depth > 0 => opaque_depth -= 1,
+            Ok((namespace, Event::End(event)))
+                if is_spreadsheet_namespace(&namespace)
+                    && event.local_name().as_ref() == b"row" =>
+            {
                 let row = current_row.take().ok_or_else(|| {
                     malformed(Some(part), "worksheet metadata row end is unmatched")
                 })?;
@@ -256,6 +288,9 @@ pub(super) fn parse_sheet_cell_metadata(
         if marks.len() as u64 > options.limits.max_table_cells {
             return Err(limit("max_table_cells", "too many styled cells"));
         }
+    }
+    if opaque_depth != 0 {
+        return Err(malformed(Some(part), "incomplete worksheet extension"));
     }
     Ok((marks, hidden_rows, hidden_columns))
 }

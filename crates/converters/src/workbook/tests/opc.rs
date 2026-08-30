@@ -4,11 +4,12 @@ use super::support::{
 };
 use crate::workbook::schema::{
     PACKAGE_REL_CT, ROOT_OFFICE_DOCUMENT, ROOT_OFFICE_DOCUMENT_STRICT, SPREADSHEET_BINARY_MAIN,
-    SPREADSHEET_MAIN, XLSB_CHARTSHEET_CT, XLSB_DIALOGSHEET_CT, XLSB_MACROSHEET_CT,
-    XML_CHARTSHEET_CT, XML_DIALOGSHEET_CT, XML_MACROSHEET_CT, XML_WORKSHEET_CT,
+    SPREADSHEET_MACRO_TEMPLATE_MAIN, SPREADSHEET_MAIN, SPREADSHEET_TEMPLATE_MAIN,
+    XLSB_CHARTSHEET_CT, XLSB_DIALOGSHEET_CT, XLSB_MACROSHEET_CT, XML_CHARTSHEET_CT,
+    XML_DIALOGSHEET_CT, XML_MACROSHEET_CT, XML_WORKSHEET_CT,
 };
 use crate::workbook::xlsx::tables::{scan_xml_shared_strings, scan_xml_style_counts};
-use into_markdown_core::{ConversionError, ConversionOptions};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy};
 
 #[test]
 fn dtd_fails_before_workbook_parse() {
@@ -157,6 +158,26 @@ fn opc_root_and_content_type_authority_is_fail_closed() {
 }
 
 #[test]
+fn xml_workbook_template_content_types_are_accepted() {
+    let base = xlsx(
+        r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData/></worksheet>"#,
+    );
+    for content_type in [SPREADSHEET_TEMPLATE_MAIN, SPREADSHEET_MACRO_TEMPLATE_MAIN] {
+        let template = rewrite_package(
+            &base,
+            &[(
+                "[Content_Types].xml",
+                format!(
+                    r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="{PACKAGE_REL_CT}"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="{content_type}"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="{XML_WORKSHEET_CT}"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#
+                ),
+            )],
+            &[],
+        );
+        assert!(convert(&template, &ConversionOptions::default()).is_ok(), "{content_type}");
+    }
+}
+
+#[test]
 fn duplicate_logical_sheet_targets_are_rejected() {
     let base = xlsx(
         r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1"/><sheetData/></worksheet>"#,
@@ -208,7 +229,16 @@ fn nonworksheet_sheet_relationships_are_consistently_unsupported_before_calamine
             ("xl/_rels/workbook.xml.rels", workbook_relationships.as_str()),
             (sheet_part.as_str(), sheet.as_str()),
         ]);
-        let error = convert(&bytes, &ConversionOptions::default()).unwrap_err();
+        let best_effort = convert(&bytes, &ConversionOptions::default()).unwrap();
+        assert!(
+            best_effort
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "spreadsheet.extension.omitted")
+        );
+        let strict =
+            ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
+        let error = convert(&bytes, &strict).unwrap_err();
         assert!(
             matches!(error, ConversionError::Unsupported { .. }),
             "{relationship_kind}: {error:?}"

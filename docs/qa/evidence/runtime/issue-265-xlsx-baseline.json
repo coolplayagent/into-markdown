@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-30T11:51:29+08:00",
+  "host": {
+    "os": "Windows x86_64",
+    "cpu": "Intel Core i5-13600KF",
+    "physicalMemoryGiB": 31.8
+  },
+  "source": {
+    "revision": "9e797178e7072a84146da6b0a3bfb22d8d62fde5",
+    "binarySha256": "a88307c160e8e01871c8008a7585e0e388200a0385f8d028a4d43d165cbb527b",
+    "profile": "release"
+  },
+  "corpus": {
+    "authority": "issue-265-xlsx-corpus.json",
+    "raw": 406,
+    "validAllowed": 367,
+    "validHardLimit": 1,
+    "invalid": 38
+  },
+  "command": [
+    "into-md.exe",
+    "inputs/xlsx",
+    "--recursive",
+    "--output-dir",
+    "outputs",
+    "--conflict",
+    "overwrite",
+    "--report",
+    "report.json",
+    "--no-config",
+    "--ocr",
+    "off",
+    "--asset-mode",
+    "omit",
+    "--error-policy",
+    "best-effort",
+    "--log-format",
+    "json"
+  ],
+  "run": {
+    "exitCode": 10,
+    "wallDurationMs": 38601.7848,
+    "peakRssBytes": 391020544,
+    "reportSha256": "4169f51d1614270162ba346fc8dd27b58438772ca4b3380ddeef95caedbc6c51"
+  },
+  "results": {
+    "raw": {"count": 406, "success": 234, "nonempty": 233},
+    "validAllowed": {"count": 367, "success": 232, "nonempty": 232, "outputBytes": 4003120},
+    "validHardLimit": {"count": 1, "success": 0, "nonempty": 0},
+    "invalid": {"count": 38, "success": 2, "nonempty": 1}
+  },
+  "validAllowedFailures": {
+    "malformed": 108,
+    "unsupported": 25,
+    "resourceLimit": 2
+  },
+  "instrumentationUnavailableAtRevision": [
+    "per-item durationMs",
+    "per-item processingDurationMs",
+    "request and peak lease bytes",
+    "temporary high-water and bytes",
+    "read calls and bytes",
+    "seek calls",
+    "cell-recall oracle"
+  ],
+  "interpretation": "The baseline records only fields exposed by clean main. Missing shared-resource and single-prepare instrumentation is deferred to the reviewed #272 ownership contract; it is not inferred from process RSS or conversion status."
+}

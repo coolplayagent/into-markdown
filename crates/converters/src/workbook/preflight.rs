@@ -3,7 +3,7 @@ use crate::workbook::budget::{
 };
 use crate::workbook::calamine_adapter::validate_extras_fields;
 use crate::workbook::error::{limit, malformed, warning};
-use crate::workbook::extras::extract_sheet_extras;
+use crate::workbook::extras::{ExtractedSheetExtras, extract_sheet_extras};
 use crate::workbook::model::{PackagePreflight, WorkbookKind, max_optional};
 use crate::workbook::opc::authority::{
     reject_external_workbook_relationships, root_workbook_authority, validate_xml_part,
@@ -13,15 +13,21 @@ use crate::workbook::opc::content_types::{
     parse_content_types, require_content_type, validate_content_type_authority,
 };
 use crate::workbook::opc::package::{PackageEntry, canonical_part_name, has_extension, read_entry};
+use crate::workbook::resource_profile::xlsx_auto_profile;
 use crate::workbook::schema::{
     XLSB_SHARED_STRINGS_CT, XLSB_STYLES_CT, XML_SHARED_STRINGS_CT, XML_STYLES_CT,
 };
 use crate::workbook::xlsb::sheet::scan_xlsb_sheet;
 use crate::workbook::xlsb::tables::{scan_binary_shared_strings, scan_binary_style_counts};
-use crate::workbook::xlsx::sheet::scan_xlsx_sheet;
-use crate::workbook::xlsx::tables::{scan_xml_shared_strings, scan_xml_style_counts};
+use crate::workbook::xlsx::emitter::{NATIVE_TABLE_NODE_CEILING, table_node_upper_bound_for};
+use crate::workbook::xlsx::regions::plan_sheet_regions;
+use crate::workbook::xlsx::regions::{MergeRange, SparseRegion, paginate_region};
+use crate::workbook::xlsx::shared_strings::read_selected;
+use crate::workbook::xlsx::sheet_index::read_layout;
+use crate::workbook::xlsx::tables::{scan_xml_shared_strings_selected, scan_xml_styles};
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ExecutionContext, ResourceReservation, SourceLocator,
+    ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, ResourceReservation,
+    SourceLocator,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Cursor;
@@ -35,6 +41,7 @@ pub(super) fn preflight_package(
     available_memory: u64,
 ) -> Result<(PackagePreflight, ResourceReservation), ConversionError> {
     const SCANNER_BOOTSTRAP_BYTES: u64 = 8 * 1024;
+    let caller_options = options;
     // Even the allocation-free central-directory walk may need to construct a
     // stable error detail. Authenticate that bounded owner before inspecting
     // attacker bytes, then grow this same permit as successive plans become
@@ -173,10 +180,51 @@ pub(super) fn preflight_package(
         .ok_or_else(|| malformed(Some("[Content_Types].xml"), "required part is missing"))?;
     let content_types_xml = read_entry(&mut zip, content_index, "[Content_Types].xml")?;
     let content_types = parse_content_types(&content_types_xml, options, context)?;
-    validate_content_type_authority(&content_types, &exact)?;
+    let untyped_parts = exact
+        .iter()
+        .filter(|part| {
+            part.as_str() != "[Content_Types].xml" && content_types.for_part(part).is_none()
+        })
+        .count();
+    if untyped_parts > 0 && options.error_policy == ErrorPolicy::BestEffort {
+        diagnostics.push(warning(
+            "spreadsheet.extension.omitted",
+            format!(
+                "{untyped_parts} unreferenced part(s) without content type authority were ignored"
+            ),
+            None,
+        ));
+    }
+    match validate_content_type_authority(&content_types, &exact, options.error_policy) {
+        Err(ConversionError::Malformed { part, detail })
+            if options.error_policy == ErrorPolicy::BestEffort
+                && detail == "orphan content-type Override" =>
+        {
+            diagnostics.push(warning(
+                "spreadsheet.extension.omitted",
+                format!(
+                    "orphan content-type declaration was ignored ({})",
+                    part.as_deref().unwrap_or("unknown part")
+                ),
+                part.map(|part| SourceLocator { part: Some(part), ..SourceLocator::default() }),
+            ));
+        }
+        result => result?,
+    }
     let (kind, content_macro) =
         root_workbook_authority(&mut zip, &entry_map, &content_types, options, context)?;
     macro_present |= content_macro;
+    let profiled_options =
+        (kind == WorkbookKind::Xml).then(|| xlsx_auto_profile(options, available_memory));
+    let options = profiled_options.as_ref().unwrap_or(options);
+    if let Some((_, name, size)) =
+        entries.iter().find(|(_, _, size)| *size > options.limits.max_archive_entry_bytes)
+    {
+        return Err(limit(
+            "max_archive_entry_bytes",
+            format!("{name}: {size} > {}", options.limits.max_archive_entry_bytes),
+        ));
+    }
 
     // Every XML part is parsed once under bounded depth before the third-party
     // workbook parser sees it. DTD/entity declarations are always rejected.
@@ -187,6 +235,14 @@ pub(super) fn preflight_package(
         .collect::<Vec<_>>();
     for (index, name) in xml_indices {
         context.checkpoint()?;
+        if options.error_policy == ErrorPolicy::BestEffort
+            && name.to_ascii_lowercase().starts_with("xl/worksheets/")
+        {
+            // The native layout scanner below performs the security and XML
+            // checks together with coordinate authentication. Parsing the
+            // same worksheet here would make prepare duplicate work.
+            continue;
+        }
         let xml = read_entry(&mut zip, index, &name)?;
         validate_xml_part(&xml, &name, options, context)?;
     }
@@ -196,17 +252,35 @@ pub(super) fn preflight_package(
     for (index, name, _) in &entries {
         if has_extension(name, "rels") {
             let rels = read_entry(&mut zip, *index, name)?;
-            reject_external_workbook_relationships(&rels, name, options, context)?;
+            match reject_external_workbook_relationships(&rels, name, options, context) {
+                Err(ConversionError::Unsupported { detail })
+                    if options.error_policy == ErrorPolicy::BestEffort =>
+                {
+                    diagnostics.push(warning(
+                        "spreadsheet.externalRelationship.omitted",
+                        detail,
+                        Some(SourceLocator {
+                            part: Some(name.clone()),
+                            ..SourceLocator::default()
+                        }),
+                    ));
+                }
+                result => result?,
+            }
         }
     }
 
     let workbook_parts =
         workbook_sheet_parts(&mut zip, kind, &exact, &content_types, options, context)?;
+    diagnostics.extend(workbook_parts.diagnostics);
+    let sheet_order = workbook_parts.sheet_order;
     let sheet_parts = workbook_parts.sheets;
     let reachable_sheets: BTreeSet<_> = sheet_parts.values().map(String::as_str).collect();
     let mut authenticated_bounds = BTreeMap::<String, (u32, u32)>::new();
     let mut declared_bounds = BTreeMap::<String, (u32, u32)>::new();
     let mut inventory = workbook_parts.inventory;
+    let mut xml_cell_counts = BTreeMap::<String, u64>::new();
+    let mut xml_layouts = BTreeMap::new();
     for (index, name, _) in &entries {
         let lower = name.to_ascii_lowercase();
         if lower.starts_with("xl/worksheets/")
@@ -222,8 +296,38 @@ pub(super) fn preflight_package(
             && has_extension(&lower, "xml")
         {
             let data = read_entry(&mut zip, *index, name)?;
-            let (bounds, declared, scanned) = scan_xlsx_sheet(&data, name, options, context)?;
-            inventory.absorb_sheet(&scanned);
+            let layout = read_layout(Cursor::new(&data), name, options, context)?;
+            if layout.physical_cells > 1_000_000
+                && layout.populated_cells.saturating_mul(64) < layout.physical_cells
+            {
+                return Err(limit(
+                    "max_table_cells",
+                    "worksheet contains an excessive number of empty physical cell records",
+                ));
+            }
+            let bounds = layout.bounds;
+            let declared = layout.declared_bounds;
+            xml_cell_counts.insert(name.clone(), layout.physical_cells);
+            inventory.cells = inventory.cells.saturating_add(layout.physical_cells);
+            inventory.formulas = inventory.formulas.saturating_add(layout.formulas);
+            inventory.formula_bytes = inventory.formula_bytes.saturating_add(layout.formula_bytes);
+            inventory.max_formula_bytes = inventory.max_formula_bytes.max(layout.max_formula_bytes);
+            inventory.cell_value_bytes =
+                inventory.cell_value_bytes.saturating_add(layout.value_bytes);
+            inventory.max_cell_value_bytes =
+                inventory.max_cell_value_bytes.max(layout.max_value_bytes);
+            inventory.merge_ranges = inventory
+                .merge_ranges
+                .saturating_add(u64::try_from(layout.merges.len()).unwrap_or(u64::MAX));
+            inventory.max_shared_string_index = max_optional(
+                inventory.max_shared_string_index,
+                layout.required_shared.iter().next_back().copied(),
+            );
+            inventory.max_style_index =
+                max_optional(inventory.max_style_index, layout.max_style_index);
+            inventory.shared_formula_slots =
+                inventory.shared_formula_slots.saturating_add(layout.shared_formula_slots);
+            xml_layouts.insert(name.clone(), layout);
             (bounds, declared)
         } else if reachable_sheets.contains(name.as_str()) && has_extension(&lower, "bin") {
             let data = read_entry(&mut zip, *index, name)?;
@@ -257,21 +361,56 @@ pub(super) fn preflight_package(
         if let Some((last_row, last_column)) = bounds {
             let rows = u64::from(last_row) + 1;
             let columns = u64::from(last_column) + 1;
-            enforce_grid(rows, columns, options)?;
+            if kind == WorkbookKind::Binary {
+                enforce_grid(rows, columns, options)?;
+            }
             authenticated_bounds.insert(name.clone(), (last_row, last_column));
         }
     }
+    let xml_layouts = sheet_parts
+        .iter()
+        .filter_map(|(sheet_name, part)| {
+            xml_layouts.remove(part).map(|layout| (sheet_name.clone(), layout))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let required_shared = xml_layouts
+        .values()
+        .flat_map(|layout| layout.required_shared.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut xml_shared_strings = BTreeMap::new();
+    let mut xml_display_profile = None;
+    let mut xml_styles_passes = 0_u64;
+    let mut xml_shared_string_passes = 0_u64;
     match kind {
         WorkbookKind::Xml => {
             if exact.contains("xl/styles.xml") {
                 require_content_type(&content_types, "xl/styles.xml", &[XML_STYLES_CT])?;
                 let entry = entry_map.get("xl/styles.xml").unwrap();
                 let data = read_entry(&mut zip, entry.index, "xl/styles.xml")?;
-                let styles = scan_xml_style_counts(&data, options, context)?;
-                inventory.styles = styles.styles;
-                inventory.fonts = styles.fonts;
-                inventory.number_formats = styles.number_formats;
-                inventory.style_format_bytes = styles.style_format_bytes;
+                xml_styles_passes = xml_styles_passes.saturating_add(1);
+                match scan_xml_styles(&data, caller_options, context) {
+                    Ok((styles, display)) => {
+                        inventory.styles = styles.styles;
+                        inventory.fonts = styles.fonts;
+                        inventory.number_formats = styles.number_formats;
+                        inventory.style_format_bytes = styles.style_format_bytes;
+                        xml_display_profile =
+                            Some(display.with_date_system(workbook_parts.date_1904));
+                    }
+                    Err(ConversionError::Malformed { detail, .. })
+                        if options.error_policy == ErrorPolicy::BestEffort =>
+                    {
+                        diagnostics.push(warning(
+                            "spreadsheet.extension.omitted",
+                            format!("non-core style metadata was omitted: {detail}"),
+                            Some(SourceLocator {
+                                part: Some("xl/styles.xml".into()),
+                                ..SourceLocator::default()
+                            }),
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             if exact.contains("xl/sharedStrings.xml") {
                 require_content_type(
@@ -281,9 +420,46 @@ pub(super) fn preflight_package(
                 )?;
                 let entry = entry_map.get("xl/sharedStrings.xml").unwrap();
                 let data = read_entry(&mut zip, entry.index, "xl/sharedStrings.xml")?;
-                let strings = scan_xml_shared_strings(&data, options, context)?;
-                inventory.shared_strings = strings.shared_strings;
-                inventory.shared_string_bytes = strings.shared_string_bytes;
+                xml_shared_string_passes = xml_shared_string_passes.saturating_add(1);
+                match scan_xml_shared_strings_selected(
+                    &data,
+                    &required_shared,
+                    caller_options,
+                    context,
+                ) {
+                    Ok((strings, selected)) => {
+                        inventory.shared_strings = strings.shared_strings;
+                        inventory.shared_string_bytes = strings.shared_string_bytes;
+                        inventory.max_shared_string_bytes = strings.max_shared_string_bytes;
+                        xml_shared_strings = selected;
+                    }
+                    Err(ConversionError::Malformed { detail, .. })
+                        if options.error_policy == ErrorPolicy::BestEffort =>
+                    {
+                        inventory.shared_strings = inventory
+                            .max_shared_string_index
+                            .map_or(0, |index| index.saturating_add(1));
+                        inventory.shared_string_bytes =
+                            entry_size(&entries, "xl/sharedStrings.xml");
+                        xml_shared_strings = read_selected(
+                            Cursor::new(&data),
+                            &required_shared,
+                            "xl/sharedStrings.xml",
+                            options,
+                            context,
+                        )?;
+                        xml_shared_string_passes = xml_shared_string_passes.saturating_add(1);
+                        diagnostics.push(warning(
+                            "spreadsheet.extension.omitted",
+                            format!("non-core shared-string metadata was normalized: {detail}"),
+                            Some(SourceLocator {
+                                part: Some("xl/sharedStrings.xml".into()),
+                                ..SourceLocator::default()
+                            }),
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
         WorkbookKind::Binary => {
@@ -310,6 +486,12 @@ pub(super) fn preflight_package(
             }
         }
     }
+    if kind == WorkbookKind::Xml && xml_display_profile.is_none() {
+        xml_display_profile = Some(
+            crate::workbook::xlsx::formulas::DisplayProfile::default()
+                .with_date_system(workbook_parts.date_1904),
+        );
+    }
     if inventory.max_shared_string_index.is_some_and(|index| index >= inventory.shared_strings) {
         return Err(malformed(
             None,
@@ -317,12 +499,26 @@ pub(super) fn preflight_package(
         ));
     }
     if inventory.max_style_index.is_some_and(|index| index != 0 && index >= inventory.styles) {
-        return Err(malformed(
-            None,
-            "worksheet style reference exceeds the authenticated style table",
-        ));
+        if options.error_policy == ErrorPolicy::BestEffort {
+            diagnostics.push(warning(
+                "spreadsheet.style.omitted",
+                "worksheet references missing optional style records; affected cells use raw display"
+                    .into(),
+                None,
+            ));
+        } else {
+            return Err(malformed(
+                None,
+                "worksheet style reference exceeds the authenticated style table",
+            ));
+        }
     }
-    let (extras, assets) = extract_sheet_extras(
+    let ExtractedSheetExtras {
+        sheets: mut extras,
+        table_ranges,
+        mut assets,
+        diagnostics: extras_diagnostics,
+    } = extract_sheet_extras(
         &mut zip,
         kind,
         &sheet_parts,
@@ -331,11 +527,23 @@ pub(super) fn preflight_package(
         options,
         context,
     )?;
+    diagnostics.extend(extras_diagnostics);
+    let mut xml_regions = BTreeMap::new();
+    let mut empty_cell_slack = inventory.cells.div_ceil(10);
+    for sheet_name in &sheet_order {
+        if let Some(layout) = xml_layouts.get(sheet_name) {
+            let tables = table_ranges.get(sheet_name).map(Vec::as_slice).unwrap_or_default();
+            let plan = plan_sheet_regions(layout, tables, empty_cell_slack)?;
+            empty_cell_slack = empty_cell_slack.saturating_sub(plan.empty_cells_used);
+            xml_regions.insert(sheet_name.clone(), plan.regions);
+        }
+    }
     validate_extras_fields(&extras, options)?;
     let mut cell_capacity = 0_u64;
     let mut sheet_bounds = BTreeMap::new();
     for (sheet_name, sheet_part) in &sheet_parts {
         let mut bounds = authenticated_bounds.get(sheet_part).copied();
+        let mut corrected_related_bounds = false;
         if let Some(sheet_extras) = extras.get(sheet_name) {
             for end in sheet_extras
                 .hyperlinks
@@ -351,10 +559,26 @@ pub(super) fn preflight_package(
                     .get(sheet_part)
                     .is_some_and(|declared| end.0 > declared.0 || end.1 > declared.1)
                 {
-                    return Err(malformed(
-                        Some(sheet_part),
-                        "worksheet dimension under-reports related sheet metadata",
-                    ));
+                    if options.error_policy != ErrorPolicy::BestEffort {
+                        return Err(malformed(
+                            Some(sheet_part),
+                            "worksheet dimension under-reports related sheet metadata",
+                        ));
+                    }
+                    if !corrected_related_bounds {
+                        diagnostics.push(warning(
+                            "spreadsheet.dimension.corrected",
+                            format!(
+                                "worksheet {sheet_name} dimension was extended to related metadata"
+                            ),
+                            Some(SourceLocator {
+                                sheet: Some(sheet_name.clone()),
+                                part: Some(sheet_part.clone()),
+                                ..SourceLocator::default()
+                            }),
+                        ));
+                        corrected_related_bounds = true;
+                    }
                 }
                 bounds = Some(
                     bounds.map_or(end, |current| (current.0.max(end.0), current.1.max(end.1))),
@@ -364,12 +588,17 @@ pub(super) fn preflight_package(
         if let Some((last_row, last_column)) = bounds {
             let rows = u64::from(last_row) + 1;
             let columns = u64::from(last_column) + 1;
-            enforce_grid(rows, columns, options)?;
+            if kind == WorkbookKind::Binary {
+                enforce_grid(rows, columns, options)?;
+            }
+            let planned_cells = if kind == WorkbookKind::Xml {
+                xml_cell_counts.get(sheet_part).copied().unwrap_or_default()
+            } else {
+                rows.checked_mul(columns)
+                    .ok_or_else(|| limit("max_table_cells", "worksheet cell count overflow"))?
+            };
             cell_capacity = cell_capacity
-                .checked_add(
-                    rows.checked_mul(columns)
-                        .ok_or_else(|| limit("max_table_cells", "worksheet cell count overflow"))?,
-                )
+                .checked_add(planned_cells)
                 .ok_or_else(|| limit("max_table_cells", "workbook cell count overflow"))?;
             sheet_bounds.insert(sheet_name.clone(), (last_row, last_column));
         }
@@ -390,11 +619,13 @@ pub(super) fn preflight_package(
             .checked_add(u64::try_from(count).unwrap_or(u64::MAX))
             .ok_or_else(|| limit("max_memory_bytes", "worksheet extras count overflow"))
     })?;
+    let text_multiplier = if kind == WorkbookKind::Xml { 1 } else { 4 };
     let text_memory = inventory
         .text_bytes()?
-        .checked_mul(4)
+        .checked_mul(text_multiplier)
         .ok_or_else(|| limit("max_memory_bytes", "workbook text memory overflow"))?;
-    let formula_materialized_memory = inventory.formula_materialized_bytes()?;
+    let formula_materialized_memory =
+        if kind == WorkbookKind::Xml { 0 } else { inventory.formula_materialized_bytes()? };
     let xlsb_formula_preallocation_memory = inventory
         .xlsb_formula_preallocation_cells
         .checked_mul(
@@ -414,16 +645,22 @@ pub(super) fn preflight_package(
         .saturating_add(inventory.number_formats)
         .checked_mul(128)
         .ok_or_else(|| limit("max_memory_bytes", "workbook metadata memory overflow"))?;
-    let paged = requires_paged_grid(cell_capacity, 1);
+    let paged = kind == WorkbookKind::Xml || requires_paged_grid(cell_capacity, 1);
     // Large sheets use bounded TSV page blocks rather than one paragraph node per
     // cell. Calamine's dense value/formula ranges still coexist with accumulated
     // page text, but validation and provenance scale with pages rather than cells.
     let page_nodes = sheet_bounds
         .values()
         .fold(0_u64, |total, (row, _)| total.saturating_add((u64::from(*row) + 2_048) / 2_048));
-    let calamine_range_memory = cell_capacity
-        .checked_mul(if paged { 64 } else { 512 })
-        .ok_or_else(|| limit("max_memory_bytes", "Calamine range memory overflow"))?;
+    let calamine_range_memory = if kind == WorkbookKind::Xml {
+        // SpreadsheetML cells are streamed to the request-scoped staged data
+        // plane and never coexist as Calamine value/formula ranges.
+        0
+    } else {
+        cell_capacity
+            .checked_mul(if paged { 64 } else { 512 })
+            .ok_or_else(|| limit("max_memory_bytes", "Calamine range memory overflow"))?
+    };
     let retained_ir_memory = if paged {
         cell_capacity
             .checked_mul(4)
@@ -434,10 +671,27 @@ pub(super) fn preflight_package(
             .checked_mul(2_048)
             .ok_or_else(|| limit("max_memory_bytes", "workbook retained IR overflow"))?
     };
-    let validation_nodes = if paged { page_nodes } else { cell_capacity };
-    let validation_memory = validation_nodes
-        .checked_mul(12_288)
-        .and_then(|value| value.checked_add(extras_count.saturating_mul(8_192)))
+    let (validation_nodes, validation_memory) = if kind == WorkbookKind::Xml {
+        let (table_nodes, tsv_nodes) =
+            xml_validation_nodes(&sheet_order, &xml_layouts, &xml_regions, &extras)?;
+        let nodes = table_nodes
+            .checked_add(tsv_nodes)
+            .ok_or_else(|| limit("max_memory_bytes", "workbook node count overflow"))?;
+        let memory = table_nodes
+            .checked_mul(12_288)
+            .and_then(|value| value.checked_add(tsv_nodes.saturating_mul(1_024)))
+            .and_then(|value| value.checked_add(extras_count.saturating_mul(8_192)))
+            .ok_or_else(|| limit("max_memory_bytes", "workbook validation memory overflow"))?;
+        (nodes, memory)
+    } else if paged {
+        (page_nodes, page_nodes.saturating_mul(12_288))
+    } else {
+        (cell_capacity, cell_capacity.saturating_mul(12_288))
+    };
+    let extra_validation_memory =
+        if kind == WorkbookKind::Xml { 0 } else { extras_count.saturating_mul(8_192) };
+    let validation_memory = validation_memory
+        .checked_add(extra_validation_memory)
         .ok_or_else(|| limit("max_memory_bytes", "workbook validation memory overflow"))?;
     let provenance_nodes = validation_nodes
         .checked_add(extras_count)
@@ -458,7 +712,11 @@ pub(super) fn preflight_package(
         .and_then(|value| value.checked_add(metadata_memory))
         .and_then(|value| value.checked_add(extras_memory))
         .and_then(|value| value.checked_add(media_bytes))
-        .and_then(|value| value.checked_add(8 * 1024 * 1024))
+        // Keep a converter-local retained-output cushion inside the same
+        // authenticated request permit. This covers allocator capacity and
+        // Markdown transaction owners that are not represented by XML byte
+        // counts without increasing the caller's shared memory budget.
+        .and_then(|value| value.checked_add(24 * 1024 * 1024))
         .ok_or_else(|| limit("max_memory_bytes", "workbook peak memory overflow"))?;
     let decode_peak = package_materialization
         .checked_add(assets.decode_working_set_peak)
@@ -470,19 +728,62 @@ pub(super) fn preflight_package(
     // Codec construction is deliberately last: malformed image bytes are
     // decoded only after the complete retained/transient workbook peak has
     // passed against the engine-authenticated request credit.
-    assets.validate_images(options, context)?;
+    let invalid_assets = assets.validate_images(options, context)?;
+    if !invalid_assets.is_empty() {
+        for (sheet_name, sheet_extras) in &mut extras {
+            let before = sheet_extras.images.len();
+            sheet_extras.images.retain(|image| !invalid_assets.contains(&image.asset));
+            let omitted = before.saturating_sub(sheet_extras.images.len());
+            if omitted > 0 {
+                diagnostics.push(warning(
+                    "spreadsheet.image.omitted",
+                    format!("{omitted} unsupported or invalid image(s) were omitted"),
+                    Some(SourceLocator {
+                        sheet: Some(sheet_name.clone()),
+                        ..SourceLocator::default()
+                    }),
+                ));
+            }
+        }
+        assets.remove_invalid(&invalid_assets);
+        media_bytes = assets.total_bytes;
+    }
     // Transfer the concrete package allocation reservation into a single exact
     // workbook-owner reservation before any preflight-owned allocation can
     // outlive its original package model. This same authenticated reservation
     // remains live through Calamine range construction and accumulated IR.
     package_permit.grow(memory_peak.saturating_sub(package_materialization))?;
 
+    let xml_sheets = if kind == WorkbookKind::Xml {
+        sheet_order
+            .iter()
+            .filter_map(|sheet| {
+                sheet_parts.get(sheet).map(|part| {
+                    (
+                        sheet.clone(),
+                        (part.clone(), xml_cell_counts.get(part).copied().unwrap_or_default()),
+                    )
+                })
+            })
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     Ok((
         PackagePreflight {
             kind,
             macro_present,
             media_bytes,
             sheet_parts,
+            sheet_order,
+            xml_sheets,
+            xml_layouts,
+            xml_regions,
+            xml_shared_strings,
+            xml_display_profile,
+            xml_workbook_passes: u64::from(kind == WorkbookKind::Xml),
+            xml_styles_passes,
+            xml_shared_string_passes,
             sheet_bounds,
             extras,
             diagnostics,
@@ -492,4 +793,65 @@ pub(super) fn preflight_package(
         },
         package_permit,
     ))
+}
+
+fn entry_size(entries: &[(usize, String, u64)], target: &str) -> u64 {
+    entries.iter().find_map(|(_, name, size)| (name == target).then_some(*size)).unwrap_or_default()
+}
+
+fn xml_validation_nodes(
+    sheet_order: &[String],
+    layouts: &BTreeMap<String, crate::workbook::xlsx::sheet_index::SheetLayout>,
+    region_plans: &BTreeMap<String, Vec<SparseRegion>>,
+    extras: &BTreeMap<String, crate::workbook::model::SheetExtras>,
+) -> Result<(u64, u64), ConversionError> {
+    let mut table_total = 0_u64;
+    let mut paged_total = 0_u64;
+    for sheet_name in sheet_order {
+        let layout = layouts
+            .get(sheet_name)
+            .ok_or_else(|| malformed(None, format!("missing layout for worksheet {sheet_name}")))?;
+        let regions = region_plans.get(sheet_name).ok_or_else(|| {
+            malformed(None, format!("missing region plan for worksheet {sheet_name}"))
+        })?;
+        let sheet_extras = extras.get(sheet_name).cloned().unwrap_or_default();
+        let extras_nodes = u64::try_from(
+            sheet_extras.hyperlinks.len()
+                + sheet_extras.annotations.len()
+                + sheet_extras.chart_titles.len()
+                + sheet_extras.images.len(),
+        )
+        .unwrap_or(u64::MAX);
+        let table_nodes = table_node_upper_bound_for(regions, layout.physical_cells, extras_nodes)?;
+        let nodes = if regions.len() == 1 && table_nodes <= NATIVE_TABLE_NODE_CEILING {
+            table_nodes
+        } else {
+            let merges = layout
+                .merges
+                .iter()
+                .map(|(start, end)| MergeRange {
+                    first_row: start.0,
+                    last_row: end.0,
+                    first_column: start.1,
+                    last_column: end.1,
+                })
+                .collect::<Vec<_>>();
+            regions.iter().try_fold(1_u64.saturating_add(extras_nodes), |count, region| {
+                let pages =
+                    u64::try_from(paginate_region(*region, &merges)?.len()).unwrap_or(u64::MAX);
+                count
+                    .checked_add(pages)
+                    .ok_or_else(|| limit("max_memory_bytes", "worksheet page count overflow"))
+            })?
+        };
+        let target = if regions.len() == 1 && table_nodes <= NATIVE_TABLE_NODE_CEILING {
+            &mut table_total
+        } else {
+            &mut paged_total
+        };
+        *target = target
+            .checked_add(nodes)
+            .ok_or_else(|| limit("max_memory_bytes", "workbook node count overflow"))?;
+    }
+    Ok((table_total, paged_total))
 }
