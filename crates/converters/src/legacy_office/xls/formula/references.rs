@@ -5,7 +5,7 @@ use crate::workbook::cell::cell_name;
 pub(in crate::legacy_office::xls) struct References {
     names: Vec<String>,
     maximum_name_bytes: usize,
-    books: Vec<Option<u16>>,
+    local_books: Vec<bool>,
     xtis: Vec<(u16, u16, u16)>,
     invalid: bool,
 }
@@ -36,10 +36,11 @@ impl References {
     fn read_record(&mut self, kind: u16, input: &mut Tokens<'_>) -> Result<()> {
         match kind {
             0x01ae => {
-                let count = input.word()?;
+                // MS-XLS SupBook: ctab is undefined for self-referencing links.
+                input.word()?;
                 let kind = input.word()?;
                 // Only the exact self-referencing SupBook form authenticates local sheets.
-                self.books.push((kind == 0x0401 && input.remaining() == 0).then_some(count));
+                self.local_books.push(kind == 0x0401 && input.remaining() == 0);
             }
             0x0017 => {
                 let count = usize::from(input.word()?);
@@ -60,9 +61,10 @@ impl References {
             return Err("invalid-reference-metadata");
         }
         let (book, first, last) = *self.xtis.get(usize::from(ixti)).ok_or("unknown-xti")?;
-        let book = self.books.get(usize::from(book)).ok_or("unknown-supbook")?;
-        let count = book.ok_or("external-reference")?;
-        if usize::from(count) != self.names.len() || first > last {
+        if !*self.local_books.get(usize::from(book)).ok_or("unknown-supbook")? {
+            return Err("external-reference");
+        }
+        if first > last {
             return Err("invalid-local-reference");
         }
         let first_name = self.names.get(usize::from(first)).ok_or("invalid-local-reference")?;

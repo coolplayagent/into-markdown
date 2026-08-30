@@ -99,6 +99,21 @@ fn local_3d_requires_complete_supbook_identity_and_uses_the_same_ref_flags() {
 }
 
 #[test]
+fn local_supbook_undefined_count_does_not_override_authenticated_sheet_indices() {
+    for count in [0, 1, u16::MAX] {
+        let mut references = References::default();
+        references.add_sheet("Local");
+        let [low, high] = count.to_le_bytes();
+        references.record(0x01ae, &[low, high, 1, 4]);
+        references.record(0x0017, &[2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0]);
+        let mut value = Expression::default();
+        parse(&[0x5a, 0, 0, 0, 0, 0, 0xc0], true, &references, &mut value).unwrap();
+        assert_eq!(value.render().unwrap(), "'Local'!A1");
+        assert_eq!(references.sheet_prefix(1), Err("invalid-local-reference"));
+    }
+}
+
+#[test]
 fn unsupported_and_truncated_tokens_keep_exact_evidence_and_release_all_leases() {
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
