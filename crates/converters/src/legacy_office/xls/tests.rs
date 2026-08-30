@@ -5,6 +5,8 @@ use super::*;
 use crate::msg::ole::CompoundFile;
 use into_markdown_core::{Cell, ExecutionOptions, Inline, ResourceLimits};
 
+mod records;
+
 fn budget<'a>(options: &'a ConversionOptions, context: &'a ExecutionContext) -> LegacyBudget<'a> {
     LegacyBudget::new(64, options, context).unwrap()
 }

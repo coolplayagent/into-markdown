@@ -1,5 +1,6 @@
 use super::preflight::{
-    biff_record, decode_continued_formula_string, has_noncanonical_formula_string_cache,
+    biff_record, bound_sheet_name_length, bound_sheet_substream, decode_continued_formula_string,
+    has_noncanonical_formula_string_cache,
 };
 use super::{
     BIFF4, BIFF5, BOF, BOF4, EOF, ErrorPolicy, FORMULA, LegacyBudget, malformed, read_u16, read_u32,
@@ -21,6 +22,7 @@ const XF: u16 = 0x00e0;
 #[derive(Debug)]
 struct BoundSheet {
     offset: usize,
+    substream: u16,
     name: String,
 }
 
@@ -60,7 +62,7 @@ pub(super) fn scan_workbook_inventory(
     let memory = context.reserve_memory(inventory_memory_plan(bytes.len())?)?;
     let mut global = collect_globals(bytes, biff_version, part, budget, error_policy)?;
     if global.sheets.is_empty() {
-        global.sheets.push(BoundSheet { offset: 0, name: "Sheet 1".into() });
+        global.sheets.push(BoundSheet { offset: 0, substream: 0x0010, name: "Sheet 1".into() });
     }
     let offsets = authenticate_sheets(&global.sheets, bytes.len(), part)?;
     let inventory = collect_sheet_inventory(bytes, biff_version, part, budget, &global, &offsets)?;
@@ -71,11 +73,13 @@ fn authenticate_sheets(
     sheets: &[BoundSheet],
     workbook_bytes: usize,
     part: &str,
-) -> Result<BTreeMap<usize, usize>, ConversionError> {
+) -> Result<BTreeMap<usize, (usize, u16)>, ConversionError> {
     let mut offsets = BTreeMap::new();
     let mut names = BTreeSet::new();
     for (index, sheet) in sheets.iter().enumerate() {
-        if sheet.offset >= workbook_bytes || offsets.insert(sheet.offset, index).is_some() {
+        if sheet.offset >= workbook_bytes
+            || offsets.insert(sheet.offset, (index, sheet.substream)).is_some()
+        {
             return Err(malformed(part, "duplicate or out-of-range BoundSheet offset"));
         }
         if !names.insert(sheet.name.to_lowercase()) {
@@ -105,7 +109,7 @@ impl InventorySubstreams {
         &mut self,
         body: &[u8],
         record_start: usize,
-        offsets: &BTreeMap<usize, usize>,
+        offsets: &BTreeMap<usize, (usize, u16)>,
         completed: &[bool],
         part: &str,
     ) -> Result<(), ConversionError> {
@@ -118,13 +122,13 @@ impl InventorySubstreams {
         }
         self.stack[self.depth] = substream;
         self.depth += 1;
-        if substream == 0x0010 {
-            if self.current_sheet.is_some() || self.depth != 1 {
-                return Err(malformed(part, "nested BIFF worksheet substream"));
-            }
-            let index = offsets.get(&record_start).copied().ok_or_else(|| {
+        if self.depth == 1 && matches!(substream, 0x0010 | 0x0020 | 0x0040) {
+            let (index, expected) = offsets.get(&record_start).copied().ok_or_else(|| {
                 malformed(part, "worksheet BOF is not authenticated by BoundSheet")
             })?;
+            if substream != expected {
+                return Err(malformed(part, "BoundSheet type disagrees with sheet BOF"));
+            }
             if completed[index] {
                 return Err(malformed(part, "duplicate worksheet substream"));
             }
@@ -138,7 +142,7 @@ impl InventorySubstreams {
             return Err(malformed(part, "BIFF inventory EOF has no BOF"));
         }
         self.depth -= 1;
-        if self.stack[self.depth] == 0x0010 {
+        if self.depth == 0 && matches!(self.stack[0], 0x0010 | 0x0020 | 0x0040) {
             let index = self
                 .current_sheet
                 .take()
@@ -149,7 +153,7 @@ impl InventorySubstreams {
     }
 
     fn in_worksheet(&self) -> bool {
-        self.current_sheet.is_some() && self.depth == 1
+        self.current_sheet.is_some() && self.depth == 1 && self.stack[0] == 0x0010
     }
 }
 
@@ -159,7 +163,7 @@ fn collect_sheet_inventory(
     part: &str,
     budget: &mut LegacyBudget<'_>,
     global: &GlobalInventory,
-    offsets: &BTreeMap<usize, usize>,
+    offsets: &BTreeMap<usize, (usize, u16)>,
 ) -> Result<SheetInventory, ConversionError> {
     let mut output = SheetInventory {
         bounds: (0..global.sheets.len()).map(|_| SheetBounds::default()).collect(),
@@ -242,7 +246,7 @@ fn collect_sheet_inventory(
         || substreams.current_sheet.is_some()
         || output.completed.iter().any(|value| !value)
     {
-        return Err(malformed(part, "BoundSheet inventory is not closed by worksheet EOF records"));
+        return Err(malformed(part, "BoundSheet inventory is not closed by sheet EOF records"));
     }
     Ok(output)
 }
@@ -405,7 +409,9 @@ fn collect_globals(
         budget.work(1, part)?;
         let (kind, body, end) = biff_record(bytes, cursor, part)?;
         match kind {
-            BOUND_SHEET => output.sheets.push(parse_bound_sheet(body, biff_version, part)?),
+            BOUND_SHEET => {
+                output.sheets.push(parse_bound_sheet(body, biff_version, part, error_policy)?);
+            }
             FORMAT => {
                 let index = if biff_version == BIFF4 {
                     let index = legacy_format_index;
@@ -581,15 +587,11 @@ fn parse_bound_sheet(
     body: &[u8],
     biff_version: u16,
     part: &str,
+    error_policy: ErrorPolicy,
 ) -> Result<BoundSheet, ConversionError> {
     let offset = usize::try_from(read_u32(body, 0, part)?)
         .map_err(|_| malformed(part, "BoundSheet offset is not representable"))?;
-    let characters = usize::from(
-        *body.get(6).ok_or_else(|| malformed(part, "truncated BoundSheet name length"))?,
-    );
-    if characters == 0 || characters > 31 {
-        return Err(malformed(part, "invalid BoundSheet name length"));
-    }
+    let characters = bound_sheet_name_length(body, part, error_policy)?;
     let (name, consumed) = if matches!(biff_version, BIFF4 | BIFF5) {
         let bytes = body
             .get(7..7 + characters)
@@ -622,7 +624,7 @@ fn parse_bound_sheet(
     if consumed != body.len() || name.contains(['/', '\\', '\0']) {
         return Err(malformed(part, "BoundSheet name contains trailing or unsafe data"));
     }
-    Ok(BoundSheet { offset, name })
+    Ok(BoundSheet { offset, substream: bound_sheet_substream(body, part)?, name })
 }
 
 fn is_single_cell_record(kind: u16, biff_version: u16) -> bool {

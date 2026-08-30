@@ -198,6 +198,23 @@ where
             );
         }
         if sheet.typ != SheetType::WorkSheet {
+            if legacy_hints.is_some()
+                && matches!(sheet.typ, SheetType::ChartSheet | SheetType::MacroSheet)
+            {
+                diagnostics.push(Diagnostic {
+                    code: "legacyOffice.xls.nonWorksheetSkipped".into(),
+                    severity: DiagnosticSeverity::Warning,
+                    message: format!(
+                        "{:?} {} was authenticated but its contents were not rendered or executed",
+                        sheet.typ, sheet.name
+                    ),
+                    locator: Some(SourceLocator {
+                        sheet: Some(sheet.name.clone()),
+                        ..SourceLocator::default()
+                    }),
+                });
+                continue;
+            }
             return Err(ConversionError::Unsupported {
                 detail: format!(
                     "Calamine reported non-worksheet sheet type {:?} for {}",

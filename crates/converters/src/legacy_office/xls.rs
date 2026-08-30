@@ -12,6 +12,7 @@ mod binary;
 mod inventory;
 mod objects;
 mod preflight;
+mod reader_view;
 mod wrapper;
 
 use binary::{read_u16, read_u32};
@@ -34,6 +35,8 @@ const FORMULA: u16 = 0x0006;
 const STRING: u16 = 0x0207;
 const CONTINUE: u16 = 0x003c;
 const SHARED_FORMULA: u16 = 0x04bc;
+const ARRAY: u16 = 0x0221;
+const TABLE: u16 = 0x0236;
 const DIMENSIONS: u16 = 0x0200;
 const BOUND_SHEET: u16 = 0x0085;
 const SUP_BOOK: u16 = 0x01ae;
@@ -146,38 +149,22 @@ pub(super) fn convert(
         context,
         options.error_policy,
     )?;
-    let wrapper_layout = (container_view_required
-        || preflight.has(PreflightFlag::DimensionMetadata)
-        || preflight.has(PreflightFlag::FormulaCacheMetadata)
-        || preflight.logical_end != workbook.len())
-    .then(|| cfb_wrapper_layout(workbook_view.len()))
-    .transpose()?;
-    let wrapper_memory = wrapper_layout
-        .as_ref()
-        .map(|layout| {
-            context.reserve_memory(
-                u64::try_from(layout.output_bytes.saturating_add(layout.total_sectors * 4))
-                    .unwrap_or(u64::MAX),
-            )
-        })
-        .transpose()?;
-    let wrapper = wrapper_layout
-        .as_ref()
-        .map(|layout| {
-            build_cfb_wrapper(
-                workbook_view,
-                preflight.has(PreflightFlag::DimensionMetadata),
-                preflight.has(PreflightFlag::FormulaCacheMetadata),
-                preflight.biff_version,
-                *layout,
-            )
-        })
-        .transpose()?;
-    let conversion_bytes = wrapper.as_deref().unwrap_or(bytes);
+    let format_remap = if preflight.biff_version == BIFF8 {
+        reader_view::format_id_remap(workbook_view, &preflight.hints, options.error_policy)?
+    } else {
+        std::collections::BTreeMap::new()
+    };
+    let wrapper = reader_view::prepare_wrapper(
+        workbook,
+        &preflight,
+        container_view_required,
+        &format_remap,
+        context,
+    )?;
+    let conversion_bytes = wrapper.as_ref().map_or(bytes, |(view, _memory)| view.as_slice());
     let mut output =
         crate::workbook::convert_legacy_xls(conversion_bytes, &preflight.hints, options, context)?;
     drop(wrapper);
-    drop(wrapper_memory);
     normalize_xls_output(&mut output);
     output.document.metadata.properties.insert(
         "legacyOffice.xls.biff".into(),
@@ -191,6 +178,14 @@ pub(super) fn convert(
 
     append_preflight_diagnostics(&mut output, &preflight, part);
     append_inventory_diagnostics(&mut output, &preflight.hints, part);
+    if !format_remap.is_empty() {
+        output.diagnostics.push(Diagnostic {
+            code: "legacyOffice.xls.formatIndexRecovered".into(),
+            severity: DiagnosticSeverity::Info,
+            message: "non-canonical Format identifiers and XF references were remapped to unused custom slots without changing their format strings".into(),
+            locator: Some(locator(part)),
+        });
+    }
     if !preflight.has(PreflightFlag::EmbeddedObjects)
         && (root.storage("ObjectPool").is_some() || root.storage("ActiveX").is_some())
     {
