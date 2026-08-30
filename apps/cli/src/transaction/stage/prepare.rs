@@ -118,8 +118,14 @@ pub fn prepare_file_and_bytes(
     unreachable!("bounded recovery loop always returns")
 }
 
-/// Recover any interrupted transaction owning one of these physical parent
-/// directories before higher-level conflict planning observes the filesystem.
+/// Create and authenticate target parents, then recover any interrupted
+/// transaction owning one of those physical directories before higher-level
+/// conflict planning observes the filesystem.
+///
+/// Output encoders call this preflight before allocating their same-filesystem
+/// temporary file. Creating the parent here restores that directory contract
+/// without bypassing the transaction manager's no-follow path checks or
+/// allocating a transaction registry before staging begins.
 pub fn recover_for_paths(paths: &[PathBuf], context: &ExecutionContext) -> Result<(), CliError> {
     ensure_transaction_platform()?;
     let paths = paths.iter().map(|path| absolute_lexical(path)).collect::<Result<Vec<_>, _>>()?;
@@ -130,6 +136,10 @@ pub fn recover_for_paths(paths: &[PathBuf], context: &ExecutionContext) -> Resul
     let _preparing_root = PreparingTransactionRoot::enter(&root)?;
     for recovered in 0..=MAX_RECOVERY_RETRIES {
         context.checkpoint().map_err(CliError::from)?;
+        for path in &paths {
+            let parent = path.parent().ok_or_else(|| recovery_error("target has no parent"))?;
+            SafeDir::open_or_create_absolute(parent)?;
+        }
         match recover_root_transactions(&root, context)
             .and_then(|()| recover_existing_target_parents(&paths, context))
         {

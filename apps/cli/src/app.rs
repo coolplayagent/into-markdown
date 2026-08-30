@@ -7060,6 +7060,111 @@ mod tests {
     }
 
     #[test]
+    fn single_file_creates_missing_output_root_and_report() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let input = root.join("document.txt");
+        let output = root.join("missing-output");
+        let report = root.join("report.json");
+        fs::write(&input, b"transactional output\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = run(
+            vec![
+                OsString::from("--no-config"),
+                input.into_os_string(),
+                OsString::from("--output-dir"),
+                output.clone().into_os_string(),
+                OsString::from("--conflict"),
+                OsString::from("error"),
+                OsString::from("--report"),
+                report.clone().into_os_string(),
+                OsString::from("--ocr"),
+                OsString::from("off"),
+                OsString::from("--asset-mode"),
+                OsString::from("omit"),
+                OsString::from("--progress"),
+                OsString::from("never"),
+            ],
+            RunContext {
+                user_data_anchor: Some(root.join("user-data")),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "conversion failed: {result:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(output.join("document.md")).unwrap(),
+            "transactional output\n"
+        );
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["succeeded"], 1);
+        assert_eq!(report["failed"], 0);
+    }
+
+    #[test]
+    fn recursive_batch_creates_missing_output_tree_and_report() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let input = root.join("input");
+        let output = root.join("missing-output");
+        let report = root.join("reports/batch.json");
+        fs::create_dir_all(input.join("nested")).unwrap();
+        fs::write(input.join("first.txt"), b"first\n").unwrap();
+        fs::write(input.join("nested/second.txt"), b"second\n").unwrap();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let result = run(
+            vec![
+                OsString::from("--no-config"),
+                input.into_os_string(),
+                OsString::from("--recursive"),
+                OsString::from("--output-dir"),
+                output.clone().into_os_string(),
+                OsString::from("--jobs"),
+                OsString::from("4"),
+                OsString::from("--report"),
+                report.clone().into_os_string(),
+                OsString::from("--ocr"),
+                OsString::from("off"),
+                OsString::from("--asset-mode"),
+                OsString::from("omit"),
+                OsString::from("--progress"),
+                OsString::from("never"),
+            ],
+            RunContext {
+                user_data_anchor: Some(root.join("user-data")),
+                stdout: &mut stdout,
+                stderr: &mut stderr,
+                stdin_is_terminal: true,
+                cwd: root.clone(),
+            },
+        );
+
+        assert!(
+            result.is_ok(),
+            "batch failed: {result:?}; stdout={}; stderr={}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        assert_eq!(fs::read_to_string(output.join("first.md")).unwrap(), "first\n");
+        assert_eq!(fs::read_to_string(output.join("nested/second.md")).unwrap(), "second\n");
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(report).unwrap()).unwrap();
+        assert_eq!(report["succeeded"], 2);
+        assert_eq!(report["failed"], 0);
+    }
+
+    #[test]
     fn parallel_batch_serializes_atomic_output_leases() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
