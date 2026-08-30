@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
-struct Recognizer(AtomicUsize);
+struct Recognizer(AtomicUsize, bool);
 
 impl OcrEngine for Recognizer {
     fn id(&self) -> &'static str {
@@ -61,6 +61,12 @@ impl OcrEngine for Recognizer {
             })
             .await;
             let ordinal = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.1 && ordinal == 1 {
+                return Err(ConversionError::ComponentUnavailable {
+                    component: "ocr".into(),
+                    detail: "test provider temporarily unavailable".into(),
+                });
+            }
             let image = image::load_from_memory(request.image).unwrap();
             let identity = OcrInputIdentity::try_new(
                 Sha256::digest(request.image).into(),
@@ -425,8 +431,14 @@ fn mixed_pdf_modes_yield_runtime_admission_on_one_executor() {
 #[test]
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
 fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
+    for unavailable_first in [false, true] {
+        check_repeated_pages(unavailable_first);
+    }
+}
+
+fn check_repeated_pages(unavailable_first: bool) {
     let pages = Arc::new(ObservedPages::default());
-    let ocr = Arc::new(Recognizer::default());
+    let ocr = Arc::new(Recognizer(AtomicUsize::new(0), unavailable_first));
     let engine = engine(pages.clone(), ocr.clone());
     let mut request = request(4);
     request.input = InputRef::Bytes {
@@ -436,8 +448,14 @@ fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
     let context =
         ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
     let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
-    assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
-    assert_eq!(result.markdown.matches("recognized body 1").count(), 4);
+    let unavailable = usize::from(unavailable_first);
+    let body = format!("recognized body {}", 1 + unavailable);
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 1 + unavailable);
+    assert_eq!(result.markdown.matches(&body).count(), 4 - unavailable);
+    assert_eq!(
+        result.diagnostics.iter().filter(|value| value.code == "image.ocrUnavailable").count(),
+        unavailable
+    );
     assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
     assert_eq!(context.resource_usage().ocr_recognized_chars, 17);
     assert_eq!(result.document.blocks.len(), 4);
@@ -446,7 +464,10 @@ fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
         assert!(
             matches!(node.block, Block::Page { number, .. } if usize::try_from(number).unwrap() == index + 1)
         );
-        assert!(serde_json::to_string(node).unwrap().contains("recognized body 1"));
+        assert_eq!(
+            serde_json::to_string(node).unwrap().contains(&body),
+            !unavailable_first || index > 0
+        );
     }
     let entries = pages.entries.lock().unwrap();
     assert_eq!(entries.len(), 4);

@@ -903,11 +903,8 @@ async fn enrich(
                     && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
             {
                 diagnostics.push(visual_diagnostic(None, error.to_string()));
-                cache[group_index] = Some(CachedContribution {
-                    nodes: Vec::new(),
-                    diagnostics,
-                    telemetry: None,
-                });
+                cache[group_index] =
+                    Some(CachedContribution { nodes: Vec::new(), diagnostics, telemetry: None });
                 continue;
             }
             Err(error) => return Err(error),

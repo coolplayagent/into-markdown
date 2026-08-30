@@ -45,10 +45,11 @@ impl OcrEngine for PageOcrCache {
     ) -> Result<(), ConversionError> {
         let mut entries =
             self.entries.lock().map_err(|_| cache_error("OCR contribution cache lock poisoned"))?;
-        let entry = entries
-            .values_mut()
-            .find(|entry| entry.normalized_sha256 == input.sha256())
-            .ok_or_else(|| cache_error("OCR contribution has no cached input identity"))?;
+        let Some(entry) =
+            entries.values_mut().find(|entry| entry.normalized_sha256 == input.sha256())
+        else {
+            return context.record_ocr_contribution(regions, characters);
+        };
         if !entry.counted {
             self.provider.record_contribution(input, regions, characters, context)?;
             entry.counted = true;
