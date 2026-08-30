@@ -296,7 +296,9 @@ fn push_text(output: &mut Vec<String>, value: &str) {
     output.extend(
         value
             .split(['\r', '\u{000b}'])
-            .map(str::trim)
+            .map(|line| {
+                line.trim_matches(|character: char| character.is_whitespace() && character != '\t')
+            })
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
     );
@@ -321,7 +323,7 @@ fn text_blocks(
             let columns =
                 text[start..cursor].iter().map(|row| row.split('\t').count()).max().unwrap_or(0);
             budget.table_shape(cursor - start, columns)?;
-            let rows = text[start..cursor]
+            let mut rows = text[start..cursor]
                 .iter()
                 .map(|row| TableRow {
                     cells: row
@@ -337,7 +339,8 @@ fn text_blocks(
                         })
                         .collect(),
                 })
-                .collect();
+                .collect::<Vec<_>>();
+            super::tables::rectangularize(&mut rows, builder, budget, part)?;
             blocks.push(
                 builder.node(
                     Block::Table { rows, alignments: Vec::new() },
@@ -543,5 +546,25 @@ mod tests {
         let blocks = text_blocks(&mut builder, &text, 1, "slide", &mut budget).unwrap();
         assert!(matches!(blocks[0].block, Block::List { .. }));
         assert!(matches!(blocks[1].block, Block::Table { .. }));
+    }
+
+    #[test]
+    fn leading_trailing_and_interior_empty_cells_keep_their_columns() {
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut budget = LegacyBudget::new(128, &options, &context).unwrap();
+        let mut builder = OutputBuilder::new("ppt");
+        let mut text = Vec::new();
+        push_text(&mut text, "\tA\t\t\rB\tC");
+        assert_eq!(text, ["\tA\t\t", "B\tC"]);
+        let blocks = text_blocks(&mut builder, &text, 1, "slide", &mut budget).unwrap();
+        let Block::Table { rows, .. } = &blocks[0].block else { panic!("table") };
+        assert_eq!(rows.iter().map(|row| row.cells.len()).collect::<Vec<_>>(), [4, 4]);
+        assert_eq!(
+            rows[0].cells[1].blocks[0].block,
+            Block::Paragraph(vec![OutputBuilder::text("A")])
+        );
+        let document = into_markdown_core::Document { blocks, ..Default::default() };
+        document.validate().unwrap();
     }
 }

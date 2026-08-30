@@ -1,7 +1,7 @@
 use crate::msg::ole::CompoundBudget;
 use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits as ImageLimits};
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ExecutionContext, ResourceReservation,
+    ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, ResourceReservation,
 };
 use std::io::Cursor;
 
@@ -44,6 +44,10 @@ impl<'a> LegacyBudget<'a> {
 
     pub(super) fn max_field_bytes(&self) -> u64 {
         self.options.limits.max_field_bytes
+    }
+
+    pub(super) fn error_policy(&self) -> ErrorPolicy {
+        self.options.error_policy
     }
 
     pub(super) fn work(&mut self, units: u64, part: &str) -> Result<(), ConversionError> {
