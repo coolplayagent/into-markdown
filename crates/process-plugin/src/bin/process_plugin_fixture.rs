@@ -166,6 +166,9 @@ fn main() -> std::io::Result<()> {
                 Ok(result("ok"))
             }
             value if value.starts_with("large-ok") => Ok(result("large-ok")),
+            "resource-error" => Err(WorkerError::new("resourceLimit", "bounded inference failed")),
+            "timeout-error" => Err(WorkerError::new("timeout", "bounded inference timed out")),
+            "cancelled-error" => Err(WorkerError::new("cancelled", "bounded inference cancelled")),
             _ => Err(WorkerError::new("unknownFixture", "unknown fixture command")),
         }
     })

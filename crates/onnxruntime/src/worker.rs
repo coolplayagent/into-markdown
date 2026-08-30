@@ -222,7 +222,9 @@ impl WorkerClient {
                     #[cfg(not(target_os = "linux"))]
                     {
                         self.terminate();
-                        return Err(resource_error("nativeWorkerMemory"));
+                        // A disconnected pipe alone does not establish allocation
+                        // failure. Explicit native resource replies remain typed.
+                        return Err(ort_error("workerCrashed"));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {

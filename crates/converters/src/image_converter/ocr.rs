@@ -95,7 +95,7 @@ async fn recognize_inner(
     let recognition = match context.run(engine.recognize_bound(request, provider_context)).await? {
         Ok(value) => value,
         Err(error @ ConversionError::ComponentUnavailable { .. }) if policy == OcrPolicy::Auto => {
-            return Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")));
+            return Ok(degraded(page, format!("OCR was unavailable ({error})")));
         }
         Err(error) if policy == OcrPolicy::Auto => return Err(error),
         Err(error) => return Err(map_unavailable(engine.id(), error)),
@@ -487,7 +487,7 @@ fn preflight_unavailable(
 ) -> Result<OcrContribution, ConversionError> {
     match error {
         error @ ConversionError::ComponentUnavailable { .. } if policy == OcrPolicy::Auto => {
-            Ok(degraded(page, format!("OCR was unavailable ({error}); {INSTALL_HINT}")))
+            Ok(degraded(page, format!("OCR was unavailable ({error})")))
         }
         error if policy == OcrPolicy::Auto => Err(error),
         ConversionError::Cancelled
@@ -614,10 +614,11 @@ fn map_unavailable(provider: &str, error: ConversionError) -> ConversionError {
     match error {
         ConversionError::Cancelled
         | ConversionError::Timeout
+        | ConversionError::Ocr { .. }
         | ConversionError::ResourceLimit { .. } => error,
         _ => ConversionError::ComponentUnavailable {
             component: provider.into(),
-            detail: format!("{error}; {INSTALL_HINT}"),
+            detail: error.to_string(),
         },
     }
 }
