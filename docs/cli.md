@@ -150,7 +150,10 @@ into-md <INPUT...>
   `degraded`，失败为 `failed`；真正空源使用 `complete` / `emptySource`，未证明可用的
   空产物使用 `malformed` / `emptyContent`。报告还包含逐项 `durationMs`、成功项的
   `processingDurationMs` 和独立计量的整批 `wallDurationMs`；逐项耗时排除队列与批量
-  内存准入等待，整批墙钟时间不得由并发项耗时求和。
+  内存准入等待，整批墙钟时间不得由并发项耗时求和。顶层 `resourceUsage` 报告整个
+  invocation 的共享 lease budget 与历史 peak；budget 不随 `--jobs` 倍增。OCR auto/always
+  还报告过滤、去重并合并后的 `recognizedRegions` / `recognizedChars`，未命中或组件不可用
+  为明确的零值，不能用候选图片或最终 Markdown 反推。
 - Engine 的空结果判定发生在 stdout 编码及文件事务 stage/commit 之前。除明确
   `emptySource` 外，成功或 degraded 的 Markdown 目标必须存在且非空；`emptyContent`
   不创建目标，并使批处理失败计数和退出码与报告一致。asset-only 结果只有在所选

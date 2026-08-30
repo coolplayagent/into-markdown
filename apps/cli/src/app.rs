@@ -4212,13 +4212,7 @@ fn invocation_capabilities(
         |format| matches!(format, InputFormat::Audio | InputFormat::Video | InputFormat::YouTube);
     let legacy_office =
         |format| matches!(format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls);
-    let effective_ocr_policy = match options.ai.vision_ocr {
-        AiMode::Only => OcrPolicy::Always,
-        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
-            OcrPolicy::Auto
-        }
-        _ => options.ocr.policy,
-    };
+    let effective_ocr_policy = effective_ocr_policy(options);
     crate::services::InvocationCapabilities {
         ocr: formats.iter().copied().any(|format| {
             visual(format) && !(effective_ocr_policy == OcrPolicy::Auto && legacy_office(format))
@@ -4226,6 +4220,16 @@ fn invocation_capabilities(
         transcription: formats.iter().copied().any(media),
         diarization: formats.iter().copied().any(media),
         legacy_office: formats.iter().copied().any(legacy_office),
+    }
+}
+
+fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
+    match options.ai.vision_ocr {
+        AiMode::Only => OcrPolicy::Always,
+        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
+            OcrPolicy::Auto
+        }
+        _ => options.ocr.policy,
     }
 }
 
@@ -4239,6 +4243,9 @@ fn run_conversion(
 ) -> Result<(), CliError> {
     let batch_timer = crate::timing::ItemTimer::start();
     apply_conversion_overrides(&arguments, &mut loaded)?;
+    if loaded.options.limits.max_memory_bytes == 0 {
+        return Err(CliError::usage("shared conversion memory budget must be greater than zero"));
+    }
     let includes = build_globset(&arguments.include)?;
     let excludes = build_globset(&arguments.exclude)?;
     let mut items = expand_inputs(&arguments, includes.as_ref(), excludes.as_ref())?;
@@ -4329,6 +4336,7 @@ fn run_conversion(
             stderr: context.stderr,
             output_context: &policy.output_context,
             wall_duration_ms: batch_timer.elapsed_ms(),
+            ocr_enabled: effective_ocr_policy(&policy.options) != OcrPolicy::Off,
         },
     )
 }
@@ -4380,6 +4388,7 @@ struct FinishReportsContext<'a> {
     stderr: &'a mut dyn Write,
     output_context: &'a into_markdown::ExecutionContext,
     wall_duration_ms: f64,
+    ocr_enabled: bool,
 }
 
 fn finish_reports(
@@ -4394,6 +4403,7 @@ fn finish_reports(
         stderr,
         output_context,
         wall_duration_ms,
+        ocr_enabled,
     } = context;
     for report in &reports {
         for warning in &report.warnings {
@@ -4429,10 +4439,25 @@ fn finish_reports(
     if !global.quiet {
         crate::timing::write_summary(stderr, &reports, wall_duration_ms, catalog, json_log)?;
     }
-    let report = BatchReport::try_new_with_wall_duration(reports, Some(wall_duration_ms))
-        .map_err(|error| CliError::internal(format!("build batch report DTO: {error}")))?;
+    let usage = output_context.resource_usage();
+    let resource_usage = into_markdown::BatchResourceUsageDto {
+        shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
+        shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
+        ocr: ocr_enabled.then_some(into_markdown::BatchOcrUsageDto {
+            recognized_regions: usage.ocr_recognized_regions,
+            recognized_chars: usage.ocr_recognized_chars,
+        }),
+    };
+    let report = BatchReport::try_new_with_resource_usage(
+        reports,
+        Some(wall_duration_ms),
+        Some(resource_usage),
+    )
+    .map_err(|error| CliError::internal(format!("build batch report DTO: {error}")))?;
     if let Some(path) = report_path {
-        output::write_report(path, &report, output_context)?;
+        let report_context =
+            output_context.fork_with_shared_resources(into_markdown::ExecutionOptions::default());
+        output::write_report(path, &report, &report_context)?;
     }
     if report.failed > 0 {
         Err(CliError::partial(format!(
@@ -5855,6 +5880,10 @@ fn redact_parsed_url(mut parsed: url::Url) -> String {
 #[cfg(test)]
 #[path = "app/timing_tests.rs"]
 mod timing_tests;
+
+#[cfg(test)]
+#[path = "app/resource_usage_tests.rs"]
+mod resource_usage_tests;
 
 #[cfg(test)]
 mod tests {

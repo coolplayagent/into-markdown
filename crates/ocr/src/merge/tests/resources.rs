@@ -79,6 +79,8 @@ fn cancellation_is_observed_before_merge_work_or_output() {
         merge_document(Document::default(), &[], &MergeConfig::default(), &context).unwrap_err();
     assert_eq!(error.code(), ErrorCode::Cancelled);
     assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 0);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 0);
 }
 
 #[test]
@@ -235,6 +237,8 @@ fn large_text_checkpoint_observes_timeout_after_work_begins() {
     assert!(reached.load(Ordering::SeqCst) >= 4 * 1024);
     assert_eq!(error.code(), ErrorCode::Timeout);
     assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.resource_usage().ocr_recognized_regions, 0);
+    assert_eq!(context.resource_usage().ocr_recognized_chars, 0);
 }
 
 fn subthreshold_recognition_regions() -> (DetectionResult, RecognitionResult) {

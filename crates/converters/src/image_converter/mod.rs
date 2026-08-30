@@ -125,6 +125,8 @@ async fn convert_image(
     let mut leases = vec![original_memory];
     let mut diagnostics = Vec::new();
     let mut document = document_metadata(format, summary, &decoded, density);
+    let mut recognized_regions = 0_u64;
+    let mut recognized_chars = 0_u64;
 
     for (index, frame) in decoded.frames.iter().enumerate() {
         context.checkpoint()?;
@@ -177,6 +179,12 @@ async fn convert_image(
         if let Some(memory) = ocr.memory.take() {
             leases.push(memory);
         }
+        recognized_regions = recognized_regions
+            .checked_add(ocr.recognized_regions)
+            .ok_or_else(|| resource("max_archive_entries", "OCR region telemetry overflow"))?;
+        recognized_chars = recognized_chars
+            .checked_add(ocr.recognized_chars)
+            .ok_or_else(|| resource("max_field_bytes", "OCR character telemetry overflow"))?;
         if options.ai.image_description == AiMode::Fallback && !ocr.accepted_text {
             let ai_image = normalized.as_ref().ok_or_else(|| ConversionError::Internal {
                 detail: "AI fallback image input was not materialized".into(),
@@ -234,7 +242,9 @@ async fn convert_image(
     })?;
     let output =
         ConverterOutput::new_with_memory_reservations(document, assets, diagnostics, leases);
-    output.account_retained(context)
+    let output = output.account_retained(context)?;
+    context.record_ocr_contribution(recognized_regions, recognized_chars)?;
+    Ok(output)
 }
 
 fn image_block(asset: AssetId, page: u32, frame: &DecodedFrame) -> BlockNode {
