@@ -16,6 +16,7 @@ def main() -> None:
     build = commands.add_parser("build")
     build.add_argument("--archive", required=True, type=pathlib.Path)
     build.add_argument("--windows-x86-64-core", required=True, type=pathlib.Path)
+    build.add_argument("--windows-x86-64-pdfium", required=True, type=pathlib.Path)
     build.add_argument("--linux-x86-64-core", required=True, type=pathlib.Path)
     build.add_argument("--linux-arm64-core", required=True, type=pathlib.Path)
     verify = commands.add_parser("verify")
@@ -29,6 +30,7 @@ def main() -> None:
             arguments.archive.resolve(),
             core_inputs(
                 arguments.windows_x86_64_core.resolve(),
+                arguments.windows_x86_64_pdfium.resolve(),
                 arguments.linux_x86_64_core.resolve(),
                 arguments.linux_arm64_core.resolve(),
             ),

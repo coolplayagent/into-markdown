@@ -357,6 +357,7 @@ jobs:
           python -m zipfile -e "$RUNNER_TEMP/targets/release-aarch64-unknown-linux-gnu/release/into-md-linux-arm64.zip" "$RUNNER_TEMP/skill-input/linux-arm64"
           python tools/skill-release/skill_release_main.py build \
             --windows-x86-64-core "$RUNNER_TEMP/skill-input/windows/into-md.exe" \
+            --windows-x86-64-pdfium "$RUNNER_TEMP/skill-input/windows/lib/pdfium/pdfium.dll" \
             --linux-x86-64-core "$RUNNER_TEMP/skill-input/linux-x86_64/into-md" \
             --linux-arm64-core "$RUNNER_TEMP/skill-input/linux-arm64/into-md" \
             --archive "$RUNNER_TEMP/publish/into-markdown-skill.zip"

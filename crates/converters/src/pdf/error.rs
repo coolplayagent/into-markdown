@@ -8,6 +8,12 @@ pub(super) fn map_pdfium_error(error: PdfiumError) -> ConversionError {
         PdfiumError::Native { operation: "load_document", code } => {
             malformed("document", format!("PDFium rejected the PDF (native error {code})"))
         }
+        PdfiumError::ResourceLimit { limit: "pdfium_runtime_bytes", .. } => {
+            ConversionError::ComponentUnavailable {
+                component: "pdfium".into(),
+                detail: error.to_string(),
+            }
+        }
         PdfiumError::ResourceLimit { limit, actual, maximum } => {
             resource(limit, format!("{actual} > {maximum}"))
         }

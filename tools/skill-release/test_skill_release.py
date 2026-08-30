@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import stat
 import struct
@@ -20,6 +21,7 @@ from skill_release import (
     FIXED_TIMESTAMP,
     SKILL_NAME,
     SKILL_SOURCE,
+    WINDOWS_PDFIUM_RELATIVE,
     SkillReleaseError,
     core_inputs,
     create_archive,
@@ -50,12 +52,14 @@ def elf(machine: int, marker: bytes = b"") -> bytes:
 
 def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]:
     windows = root / "windows-core.exe"
+    pdfium = root / "pdfium.dll"
     linux_x86_64 = root / "linux-x86_64-core"
     linux_arm64 = root / "linux-arm64-core"
     windows.write_bytes(pe(marker=b"windows"))
+    pdfium.write_bytes(b"test-pdfium")
     linux_x86_64.write_bytes(elf(62, b"linux-x86_64"))
     linux_arm64.write_bytes(elf(183, b"linux-arm64"))
-    return core_inputs(windows, linux_x86_64, linux_arm64)
+    return core_inputs(windows, pdfium, linux_x86_64, linux_arm64)
 
 
 def rewrite_entry(
@@ -81,6 +85,19 @@ def rewrite_entry(
 
 
 class SkillReleaseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.pdfium_authority = mock.patch(
+            "skill_release.WINDOWS_PDFIUM_AUTHORITY",
+            {
+                "library_size": len(b"test-pdfium"),
+                "library_sha256": hashlib.sha256(b"test-pdfium").hexdigest(),
+            },
+        )
+        self.pdfium_authority.start()
+
+    def tearDown(self) -> None:
+        self.pdfium_authority.stop()
+
     def test_canonical_skill_routes_only_to_bundled_assets(self) -> None:
         paths = validate()
         self.assertEqual(
@@ -112,6 +129,16 @@ class SkillReleaseTests(unittest.TestCase):
                     info = archive.getinfo(name_in_zip)
                     self.assertEqual((info.external_attr >> 16) & 0o177777, stat.S_IFREG | spec.mode)
                     self.assertEqual(archive.read(info), cores[spec.relative].read_bytes())
+                runtime = archive.getinfo(
+                    f"{SKILL_NAME}/{WINDOWS_PDFIUM_RELATIVE.as_posix()}"
+                )
+                self.assertEqual(
+                    (runtime.external_attr >> 16) & 0o177777,
+                    stat.S_IFREG | 0o644,
+                )
+                self.assertEqual(
+                    archive.read(runtime), cores[WINDOWS_PDFIUM_RELATIVE].read_bytes()
+                )
 
     def test_verify_is_standalone_and_rejects_sidecars_or_extra_entries(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -179,7 +206,7 @@ class SkillReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(SkillReleaseError, "symbolic link"):
                 validate(source)
 
-    def test_cli_build_requires_three_cores_and_verify_needs_only_archive(self) -> None:
+    def test_cli_build_requires_three_cores_pdfium_and_verify_needs_only_archive(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             cores = write_cores(root)
@@ -191,6 +218,8 @@ class SkillReleaseTests(unittest.TestCase):
                 str(archive),
                 "--windows-x86-64-core",
                 str(cores[ASSET_SPECS[0].relative]),
+                "--windows-x86-64-pdfium",
+                str(cores[WINDOWS_PDFIUM_RELATIVE]),
                 "--linux-x86-64-core",
                 str(cores[ASSET_SPECS[1].relative]),
                 "--linux-arm64-core",

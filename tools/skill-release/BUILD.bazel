@@ -8,6 +8,7 @@ py_library(
     data = [
         "//:LICENSE",
         "//:agent_skill_files",
+        "//third_party/pdfium:manifest.json",
     ],
     imports = ["."],
 )

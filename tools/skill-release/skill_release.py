@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import shutil
 import stat
@@ -47,11 +48,19 @@ ASSET_SPECS = (
     AssetSpec(pathlib.PurePosixPath("assets/linux-x86_64/into-md"), "ELF", 62, 0o755),
     AssetSpec(pathlib.PurePosixPath("assets/linux-arm64/into-md"), "ELF", 183, 0o755),
 )
+WINDOWS_PDFIUM_RELATIVE = pathlib.PurePosixPath(
+    "assets/windows-x86_64/lib/pdfium/pdfium.dll"
+)
+WINDOWS_PDFIUM_AUTHORITY = json.loads(
+    (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
+)["targets"]["x86_64-pc-windows-msvc"]
 ASSET_DIRECTORIES = (
     pathlib.PurePosixPath("assets"),
     pathlib.PurePosixPath("assets/linux-arm64"),
     pathlib.PurePosixPath("assets/linux-x86_64"),
     pathlib.PurePosixPath("assets/windows-x86_64"),
+    pathlib.PurePosixPath("assets/windows-x86_64/lib"),
+    pathlib.PurePosixPath("assets/windows-x86_64/lib/pdfium"),
 )
 
 
@@ -69,12 +78,14 @@ def sha256(path: pathlib.Path) -> str:
 
 def core_inputs(
     windows_x86_64_core: pathlib.Path,
+    windows_x86_64_pdfium: pathlib.Path,
     linux_x86_64_core: pathlib.Path,
     linux_arm64_core: pathlib.Path,
 ) -> dict[pathlib.PurePosixPath, pathlib.Path]:
     """Bind the three required platform inputs to their immutable package paths."""
     return {
         ASSET_SPECS[0].relative: windows_x86_64_core,
+        WINDOWS_PDFIUM_RELATIVE: windows_x86_64_pdfium,
         ASSET_SPECS[1].relative: linux_x86_64_core,
         ASSET_SPECS[2].relative: linux_arm64_core,
     }
@@ -222,9 +233,23 @@ def _validate_binary_header(header: bytes, size: int, spec: AssetSpec) -> None:
 
 
 def _validated_cores(cores: Mapping[pathlib.PurePosixPath, pathlib.Path]) -> dict[pathlib.PurePosixPath, pathlib.Path]:
-    if set(cores) != {spec.relative for spec in ASSET_SPECS}:
-        raise SkillReleaseError("exactly three reviewed Core inputs are required")
-    return {spec.relative: _validate_core_path(pathlib.Path(cores[spec.relative]), spec) for spec in ASSET_SPECS}
+    expected = {spec.relative for spec in ASSET_SPECS} | {WINDOWS_PDFIUM_RELATIVE}
+    if set(cores) != expected:
+        raise SkillReleaseError("the three reviewed Core inputs and Windows PDFium are required")
+    validated = {
+        spec.relative: _validate_core_path(pathlib.Path(cores[spec.relative]), spec)
+        for spec in ASSET_SPECS
+    }
+    runtime = pathlib.Path(cores[WINDOWS_PDFIUM_RELATIVE])
+    if runtime.is_symlink() or not runtime.is_file():
+        raise SkillReleaseError("Windows PDFium input is not a regular file")
+    if (
+        runtime.stat().st_size != WINDOWS_PDFIUM_AUTHORITY["library_size"]
+        or sha256(runtime) != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
+    ):
+        raise SkillReleaseError("Windows PDFium input differs from the pinned manifest")
+    validated[WINDOWS_PDFIUM_RELATIVE] = runtime
+    return validated
 
 
 def materialize(destination: pathlib.Path, source: pathlib.Path = SKILL_SOURCE) -> pathlib.Path:
@@ -285,6 +310,7 @@ def create_archive(
             *((relative.as_posix(), None, 0o755) for relative in CANONICAL_DIRECTORIES + ASSET_DIRECTORIES),
             *((path.relative_to(source.resolve()).as_posix(), path, 0o644) for path in files),
             *((spec.relative.as_posix(), validated_cores[spec.relative], spec.mode) for spec in ASSET_SPECS),
+            (WINDOWS_PDFIUM_RELATIVE.as_posix(), validated_cores[WINDOWS_PDFIUM_RELATIVE], 0o644),
         ]
         for relative, path, mode in sorted(entries, key=lambda entry: entry[0]):
             if path is None:
@@ -321,7 +347,15 @@ def _expected_archive_entries(source: pathlib.Path) -> tuple[list[str], dict[str
         f"{SKILL_NAME}/",
         *(f"{SKILL_NAME}/{relative.as_posix()}/" for relative in CANONICAL_DIRECTORIES + ASSET_DIRECTORIES),
     }
-    names = [f"{SKILL_NAME}/", *sorted((directories - {f"{SKILL_NAME}/"}) | set(canonical) | set(assets))]
+    names = [
+        f"{SKILL_NAME}/",
+        *sorted(
+            (directories - {f"{SKILL_NAME}/"})
+            | set(canonical)
+            | set(assets)
+            | {f"{SKILL_NAME}/{WINDOWS_PDFIUM_RELATIVE.as_posix()}"}
+        ),
+    ]
     return names, canonical, assets
 
 
@@ -360,6 +394,18 @@ def verify_archive(
                 if info.filename in canonical:
                     if mode != stat.S_IFREG | 0o644 or archive.read(info) != canonical[info.filename]:
                         raise SkillReleaseError("skill archive instruction metadata or bytes are invalid")
+                    continue
+                if info.filename == f"{SKILL_NAME}/{WINDOWS_PDFIUM_RELATIVE.as_posix()}":
+                    data = archive.read(info)
+                    if (
+                        mode != stat.S_IFREG | 0o644
+                        or len(data) != WINDOWS_PDFIUM_AUTHORITY["library_size"]
+                        or hashlib.sha256(data).hexdigest()
+                        != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
+                    ):
+                        raise SkillReleaseError(
+                            "Windows PDFium archive member differs from the pinned manifest"
+                        )
                     continue
                 spec = assets[info.filename]
                 if mode != stat.S_IFREG | spec.mode:

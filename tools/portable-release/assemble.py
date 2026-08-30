@@ -28,6 +28,7 @@ CORE_ARCHIVES = {
     "aarch64-unknown-linux-gnu": ("into-md-linux-arm64.zip", "into-md"),
     "aarch64-apple-darwin": ("into-md-macos-arm64.zip", "into-md"),
 }
+WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
 SPEECH_NAMES = {
     target: f"official.media.whisper-{target}.imp" for target in CORE_ARCHIVES
 }
@@ -110,25 +111,39 @@ def write_json(path: pathlib.Path, value: object) -> None:
     )
 
 
-def create_core_archive(binary: pathlib.Path, destination: pathlib.Path, member: str) -> None:
+def create_core_archive(
+    binary: pathlib.Path,
+    destination: pathlib.Path,
+    member: str,
+    runtime: tuple[pathlib.Path, str] | None = None,
+) -> None:
     if not binary.is_file() or binary.is_symlink():
         raise PortableReleaseError("final Core binary is unavailable")
+    if runtime is not None and (
+        not runtime[0].is_file()
+        or runtime[0].is_symlink()
+        or runtime[1] == member
+    ):
+        raise PortableReleaseError("final Core runtime is unavailable")
     if destination.exists() or destination.is_symlink():
         raise PortableReleaseError("Core archive destination already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    info = zipfile.ZipInfo(member, (2026, 1, 1, 0, 0, 0))
-    info.create_system = 3
-    mode = 0o755 if member == "into-md" else 0o644
-    info.external_attr = (stat.S_IFREG | mode) << 16
     with zipfile.ZipFile(
         destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9
     ) as archive:
-        archive.writestr(
-            info,
-            binary.read_bytes(),
-            compress_type=zipfile.ZIP_DEFLATED,
-            compresslevel=9,
-        )
+        entries = [(member, binary, 0o755 if member == "into-md" else 0o644)]
+        if runtime is not None:
+            entries.append((runtime[1], runtime[0], 0o644))
+        for name, source, mode in entries:
+            info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
+            info.create_system = 3
+            info.external_attr = (stat.S_IFREG | mode) << 16
+            archive.writestr(
+                info,
+                source.read_bytes(),
+                compress_type=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            )
 
 
 def stage_catalog(
@@ -241,7 +256,10 @@ def build_platform(arguments: argparse.Namespace) -> None:
     release.authenticode_files([core], arguments.windows_signing_thumbprint)
     archive_name, member = CORE_ARCHIVES[target]
     archive = arguments.output / "release" / archive_name
-    create_core_archive(core, archive, member)
+    runtime = None
+    if target == "x86_64-pc-windows-msvc":
+        runtime = (pdfium / config["pdfium"]["destination"], WINDOWS_PDFIUM_MEMBER)
+    create_core_archive(core, archive, member, runtime)
     speech = arguments.output / "release" / SPEECH_NAMES[target]
     speech.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(packages / "official.media.whisper.imp", speech)
@@ -620,19 +638,56 @@ def _validate_speech_package(package: zipfile.ZipFile, target: str) -> None:
     _validate_speech_manifest(package, infos, target)
 
 
-def verify_target(output: pathlib.Path, target: str) -> None:
+def windows_pdfium_authority() -> dict:
+    platform = json.loads(
+        (ROOT / "tools/platform-release/authority.json").read_text(encoding="utf-8")
+    )["targets"]["x86_64-pc-windows-msvc"]["pdfium"]
+    manifest = json.loads(
+        (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
+    )["targets"]["x86_64-pc-windows-msvc"]
+    if (
+        platform["destination"] != WINDOWS_PDFIUM_MEMBER
+        or platform["member"] != manifest["library"]
+        or platform["bytes"] != manifest["archive_size"]
+        or platform["sha256"] != manifest["archive_sha256"]
+    ):
+        raise PortableReleaseError("Windows PDFium release authorities disagree")
+    return manifest
+
+
+def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
     archive_name, member = CORE_ARCHIVES[target]
-    archive_path = output / "release" / archive_name
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
-        if len(infos) != 1 or infos[0].filename != member:
-            raise PortableReleaseError("Core ZIP must contain exactly the direct-run binary")
-        if infos[0].date_time != (2026, 1, 1, 0, 0, 0):
+        expected = [member]
+        if target == "x86_64-pc-windows-msvc":
+            expected.append(WINDOWS_PDFIUM_MEMBER)
+        if [info.filename for info in infos] != expected or any(info.is_dir() for info in infos):
+            raise PortableReleaseError("Core ZIP member inventory is invalid")
+        if any(info.date_time != (2026, 1, 1, 0, 0, 0) for info in infos):
             raise PortableReleaseError("Core ZIP timestamp is not deterministic")
         mode = (infos[0].external_attr >> 16) & 0o177777
         expected_mode = stat.S_IFREG | (0o755 if member == "into-md" else 0o644)
         if mode != expected_mode or not binary_architecture(archive.read(infos[0]), target):
             raise PortableReleaseError("Core binary architecture or mode is invalid")
+        if target == "x86_64-pc-windows-msvc":
+            runtime = infos[1]
+            if (runtime.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise PortableReleaseError("Windows PDFium archive member is not a regular file")
+            data = archive.read(runtime)
+            authority = windows_pdfium_authority()
+            if (
+                len(data) != authority["library_size"]
+                or hashlib.sha256(data).hexdigest() != authority["library_sha256"]
+            ):
+                raise PortableReleaseError(
+                    "Windows PDFium archive member differs from the pinned manifest"
+                )
+
+
+def verify_target(output: pathlib.Path, target: str) -> None:
+    archive_name, _ = CORE_ARCHIVES[target]
+    verify_core_archive(output / "release" / archive_name, target)
     speech = output / "release" / SPEECH_NAMES[target]
     with zipfile.ZipFile(speech) as package:
         _validate_speech_package(package, target)

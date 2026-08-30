@@ -21,6 +21,15 @@ assemble = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(assemble)
 
 
+def pe_x86_64() -> bytes:
+    value = bytearray(128)
+    value[:2] = b"MZ"
+    struct.pack_into("<I", value, 0x3C, 64)
+    value[64:68] = b"PE\0\0"
+    struct.pack_into("<H", value, 68, 0x8664)
+    return bytes(value)
+
+
 class PortableReleaseTests(unittest.TestCase):
     TARGET = "x86_64-unknown-linux-gnu"
 
@@ -194,7 +203,7 @@ class PortableReleaseTests(unittest.TestCase):
                         )
                     self.assertFalse((root / "release").exists())
 
-    def test_core_archive_has_one_direct_run_binary(self) -> None:
+    def test_non_windows_core_archive_has_one_direct_run_binary(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             binary = root / "source"
@@ -211,6 +220,47 @@ class PortableReleaseTests(unittest.TestCase):
                     (info.external_attr >> 16) & 0o177777,
                     stat.S_IFREG | 0o755,
                 )
+
+    def test_windows_core_archive_requires_manifest_pinned_pdfium(self) -> None:
+        target = "x86_64-pc-windows-msvc"
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            binary = root / "into-md.exe"
+            binary.write_bytes(pe_x86_64())
+            archive = root / "core.zip"
+            assemble.create_core_archive(binary, archive, "into-md.exe")
+            with self.assertRaisesRegex(assemble.PortableReleaseError, "inventory"):
+                assemble.verify_core_archive(archive, target)
+
+            archive.unlink()
+            runtime = root / "pdfium.dll"
+            runtime.write_bytes(b"tampered")
+            assemble.create_core_archive(
+                binary,
+                archive,
+                "into-md.exe",
+                (runtime, assemble.WINDOWS_PDFIUM_MEMBER),
+            )
+            with self.assertRaisesRegex(assemble.PortableReleaseError, "pinned manifest"):
+                assemble.verify_core_archive(archive, target)
+
+    def test_windows_core_archive_rejects_link_typed_pdfium_member(self) -> None:
+        target = "x86_64-pc-windows-msvc"
+        with tempfile.TemporaryDirectory() as name:
+            archive = pathlib.Path(name) / "core.zip"
+            binary = zipfile.ZipInfo("into-md.exe", (2026, 1, 1, 0, 0, 0))
+            binary.create_system = 3
+            binary.external_attr = (stat.S_IFREG | 0o644) << 16
+            runtime = zipfile.ZipInfo(
+                assemble.WINDOWS_PDFIUM_MEMBER, (2026, 1, 1, 0, 0, 0)
+            )
+            runtime.create_system = 3
+            runtime.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive, "w") as value:
+                value.writestr(binary, pe_x86_64())
+                value.writestr(runtime, b"outside/pdfium.dll")
+            with self.assertRaisesRegex(assemble.PortableReleaseError, "regular file"):
+                assemble.verify_core_archive(archive, target)
 
     def test_forbidden_speech_evidence_contract_is_complete(self) -> None:
         self.assertIn("SBOM.spdx.json", assemble.FORBIDDEN_PLUGIN_FILES)
