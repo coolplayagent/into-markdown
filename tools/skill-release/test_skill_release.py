@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import pathlib
 import stat
 import struct
@@ -19,6 +20,8 @@ from skill_release import (
     ALLOWED_FILES,
     ARCHIVE_MANIFEST,
     ASSET_SPECS,
+    AUTHORITY_MATERIALS,
+    AUTHORITY_TARGET,
     CORE_MATERIAL_RELATIVES,
     FIXED_TIMESTAMP,
     ROOT,
@@ -27,12 +30,13 @@ from skill_release import (
     WINDOWS_PDFIUM_RELATIVE,
     SkillReleaseError,
     core_inputs,
-    create_archive,
+    create_archive as create_release_archive,
     materialize,
     validate,
     validate_materialized,
-    verify_release,
+    verify_release as verify_release_archive,
 )
+from core_archive import write_authority
 
 
 def pe(machine: int = 0x8664, marker: bytes = b"") -> bytes:
@@ -75,8 +79,64 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
         path = root / pathlib.Path(relative.as_posix())
         path.parent.mkdir(parents=True, exist_ok=True)
         source = static_materials.get(relative)
-        path.write_bytes(source.read_bytes() if source else f"material:{relative}".encode())
+        if source:
+            contents = source.read_bytes()
+        elif relative.as_posix() == "SBOM.spdx.json":
+            contents = json.dumps(
+                {
+                    "SPDXID": "SPDXRef-DOCUMENT",
+                    "spdxVersion": "SPDX-2.3",
+                    "dataLicense": "CC0-1.0",
+                    "creationInfo": {},
+                    "packages": [{"name": "fixture"}],
+                }
+            ).encode()
+        elif relative.as_posix() == "SOURCES.json":
+            contents = json.dumps(
+                {
+                    "schema_version": 1,
+                    "target": AUTHORITY_TARGET,
+                    "artifact": "into-markdown-core",
+                    "version": "0.0.3",
+                    "source_revision": "fixture",
+                    "components": [{"id": "fixture"}],
+                }
+            ).encode()
+        else:
+            contents = f"material:{relative}".encode()
+        path.write_bytes(contents)
     return core_inputs(windows, pdfium, linux_x86_64, linux_arm64)
+
+
+def write_test_authority(
+    root: pathlib.Path,
+    cores: dict[pathlib.PurePosixPath, pathlib.Path],
+) -> pathlib.Path:
+    authority = root / "material-authority.json"
+    if authority.exists():
+        return authority
+    materials = {
+        "LICENSE": root / "LICENSE",
+        **{
+            relative.as_posix(): cores[relative]
+            for relative in CORE_MATERIAL_RELATIVES
+        },
+    }
+    write_authority(authority, materials, AUTHORITY_TARGET, AUTHORITY_MATERIALS)
+    return authority
+
+
+def create_archive(
+    destination: pathlib.Path,
+    cores: dict[pathlib.PurePosixPath, pathlib.Path],
+) -> pathlib.Path:
+    return create_release_archive(
+        destination, cores, write_test_authority(destination.parent, cores)
+    )
+
+
+def verify_release(archive: pathlib.Path) -> None:
+    verify_release_archive(archive, archive.parent / "material-authority.json")
 
 
 def rewrite_entry(
@@ -99,6 +159,44 @@ def rewrite_entry(
                 if mode is not None:
                     info.external_attr = (stat.S_IFREG | mode) << 16
             output_archive.writestr(info, data, compress_type=info.compress_type, compresslevel=9)
+
+
+def replace_material_and_recompute_manifest(
+    source: pathlib.Path,
+    destination: pathlib.Path,
+    relative: str,
+    contents: bytes,
+) -> None:
+    entry_name = f"{SKILL_NAME}/{relative}"
+    with zipfile.ZipFile(source) as input_archive:
+        entries = [(info, input_archive.read(info)) for info in input_archive.infolist()]
+    manifest_name = f"{SKILL_NAME}/{ARCHIVE_MANIFEST.as_posix()}"
+    rewritten = []
+    for info, data in entries:
+        if info.filename == entry_name:
+            data = contents
+        rewritten.append((info, data))
+    manifest = json.loads(next(data for info, data in rewritten if info.filename == manifest_name))
+    for record in manifest["files"]:
+        if record["path"] == relative:
+            record["bytes"] = len(contents)
+            record["sha256"] = hashlib.sha256(contents).hexdigest()
+    manifest_bytes = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode()
+        + b"\n"
+    )
+    with zipfile.ZipFile(destination, "x") as output_archive:
+        for original, data in rewritten:
+            info = zipfile.ZipInfo(original.filename, original.date_time)
+            info.create_system = original.create_system
+            info.compress_type = original.compress_type
+            info.external_attr = original.external_attr
+            output_archive.writestr(
+                info,
+                manifest_bytes if original.filename == manifest_name else data,
+                compress_type=info.compress_type,
+                compresslevel=9,
+            )
 
 
 class SkillReleaseTests(unittest.TestCase):
@@ -215,6 +313,17 @@ class SkillReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(SkillReleaseError, "bidirectional projection"):
                 verify_release(root / "tampered.zip")
 
+            replace_material_and_recompute_manifest(
+                valid,
+                root / "recomputed-manifest.zip",
+                "NOTICE",
+                b"attacker-controlled notice",
+            )
+            with self.assertRaisesRegex(
+                SkillReleaseError, "independent authority"
+            ):
+                verify_release(root / "recomputed-manifest.zip")
+
             cores = write_cores(root)
             cores.pop(pathlib.PurePosixPath("licenses/pdfium/licenses/zlib.txt"))
             with self.assertRaisesRegex(SkillReleaseError, "exact release materials"):
@@ -244,11 +353,12 @@ class SkillReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(SkillReleaseError, "symbolic link"):
                 validate(source)
 
-    def test_cli_build_requires_three_cores_pdfium_and_verify_needs_only_archive(self) -> None:
+    def test_cli_build_and_verify_require_independent_material_authority(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             cores = write_cores(root)
             archive = root / "skill.zip"
+            authority = write_test_authority(root, cores)
             command = [
                 "skill-release",
                 "build",
@@ -262,13 +372,22 @@ class SkillReleaseTests(unittest.TestCase):
                 str(cores[ASSET_SPECS[1].relative]),
                 "--linux-arm64-core",
                 str(cores[ASSET_SPECS[2].relative]),
+                "--material-authority",
+                str(authority),
             ]
             with mock.patch.object(sys, "argv", command):
                 skill_release_main.main()
             with mock.patch.object(
                 sys,
                 "argv",
-                ["skill-release", "verify", "--archive", str(archive)],
+                [
+                    "skill-release",
+                    "verify",
+                    "--archive",
+                    str(archive),
+                    "--material-authority",
+                    str(authority),
+                ],
             ):
                 skill_release_main.main()
 

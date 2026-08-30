@@ -15,6 +15,15 @@ from typing import Mapping
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+PORTABLE_RELEASE_DIR = ROOT / "tools/portable-release"
+if str(PORTABLE_RELEASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
+from core_archive import (  # noqa: E402
+    MaterialAuthorityError,
+    load_authority,
+    verify_materials,
+)
+
 SKILL_NAME = "into-markdown"
 SKILL_SOURCE = ROOT / ".agents/skills" / SKILL_NAME
 # Kept for release-tool compatibility while Core packages stop embedding the skill.
@@ -52,6 +61,8 @@ CORE_MATERIAL_RELATIVES = tuple(
         *(f"licenses/pdfium/{name}" for name in PDFIUM_LICENSE_FILES),
     )
 )
+AUTHORITY_MATERIALS = ("LICENSE", *(path.as_posix() for path in CORE_MATERIAL_RELATIVES))
+AUTHORITY_TARGET = "x86_64-pc-windows-msvc"
 MATERIAL_DIRECTORIES = tuple(
     pathlib.PurePosixPath(value)
     for value in ("licenses", "licenses/npm", "licenses/pdfium", "licenses/pdfium/licenses")
@@ -380,10 +391,27 @@ def validate_materialized(destination: pathlib.Path, source: pathlib.Path = SKIL
 def create_archive(
     destination: pathlib.Path,
     cores: Mapping[pathlib.PurePosixPath, pathlib.Path],
+    material_authority: pathlib.Path,
     source: pathlib.Path = SKILL_SOURCE,
 ) -> pathlib.Path:
     files = validate(source)
     validated_cores = _validated_cores(cores)
+    authority = _load_material_authority(material_authority)
+    authority_inputs = {
+        "LICENSE": source / "LICENSE",
+        **{
+            relative.as_posix(): validated_cores[relative]
+            for relative in CORE_MATERIAL_RELATIVES
+        },
+    }
+    try:
+        verify_materials(
+            {name: path.read_bytes() for name, path in authority_inputs.items()},
+            authority,
+            AUTHORITY_MATERIALS,
+        )
+    except MaterialAuthorityError as error:
+        raise SkillReleaseError(str(error)) from error
     sidecar = destination.with_name(destination.name + ".sha256")
     if destination.exists() or destination.is_symlink() or sidecar.exists() or sidecar.is_symlink():
         raise SkillReleaseError("skill archive destination or forbidden checksum sidecar already exists")
@@ -420,7 +448,12 @@ def create_archive(
                 _write_directory(archive, f"{SKILL_NAME}/{relative}/")
             else:
                 _write_file(archive, f"{SKILL_NAME}/{relative}", path, mode)
-    verify_release(destination, source, expected_cores=validated_cores)
+    verify_release(
+        destination,
+        material_authority,
+        source,
+        expected_cores=validated_cores,
+    )
     return destination
 
 
@@ -501,6 +534,7 @@ def _expected_archive_entries(
 
 def verify_archive(
     archive_path: pathlib.Path,
+    material_authority: dict,
     source: pathlib.Path = SKILL_SOURCE,
     expected_cores: Mapping[pathlib.PurePosixPath, pathlib.Path] | None = None,
 ) -> None:
@@ -517,6 +551,7 @@ def verify_archive(
             if archive.comment:
                 raise SkillReleaseError("skill archive metadata is not deterministic")
             observed_manifest_files: list[dict[str, object]] = []
+            observed_materials: dict[str, bytes] = {}
             manifest: object = None
             for info in infos:
                 if (
@@ -543,6 +578,8 @@ def verify_archive(
                     except (UnicodeDecodeError, json.JSONDecodeError) as error:
                         raise SkillReleaseError("skill archive manifest is not valid JSON") from error
                     continue
+                if relative in AUTHORITY_MATERIALS:
+                    observed_materials[relative] = data
                 observed_manifest_files.append(
                     {
                         "path": relative,
@@ -608,6 +645,14 @@ def verify_archive(
             expected_manifest = {"schemaVersion": 1, "files": observed_manifest_files}
             if manifest != expected_manifest:
                 raise SkillReleaseError("skill archive manifest is not an exact bidirectional projection")
+            try:
+                verify_materials(
+                    observed_materials,
+                    material_authority,
+                    AUTHORITY_MATERIALS,
+                )
+            except MaterialAuthorityError as error:
+                raise SkillReleaseError(str(error)) from error
     except (OSError, zipfile.BadZipFile, RuntimeError) as error:
         if isinstance(error, SkillReleaseError):
             raise
@@ -616,10 +661,23 @@ def verify_archive(
 
 def verify_release(
     archive_path: pathlib.Path,
+    material_authority: pathlib.Path,
     source: pathlib.Path = SKILL_SOURCE,
     expected_cores: Mapping[pathlib.PurePosixPath, pathlib.Path] | None = None,
 ) -> None:
-    verify_archive(archive_path, source, expected_cores)
+    verify_archive(
+        archive_path,
+        _load_material_authority(material_authority),
+        source,
+        expected_cores,
+    )
     sidecar = archive_path.with_name(archive_path.name + ".sha256")
     if sidecar.exists() or sidecar.is_symlink():
         raise SkillReleaseError("skill release must not have an external checksum sidecar")
+
+
+def _load_material_authority(path: pathlib.Path) -> dict:
+    try:
+        return load_authority(path, AUTHORITY_TARGET, AUTHORITY_MATERIALS)
+    except MaterialAuthorityError as error:
+        raise SkillReleaseError(str(error)) from error

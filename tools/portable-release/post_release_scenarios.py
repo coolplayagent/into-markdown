@@ -2,13 +2,77 @@
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
 from typing import Any
 
 from release_artifacts import E2EError
+
+
+def _windows_to_wsl(path: pathlib.Path) -> str:
+    result = subprocess.run(
+        ["wsl.exe", "--exec", "wslpath", "-a", str(path.resolve())],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip().startswith("/"):
+        raise E2EError(f"cannot translate path for WSL: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def run_wsl(arguments: Any, assets: pathlib.Path, fixtures: pathlib.Path) -> dict:
+    """Run the Linux half of the release suite from a Windows aggregate job."""
+    script = _windows_to_wsl(pathlib.Path(__file__).with_name("post_release_e2e.py"))
+    report_path = arguments.work_root / "linux-x86_64.json"
+    command = [
+        "wsl.exe",
+        "--exec",
+        "python3",
+        script,
+        "--platform",
+        "linux",
+        "--assets-dir",
+        _windows_to_wsl(assets),
+        "--fixtures",
+        _windows_to_wsl(fixtures),
+        "--evidence-dir",
+        _windows_to_wsl(arguments.evidence_dir.resolve(strict=True)),
+        "--work-root",
+        f"/tmp/into-md-post-release-e2e-{os.getpid()}",
+        "--report",
+        _windows_to_wsl(report_path),
+        "--version",
+        arguments.version,
+        "--repository",
+        arguments.repository,
+        "--tag",
+        arguments.tag,
+    ]
+    started = time.monotonic()
+    result = subprocess.run(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+    )
+    detail = (result.stderr or result.stdout)[: 64 * 1024].decode(
+        "utf-8", errors="replace"
+    ).strip()
+    if not report_path.is_file():
+        raise E2EError(f"WSL Linux E2E did not write its report: {detail}")
+    envelope = json.loads(report_path.read_text(encoding="utf-8"))
+    reports = envelope.get("platforms", [])
+    if len(reports) != 1:
+        raise E2EError("WSL Linux E2E report does not contain one platform result")
+    report = reports[0]
+    report["wslInvocationElapsedMs"] = round((time.monotonic() - started) * 1000)
+    if result.returncode != 0 and report.get("conclusion") == "passed":
+        raise E2EError(f"WSL Linux E2E process failed: {detail}")
+    return report
 
 
 def run_concurrent_ocr(
@@ -249,3 +313,68 @@ def run_skill_packaged_runtime(
             "Skill empty-PATH PDF/OCR did not use the expected packaged/embedded runtimes"
         )
     return runner.cases
+
+
+def run_packaged_pdfium_negative_cases(
+    binary: pathlib.Path,
+    fixtures: pathlib.Path,
+    root: pathlib.Path,
+    platform: str,
+    protect_directory: Callable,
+    isolated_environment: Callable,
+    copy_fixture: Callable,
+    runner_factory: Callable,
+    conversion_arguments: Callable,
+    bounded: Callable[[bytes], str],
+) -> list[dict[str, Any]]:
+    """Prove missing, tampered, and reparse packaged PDFium fail closed on Windows."""
+    if platform != "windows":
+        return []
+    source_runtime = binary.parent / "lib/pdfium/pdfium.dll"
+    if not source_runtime.is_file() or source_runtime.is_symlink():
+        raise E2EError("authenticated packaged PDFium fixture is unavailable")
+    results = []
+    for scenario in ("missing", "tampered", "reparse"):
+        scenario_root = protect_directory(root / scenario, platform)
+        layout = protect_directory(scenario_root / "layout", platform)
+        work = protect_directory(scenario_root / "work", platform)
+        copied_binary = layout / binary.name
+        shutil.copyfile(binary, copied_binary)
+        runtime = layout / "lib/pdfium/pdfium.dll"
+        if scenario == "tampered":
+            runtime.parent.mkdir(parents=True)
+            data = bytearray(source_runtime.read_bytes())
+            if not data:
+                raise E2EError("authenticated packaged PDFium fixture is empty")
+            data[0] ^= 0x80
+            runtime.write_bytes(data)
+        elif scenario == "reparse":
+            reparse_target = scenario_root / "outside"
+            create_runtime_reparse(runtime.parent, reparse_target, platform)
+            shutil.copyfile(source_runtime, reparse_target / runtime.name)
+        environment, _user_data = isolated_environment(
+            scenario_root / "state", platform
+        )
+        decoy = protect_directory(scenario_root / "path-decoy", platform)
+        shutil.copyfile(source_runtime, decoy / "pdfium.dll")
+        shutil.copyfile(source_runtime, work / "pdfium.dll")
+        environment["PATH"] = str(decoy)
+        source = copy_fixture(
+            fixtures, "small/pdf/structures.pdf", work / "structures.pdf"
+        )
+        output = work / "structures.md"
+        runner = runner_factory(copied_binary, environment, work)
+        result = runner.call(
+            f"packaged-pdfium-{scenario}",
+            conversion_arguments(source, output, ["--ocr", "off", "--no-config"]),
+            succeed=False,
+        )
+        detail = bounded(result.stderr + result.stdout).lower().replace("_", "")
+        if "componentunavailable" not in detail:
+            raise E2EError(
+                f"packaged PDFium {scenario} did not fail as componentUnavailable"
+            )
+        if output.exists():
+            raise E2EError(f"packaged PDFium {scenario} published an output")
+        results.extend(runner.cases)
+    return results

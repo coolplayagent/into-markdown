@@ -10,7 +10,8 @@ import struct
 import tarfile
 import zipfile
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -22,6 +23,7 @@ CORE_ARCHIVES = {
 }
 WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
 CORE_ARCHIVE_MANIFEST = "archive-manifest.json"
+CORE_MATERIAL_AUTHORITY = "archive-material-authority.json"
 PDFIUM_LICENSE_FILES = (
     "LICENSE",
     "licenses/abseil.txt",
@@ -56,6 +58,159 @@ ARCHIVE_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 
 class PortableReleaseError(RuntimeError):
     """The compact release could not be assembled or verified."""
+
+
+class MaterialAuthorityError(RuntimeError):
+    """Release materials or their independent authority are invalid."""
+
+
+def validate_material(name: str, data: bytes) -> None:
+    """Reject empty text and structurally invalid generated JSON materials."""
+    if not data:
+        raise MaterialAuthorityError(f"release material is empty: {name}")
+    if name in {"NOTICE", "THIRD_PARTY_NOTICES.md"}:
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise MaterialAuthorityError(
+                f"release material is not valid UTF-8: {name}"
+            ) from error
+        return
+    if name not in {"SBOM.spdx.json", "SOURCES.json"}:
+        return
+    try:
+        value = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise MaterialAuthorityError(f"release material is not valid JSON: {name}") from error
+    if not isinstance(value, dict):
+        raise MaterialAuthorityError(f"release material has an invalid schema: {name}")
+    if name == "SBOM.spdx.json":
+        valid = (
+            value.get("SPDXID") == "SPDXRef-DOCUMENT"
+            and value.get("dataLicense") == "CC0-1.0"
+            and isinstance(value.get("spdxVersion"), str)
+            and value["spdxVersion"].startswith("SPDX-")
+            and isinstance(value.get("creationInfo"), dict)
+            and isinstance(value.get("packages"), list)
+            and bool(value["packages"])
+        )
+    else:
+        valid = (
+            value.get("schema_version") == 1
+            and isinstance(value.get("target"), str)
+            and bool(value["target"])
+            and value.get("artifact") == "into-markdown-core"
+            and isinstance(value.get("version"), str)
+            and bool(value["version"])
+            and isinstance(value.get("source_revision"), str)
+            and bool(value["source_revision"])
+            and isinstance(value.get("components"), list)
+            and bool(value["components"])
+        )
+    if not valid:
+        raise MaterialAuthorityError(f"release material has an invalid schema: {name}")
+
+
+def build_authority(
+    materials: Mapping[str, pathlib.Path], target: str, members: Sequence[str]
+) -> dict[str, Any]:
+    """Build an exact digest authority outside the product archive."""
+    if tuple(materials) != tuple(members):
+        raise MaterialAuthorityError("release material inventory is invalid")
+    files = []
+    for name in members:
+        path = materials[name]
+        if not path.is_file() or path.is_symlink():
+            raise MaterialAuthorityError(f"release material is unavailable: {name}")
+        data = path.read_bytes()
+        validate_material(name, data)
+        files.append(
+            {
+                "path": name,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+    return {"schemaVersion": 1, "target": target, "files": files}
+
+
+def write_authority(
+    destination: pathlib.Path,
+    materials: Mapping[str, pathlib.Path],
+    target: str,
+    members: Sequence[str],
+) -> dict[str, Any]:
+    authority = build_authority(materials, target, members)
+    if destination.exists() or destination.is_symlink():
+        raise MaterialAuthorityError("release material authority already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(authority, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return authority
+
+
+def load_authority(
+    source: pathlib.Path, target: str, members: Sequence[str]
+) -> dict[str, Any]:
+    if not source.is_file() or source.is_symlink():
+        raise MaterialAuthorityError("independent release material authority is unavailable")
+    try:
+        value = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise MaterialAuthorityError(
+            "independent release material authority is invalid"
+        ) from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schemaVersion", "target", "files"}
+        or value.get("schemaVersion") != 1
+        or value.get("target") != target
+        or not isinstance(value.get("files"), list)
+        or len(value["files"]) != len(members)
+    ):
+        raise MaterialAuthorityError("independent release material authority is invalid")
+    for record, name in zip(value["files"], members, strict=True):
+        if (
+            not isinstance(record, dict)
+            or set(record) != {"path", "bytes", "sha256"}
+            or record.get("path") != name
+            or not isinstance(record.get("bytes"), int)
+            or isinstance(record.get("bytes"), bool)
+            or record["bytes"] <= 0
+            or not isinstance(record.get("sha256"), str)
+            or len(record["sha256"]) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in record["sha256"]
+            )
+        ):
+            raise MaterialAuthorityError("independent release material authority is invalid")
+    return value
+
+
+def verify_materials(
+    contents: Mapping[str, bytes], authority: Mapping[str, Any], members: Sequence[str]
+) -> None:
+    """Compare package bytes to the independently supplied material authority."""
+    records = authority.get("files")
+    if not isinstance(records, list) or len(records) != len(members):
+        raise MaterialAuthorityError("independent release material authority is invalid")
+    for record, name in zip(records, members, strict=True):
+        data = contents.get(name)
+        if data is None:
+            raise MaterialAuthorityError(f"release material is absent: {name}")
+        validate_material(name, data)
+        if (
+            record.get("path") != name
+            or record.get("bytes") != len(data)
+            or record.get("sha256") != hashlib.sha256(data).hexdigest()
+        ):
+            raise MaterialAuthorityError(
+                f"release material differs from independent authority: {name}"
+            )
 
 
 def archive_record(name: str, data: bytes, mode: int) -> dict[str, object]:
@@ -107,6 +262,11 @@ def create_core_archive(
         if member.endswith(".exe")
         else "x86_64-unknown-linux-gnu"
     )
+    if materials:
+        try:
+            build_authority(materials, target, CORE_MATERIAL_MEMBERS)
+        except MaterialAuthorityError as error:
+            raise PortableReleaseError(str(error)) from error
     entries = [(member, binary, 0o755 if member == "into-md" else 0o644)]
     if runtime is not None:
         entries.append((runtime[1], runtime[0], 0o644))
@@ -299,6 +459,7 @@ def verify_core_archive(
     target: str,
     binary_architecture: Callable[[bytes, str], bool],
     pdfium_authority: dict | None = None,
+    material_authority: dict | None = None,
 ) -> None:
     """Authenticate the exact archive inventory, bytes, modes, and manifest."""
     _archive_name, member = CORE_ARCHIVES[target]
@@ -341,7 +502,7 @@ def verify_core_archive(
                 raise PortableReleaseError(
                     "Core declaration or license member mode is invalid"
                 )
-        _verify_materials(archive)
+        _verify_materials(archive, material_authority)
         _verify_manifest(archive, infos, target)
 
 
@@ -365,7 +526,11 @@ def _verify_windows_pdfium(
         raise PortableReleaseError("Windows Core still contains an embedded PDFium payload")
 
 
-def _verify_materials(archive: zipfile.ZipFile) -> None:
+def _verify_materials(
+    archive: zipfile.ZipFile, material_authority: dict | None
+) -> None:
+    if material_authority is None:
+        raise PortableReleaseError("independent Core material authority is required")
     static_materials = {
         "LICENSE": ROOT / "LICENSE",
         "licenses/npm/npm-release.spdx.json": ROOT
@@ -379,6 +544,28 @@ def _verify_materials(archive: zipfile.ZipFile) -> None:
             raise PortableReleaseError(f"Core archive static license differs: {name}")
     if any(not archive.read(f"licenses/pdfium/{name}") for name in PDFIUM_LICENSE_FILES):
         raise PortableReleaseError("Core archive contains an empty PDFium license member")
+    try:
+        verify_materials(
+            {name: archive.read(name) for name in CORE_MATERIAL_MEMBERS},
+            material_authority,
+            CORE_MATERIAL_MEMBERS,
+        )
+    except MaterialAuthorityError as error:
+        raise PortableReleaseError(str(error)) from error
+
+
+def write_core_material_authority(
+    destination: pathlib.Path,
+    materials: dict[str, pathlib.Path],
+    target: str,
+) -> dict:
+    """Write the package-independent authority consumed by archive verifiers."""
+    try:
+        return write_authority(
+            destination, materials, target, CORE_MATERIAL_MEMBERS
+        )
+    except MaterialAuthorityError as error:
+        raise PortableReleaseError(str(error)) from error
 
 
 def _verify_manifest(

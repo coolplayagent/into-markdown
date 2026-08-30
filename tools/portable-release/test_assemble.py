@@ -50,9 +50,47 @@ def core_materials(root: pathlib.Path) -> dict[str, pathlib.Path]:
             continue
         path = root / "materials" / pathlib.PurePosixPath(name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(f"reviewed material: {name}\n".encode())
+        if name == "SBOM.spdx.json":
+            contents = json.dumps(
+                {
+                    "SPDXID": "SPDXRef-DOCUMENT",
+                    "spdxVersion": "SPDX-2.3",
+                    "dataLicense": "CC0-1.0",
+                    "creationInfo": {},
+                    "packages": [{"name": "fixture"}],
+                }
+            ).encode()
+        elif name == "SOURCES.json":
+            contents = json.dumps(
+                {
+                    "schema_version": 1,
+                    "target": "fixture",
+                    "artifact": "into-markdown-core",
+                    "version": "0.0.3",
+                    "source_revision": "fixture",
+                    "components": [{"id": "fixture"}],
+                }
+            ).encode()
+        else:
+            contents = f"reviewed material: {name}\n".encode()
+        path.write_bytes(contents)
         result[name] = path
     return result
+
+
+def core_authority(materials: dict[str, pathlib.Path], target: str) -> dict:
+    return {
+        "schemaVersion": 1,
+        "target": target,
+        "files": [
+            {
+                "path": name,
+                "bytes": materials[name].stat().st_size,
+                "sha256": hashlib.sha256(materials[name].read_bytes()).hexdigest(),
+            }
+            for name in assemble.CORE_MATERIAL_MEMBERS
+        ],
+    }
 
 
 class PortableReleaseTests(unittest.TestCase):
@@ -76,7 +114,31 @@ class PortableReleaseTests(unittest.TestCase):
                 "SBOM.spdx.json",
                 "SOURCES.json",
             ):
-                (evidence / evidence_name).write_text(evidence_name, encoding="utf-8")
+                contents = (
+                    json.dumps(
+                        {
+                            "SPDXID": "SPDXRef-DOCUMENT",
+                            "spdxVersion": "SPDX-2.3",
+                            "dataLicense": "CC0-1.0",
+                            "creationInfo": {},
+                            "packages": [{"name": "fixture"}],
+                        }
+                    )
+                    if evidence_name == "SBOM.spdx.json"
+                    else json.dumps(
+                        {
+                            "schema_version": 1,
+                            "target": "fixture",
+                            "artifact": "into-markdown-core",
+                            "version": "0.0.3",
+                            "source_revision": "fixture",
+                            "components": [{"id": "fixture"}],
+                        }
+                    )
+                    if evidence_name == "SOURCES.json"
+                    else evidence_name
+                )
+                (evidence / evidence_name).write_text(contents, encoding="utf-8")
             materials = assemble.stage_core_archive_materials(
                 pdfium, evidence, root / "materials"
             )
@@ -279,11 +341,12 @@ class PortableReleaseTests(unittest.TestCase):
             struct.pack_into("<H", elf, 18, 62)
             binary.write_bytes(elf)
             archive = root / "into-md-linux-x86_64.zip"
+            materials = core_materials(root)
             assemble.create_core_archive(
                 binary,
                 archive,
                 "into-md",
-                materials=core_materials(root),
+                materials=materials,
                 target=self.TARGET,
             )
             with zipfile.ZipFile(archive) as value:
@@ -300,6 +363,108 @@ class PortableReleaseTests(unittest.TestCase):
                     (info.external_attr >> 16) & 0o177777,
                     stat.S_IFREG | 0o755,
                 )
+
+            with self.assertRaisesRegex(
+                assemble.PortableReleaseError, "authority is required"
+            ):
+                assemble.verify_core_archive(archive, self.TARGET)
+            assemble.verify_core_archive(
+                archive, self.TARGET, core_authority(materials, self.TARGET)
+            )
+
+    def test_core_rejects_replaced_material_with_recomputed_package_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            binary = root / "into-md"
+            elf = bytearray(64)
+            elf[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<H", elf, 18, 62)
+            binary.write_bytes(elf)
+            materials = core_materials(root)
+            valid = root / "valid.zip"
+            assemble.create_core_archive(
+                binary,
+                valid,
+                "into-md",
+                materials=materials,
+                target=self.TARGET,
+            )
+            with zipfile.ZipFile(valid) as source:
+                entries = [(info, source.read(info)) for info in source.infolist()]
+            replacement = b"attacker-controlled notice"
+            manifest = json.loads(
+                next(
+                    data
+                    for info, data in entries
+                    if info.filename == assemble.CORE_ARCHIVE_MANIFEST
+                )
+            )
+            for record in manifest["files"]:
+                if record["path"] == "NOTICE":
+                    record["bytes"] = len(replacement)
+                    record["sha256"] = hashlib.sha256(replacement).hexdigest()
+            manifest_bytes = json.dumps(manifest).encode()
+            tampered = root / "tampered.zip"
+            with zipfile.ZipFile(tampered, "x") as output:
+                for original, data in entries:
+                    info = zipfile.ZipInfo(original.filename, original.date_time)
+                    info.create_system = original.create_system
+                    info.compress_type = original.compress_type
+                    info.external_attr = original.external_attr
+                    if original.filename == "NOTICE":
+                        data = replacement
+                    elif original.filename == assemble.CORE_ARCHIVE_MANIFEST:
+                        data = manifest_bytes
+                    output.writestr(
+                        info,
+                        data,
+                        compress_type=info.compress_type,
+                        compresslevel=9,
+                    )
+            with self.assertRaisesRegex(
+                assemble.PortableReleaseError, "independent authority"
+            ):
+                assemble.verify_core_archive(
+                    tampered,
+                    self.TARGET,
+                    core_authority(materials, self.TARGET),
+                )
+
+    def test_core_rejects_structurally_invalid_generated_json_materials(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            binary = root / "into-md"
+            elf = bytearray(64)
+            elf[:6] = b"\x7fELF\x02\x01"
+            struct.pack_into("<H", elf, 18, 62)
+            binary.write_bytes(elf)
+            for material_name in ("SBOM.spdx.json", "SOURCES.json"):
+                with self.subTest(material=material_name):
+                    materials = core_materials(root)
+                    materials[material_name].write_text("{}", encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        assemble.PortableReleaseError, "invalid schema"
+                    ):
+                        assemble.create_core_archive(
+                            binary,
+                            root / f"invalid-{material_name}.zip",
+                            "into-md",
+                            materials=materials,
+                            target=self.TARGET,
+                        )
+
+    def test_core_authority_preserves_non_utf8_upstream_license_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            materials = core_materials(root)
+            license_name = "licenses/pdfium/licenses/freetype.txt"
+            materials[license_name].write_bytes(b"Copyright \xa9 upstream")
+            authority = core_authority(materials, self.TARGET)
+            destination = root / assemble.CORE_MATERIAL_AUTHORITY
+            assemble.write_core_material_authority(
+                destination, materials, self.TARGET
+            )
+            self.assertEqual(json.loads(destination.read_text()), authority)
 
     def test_windows_core_archive_requires_manifest_pinned_pdfium(self) -> None:
         target = "x86_64-pc-windows-msvc"
@@ -401,7 +566,9 @@ class PortableReleaseTests(unittest.TestCase):
                 core_materials(root),
                 target,
             )
-            assemble.verify_core_archive(archive, target)
+            assemble.verify_core_archive(
+                archive, target, core_authority(core_materials(root), target)
+            )
 
     def test_forbidden_speech_evidence_contract_is_complete(self) -> None:
         self.assertIn("SBOM.spdx.json", assemble.FORBIDDEN_PLUGIN_FILES)

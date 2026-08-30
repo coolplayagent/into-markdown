@@ -11,6 +11,7 @@ py_library(
         "//third_party/pdfium:manifest.json",
     ],
     imports = ["."],
+    deps = ["//tools/portable-release:core_archive"],
 )
 
 py_binary(

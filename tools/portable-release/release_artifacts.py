@@ -15,10 +15,14 @@ from typing import Any
 
 from core_archive import (
     CORE_ARCHIVE_MANIFEST,
+    CORE_MATERIAL_AUTHORITY,
     CORE_MATERIAL_MEMBERS,
     PDFIUM_LICENSE_FILES,
     WINDOWS_PDFIUM_MEMBER,
+    MaterialAuthorityError,
     archive_record,
+    load_authority,
+    verify_materials,
 )
 
 
@@ -103,12 +107,29 @@ def sha256_file(path: pathlib.Path) -> str:
     return value.hexdigest()
 
 
+def write_json(path: pathlib.Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def release_asset_url(repository: str, tag: str, name: str) -> str:
     if not repository or any(part in repository for part in ("..", "\\", "?", "#")):
         raise E2EError("repository must be an owner/name pair")
     if repository.count("/") != 1 or not tag or "/" in tag or "\\" in tag:
         raise E2EError("release repository or tag is invalid")
     return f"https://github.com/{repository}/releases/download/{tag}/{name}"
+
+
+def normalize_release_version(value: str) -> str:
+    """Normalize the accepted workflow tag spelling to the Cargo version spelling."""
+    normalized = value.removeprefix("v")
+    if not normalized or normalized.startswith("v"):
+        raise E2EError("release version is invalid")
+    return normalized
 
 
 def acquire_assets(
@@ -172,6 +193,7 @@ def extract_single_core(
     archive_path: pathlib.Path,
     platform: str,
     output: pathlib.Path,
+    material_authority: dict,
     pdfium_authority: dict | None = None,
 ) -> dict:
     """Authenticate and extract one platform's Core archive."""
@@ -206,10 +228,11 @@ def extract_single_core(
                 raise E2EError(
                     f"{archive_path.name} has an invalid license member mode"
                 )
-        if any(
-            not contents[f"licenses/pdfium/{name}"] for name in PDFIUM_LICENSE_FILES
-        ):
-            raise E2EError(f"{archive_path.name} has an empty PDFium license member")
+        _verify_release_materials(
+            {name: contents[name] for name in CORE_MATERIAL_MEMBERS},
+            material_authority,
+            CORE_MATERIAL_MEMBERS,
+        )
         _verify_core_manifest(archive_path, platform, infos, contents)
     identity = inspect_core(data, platform)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -281,6 +304,7 @@ def extract_skill_binary(
     archive_path: pathlib.Path,
     platform: str,
     output: pathlib.Path,
+    material_authority: dict,
     pdfium_authority: dict | None = None,
 ) -> dict:
     """Authenticate the full Skill inventory and extract its platform Core."""
@@ -298,7 +322,7 @@ def extract_skill_binary(
             info.filename: archive.read(info) for info in infos if not info.is_dir()
         }
         _verify_skill_metadata(archive, infos)
-        _verify_skill_materials(contents)
+        _verify_skill_materials(contents, material_authority)
         _verify_skill_manifest(infos, contents)
         info = archive.getinfo(wanted)
         if info.is_dir():
@@ -338,7 +362,9 @@ def _verify_skill_metadata(
             raise E2EError("Skill contains invalid file metadata")
 
 
-def _verify_skill_materials(contents: dict[str, bytes]) -> None:
+def _verify_skill_materials(
+    contents: dict[str, bytes], material_authority: dict
+) -> None:
     if contents["into-markdown/LICENSE"] != (ROOT / "LICENSE").read_bytes():
         raise E2EError("Skill project LICENSE differs from the repository authority")
     for relative, authority in (
@@ -357,11 +383,23 @@ def _verify_skill_materials(contents: dict[str, bytes]) -> None:
     ):
         if contents[f"into-markdown/{relative}"] != authority.read_bytes():
             raise E2EError(f"Skill {relative} differs from the repository authority")
-    if any(
-        not contents[f"into-markdown/licenses/pdfium/{name}"]
-        for name in PDFIUM_LICENSE_FILES
-    ):
-        raise E2EError("Skill has an empty PDFium license member")
+    _verify_release_materials(
+        {
+            name: contents[f"into-markdown/{name}"]
+            for name in CORE_MATERIAL_MEMBERS
+        },
+        material_authority,
+        CORE_MATERIAL_MEMBERS,
+    )
+
+
+def _verify_release_materials(
+    contents: dict[str, bytes], authority: dict, members: tuple[str, ...]
+) -> None:
+    try:
+        verify_materials(contents, authority, members)
+    except MaterialAuthorityError as error:
+        raise E2EError(str(error)) from error
 
 
 def _skill_record(info: zipfile.ZipInfo, data: bytes) -> dict[str, object]:

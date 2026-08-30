@@ -26,13 +26,16 @@ if str(PORTABLE_RELEASE_DIR) not in sys.path:
 from core_archive import (  # noqa: E402
     CORE_ARCHIVE_MANIFEST,
     CORE_ARCHIVES,
+    CORE_MATERIAL_AUTHORITY,
     CORE_MATERIAL_MEMBERS,
     PDFIUM_LICENSE_FILES,
     WINDOWS_PDFIUM_MEMBER,
     PortableReleaseError,
     contains_embedded_pdfium,
     create_core_archive,
+    load_authority,
     stage_core_archive_materials,
+    write_core_material_authority,
     windows_pdfium_authority,
 )
 
@@ -234,6 +237,9 @@ def build_platform(arguments: argparse.Namespace) -> None:
         core_evidence,
         arguments.work_root / "portable-core-materials",
     )
+    write_core_material_authority(
+        core_evidence / CORE_MATERIAL_AUTHORITY, materials, target
+    )
     archive_name, member = CORE_ARCHIVES[target]
     archive = arguments.output / "release" / archive_name
     runtime = None
@@ -320,6 +326,9 @@ def build_macos(arguments: argparse.Namespace) -> None:
         cache / "pdfium",
         core_evidence,
         arguments.work_root / "portable-core-materials",
+    )
+    write_core_material_authority(
+        core_evidence / CORE_MATERIAL_AUTHORITY, materials, target
     )
     archive_name, member = CORE_ARCHIVES[target]
     archive = arguments.output / "release" / archive_name
@@ -618,7 +627,11 @@ def _validate_speech_package(package: zipfile.ZipFile, target: str) -> None:
     _validate_speech_manifest(package, infos, target)
 
 
-def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
+def verify_core_archive(
+    archive_path: pathlib.Path,
+    target: str,
+    material_authority: dict | None = None,
+) -> None:
     from core_archive import verify_core_archive as verify
 
     authority = (
@@ -626,12 +639,27 @@ def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
         if target == "x86_64-pc-windows-msvc"
         else None
     )
-    verify(archive_path, target, binary_architecture, authority)
+    verify(
+        archive_path,
+        target,
+        binary_architecture,
+        authority,
+        material_authority,
+    )
 
 
 def verify_target(output: pathlib.Path, target: str) -> None:
     archive_name, _ = CORE_ARCHIVES[target]
-    verify_core_archive(output / "release" / archive_name, target)
+    authority_path = output / "evidence" / target / "core" / CORE_MATERIAL_AUTHORITY
+    try:
+        material_authority = load_authority(
+            authority_path, target, CORE_MATERIAL_MEMBERS
+        )
+    except RuntimeError as error:
+        raise PortableReleaseError(str(error)) from error
+    verify_core_archive(
+        output / "release" / archive_name, target, material_authority
+    )
     speech = output / "release" / SPEECH_NAMES[target]
     with zipfile.ZipFile(speech) as package:
         _validate_speech_package(package, target)

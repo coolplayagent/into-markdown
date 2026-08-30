@@ -17,13 +17,13 @@ import zipfile
 from dataclasses import dataclass
 from typing import Any
 
-
 REPOSITORY = "coolplayagent/into-markdown"
 PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
 if str(PORTABLE_RELEASE_DIR) not in sys.path:
     sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
 from release_artifacts import (  # noqa: E402
     CORE_ARCHIVE_MANIFEST,
+    CORE_MATERIAL_AUTHORITY,
     CORE_MATERIAL_MEMBERS,
     PDFIUM_LICENSE_FILES,
     ROOT,
@@ -36,50 +36,59 @@ from release_artifacts import (  # noqa: E402
     WINDOWS_PDFIUM_MEMBER,
     WINDOWS_SKILL_PDFIUM,
     E2EError,
+    MaterialAuthorityError,
     acquire_assets,
     extract_single_core as _extract_single_core,
     extract_skill_binary as _extract_skill_binary,
     inspect_core,
+    load_authority,
+    normalize_release_version,
     release_asset_url,
     sha256_file,
+    write_json,
 )
 from post_release_scenarios import (  # noqa: E402
     run_core_pdf,
     run_concurrent_ocr,
     run_fallback_matrix,
+    run_packaged_pdfium_negative_cases,
     run_skill_packaged_runtime,
+    run_wsl,
 )
-
 MAX_CAPTURE_BYTES = 64 * 1024
 
-
 def extract_single_core(
-    archive_path: pathlib.Path, platform: str, output: pathlib.Path
+    archive_path: pathlib.Path,
+    platform: str,
+    output: pathlib.Path,
+    material_authority: dict,
 ) -> dict:
     return _extract_single_core(
-        archive_path, platform, output, WINDOWS_PDFIUM_AUTHORITY
+        archive_path,
+        platform,
+        output,
+        material_authority,
+        WINDOWS_PDFIUM_AUTHORITY,
     )
 
 
 def extract_skill_binary(
-    archive_path: pathlib.Path, platform: str, output: pathlib.Path
+    archive_path: pathlib.Path,
+    platform: str,
+    output: pathlib.Path,
+    material_authority: dict,
 ) -> dict:
     return _extract_skill_binary(
-        archive_path, platform, output, WINDOWS_PDFIUM_AUTHORITY
+        archive_path,
+        platform,
+        output,
+        material_authority,
+        WINDOWS_PDFIUM_AUTHORITY,
     )
 
 
 def _bounded(value: bytes) -> str:
     return value[:MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
-
-
-def write_json(path: pathlib.Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
 
 
 def protect_directory(path: pathlib.Path, platform: str) -> pathlib.Path:
@@ -376,6 +385,7 @@ def run_platform(
     assets: pathlib.Path,
     fixtures: pathlib.Path,
     work_root: pathlib.Path,
+    evidence: pathlib.Path,
     version: str,
 ) -> dict[str, Any]:
     config = TARGETS[platform]
@@ -398,10 +408,30 @@ def run_platform(
         core_root = protect_directory(root / "core", platform)
         skill_asset_root = protect_directory(root / "skill", platform)
         work = protect_directory(root / "work", platform)
+        try:
+            core_authority = load_authority(
+                evidence / config["target"] / "core" / CORE_MATERIAL_AUTHORITY,
+                config["target"],
+                CORE_MATERIAL_MEMBERS,
+            )
+            skill_authority = load_authority(
+                evidence
+                / TARGETS["windows"]["target"]
+                / "core"
+                / CORE_MATERIAL_AUTHORITY,
+                TARGETS["windows"]["target"],
+                CORE_MATERIAL_MEMBERS,
+            )
+        except MaterialAuthorityError as authority_error:
+            raise E2EError(str(authority_error)) from authority_error
         core = core_root / config["member"]
-        report["core"] = extract_single_core(assets / config["core"], platform, core)
+        report["core"] = extract_single_core(
+            assets / config["core"], platform, core, core_authority
+        )
         skill = skill_asset_root / ("skill.exe" if platform == "windows" else "skill")
-        report["skill"] = extract_skill_binary(assets / SKILL_ARCHIVE, platform, skill)
+        report["skill"] = extract_skill_binary(
+            assets / SKILL_ARCHIVE, platform, skill, skill_authority
+        )
         package_source = assets / config["speech"]
         package = work / config["speech"]
         shutil.copyfile(package_source, package)
@@ -629,6 +659,33 @@ def run_platform(
             conversion_arguments,
             runtime_directories,
         )
+        if platform == "windows":
+            report["packagedPdfiumNegativeCases"] = {
+                "core": run_packaged_pdfium_negative_cases(
+                    core,
+                    fixtures,
+                    root / "core-pdfium-negative",
+                    platform,
+                    protect_directory,
+                    _isolated_environment,
+                    _copy_fixture,
+                    Runner,
+                    conversion_arguments,
+                    _bounded,
+                ),
+                "skill": run_packaged_pdfium_negative_cases(
+                    skill,
+                    fixtures,
+                    root / "skill-pdfium-negative",
+                    platform,
+                    protect_directory,
+                    _isolated_environment,
+                    _copy_fixture,
+                    Runner,
+                    conversion_arguments,
+                    _bounded,
+                ),
+            }
         report["cases"] = runner.cases
         if invariant_errors:
             raise E2EError("; ".join(invariant_errors))
@@ -647,63 +704,6 @@ def run_platform(
     return report
 
 
-def windows_to_wsl(path: pathlib.Path) -> str:
-    result = subprocess.run(
-        ["wsl.exe", "--exec", "wslpath", "-a", str(path.resolve())],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0 or not result.stdout.strip().startswith("/"):
-        raise E2EError(f"cannot translate path for WSL: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def run_wsl(arguments: argparse.Namespace, assets: pathlib.Path, fixtures: pathlib.Path) -> dict:
-    script = windows_to_wsl(pathlib.Path(__file__))
-    assets_path = windows_to_wsl(assets)
-    fixtures_path = windows_to_wsl(fixtures)
-    report_path = arguments.work_root / "linux-x86_64.json"
-    report_wsl = windows_to_wsl(report_path)
-    command = [
-        "wsl.exe",
-        "--exec",
-        "python3",
-        script,
-        "--platform",
-        "linux",
-        "--assets-dir",
-        assets_path,
-        "--fixtures",
-        fixtures_path,
-        "--work-root",
-        f"/tmp/into-md-post-release-e2e-{os.getpid()}",
-        "--report",
-        report_wsl,
-        "--version",
-        arguments.version,
-        "--repository",
-        arguments.repository,
-        "--tag",
-        arguments.tag,
-    ]
-    started = time.monotonic()
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    if not report_path.is_file():
-        detail = _bounded(result.stderr or result.stdout).strip()
-        raise E2EError(f"WSL Linux E2E did not write its report: {detail}")
-    envelope = json.loads(report_path.read_text(encoding="utf-8"))
-    reports = envelope.get("platforms", [])
-    if len(reports) != 1:
-        raise E2EError("WSL Linux E2E report does not contain one platform result")
-    report = reports[0]
-    report["wslInvocationElapsedMs"] = round((time.monotonic() - started) * 1000)
-    if result.returncode != 0 and report.get("conclusion") == "passed":
-        raise E2EError(f"WSL Linux E2E process failed: {_bounded(result.stderr or result.stdout).strip()}")
-    return report
-
-
 def parse_arguments() -> argparse.Namespace:
     root = pathlib.Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -712,6 +712,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--tag", default="0.0.3")
     parser.add_argument("--version", default="0.0.3")
     parser.add_argument("--assets-dir", type=pathlib.Path)
+    parser.add_argument("--evidence-dir", required=True, type=pathlib.Path)
     parser.add_argument("--fixtures", type=pathlib.Path, default=root / "fixtures")
     parser.add_argument("--work-root", type=pathlib.Path, default=pathlib.Path.cwd() / "post-release-e2e")
     parser.add_argument("--report", type=pathlib.Path)
@@ -720,6 +721,7 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_arguments()
+    arguments.version = normalize_release_version(arguments.version)
     if arguments.platform in {"all", "windows"} and os.name != "nt":
         raise E2EError("Windows E2E must be launched from Windows")
     if arguments.platform == "linux" and os.name == "nt":
@@ -727,6 +729,7 @@ def main() -> int:
     fixtures = arguments.fixtures.resolve(strict=True)
     arguments.work_root.mkdir(parents=True, exist_ok=True)
     assets = (arguments.assets_dir or (arguments.work_root / "assets")).resolve()
+    evidence = arguments.evidence_dir.resolve(strict=True)
     platforms = ["windows", "linux"] if arguments.platform == "all" else [arguments.platform]
     started = time.monotonic()
     output: dict[str, Any] = {
@@ -750,7 +753,7 @@ def main() -> int:
             if windows_root.exists():
                 raise E2EError(f"work root already exists: {windows_root}")
             platform_report = run_platform(
-                "windows", assets, fixtures, windows_root, arguments.version
+                "windows", assets, fixtures, windows_root, evidence, arguments.version
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":
@@ -769,7 +772,7 @@ def main() -> int:
             if linux_root.exists():
                 raise E2EError(f"work root already exists: {linux_root}")
             platform_report = run_platform(
-                "linux", assets, fixtures, linux_root, arguments.version
+                "linux", assets, fixtures, linux_root, evidence, arguments.version
             )
             output["platforms"].append(platform_report)
             if platform_report["conclusion"] != "passed":
