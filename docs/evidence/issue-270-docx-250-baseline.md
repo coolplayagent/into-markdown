@@ -2,8 +2,8 @@
 
 This evidence compares the #270 candidate with the DOCX converter at `main` commit
 `8d1d7d75` on Windows 11 x86-64. The branch consumes, but does not duplicate, the structured
-summary and empty-result policy from #273 and #268. The dependency order is
-**#273 → #268 → #270**.
+summary and empty-result policy from #272 and #268. The dependency order is
+**#272 → #268 → #270**.
 
 ## Corpus authority and pre-conversion classification
 
@@ -50,6 +50,8 @@ with odd/even rounds swapping which binary runs first. The report keeps all raw 
 median for latency and maximum for RSS, and rejects nondeterministic exits, payloads or resource
 snapshots. All 217 successful files are common to both sides. Their mean changed from 99.908 ms to
 101.997 ms, a 2.091% fallback, satisfying the `<50%` gate.
+Across those same common-success files, average per-process peak RSS changed by 1.435%. These paired
+performance measurements are retained unchanged after the focused compatibility fixes below.
 
 ## Empty-output evidence
 
@@ -65,11 +67,12 @@ Two directly establish the altChunk defect without filename or content special-c
 | Apache Tika `testAltChunkHTML.docx` | valid/policy-allowed; one internal altChunk; 570 payload bytes; zero `w:t` characters | success, `word.altChunkConverted`, 181 Markdown bytes |
 | Apache Tika `testAltChunkMHT.docx` | valid/policy-allowed; one internal altChunk; 1,529 payload bytes; zero `w:t` characters | success, `word.altChunkConverted`, 211 Markdown bytes |
 
-There is also one conversion failure among the 217 independently allowed packages:
-`stress014.docx`, reported as malformed. This is a compatibility observation, not evidence that
-the package is corrupt. `MultipleBodyBug.docx` is independently classified as an invalid Word main
-structure because it contains more than one body; its converter failure does not determine that
-classification.
+A final one-pass release functional gate after the focused compatibility fixes produced 218
+successful conversions, 207 non-empty Markdown results and 32 failures. `stress014.docx` now
+converts its standards-defined Word template main part to 9,485 Markdown bytes, 41 blocks and two
+assets. All 250 files still finished with zero memory/temp lease and temporary-file deltas.
+`MultipleBodyBug.docx` remains independently classified as an invalid Word main structure because
+it contains more than one body; its converter failure does not determine that classification.
 
 ## Reproduction
 

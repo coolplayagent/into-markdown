@@ -123,6 +123,15 @@ mod issue_270_fixture_tests {
         assert_eq!(markdown.matches("repeat").count(), 2);
         assert_eq!(markdown.matches("same nested text").count(), 2);
         assert_eq!(duplicate.assets.len(), 1);
+        assert_eq!(
+            duplicate
+                .document
+                .blocks
+                .iter()
+                .filter(|node| matches!(node.block, Block::Image { .. }))
+                .count(),
+            2
+        );
 
         let (_, ordered) = convert(include_bytes!(
             "../../tests/fixtures/docx/issue-270/ordered-nested-merged.docx"

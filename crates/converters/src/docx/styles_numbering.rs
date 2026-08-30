@@ -36,6 +36,8 @@ struct ParseState {
     endnote_refs: BTreeSet<String>,
     nested_outputs: Vec<ConverterOutput>,
     next_alt_chunk: usize,
+    annotation_blocks: Vec<(String, Vec<BlockNode>)>,
+    annotation_filter: Option<BTreeSet<String>>,
 }
 
 impl ParseState {
@@ -77,17 +79,22 @@ impl ParseState {
     }
 
     fn warning(&mut self, code: &str, message: impl Into<String>, part: &str) {
-        if self.diagnostics.iter().any(|diagnostic| {
+        let message = message.into();
+        if let Some(diagnostic) = self.diagnostics.iter_mut().find(|diagnostic| {
             diagnostic.code == code
                 && diagnostic.locator.as_ref().and_then(|locator| locator.part.as_deref())
                     == Some(part)
         }) {
+            if diagnostic.severity == DiagnosticSeverity::Info {
+                diagnostic.severity = DiagnosticSeverity::Warning;
+                diagnostic.message = message;
+            }
             return;
         }
         self.diagnostics.push(Diagnostic {
             code: code.into(),
             severity: DiagnosticSeverity::Warning,
-            message: message.into(),
+            message,
             locator: Some(SourceLocator { part: Some(part.into()), ..SourceLocator::default() }),
         });
     }
@@ -157,6 +164,8 @@ fn convert_docx(
         main_content_type,
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
             | "application/vnd.ms-word.document.macroEnabled.main+xml"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml"
+            | "application/vnd.ms-word.template.macroEnabledTemplate.main+xml"
     ) {
         return Err(malformed(
             Some("[Content_Types].xml"),
@@ -249,17 +258,19 @@ fn convert_docx(
     )?;
     append_related_parts(&mut package, options, context, &mut state)?;
 
+    let comment_references = state.comment_refs.clone();
     let comments = referenced_annotations(
-        &package,
+        &mut package,
         &relationships,
         "comments",
         &main_part,
-        &state.comment_refs,
+        &comment_references,
         XmlProfile::Comments,
         options,
         context,
+        &mut state,
     )?;
-    for (id, content) in comments {
+    for (id, blocks) in comments {
         state.add_inlines(1)?;
         let title = state.node(
             Block::Heading {
@@ -269,38 +280,38 @@ fn convert_docx(
             "comments",
         )?;
         state.document.blocks.push(title);
-        state.add_inlines(content.len())?;
-        let node = state.node(Block::Paragraph(content), "comments")?;
-        state.document.blocks.push(node);
+        state.document.blocks.extend(blocks);
     }
+    let footnote_references = state.footnote_refs.clone();
     let mut notes = referenced_annotations(
-        &package,
+        &mut package,
         &relationships,
         "footnotes",
         &main_part,
-        &state.footnote_refs,
+        &footnote_references,
         XmlProfile::Footnotes,
         options,
         context,
+        &mut state,
     )?;
+    let endnote_references = state.endnote_refs.clone();
     notes.extend(
         referenced_annotations(
-            &package,
+            &mut package,
             &relationships,
             "endnotes",
             &main_part,
-            &state.endnote_refs,
+            &endnote_references,
             XmlProfile::Endnotes,
             options,
             context,
+            &mut state,
         )?
         .into_iter()
         .map(|(id, content)| (format!("endnote-{id}"), content)),
     );
-    for (id, content) in notes {
-        state.add_inlines(content.len())?;
-        let paragraph = state.node(Block::Paragraph(content), "notes")?;
-        let node = state.node(Block::Footnote { label: id, blocks: vec![paragraph] }, "notes")?;
+    for (id, blocks) in notes {
+        let node = state.node(Block::Footnote { label: id, blocks }, "notes")?;
         state.document.blocks.push(node);
     }
     if state.document.blocks.is_empty()
@@ -378,7 +389,7 @@ fn relationship_target_from_kind(
 
 #[allow(clippy::too_many_arguments)]
 fn referenced_annotations(
-    package: &Package,
+    package: &mut Package,
     relationships: &BTreeMap<String, Relationship>,
     relation_suffix: &str,
     owner: &str,
@@ -386,7 +397,8 @@ fn referenced_annotations(
     profile: XmlProfile,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<Vec<(String, Vec<Inline>)>, ConversionError> {
+    state: &mut ParseState,
+) -> Result<Vec<(String, Vec<BlockNode>)>, ConversionError> {
     if references.is_empty() {
         return Ok(Vec::new());
     }
@@ -407,8 +419,28 @@ fn referenced_annotations(
         }
     };
     require_content_type(package, &part, expected_content_type)?;
-    let parsed =
-        parse_annotations(Some(package.required(&part)?), &part, profile, options, context)?;
+    let annotation_relationships = parse_relationships(
+        package.parts.get(&relationship_part(&part)).map(Vec::as_slice),
+        &part,
+        options,
+        context,
+    )?;
+    let bytes = package.take_required(&part)?;
+    state.annotation_filter = Some(references.clone());
+    parse_word_part(
+        &bytes,
+        &part,
+        profile,
+        &annotation_relationships,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        package,
+        options,
+        context,
+        state,
+    )?;
+    state.annotation_filter = None;
+    let parsed = std::mem::take(&mut state.annotation_blocks);
     let mut definitions = BTreeMap::new();
     for (id, content) in parsed {
         if definitions.insert(id, content).is_some() {
@@ -530,7 +562,10 @@ fn parse_relationships(
             .read_event()
             .map_err(|error| malformed(Some(&part), format!("invalid XML: {error}")))?
         {
-            Event::Empty(e) | Event::Start(e) if local(e.name().as_ref()) == "Relationship" => {
+            Event::Empty(e) | Event::Start(e)
+                if resolved_element(&reader, e.name(), &part)?
+                    == (PACKAGE_REL_NS.to_vec(), b"Relationship".to_vec()) =>
+            {
                 let id = attr(&e, b"Id", &part)?
                     .ok_or_else(|| malformed(Some(&part), "relationship lacks Id"))?;
                 let target = attr(&e, b"Target", &part)?
@@ -731,90 +766,6 @@ fn parse_numbering(
     for (key, start) in starts {
         if let Some(numbering) = result.get_mut(&key) {
             numbering.start = start;
-        }
-    }
-    Ok(result)
-}
-
-fn parse_annotations(
-    bytes: Option<&[u8]>,
-    part: &str,
-    profile: XmlProfile,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<Vec<(String, Vec<Inline>)>, ConversionError> {
-    let Some(bytes) = bytes else {
-        return Ok(Vec::new());
-    };
-    preflight_xml(bytes, part, profile, options, context)?;
-    let mut reader = Reader::from_reader(bytes);
-    let mut result = Vec::new();
-    let mut current = None::<(String, Vec<Inline>)>;
-    let mut stack = Vec::<String>::new();
-    loop {
-        context.checkpoint()?;
-        match reader
-            .read_event()
-            .map_err(|error| malformed(Some(part), format!("invalid XML: {error}")))?
-        {
-            Event::Start(e)
-                if matches!(local(e.name().as_ref()), "comment" | "footnote" | "endnote") =>
-            {
-                stack.push(local(e.name().as_ref()).to_owned());
-                current = Some((
-                    attr_local(&e, "id", part)?.unwrap_or_else(|| result.len().to_string()),
-                    Vec::new(),
-                ));
-            }
-            Event::Start(e) => stack.push(local(e.name().as_ref()).to_owned()),
-            Event::Text(e) if current.is_some() && stack.last().is_some_and(|name| name == "t") => {
-                append_annotation_text(
-                    &mut current.as_mut().expect("guarded above").1,
-                    decode_text(&e, part)?,
-                    options,
-                )?;
-            }
-            Event::CData(e)
-                if current.is_some() && stack.last().is_some_and(|name| name == "t") =>
-            {
-                append_annotation_text(
-                    &mut current.as_mut().expect("guarded above").1,
-                    decode_cdata(&e, part)?,
-                    options,
-                )?;
-            }
-            Event::GeneralRef(e)
-                if current.is_some() && stack.last().is_some_and(|name| name == "t") =>
-            {
-                append_annotation_text(
-                    &mut current.as_mut().expect("guarded above").1,
-                    decode_reference(&e, part)?,
-                    options,
-                )?;
-            }
-            Event::Empty(e) if local(e.name().as_ref()) == "tab" && current.is_some() => current
-                .as_mut()
-                .unwrap()
-                .1
-                .push(Inline::Text { value: "\t".into(), marks: Vec::new() }),
-            Event::Empty(e)
-                if matches!(local(e.name().as_ref()), "br" | "cr") && current.is_some() =>
-            {
-                current.as_mut().unwrap().1.push(Inline::LineBreak);
-            }
-            Event::End(e)
-                if matches!(local(e.name().as_ref()), "comment" | "footnote" | "endnote") =>
-            {
-                if let Some(value) = current.take() {
-                    result.push(value);
-                }
-                stack.pop();
-            }
-            Event::End(_) => {
-                stack.pop();
-            }
-            Event::Eof => break,
-            _ => {}
         }
     }
     Ok(result)

@@ -30,6 +30,7 @@ const MC_NS: &[u8] = b"http://schemas.openxmlformats.org/markup-compatibility/20
 const DRAWING_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/main";
 const WORD_DRAWING_NS: &[u8] =
     b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const PICTURE_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/picture";
 const VML_NS: &[u8] = b"urn:schemas-microsoft-com:vml";
 const CHART_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/chart";
 const DIAGRAM_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/diagram";

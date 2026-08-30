@@ -5,7 +5,6 @@ struct Paragraph {
     num_id: Option<String>,
     level: u8,
     images: Vec<(String, Option<String>)>,
-    field: String,
     pending_alt: Option<String>,
 }
 
@@ -56,8 +55,10 @@ fn parse_word_part(
     let mut depth = 0_u16;
     let mut element_stack = Vec::<String>::new();
     let mut skipped_choice_depth = None::<u16>;
+    let mut opaque_depth = None::<u16>;
     let mut body_depth = None::<u16>;
-    let mut field_active = false;
+    let mut fields = Vec::<FieldFrame>::new();
+    let mut annotation = None::<(String, usize)>;
     let mut math_depth = 0_u16;
     let mut formula = String::new();
     loop {
@@ -76,7 +77,16 @@ fn parse_word_part(
                         format!("{depth} > {}", options.limits.max_nesting_depth),
                     ));
                 }
-                let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
+                let name = interpreted_word_local(&reader, e.name(), part)?;
+                if opaque_depth.is_some() {
+                    element_stack.push(String::new());
+                    continue;
+                }
+                let Some(name) = name else {
+                    opaque_depth = Some(depth);
+                    element_stack.push(String::new());
+                    continue;
+                };
                 if skipped_choice_depth.is_some() {
                     element_stack.push(name);
                     continue;
@@ -89,6 +99,21 @@ fn parse_word_part(
                     continue;
                 }
                 element_stack.push(name.clone());
+                if annotation.is_none()
+                    && annotation_definition(profile) == Some(name.as_str())
+                {
+                    let id = attr_local(&e, "id", part)?
+                        .ok_or_else(|| malformed(Some(part), "annotation definition lacks id"))?;
+                    if state
+                        .annotation_filter
+                        .as_ref()
+                        .is_some_and(|references| !references.contains(&id))
+                    {
+                        opaque_depth = Some(depth);
+                        continue;
+                    }
+                    annotation = Some((id, state.document.blocks.len()));
+                }
                 if name == "body" {
                     body_depth = Some(depth);
                 }
@@ -121,7 +146,7 @@ fn parse_word_part(
                             tables.last_mut(),
                         )?;
                         hyperlink = None;
-                        field_active = false;
+                        fields.clear();
                         state.warning(
                             "word.unsupportedWrapperOmitted",
                             "nested paragraph wrapper was flattened in document order",
@@ -133,14 +158,11 @@ fn parse_word_part(
                     }
                     paragraph = Some(Paragraph::default());
                     paragraph_nesting = paragraph_nesting.saturating_add(1);
-                } else if name == "instrText" && !field_active {
+                } else if name == "instrText" && fields.is_empty() {
                     if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
                         return Err(malformed(Some(part), "field instruction is outside a field"));
                     }
-                    field_active = true;
-                    if let Some(p) = &mut paragraph {
-                        p.field.clear();
-                    }
+                    fields.push(FieldFrame::default());
                     state.warning(
                         "word.unsupportedWrapperOmitted",
                         "field instruction without a begin marker was recovered",
@@ -282,7 +304,12 @@ fn parse_word_part(
                 }
             }
             Event::Empty(e) => {
-                let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
+                if opaque_depth.is_some() {
+                    continue;
+                }
+                let Some(name) = interpreted_word_local(&reader, e.name(), part)? else {
+                    continue;
+                };
                 if skipped_choice_depth.is_some()
                     || (name == "Choice"
                         && element_stack.last().is_some_and(|parent| parent == "AlternateContent"))
@@ -313,12 +340,18 @@ fn parse_word_part(
                             }
                             _ => {}
                         },
-                        "tab" => push_inline(
+                        "tab" => push_field_inline(
                             p,
                             &mut hyperlink,
+                            &mut fields,
                             Inline::Text { value: "\t".into(), marks: marks.clone() },
                         ),
-                        "br" | "cr" => push_inline(p, &mut hyperlink, Inline::LineBreak),
+                        "br" | "cr" => push_field_inline(
+                            p,
+                            &mut hyperlink,
+                            &mut fields,
+                            Inline::LineBreak,
+                        ),
                         "footnoteReference" | "endnoteReference" => {
                             if let Some(id) = attr_local(&e, "id", part)? {
                                 let label = if name == "footnoteReference" {
@@ -348,24 +381,21 @@ fn parse_word_part(
                         }
                         "fldChar" => match attr_local(&e, "fldCharType", part)?.as_deref() {
                             Some("begin") => {
-                                if field_active {
-                                    return Err(malformed(
-                                        Some(part),
-                                        "nested fields are unsupported",
-                                    ));
-                                }
-                                field_active = true;
-                                p.field.clear();
+                                fields.try_reserve(1).map_err(|error| {
+                                    limit(
+                                        "max_memory_bytes",
+                                        format!("cannot reserve field stack: {error}"),
+                                    )
+                                })?;
+                                fields.push(FieldFrame::default());
                             }
                             Some("separate") => {
-                                emit_field(p, &mut hyperlink);
-                                field_active = false;
+                                if let Some(field) = fields.last_mut() {
+                                    field.separated = true;
+                                }
                             }
                             Some("end") => {
-                                if field_active {
-                                    emit_field(p, &mut hyperlink);
-                                }
-                                field_active = false;
+                                close_field(p, &mut hyperlink, &mut fields);
                             }
                             _ => {}
                         },
@@ -439,14 +469,14 @@ fn parse_word_part(
                 }
             }
             Event::Text(e) => {
-                if skipped_choice_depth.is_some() {
+                if skipped_choice_depth.is_some() || opaque_depth.is_some() {
                     continue;
                 }
                 append_word_text(
                     decode_text(&e, part)?,
                     element_stack.last().map(String::as_str),
                     math_depth,
-                    field_active,
+                    &mut fields,
                     &mut formula,
                     &mut paragraph,
                     &mut hyperlink,
@@ -455,14 +485,14 @@ fn parse_word_part(
                 )?;
             }
             Event::CData(e) => {
-                if skipped_choice_depth.is_some() {
+                if skipped_choice_depth.is_some() || opaque_depth.is_some() {
                     continue;
                 }
                 append_word_text(
                     decode_cdata(&e, part)?,
                     element_stack.last().map(String::as_str),
                     math_depth,
-                    field_active,
+                    &mut fields,
                     &mut formula,
                     &mut paragraph,
                     &mut hyperlink,
@@ -471,14 +501,14 @@ fn parse_word_part(
                 )?;
             }
             Event::GeneralRef(e) => {
-                if skipped_choice_depth.is_some() {
+                if skipped_choice_depth.is_some() || opaque_depth.is_some() {
                     continue;
                 }
                 append_word_text(
                     decode_reference(&e, part)?,
                     element_stack.last().map(String::as_str),
                     math_depth,
-                    field_active,
+                    &mut fields,
                     &mut formula,
                     &mut paragraph,
                     &mut hyperlink,
@@ -487,6 +517,14 @@ fn parse_word_part(
                 )?;
             }
             Event::End(e) => {
+                if let Some(start_depth) = opaque_depth {
+                    element_stack.pop();
+                    if depth == start_depth {
+                        opaque_depth = None;
+                    }
+                    depth = depth.saturating_sub(1);
+                    continue;
+                }
                 let name = interpreted_word_local(&reader, e.name(), part)?.unwrap_or_default();
                 if let Some(skip_depth) = skipped_choice_depth {
                     element_stack.pop();
@@ -523,7 +561,7 @@ fn parse_word_part(
                         p.inlines.push(Inline::Link { target, content });
                     }
                 } else if name == "p" {
-                    if field_active {
+                    if !fields.is_empty() {
                         if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
                             return Err(malformed(
                                 Some(part),
@@ -531,9 +569,10 @@ fn parse_word_part(
                             ));
                         }
                         if let Some(p) = &mut paragraph {
-                            emit_field(p, &mut hyperlink);
+                            while !fields.is_empty() {
+                                close_field(p, &mut hyperlink, &mut fields);
+                            }
                         }
-                        field_active = false;
                         state.warning(
                             "word.unsupportedWrapperOmitted",
                             "unterminated field instruction was closed at the paragraph boundary",
@@ -618,6 +657,12 @@ fn parse_word_part(
                     }
                 } else if name == "body" {
                     body_depth = None;
+                } else if annotation_definition(profile) == Some(name.as_str()) {
+                    let (id, start) = annotation.take().ok_or_else(|| {
+                        malformed(Some(part), "annotation definition closes without opening")
+                    })?;
+                    let blocks = state.document.blocks.split_off(start);
+                    state.annotation_blocks.push((id, blocks));
                 }
                 element_stack.pop();
                 depth = depth.saturating_sub(1);
@@ -632,8 +677,19 @@ fn parse_word_part(
         || depth != 0
         || !element_stack.is_empty()
         || skipped_choice_depth.is_some()
+        || opaque_depth.is_some()
+        || annotation.is_some()
     {
         return Err(malformed(Some(part), "truncated WordprocessingML structure"));
     }
     Ok(())
+}
+
+fn annotation_definition(profile: XmlProfile) -> Option<&'static str> {
+    match profile {
+        XmlProfile::Comments => Some("comment"),
+        XmlProfile::Footnotes => Some("footnote"),
+        XmlProfile::Endnotes => Some("endnote"),
+        _ => None,
+    }
 }

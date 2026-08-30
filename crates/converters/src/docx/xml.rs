@@ -36,35 +36,110 @@ fn interpreted_word_local(
     name: quick_xml::name::QName<'_>,
     part: &str,
 ) -> Result<Option<String>, ConversionError> {
-    let (namespace, local_name) = reader.resolve_element(name);
-    let namespace = match namespace {
-        ResolveResult::Bound(value) => value,
-        ResolveResult::Unbound => return Ok(None),
-        ResolveResult::Unknown(prefix) => {
-            return Err(malformed(
-                Some(part),
-                format!("undeclared XML namespace prefix {}", String::from_utf8_lossy(&prefix)),
-            ));
-        }
-    };
-    let local_name = local_name.as_ref();
-    let interpreted = matches!(namespace.as_ref(), WORD_NS | STRICT_WORD_NS)
-        || namespace.as_ref() == MC_NS
-            && matches!(local_name, b"AlternateContent" | b"Choice" | b"Fallback")
-        || namespace.as_ref() == MATH_NS && matches!(local_name, b"oMath" | b"r" | b"t")
-        || namespace.as_ref() == DRAWING_NS && local_name == b"blip"
-        || namespace.as_ref() == WORD_DRAWING_NS && local_name == b"docPr"
-        || namespace.as_ref() == VML_NS && local_name == b"imagedata"
-        || namespace.as_ref() == CHART_NS && local_name == b"chart"
-        || namespace.as_ref() == DIAGRAM_NS && local_name == b"relIds"
-        || namespace.as_ref() == OFFICE_VML_NS && local_name == b"OLEObject";
-    interpreted
+    let (namespace, local_name) = resolved_element(reader, name, part)?;
+    let namespace = namespace.as_slice();
+    let local_name = local_name.as_slice();
+    supported_word_qname(namespace, local_name)
         .then(|| {
             std::str::from_utf8(local_name)
                 .map(str::to_owned)
                 .map_err(|_| malformed(Some(part), "XML local name is not UTF-8"))
         })
         .transpose()
+}
+
+fn supported_word_qname(namespace: &[u8], local: &[u8]) -> bool {
+    (namespace == WORD_NS && supported_wordprocessing_local(local))
+        || namespace == MC_NS && matches!(local, b"AlternateContent" | b"Choice" | b"Fallback")
+        || namespace == MATH_NS && matches!(local, b"oMath" | b"r" | b"t")
+        || namespace == DRAWING_NS && matches!(local, b"graphic" | b"graphicData" | b"blip")
+        || namespace == WORD_DRAWING_NS && matches!(local, b"inline" | b"anchor" | b"docPr")
+        || namespace == PICTURE_NS && matches!(local, b"pic" | b"blipFill")
+        || namespace == VML_NS
+            && matches!(
+                local,
+                b"imagedata"
+                    | b"shape"
+                    | b"textbox"
+                    | b"rect"
+                    | b"roundrect"
+                    | b"group"
+                    | b"line"
+                    | b"oval"
+            )
+        || namespace == CHART_NS && local == b"chart"
+        || namespace == DIAGRAM_NS && local == b"relIds"
+        || namespace == OFFICE_VML_NS && local == b"OLEObject"
+}
+
+fn supported_wordprocessing_local(local: &[u8]) -> bool {
+    matches!(
+        local,
+        b"document"
+            | b"hdr"
+            | b"ftr"
+            | b"body"
+            | b"comments"
+            | b"comment"
+            | b"footnotes"
+            | b"footnote"
+            | b"endnotes"
+            | b"endnote"
+            | b"p"
+            | b"pPr"
+            | b"pStyle"
+            | b"numPr"
+            | b"numId"
+            | b"ilvl"
+            | b"r"
+            | b"rPr"
+            | b"b"
+            | b"i"
+            | b"strike"
+            | b"dstrike"
+            | b"u"
+            | b"vertAlign"
+            | b"t"
+            | b"tab"
+            | b"br"
+            | b"cr"
+            | b"footnoteReference"
+            | b"endnoteReference"
+            | b"commentReference"
+            | b"headerReference"
+            | b"footerReference"
+            | b"fldChar"
+            | b"instrText"
+            | b"hyperlink"
+            | b"tbl"
+            | b"tblPr"
+            | b"tr"
+            | b"trPr"
+            | b"tc"
+            | b"tcPr"
+            | b"gridSpan"
+            | b"tblHeader"
+            | b"vMerge"
+            | b"sectPr"
+            | b"drawing"
+            | b"pict"
+            | b"sdt"
+            | b"sdtPr"
+            | b"sdtContent"
+            | b"txbxContent"
+            | b"customXml"
+            | b"smartTag"
+            | b"ins"
+            | b"del"
+            | b"moveFrom"
+            | b"moveTo"
+            | b"fldSimple"
+            | b"altChunk"
+            | b"object"
+            | b"ruby"
+            | b"rt"
+            | b"rubyBase"
+    )
 }
 
 fn reject_dangerous_xml(bytes: &[u8], part: &str) -> Result<(), ConversionError> {

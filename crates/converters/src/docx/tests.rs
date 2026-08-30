@@ -460,7 +460,7 @@ mod tests {
 
         let document = format!(
             r#"<w:document xmlns:w="{WORD}" xmlns:mc="{MC}" xmlns:x="urn:fixture-extension"><w:body>
-              <w:p><x:payload>must-not-leak</x:payload><w:r><w:t>kept</w:t></w:r></w:p>
+              <w:p><x:payload><w:r><w:t>descendant-must-not-leak</w:t></w:r></x:payload><w:extension><w:r><w:t>word-extension-must-not-leak</w:t></w:r></w:extension><w:r><w:t>kept</w:t></w:r></w:p>
               <mc:AlternateContent><mc:Choice Requires="x"><w:p><w:r><w:t>choice-must-not-leak</w:t></w:r></w:p></mc:Choice><mc:Fallback><w:p><w:r><w:t>fallback-kept</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent>
             </w:body></w:document>"#
         );
@@ -473,7 +473,10 @@ mod tests {
         let markdown =
             render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
         assert!(markdown.contains("kept") && markdown.contains("fallback\\-kept"), "{markdown}");
-        assert!(!markdown.contains("must-not-leak") && !markdown.contains("choice-must-not-leak"));
+        assert!(
+            !markdown.contains("must-not-leak")
+                && !markdown.contains("choice-must-not-leak")
+        );
 
         let structured_document_tag = format!(
             r#"<w:document xmlns:w="{WORD}"><w:body><w:tbl><w:tblPr/><w:sdt><w:sdtPr><w:id w:val="1001"/></w:sdtPr><w:sdtContent><w:tr><w:tc><w:p><w:r><w:t>SDT Cell</w:t></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt></w:tbl></w:body></w:document>"#
@@ -487,6 +490,142 @@ mod tests {
         let markdown =
             render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
         assert!(markdown.contains("SDT Cell"), "{markdown}");
+    }
+
+    #[test]
+    fn relationships_require_the_package_qname_before_becoming_authoritative() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}" xmlns:r="{OFFICE_REL}"><w:body><w:p><w:hyperlink r:id="rLink"><w:r><w:t>safe label</w:t></w:r></w:hyperlink></w:p></w:body></w:document>"#
+        );
+        let relationships = format!(
+            r#"<Relationships xmlns="{PACKAGE_REL}" xmlns:e="urn:evil"><e:Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://evil.example" TargetMode="External"/><Relationship Id="rLink" Type="{REL_TYPE_PREFIX}hyperlink" Target="https://safe.example" TargetMode="External"/></Relationships>"#
+        );
+        let output = convert_docx(
+            &base(
+                document.as_bytes(),
+                &[("word/_rels/document.xml.rels", relationships.as_bytes())],
+            ),
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap();
+        let markdown = render(&output.document, &output.assets, &ConversionOptions::default())
+            .unwrap();
+        assert!(markdown.contains("https://safe.example"), "{markdown}");
+        assert!(!markdown.contains("evil.example"), "{markdown}");
+    }
+
+    #[test]
+    fn annotation_parts_share_mc_tables_and_alt_chunk_degradation_with_body_parsing() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}" xmlns:r="{OFFICE_REL}"><w:body><w:p><w:r><w:t>body</w:t><w:commentReference w:id="7"/></w:r></w:p></w:body></w:document>"#
+        );
+        let document_relationships = format!(
+            r#"<Relationships xmlns="{PACKAGE_REL}"><Relationship Id="comments" Type="{REL_TYPE_PREFIX}comments" Target="comments.xml"/></Relationships>"#
+        );
+        let comments = format!(
+            r#"<w:comments xmlns:w="{WORD}" xmlns:r="{OFFICE_REL}" xmlns:mc="{MC}" xmlns:x="urn:unsupported" xmlns:a="{DRAWING}"><w:comment w:id="7"><mc:AlternateContent><mc:Choice Requires="x"><w:p><w:r><w:t>choice-hidden</w:t></w:r></w:p></mc:Choice><mc:Fallback><w:p><w:r><w:t>fallback-visible</w:t></w:r></w:p></mc:Fallback></mc:AlternateContent><w:tbl><w:tr><w:tc><w:p><w:r><w:t>comment-table</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:drawing><a:blip r:embed="image"/></w:drawing></w:r></w:p><w:altChunk r:id="chunk"/></w:comment></w:comments>"#
+        );
+        let comment_relationships = format!(
+            r#"<Relationships xmlns="{PACKAGE_REL}"><Relationship Id="image" Type="{REL_TYPE_PREFIX}image" Target="media/comment.png"/><Relationship Id="chunk" Type="{REL_TYPE_PREFIX}aFChunk" Target="https://example.invalid/comment.html" TargetMode="External"/></Relationships>"#
+        );
+        let image = valid_png(0);
+        let output = convert_docx(
+            &base(
+                document.as_bytes(),
+                &[
+                    (
+                        "word/_rels/document.xml.rels",
+                        document_relationships.as_bytes(),
+                    ),
+                    ("word/comments.xml", comments.as_bytes()),
+                    (
+                        "word/_rels/comments.xml.rels",
+                        comment_relationships.as_bytes(),
+                    ),
+                    ("word/media/comment.png", image.as_slice()),
+                ],
+            ),
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap();
+        let markdown = render(&output.document, &output.assets, &ConversionOptions::default())
+            .unwrap();
+        assert!(markdown.contains(r"fallback\-visible"), "{markdown}");
+        assert!(markdown.contains(r"comment\-table"), "{markdown}");
+        assert!(markdown.contains("Embedded Word content omitted"), "{markdown}");
+        assert!(!markdown.contains("choice-hidden"), "{markdown}");
+        assert_eq!(output.assets.len(), 1);
+        assert!(output.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "office.relationshipOmitted"
+                && diagnostic.severity == DiagnosticSeverity::Warning
+        }));
+    }
+
+    #[test]
+    fn word_template_main_content_type_is_a_valid_docx_source() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}"><w:body><w:p><w:r><w:t>template-visible</w:t></w:r></w:p></w:body></w:document>"#
+        );
+        let bytes = base_with_type(
+            document.as_bytes(),
+            &[],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml",
+        );
+        let output = convert_docx(&bytes, &ConversionOptions::default(), &context()).unwrap();
+        let markdown = render(&output.document, &output.assets, &ConversionOptions::default())
+            .unwrap();
+        assert!(markdown.contains(r"template\-visible"), "{markdown}");
+    }
+
+    #[test]
+    fn complex_hyperlink_fields_use_the_result_label_and_allow_nesting() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText>HYPERLINK "https://example.com/report"</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>Report </w:t><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>2</w:t><w:fldChar w:fldCharType="end"/><w:t> label</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>"#
+        );
+        let output = convert_docx(
+            &base(document.as_bytes(), &[]),
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap();
+        let markdown = render(&output.document, &output.assets, &ConversionOptions::default())
+            .unwrap();
+        assert_eq!(markdown.matches("https://example.com/report").count(), 1, "{markdown}");
+        assert_eq!(markdown.matches("Report 2 label").count(), 1, "{markdown}");
+        assert!(
+            markdown.contains("[Report 2 label](<https://example.com/report>)"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn warning_upgrades_an_earlier_duplicate_info_diagnostic() {
+        let mut state = ParseState::default();
+        state.info("word.loss", "informational", "word/document.xml");
+        state.warning("word.loss", "content was omitted", "word/document.xml");
+        assert_eq!(state.diagnostics.len(), 1);
+        assert_eq!(state.diagnostics[0].severity, DiagnosticSeverity::Warning);
+        assert_eq!(state.diagnostics[0].message, "content was omitted");
+    }
+
+    #[test]
+    fn merged_table_cells_preserve_row_and_column_spans() {
+        let document = format!(
+            r#"<w:document xmlns:w="{WORD}"><w:body><w:tbl><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>merged</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"#
+        );
+        let output = convert_docx(
+            &base(document.as_bytes(), &[]),
+            &ConversionOptions::default(),
+            &context(),
+        )
+        .unwrap();
+        let cell = output.document.blocks.iter().find_map(|node| match &node.block {
+            Block::Table { rows, .. } => rows.first().and_then(|row| row.cells.first()),
+            _ => None,
+        });
+        assert!(matches!(cell, Some(cell) if cell.row_span == 2 && cell.column_span == 2));
     }
 
     #[test]

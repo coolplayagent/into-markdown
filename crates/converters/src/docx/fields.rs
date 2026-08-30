@@ -1,9 +1,16 @@
+#[derive(Default)]
+struct FieldFrame {
+    instruction: String,
+    result: Vec<Inline>,
+    separated: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_word_text(
     value: String,
     current: Option<&str>,
     math_depth: u16,
-    field_active: bool,
+    fields: &mut [FieldFrame],
     formula: &mut String,
     paragraph: &mut Option<Paragraph>,
     hyperlink: &mut Option<(String, Vec<Inline>)>,
@@ -12,25 +19,22 @@ fn append_word_text(
 ) -> Result<(), ConversionError> {
     if math_depth != 0 && current == Some("t") {
         append_bounded_text(formula, &value, options)?;
-    } else if field_active && current == Some("instrText") {
-        if let Some(paragraph) = paragraph {
-            append_bounded_text(&mut paragraph.field, &value, options)?;
+    } else if current == Some("instrText") {
+        if let Some(field) = fields.last_mut()
+            && !field.separated
+        {
+            append_bounded_text(&mut field.instruction, &value, options)?;
         }
     } else if current == Some("t")
         && let Some(paragraph) = paragraph
     {
-        let inlines = hyperlink.as_mut().map_or(&mut paragraph.inlines, |(_, content)| content);
+        let inlines = fields.last_mut().filter(|field| field.separated).map_or_else(
+            || hyperlink.as_mut().map_or(&mut paragraph.inlines, |(_, content)| content),
+            |field| &mut field.result,
+        );
         append_text_inline(inlines, value, marks, options)?;
     }
     Ok(())
-}
-
-fn append_annotation_text(
-    inlines: &mut Vec<Inline>,
-    value: String,
-    options: &ConversionOptions,
-) -> Result<(), ConversionError> {
-    append_text_inline(inlines, value, &[], options)
 }
 
 fn append_text_inline(
@@ -150,24 +154,48 @@ fn push_inline(
     }
 }
 
-fn emit_field(paragraph: &mut Paragraph, hyperlink: &mut Option<(String, Vec<Inline>)>) {
-    let field = paragraph.field.trim();
-    if let Some(rest) = field.strip_prefix("HYPERLINK") {
+fn push_field_inline(
+    paragraph: &mut Paragraph,
+    hyperlink: &mut Option<(String, Vec<Inline>)>,
+    fields: &mut [FieldFrame],
+    value: Inline,
+) {
+    if let Some(field) = fields.last_mut().filter(|field| field.separated) {
+        field.result.push(value);
+    } else {
+        push_inline(paragraph, hyperlink, value);
+    }
+}
+
+fn close_field(
+    paragraph: &mut Paragraph,
+    hyperlink: &mut Option<(String, Vec<Inline>)>,
+    fields: &mut Vec<FieldFrame>,
+) {
+    let Some(mut field) = fields.pop() else {
+        return;
+    };
+    let instruction = field.instruction.trim();
+    if let Some(rest) = instruction.strip_prefix("HYPERLINK") {
         let target = rest.trim().trim_matches('"');
         if !target.is_empty() {
-            push_inline(
+            if field.result.is_empty() {
+                field.result.push(Inline::Text { value: target.into(), marks: Vec::new() });
+            }
+            push_field_inline(
                 paragraph,
                 hyperlink,
-                Inline::Link {
-                    target: target.into(),
-                    content: vec![Inline::Text { value: target.into(), marks: Vec::new() }],
-                },
+                fields,
+                Inline::Link { target: target.into(), content: field.result },
             );
         }
-    } else if !field.is_empty() {
-        push_inline(paragraph, hyperlink, Inline::Code(field.into()));
+    } else if !field.result.is_empty() {
+        for value in field.result {
+            push_field_inline(paragraph, hyperlink, fields, value);
+        }
+    } else if !instruction.is_empty() {
+        push_field_inline(paragraph, hyperlink, fields, Inline::Code(instruction.into()));
     }
-    paragraph.field.clear();
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
