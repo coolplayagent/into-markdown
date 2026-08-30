@@ -890,7 +890,7 @@ fn detect_content(
 }
 
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
-    let (format, confidence, evidence) = if bytes.starts_with(b"%PDF-") {
+    let (format, confidence, evidence) = if pdf::has_pdf_header(bytes) {
         (InputFormat::Pdf, 0.99, "PDF magic bytes")
     } else if rtf::strict_header(bytes).is_some() {
         (InputFormat::Rtf, 0.99, "RTF signature")

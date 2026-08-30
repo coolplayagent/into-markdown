@@ -6,6 +6,156 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEMPORARY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
 
+#[test]
+fn direct_pdf_probe_accepts_only_the_header_or_one_utf8_bom() {
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits::default(),
+    );
+    let candidate = FormatCandidate::new(InputFormat::Pdf, 1.0, "test PDF");
+    for (bytes, accepted) in [
+        (b"%PDF-1.7\n".to_vec(), true),
+        (b"\xef\xbb\xbf%PDF-1.7\n".to_vec(), true),
+        (b"\xef\xbb\xbf\xef\xbb\xbf%PDF-1.7\n".to_vec(), false),
+        (b" %PDF-1.7\n".to_vec(), false),
+        ([vec![0; 174], b"%PDF-1.7\n".to_vec()].concat(), false),
+    ] {
+        assert_eq!(
+            crate::magic_candidate(&bytes).is_some_and(|found| found.format == InputFormat::Pdf),
+            accepted
+        );
+        let input = ResolvedInput { bytes: Arc::from(bytes), metadata: SourceMetadata::default() };
+        let outcome = futures::executor::block_on(
+            PdfConverter::default().probe(&input, &candidate, &context),
+        )
+        .unwrap();
+        assert_eq!(matches!(outcome, ProbeOutcome::Match { .. }), accepted);
+    }
+}
+
+#[test]
+fn only_omitted_images_without_pixel_consumers_skip_materialization() {
+    let mut options = ConversionOptions::default();
+    for asset_mode in [AssetMode::Omit, AssetMode::Extract, AssetMode::Embed] {
+        for policy in [OcrPolicy::Off, OcrPolicy::Auto, OcrPolicy::Always] {
+            options.output.asset_mode = asset_mode;
+            options.ocr.policy = policy;
+            assert_eq!(
+                image_pixels_required(&options),
+                asset_mode != AssetMode::Omit || policy != OcrPolicy::Off
+            );
+        }
+    }
+    options.output.asset_mode = AssetMode::Omit;
+    options.ocr.policy = OcrPolicy::Off;
+    for mode in [AiMode::Fallback, AiMode::Prefer, AiMode::Only] {
+        for field in 0..5 {
+            let mut visual = options.clone();
+            match field {
+                0 => visual.ai.vision_ocr = mode,
+                1 => visual.ai.image_description = mode,
+                2 => visual.ai.layout_repair = mode,
+                3 => visual.ai.table_repair = mode,
+                _ => visual.ai.formula_repair = mode,
+            }
+            assert!(image_pixels_required(&visual));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn native_omit_off_skips_bitmap_work_and_preserves_native_text_order() {
+    let path = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY"));
+    let input = ResolvedInput {
+        bytes: Arc::from(one_page_fixture(
+            b"BT /F1 8 Tf 10 160 Td (Before) Tj ET\nq 100 0 0 200 0 0 cm /Im1 Do Q\nBT /F1 8 Tf 65 145 Td (Beside) Tj ET\nBT /F1 8 Tf 10 130 Td (After) Tj ET\n",
+            true,
+        )),
+        metadata: SourceMetadata::default(),
+    };
+    let mut expected = None;
+    for asset_mode in [AssetMode::Omit, AssetMode::Extract, AssetMode::Embed] {
+        for policy in [OcrPolicy::Off, OcrPolicy::Auto, OcrPolicy::Always] {
+            let mut options = ConversionOptions::default();
+            options.output.asset_mode = asset_mode;
+            options.ocr.policy = policy;
+            let context = ExecutionContext::new(
+                into_markdown_core::ExecutionOptions::default(),
+                options.limits.clone(),
+            );
+            IMAGE_BITMAP_MATERIALIZATIONS.set(0);
+            let output = convert_pdf(&path, &input, &options, &context).unwrap();
+            let skipped = asset_mode == AssetMode::Omit && policy == OcrPolicy::Off;
+            assert_eq!(IMAGE_BITMAP_MATERIALIZATIONS.get(), usize::from(!skipped));
+            assert_eq!(output.assets.is_empty(), skipped);
+            assert_eq!(
+                output.assets.iter().any(|asset| asset.id.0.starts_with("pdf-page-render-")),
+                policy == OcrPolicy::Always
+            );
+            options.output.asset_mode = AssetMode::Omit;
+            let markdown =
+                into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+                    .unwrap();
+            let before = markdown.find("Before").expect("first native body line");
+            let beside = markdown.find("Beside").expect("native body in second column");
+            let after = markdown.find("After").expect("last native body line");
+            assert!(before < beside && beside < after, "{markdown}");
+            assert!(output.document.blocks.iter().all(|page| {
+                let Block::Page { blocks, .. } = &page.block else { return false };
+                !skipped || blocks.iter().all(|node| !matches!(node.block, Block::Image { .. }))
+            }));
+            if policy != OcrPolicy::Always {
+                assert_eq!(expected.get_or_insert_with(|| markdown.clone()), &markdown);
+            }
+            drop(output);
+            assert_eq!(context.reserved_memory_bytes(), 0);
+        }
+    }
+
+    let mut options = ConversionOptions::default();
+    options.output.asset_mode = AssetMode::Omit;
+    options.ocr.policy = OcrPolicy::Off;
+    options.limits.max_asset_bytes = 1;
+    options.limits.max_total_asset_bytes = 1;
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        options.limits.clone(),
+    );
+    assert!(convert_pdf(&path, &input, &options, &context).unwrap().assets.is_empty());
+    let scanned_input =
+        ResolvedInput { bytes: Arc::from(scanned_pdf()), metadata: SourceMetadata::default() };
+    let scanned = convert_pdf(&path, &scanned_input, &options, &context).unwrap();
+    assert!(scanned.assets.is_empty());
+    assert!(scanned.diagnostics.iter().any(|diagnostic| diagnostic.code == "pdf.scannedPage"));
+    drop(scanned);
+    options.output.asset_mode = AssetMode::Extract;
+    assert!(matches!(
+        convert_pdf(&path, &input, &options, &context),
+        Err(ConversionError::ResourceLimit { .. })
+    ));
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn native_bom_pdf_reaches_pdfium_without_rewriting_original_offsets() {
+    let path = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY"));
+    let original = [b"\xef\xbb\xbf".as_slice(), &text_only_pdf()].concat();
+    let input =
+        ResolvedInput { bytes: Arc::from(original.clone()), metadata: SourceMetadata::default() };
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        options.limits.clone(),
+    );
+    let output = convert_pdf(&path, &input, &options, &context).unwrap();
+    assert_eq!(&*input.bytes, original);
+    let markdown =
+        into_markdown_render_markdown::render(&output.document, &output.assets, &options).unwrap();
+    assert!(markdown.contains("Text only page"));
+}
+
 struct TemporaryDirectory(PathBuf);
 
 impl TemporaryDirectory {
