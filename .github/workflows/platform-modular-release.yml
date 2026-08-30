@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Release tag, for example 0.0.3
+        description: Release tag, for example 0.0.4
         required: true
-        default: 0.0.3
+        default: 0.0.4
         type: string
       build_only:
         description: Build and aggregate all targets without creating or changing a GitHub Release
