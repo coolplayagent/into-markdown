@@ -1,0 +1,88 @@
+{
+  "fixtures": [
+    {
+      "bytes": 1059,
+      "path": "cycle.docx",
+      "scenario": "altChunk relationship cycle must not recurse",
+      "sha256": "1b8efd621049df3a6ad75e413eb2bcea74a04098afcecb9b1815595175bca5bb"
+    },
+    {
+      "bytes": 12730,
+      "path": "depth-limit.docx",
+      "scenario": "default XML nesting hard limit",
+      "sha256": "46beb68fc8978091f269b240c5d17d69192ffbb4a852ecc3c8fbeb93bc68486f"
+    },
+    {
+      "bytes": 1638,
+      "path": "duplicate-content-assets.docx",
+      "scenario": "repeated text and equal nested payloads remain ordered",
+      "sha256": "6830a3cb9cc61305d84701710fdc38fa871092f3fa02be7f97e1f2803de828d3"
+    },
+    {
+      "bytes": 984,
+      "path": "empty.docx",
+      "scenario": "verifiably empty Word body",
+      "sha256": "9a7bbef15f5bdbdd718c3673efb6fc5efa33b945acabd60a3befda35eb071fa1"
+    },
+    {
+      "bytes": 1316,
+      "path": "entity.docx",
+      "scenario": "DTD and external entity must fail closed",
+      "sha256": "ffacd4603a0e3eeaab1a3d0360df6ba6398972fa1e7f118fecf0f51254c4dc4a"
+    },
+    {
+      "bytes": 1106,
+      "path": "external.docx",
+      "scenario": "external altChunk must never be fetched",
+      "sha256": "652c0ced898db53491a1f83cb00d76531ad1ded828a677e4cabba7a1f945de43"
+    },
+    {
+      "bytes": 1280,
+      "path": "html.docx",
+      "scenario": "internal HTML altChunk in body order",
+      "sha256": "60bbaca4d6205acdaa72fc04a21f365dee29f0aa64d584868e6befe33245449d"
+    },
+    {
+      "bytes": 1378,
+      "path": "mhtml.docx",
+      "scenario": "bounded multipart MHTML altChunk",
+      "sha256": "6f06c6337805dbc2fd164f0b5d69661c4b84ba1a762e2c47d3af35bb5947f336"
+    },
+    {
+      "bytes": 1929,
+      "path": "ordered-nested-merged.docx",
+      "scenario": "body/table/nested-table/merge/altChunk order",
+      "sha256": "a916b095614addb8591a323d6cc695e2675c9840d7d14aa0cf3bc87110b113a2"
+    },
+    {
+      "bytes": 1225,
+      "path": "rtf.docx",
+      "scenario": "local RTF altChunk",
+      "sha256": "fb0999737a4108448e5ad74c1b17bf6d35ee85faf70aa2aacd8b455989e36e90"
+    },
+    {
+      "bytes": 1233,
+      "path": "strict.docx",
+      "scenario": "Strict WordprocessingML and relationship QNames",
+      "sha256": "926acdddda16b66ed394f239c2bd5ee940d581256c81e04e7bff2111a74d9390"
+    },
+    {
+      "bytes": 1819,
+      "path": "wrappers.docx",
+      "scenario": "content controls, compatibility fallback, fields, text boxes, headers and footers",
+      "sha256": "1066925aae700f801e5500aca1d40f9ad6642eefe4d85971be991815d8b12828"
+    },
+    {
+      "bytes": 1282,
+      "path": "xhtml.docx",
+      "scenario": "internal XHTML altChunk",
+      "sha256": "d22fbddfb6856cfd4832b4178d0f8ed8e6a7ffd1b06c241cb5f59a273742b648"
+    }
+  ],
+  "generator": "generate.py",
+  "policyMatrix": [
+    "bestEffort",
+    "strict"
+  ],
+  "schemaVersion": 1
+}

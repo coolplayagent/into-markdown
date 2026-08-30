@@ -1,0 +1,5099 @@
+{
+  "classificationCounts": {
+    "defaultStructuralHardLimit": 1,
+    "invalidPackage": 24,
+    "policyRejected": 8,
+    "validPolicyAllowed": 217
+  },
+  "defaultLimits": {
+    "maxArchiveCompressionRatio": 100,
+    "maxArchiveEntries": 100000,
+    "maxArchiveEntryBytes": 268435456,
+    "maxDecompressedBytes": 1073741824,
+    "maxInputBytes": 536870912,
+    "maxNestingDepth": 256,
+    "maxTableCells": 1000000,
+    "maxTableColumns": 16384,
+    "maxTableRows": 100000
+  },
+  "items": [
+    {
+      "bytes": 10382,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 31042,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 14
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-integration-tests/src/test/resources/test-documents/testOptionalHyphen.docx",
+      "sha256": "647cb4fae2d7bf7d209c1b33c98f1d72363798289e9fb37eede118dd3a45e110"
+    },
+    {
+      "bytes": 17920,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/casing/protected_normal_case.docx",
+      "sha256": "254d301a6ee3248248a6de921c5af8baf8eb0d7cd27af349e4539a227fc8d1ff"
+    },
+    {
+      "bytes": 17920,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/casing/protected_upper_case.docx",
+      "sha256": "e57ddbf2d16a9a1cc3eb8bb485aeb002f00b0082430d2e286e0085b87ddf5759"
+    },
+    {
+      "bytes": 13219,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 53063,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 48
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/EmbeddedDocument.docx",
+      "sha256": "4aaabe19c2c4e30db9f13aa32bc3c35e913867c64627c574d5e6152b4c635115"
+    },
+    {
+      "bytes": 113242,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 179381,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 45
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/EmbeddedOutlook.docx",
+      "sha256": "45d84c0cbf2bc695588dca1364dba224158f5a7acd1e92d1b732b94ba6cdbe06"
+    },
+    {
+      "bytes": 99389,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 146950,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 34
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/EmbeddedPDF.docx",
+      "sha256": "f39a3ab2ce59d9b363d05831d75efae2a6d18309d752696854bdcc28674244c7"
+    },
+    {
+      "bytes": 12823,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 35534,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 40
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/footnotes.docx",
+      "sha256": "9070094b27ff5201477f4de4b2c027730c66cb889106a1609c5adeed207a59c1"
+    },
+    {
+      "bytes": 16206,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 41918,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/headerPic.docx",
+      "sha256": "50d9b17f7575c8a91129fd8a3e6a70feec886480ab9f089e29a7f8ac7e5ed51a"
+    },
+    {
+      "bytes": 4355,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 8922,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 3976
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/NullHeader.docx",
+      "sha256": "4878c775336eb563fd88ca13adc134aed9203d8b3d73cdd0eef904a0354b6d56"
+    },
+    {
+      "bytes": 27082,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 81951,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 9
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/test_recursive_embedded.docx",
+      "sha256": "c4b7fab030a8b6a9d6691f6699ac8e6f82bc53764a0f1430d134ae3b70c32654"
+    },
+    {
+      "bytes": 27817,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 82515,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 9
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/test_recursive_embedded_npe.docx",
+      "sha256": "f3ff590386f645943719622badc7a16a578c3cd1fea2fdb433d25bab0f12f721"
+    },
+    {
+      "bytes": 2631,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 570,
+        "altChunkRelationships": 1,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 3720,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 4,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testAltChunkHTML.docx",
+      "sha256": "4e69425bf505c9b439be04f6cbb10271e5ea8ec2fbec820fe459a0f74db2fb7b"
+    },
+    {
+      "bytes": 3070,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 1529,
+        "altChunkRelationships": 1,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 4682,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 4,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testAltChunkMHT.docx",
+      "sha256": "e1669cb83f3042413a84593814f529db9cc19dd29ba52906a29d90d29c43b2af"
+    },
+    {
+      "bytes": 2284,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1820,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 40
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testAttachedTemplate.docx",
+      "sha256": "4565fda29525e369c6949437893f75c2548e16735e99a14e9586984aed718fc2"
+    },
+    {
+      "bytes": 11019,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 34087,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 35
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testComment.docx",
+      "sha256": "740337ba9a0f0c9dd4cc0ea07b6a7b413c7b67ee28ec4b430a1a242c688fe5b5"
+    },
+    {
+      "bytes": 13810,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 50161,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 30
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testDOCX_Thumbnail.docx",
+      "sha256": "28e77040dc0b1df9cde900f2a125051b5d9d21b9f90e40569d9127160b04c4f8"
+    },
+    {
+      "bytes": 2125,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 3180,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 338
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testExternalRefs.docx",
+      "sha256": "7447372cdbd43edeba1fcfe316154e3ba5153a623cad7acb1e3a9131ddc966ee"
+    },
+    {
+      "bytes": 2328,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1992,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 22
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testFrameset.docx",
+      "sha256": "d5c60722ba6c3cf9db497efc3812236e91d0b13f635db520f72c18a4962a778c"
+    },
+    {
+      "bytes": 2270,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2759,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 66
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testHoverAndVml.docx",
+      "sha256": "7ff4f180062462af9e9e6adf403d9fed8dd373195b9cfecf58a85944557770eb"
+    },
+    {
+      "bytes": 14464,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 78946,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 18,
+        "reason": "packagePreflightPassed",
+        "tableCells": 13,
+        "tableRows": 13,
+        "wordTextCharacters": 234
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testInstrLink.docx",
+      "sha256": "4f96a04634eceebda4249a8204e7f632cd6ad2067154984a578c097b241bf3ce"
+    },
+    {
+      "bytes": 2306,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1825,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 24
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testMailMerge.docx",
+      "sha256": "e388dda2c53b8e1ac3b6904a2c32cedcfcf3b8c60a4af97771bb14737958678d"
+    },
+    {
+      "bytes": 1980,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1684,
+        "externalRelationships": 2,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 33
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testSubdocument.docx",
+      "sha256": "8355ed73c6d7cfd11e72188ca320095054be49a10027589e30d5864092b9335a"
+    },
+    {
+      "bytes": 13436,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 56037,
+        "externalRelationships": 4,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 10,
+        "tableRows": 5,
+        "wordTextCharacters": 627
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD.docx",
+      "sha256": "67797f5691cb5346201f1c40000a959f9f08d05d0b4493b4291e8d5f16e81e65"
+    },
+    {
+      "bytes": 8325,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 9,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 12491,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 43
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_1img.docx",
+      "sha256": "d9dbb66913b6af41e7e5ef6fb969eb60d1ee49f4350bd649168225e15709ad0d"
+    },
+    {
+      "bytes": 151733,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 47,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 512280,
+        "externalRelationships": 2,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 22,
+        "reason": "packagePreflightPassed",
+        "tableCells": 58,
+        "tableRows": 18,
+        "wordTextCharacters": 2461
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_2006ml.docx",
+      "sha256": "a27f2b9244f5147cce25a05d4cddb1eec9c72259a41d52a7bf5eb3806b28207c"
+    },
+    {
+      "bytes": 31303,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39060,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 104
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_3imgs.docx",
+      "sha256": "3c7d3114d21dae635e2e3dfb742d3cb5737ef957be5548a3c8a787cf9e4cdd2c"
+    },
+    {
+      "bytes": 12912,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 48360,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 6
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_bold_character_runs.docx",
+      "sha256": "a4a0603c0151d0813cc840e3a3dba5ab436a9ac5edba00118aa6277db6a6a2e8"
+    },
+    {
+      "bytes": 12863,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 48190,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 6
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_bold_character_runs2.docx",
+      "sha256": "6b19e83626f763ee96245f027b2514ef5859e2eb4b72ac9902753f702d7d78c3"
+    },
+    {
+      "bytes": 12382,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51037,
+        "externalRelationships": 2,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 66
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_boldHyperlink.docx",
+      "sha256": "dead3afa9ff59b827cea3e9c5e73a9d018d3eadd9c1c51ea63dd19db6edd9060"
+    },
+    {
+      "bytes": 15586,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 68063,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_charts.docx",
+      "sha256": "04580520e7577ab4cdf08d289d5c03d6a1b942dd261f4101de53124334a500cd"
+    },
+    {
+      "bytes": 13942,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51784,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 16
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_custom_props.docx",
+      "sha256": "6ccf04f70122b1c32b3623c739b2b8a4d2d7795968b8e2939e665319bf482787"
+    },
+    {
+      "bytes": 49860,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 143343,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 40
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_diagramData.docx",
+      "sha256": "c4c3f15c28df87ffb1c062e489a8b22bf72ef22df5bdb8020e48f26dd3b7a57e"
+    },
+    {
+      "bytes": 12861,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51818,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_docSecurity.docx",
+      "sha256": "52049d0938d54fc4edbdd27ea7a97629572c498dc5125ea45df9713ac5504dfe"
+    },
+    {
+      "bytes": 63294,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "policyRejected",
+        "decompressedBytes": 4438752,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "maxArchiveCompressionRatio",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_embedded_pdf.docx",
+      "sha256": "8af6790699d2bea7b91720b6ecda45f30c0bdffa43300924447bba32b2571401"
+    },
+    {
+      "bytes": 52399,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 42,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 166411,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 18,
+        "reason": "packagePreflightPassed",
+        "tableCells": 62,
+        "tableRows": 13,
+        "wordTextCharacters": 180
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_embedded_pics.docx",
+      "sha256": "416b7f04fc83bf3d393924f1e1aa49e6bf7cda06fa1559a0e23b889e0cb6205d"
+    },
+    {
+      "bytes": 157830,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 252619,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 104
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_embeded.docx",
+      "sha256": "0bbd355e6d3d3caa816b8913cd955a7bf4f167bce142d8c49998bb764ed79e71"
+    },
+    {
+      "bytes": 61769,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 142143,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 39
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_EMFAndAttachments.docx",
+      "sha256": "9b4ee4a8dad5dab45aa291a33842c7d5d71988c5e83f460adf263f73c3c96773"
+    },
+    {
+      "bytes": 15982,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 95866,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 56,
+        "tableRows": 14,
+        "wordTextCharacters": 1612
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_emptyParaInTextbox.docx",
+      "sha256": "28a372a0932d7d5ec5032094130200124fb8c3126d2dfaa3cc63312f5d92a36e"
+    },
+    {
+      "bytes": 18504,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 159204,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 1,
+        "tableRows": 1,
+        "wordTextCharacters": 73786
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_endnote_table.docx",
+      "sha256": "105709ab279ee6d5642edddf8b5e32257ff9b9cf54c2e886d7d251cb29e39c34"
+    },
+    {
+      "bytes": 8169,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 23752,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 7,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 607
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_features.docx",
+      "sha256": "b0920ec3e38521c02ca75ef0b1ed1b2b19fabcd701b75366e89b818228094e25"
+    },
+    {
+      "bytes": 18506,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 162281,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 10050
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_formattingFlipUnderlineOrder.docx",
+      "sha256": "d717b9d30f3a4bd19d91840ede952a0af88dfe7d51698652acba2eef399bbcc5"
+    },
+    {
+      "bytes": 17913,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 64048,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 10,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 3
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_missing_ooxml_bean1.docx",
+      "sha256": "95de9f3b655bfec5b619ee31d1319e5a9a6ce4f253a9738898876640a2969665"
+    },
+    {
+      "bytes": 31592,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 29,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 159497,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 26,
+        "tableRows": 9,
+        "wordTextCharacters": 522
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_missing_text.docx",
+      "sha256": "85265e95dddecd8dfbf3fe70d27cbc8dd5e83d238b2c10abd8014f1d8d74268e"
+    },
+    {
+      "bytes": 12054,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 46486,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_multi_authors.docx",
+      "sha256": "8435a0e087a5452b0418ba860136683e95ba17ba3be8e22ec21d678b5db1f1b9"
+    },
+    {
+      "bytes": 37018,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 262109,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 111
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_no_format.docx",
+      "sha256": "1cdbf5dc2b9e8a1e2d5307e3b6d49b9afd0268dacd3975e176fbc9fd9e5805f3"
+    },
+    {
+      "bytes": 29018,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 30,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 95363,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1071
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_null_style.docx",
+      "sha256": "c8bd6f119d65896b2ec8e34ce56cb532b7358173efb9d41af6abb389ac71176e"
+    },
+    {
+      "bytes": 24696,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 120901,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 12,
+        "tableRows": 3,
+        "wordTextCharacters": 712
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_numbered_list.docx",
+      "sha256": "3e500410c6ce4f56f871bd55beff2476152fc3d0b7049cf5a93781ae7946ff5b"
+    },
+    {
+      "bytes": 15746,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 153645,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 444
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_override_list_numbering.docx",
+      "sha256": "2d88b75145043fb8eef1d851e595b1d0f01d5a342552919fe3af22b36b57d086"
+    },
+    {
+      "bytes": 12523,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51623,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_phonetic.docx",
+      "sha256": "abda850b3685027eef32a4c583b2b5f7f20f243026d8c453cdb3315348ed6ff0"
+    },
+    {
+      "bytes": 14336,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_protected_passtika.docx",
+      "sha256": "09b941cabd222172dfd0b213a6a3fd404348b930ca285fa951bad14afb0fdf5c"
+    },
+    {
+      "bytes": 21117,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 94692,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 19,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 233
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_sdtInTextBox.docx",
+      "sha256": "c2f5b10e5850b081c62f7ff3fde05587836f13ccbc0e19bcb4544b8763c5b0c1"
+    },
+    {
+      "bytes": 18245,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 63471,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 6
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_signed.docx",
+      "sha256": "40bd97185ad6203230c439694a55eada99db48f5fc023f04dc1969ba462c73cb"
+    },
+    {
+      "bytes": 18606,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 94581,
+        "externalRelationships": 0,
+        "maximumGridSpan": 3,
+        "maximumXmlDepth": 20,
+        "reason": "packagePreflightPassed",
+        "tableCells": 33,
+        "tableRows": 17,
+        "wordTextCharacters": 991
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_tableInRunInsideParagraph.docx",
+      "sha256": "11cdfd70ce1d984fa6c28d278cd516ce5b7573331d84ffbb58f0c8c8c170550f"
+    },
+    {
+      "bytes": 44942,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 31,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 174040,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 19,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1590
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_template.docx",
+      "sha256": "b05df2e299e825b5b25b34ff5af63f3c309bf6afcd94b3dd8fab224ac507f163"
+    },
+    {
+      "bytes": 25271,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 76265,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 16,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 430
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_text_box.docx",
+      "sha256": "82d4d863c5e8c1ed0137587323d85f3c66f1c16bbaf0ee69e4806b0bd802b73a"
+    },
+    {
+      "bytes": 11047,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51046,
+        "externalRelationships": 2,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 66
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_totalTimeOutOfRange.docx",
+      "sha256": "a97effd80acf1e4ae1ec8d96af35954858ea031cc71014a1d5de2bd3ff842cb3"
+    },
+    {
+      "bytes": 763,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_truncated.docx",
+      "sha256": "8bb91125cc08ec4a5a771e86ff20cfd0646998b2c1da4361e0241036816a471f"
+    },
+    {
+      "bytes": 14470,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 18,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 71638,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 6,
+        "tableRows": 2,
+        "wordTextCharacters": 651
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_various.docx",
+      "sha256": "f7761e3893d795ed09f12f89a16d3265c3919da549adf00127b0f7094bccd0ee"
+    },
+    {
+      "bytes": 130189,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 41,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 354319,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWPSAttachment.docx",
+      "sha256": "f9373ab9c763603ce72e4a5490c727be745bf48a98d703bab1c9f98ff9cc8a36"
+    },
+    {
+      "bytes": 62041,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 100604,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 44
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-ocr-module/src/test/resources/test-documents/testOCR.docx",
+      "sha256": "9bbac8ae8790581133abd2570c6ce4cc831216dc9030d9b16801a24ff393905f"
+    },
+    {
+      "bytes": 34139,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 22,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 93348,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 70
+      },
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-pdf-module/src/test/resources/test-documents/testPDFEmbeddingAndEmbedded.docx",
+      "sha256": "908d3fdd5b961c3bb2c837acee609b5e4396e97945d1f5bd993619df1bf7ca53"
+    },
+    {
+      "bytes": 51898,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 143582,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 24,
+        "tableRows": 6,
+        "wordTextCharacters": 962
+      },
+      "path": "multimedia/simplified-chinese/ecnu-ai-case-library/ecnu-ai-case-03.docx",
+      "sha256": "3066ba495e3c4e5c37f3f4599a3736a076a9724e20458b4ed89b589b92fbed4f"
+    },
+    {
+      "bytes": 20006,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 114138,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/51921-Word-Crash067.docx",
+      "sha256": "422e62dfe18243e8bfbb4504be91075cde9318c11d479b70132972aebbb3b107"
+    },
+    {
+      "bytes": 12788,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 42680,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 51
+      },
+      "path": "office/apache-poi/test-data/document/52288.docx",
+      "sha256": "8ab0f0afddd11ab43bd2dcfe4e5b51f8a4dfcc948fe3f327b338bcc2c3733bee"
+    },
+    {
+      "bytes": 18854,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 65713,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 339
+      },
+      "path": "office/apache-poi/test-data/document/52449.docx",
+      "sha256": "f48139d1b019b5e5e0d4396fb6b10ed21dd30116926646bbd5598d807580ae2b"
+    },
+    {
+      "bytes": 3045,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2531,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 4
+      },
+      "path": "office/apache-poi/test-data/document/55733.docx",
+      "sha256": "b5c30080ffe667ef27414302ffd3ccd01ef1c85d4a5a459761b9c82c3421a4e0"
+    },
+    {
+      "bytes": 20757,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 89631,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 178
+      },
+      "path": "office/apache-poi/test-data/document/55966.docx",
+      "sha256": "4409a5e95d229c5ab94fb24aac1a53ee47d0d66c9e75b7f39d80f10c218abedb"
+    },
+    {
+      "bytes": 11211,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40602,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 507
+      },
+      "path": "office/apache-poi/test-data/document/56392.docx",
+      "sha256": "bdff4457ccfbe7482f8230e2e1085e8becdda5bc869237923a4e70977d3b6678"
+    },
+    {
+      "bytes": 21702,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 85258,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 426
+      },
+      "path": "office/apache-poi/test-data/document/57312.docx",
+      "sha256": "f80b3c4f3885e0284d8017fec93818b4ec5366f9486ad97b8ddd47ab68a330c5"
+    },
+    {
+      "bytes": 28709,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 73193,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 96
+      },
+      "path": "office/apache-poi/test-data/document/58067.docx",
+      "sha256": "719b5076b736e6208be4b10fd268e9e3b7e0029c819d485d53ca14700fc98fc5"
+    },
+    {
+      "bytes": 10045,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 31258,
+        "externalRelationships": 4,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 56
+      },
+      "path": "office/apache-poi/test-data/document/58618.docx",
+      "sha256": "393ac2f66113a3a8a35e3cacf806cbcaf080dbdb62d1c8345183e6a338f35295"
+    },
+    {
+      "bytes": 11712,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 47507,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 4,
+        "tableRows": 2,
+        "wordTextCharacters": 15
+      },
+      "path": "office/apache-poi/test-data/document/59030.docx",
+      "sha256": "2968d4a5d5de21dce1cbeae3235e545cdf4bfd7ae508fe0eed3a9b032773ce17"
+    },
+    {
+      "bytes": 26063,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 23,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 282451,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/59378.docx",
+      "sha256": "9829d202db7fc9d86399552ea7e92fbb415444c9242303c8142026b73034776a"
+    },
+    {
+      "bytes": 15634,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 64675,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 54
+      },
+      "path": "office/apache-poi/test-data/document/60293.docx",
+      "sha256": "a534742296b8a3817f94ded5110ab79e3995bb53184c2741207fbc70e475e5f5"
+    },
+    {
+      "bytes": 48142,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 34,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 191938,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 20,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1879
+      },
+      "path": "office/apache-poi/test-data/document/60316.docx",
+      "sha256": "0bfd17f6ccbf1d410278fcd9141c6007b521ebb0cba53276eddb52bdd16c4769"
+    },
+    {
+      "bytes": 31124,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 136934,
+        "externalRelationships": 0,
+        "maximumGridSpan": 5,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 56,
+        "tableRows": 25,
+        "wordTextCharacters": 4664
+      },
+      "path": "office/apache-poi/test-data/document/60329.docx",
+      "sha256": "e5b4e66038f92ef589e12ea870b24cc7a3e0005cd7a53817abff1307404f7aa3"
+    },
+    {
+      "bytes": 12523,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51623,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "office/apache-poi/test-data/document/61470.docx",
+      "sha256": "abda850b3685027eef32a4c583b2b5f7f20f243026d8c453cdb3315348ed6ff0"
+    },
+    {
+      "bytes": 37030,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 103634,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/61745.docx",
+      "sha256": "ec54badce04b9fc3c4c327e31fbbd06c1bb556056df9cf04760db75c8913f8a2"
+    },
+    {
+      "bytes": 7047,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 8,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40540,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 3977
+      },
+      "path": "office/apache-poi/test-data/document/61787.docx",
+      "sha256": "eaea73fcee1225c17d55fdd363444ee34ce8a4eb2358b2ec2e5d835f24691227"
+    },
+    {
+      "bytes": 17931,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 72029,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 623
+      },
+      "path": "office/apache-poi/test-data/document/61991.docx",
+      "sha256": "e48f4d42f64b6b7bfc30827c37285fc6af692bdb9b73d9caca90343afeb6b140"
+    },
+    {
+      "bytes": 17126,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 83039,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 12,
+        "tableRows": 6,
+        "wordTextCharacters": 294
+      },
+      "path": "office/apache-poi/test-data/document/65099.docx",
+      "sha256": "135859d73ef88c3c721ee42ad5e49d325e5a1a7ee68e0a099eb667b49331cc62"
+    },
+    {
+      "bytes": 47023,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1056284,
+        "externalRelationships": 0,
+        "maximumGridSpan": 2,
+        "maximumXmlDepth": 22,
+        "reason": "packagePreflightPassed",
+        "tableCells": 554,
+        "tableRows": 284,
+        "wordTextCharacters": 16771
+      },
+      "path": "office/apache-poi/test-data/document/bib-chernigovka.netdo.ru_download_docs_17459.docx",
+      "sha256": "74575caabe35de9982ed11328ebe556844fcd3da2fed1e425255bfe81dee4c50"
+    },
+    {
+      "bytes": 10405,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 32114,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 78
+      },
+      "path": "office/apache-poi/test-data/document/bookmarks.docx",
+      "sha256": "9b93eef9e2ce1ad0e28dc65beab73a896d5d1631a0b7fc73ec6ac279cf36b218"
+    },
+    {
+      "bytes": 11916,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 48524,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 179
+      },
+      "path": "office/apache-poi/test-data/document/bug-paragraph-alignment.docx",
+      "sha256": "0a7a19175b8fb5fdce4755a51489a29109b358447dc99a2125642964be48e6ad"
+    },
+    {
+      "bytes": 239621,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 374694,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 13,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 9915
+      },
+      "path": "office/apache-poi/test-data/document/Bug51170.docx",
+      "sha256": "3a5f19e5bfdc7f25ce16cb256bb8bab1a15e900a767b4a4c6b1ea3ee34faaa32"
+    },
+    {
+      "bytes": 29696,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/bug53475-password-is-pass.docx",
+      "sha256": "c182f7825ae588fe1c28497588d1bded635a5bef7eb7370fd1c589233a6471d5"
+    },
+    {
+      "bytes": 33792,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/bug53475-password-is-solrcell.docx",
+      "sha256": "cde5752f65238b42fefeaa28c0a10ef3b75bd6232cd6427b3920113c91c5909d"
+    },
+    {
+      "bytes": 44431,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 27,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 139376,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 13,
+        "reason": "packagePreflightPassed",
+        "tableCells": 9,
+        "tableRows": 8,
+        "wordTextCharacters": 164
+      },
+      "path": "office/apache-poi/test-data/document/Bug54771a.docx",
+      "sha256": "e9f466580cd26098320262def84db719802e6f7ef2302036ce0ec8a5a607188d"
+    },
+    {
+      "bytes": 39666,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 113082,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 3,
+        "tableRows": 3,
+        "wordTextCharacters": 101
+      },
+      "path": "office/apache-poi/test-data/document/Bug54771b.docx",
+      "sha256": "8721295e024cf07671ba7db0430db2a94f9a6f12dd3ba2aa36f3011d5885021b"
+    },
+    {
+      "bytes": 27566,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 26,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 116406,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 27,
+        "tableRows": 6,
+        "wordTextCharacters": 424
+      },
+      "path": "office/apache-poi/test-data/document/Bug54849.docx",
+      "sha256": "f54182713ea5ce5d77b9593d3d9d24e645460043cec0b40ef59c932385f084d3"
+    },
+    {
+      "bytes": 22586,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 101050,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 8,
+        "tableRows": 2,
+        "wordTextCharacters": 349
+      },
+      "path": "office/apache-poi/test-data/document/Bug55142.docx",
+      "sha256": "69828bfe8887125db7d7e5b29405111927807b849d262d42c351ccec3b3cdb83"
+    },
+    {
+      "bytes": 12617,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 47309,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 19
+      },
+      "path": "office/apache-poi/test-data/document/bug56075-changeTracking_off.docx",
+      "sha256": "bfe651932119ad2472b943b726f8ea7559d8ff0fb9c100b63cc0c28f8227de78"
+    },
+    {
+      "bytes": 12606,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 47301,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 18
+      },
+      "path": "office/apache-poi/test-data/document/bug56075-changeTracking_on.docx",
+      "sha256": "9c837e12aaf3deac10ac20ac1bc08dc6bebdec14b553698063742b9bc12f8920"
+    },
+    {
+      "bytes": 11033,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 48030,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "office/apache-poi/test-data/document/bug56076.docx",
+      "sha256": "3abb05a4e76d5f92cf59eb818db7b03e8ff342d051f832a1bee196b1164b3b0d"
+    },
+    {
+      "bytes": 55889,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 972445,
+        "externalRelationships": 0,
+        "maximumGridSpan": 7,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 1224,
+        "tableRows": 230,
+        "wordTextCharacters": 7297
+      },
+      "path": "office/apache-poi/test-data/document/bug57031.docx",
+      "sha256": "bbd88b16a90c65b46e1a6922f7017e8d4cc0bc8f62ac28619c2d367d37d6754b"
+    },
+    {
+      "bytes": 210256,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 29,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2448461,
+        "externalRelationships": 299,
+        "maximumGridSpan": 4,
+        "maximumXmlDepth": 33,
+        "reason": "packagePreflightPassed",
+        "tableCells": 595,
+        "tableRows": 151,
+        "wordTextCharacters": 119077
+      },
+      "path": "office/apache-poi/test-data/document/bug59058.docx",
+      "sha256": "89d0abb8eed1a58f262c49c386f74d8a82798d6344bed690d66b389514f0751c"
+    },
+    {
+      "bytes": 13463,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 52168,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 15,
+        "tableRows": 3,
+        "wordTextCharacters": 50
+      },
+      "path": "office/apache-poi/test-data/document/Bug60337.docx",
+      "sha256": "87f983bdd93b3b5b8469104a5b09ccff41e0f5c144060e13fd4db07bfd2e39da"
+    },
+    {
+      "bytes": 2297,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 6,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2722,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 8,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 25
+      },
+      "path": "office/apache-poi/test-data/document/Bug60341.docx",
+      "sha256": "56147fba379742c9b73e98787ff171c7ed37b038e623ed26749dab6b90a009ab"
+    },
+    {
+      "bytes": 17326,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 88984,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 25
+      },
+      "path": "office/apache-poi/test-data/document/Bug62859.docx",
+      "sha256": "9a2af7058bb7f2c77a6591ecffd72f8b45983659ea59b9b5d7acf92b1daea513"
+    },
+    {
+      "bytes": 17630,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 95076,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "office/apache-poi/test-data/document/Bug64561.docx",
+      "sha256": "ae2ce22d39377301bf17145d6ce0812f6cf33ab9639edb7b06bc1f5254bd9824"
+    },
+    {
+      "bytes": 474844,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 15316834,
+        "externalRelationships": 1,
+        "maximumGridSpan": 63,
+        "maximumXmlDepth": 15,
+        "reason": "packagePreflightPassed",
+        "tableCells": 13367,
+        "tableRows": 2304,
+        "wordTextCharacters": 271363
+      },
+      "path": "office/apache-poi/test-data/document/bug65649.docx",
+      "sha256": "f98d2bfcca5d091cda26539b00318bb2b2b1e6d8aa644e370175e99ca9c1b4ad"
+    },
+    {
+      "bytes": 13436,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 56037,
+        "externalRelationships": 4,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 10,
+        "tableRows": 5,
+        "wordTextCharacters": 627
+      },
+      "path": "office/apache-poi/test-data/document/bug65738.docx",
+      "sha256": "67797f5691cb5346201f1c40000a959f9f08d05d0b4493b4291e8d5f16e81e65"
+    },
+    {
+      "bytes": 2012,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2800,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 8,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 87
+      },
+      "path": "office/apache-poi/test-data/document/Bug66263-paragraph.docx",
+      "sha256": "41ccacadeda1ac97485b772404228b9a66c2339d46208271b932b7a4a6661998"
+    },
+    {
+      "bytes": 1970,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 7,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1840,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 10,
+        "reason": "packagePreflightPassed",
+        "tableCells": 2,
+        "tableRows": 1,
+        "wordTextCharacters": 20
+      },
+      "path": "office/apache-poi/test-data/document/Bug66263-table.docx",
+      "sha256": "2d3aedaf149375071e54c10a898c1900b343fb22a7b2db9261a32b1452ed7737"
+    },
+    {
+      "bytes": 4500,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 9,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 10025,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 8,
+        "reason": "packagePreflightPassed",
+        "tableCells": 1,
+        "tableRows": 1,
+        "wordTextCharacters": 10
+      },
+      "path": "office/apache-poi/test-data/document/bug66312.docx",
+      "sha256": "de03dd0ac02c04e07790c400ee5cb36b580e38750d6c56c2b8528a53219cb46a"
+    },
+    {
+      "bytes": 4875,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 10,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 10610,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 8,
+        "reason": "packagePreflightPassed",
+        "tableCells": 1,
+        "tableRows": 1,
+        "wordTextCharacters": 5
+      },
+      "path": "office/apache-poi/test-data/document/Bug66988.docx",
+      "sha256": "349b3576e2478801a80672e190d7406252d7adefb6d722bd6ae790817ea0bd2f"
+    },
+    {
+      "bytes": 7510,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 37782,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 9,
+        "tableRows": 3,
+        "wordTextCharacters": 1200
+      },
+      "path": "office/apache-poi/test-data/document/bug69628.docx",
+      "sha256": "a6c0d65a75862446b3261e0eb8f2709c889c9308c60e73b9f8fd0e022d8ba74f"
+    },
+    {
+      "bytes": 12104,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 49906,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 35
+      },
+      "path": "office/apache-poi/test-data/document/capitalized.docx",
+      "sha256": "e96c6a0f4db42a658f56a2c96db0d6a7c899db1078d1fe3ea05033c1b7297dc3"
+    },
+    {
+      "bytes": 133304,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 44,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 277322,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 19
+      },
+      "path": "office/apache-poi/test-data/document/chartex.docx",
+      "sha256": "5d7f0ca9aa26d0244eedbc8ff862f08910689ec3848a036c622b17d56a290b57"
+    },
+    {
+      "bytes": 20800,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 69339,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 2,
+        "tableRows": 1,
+        "wordTextCharacters": 245
+      },
+      "path": "office/apache-poi/test-data/document/checkboxes.docx",
+      "sha256": "06f1dc1370c772a020c6d5183c8b7c4fe30ad7a9fff108cb2f027128ddf5e209"
+    },
+    {
+      "bytes": 12632,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIFuzzer-6709287337197568.docx",
+      "sha256": "dda9dd500d6922d60205d5045adb7496bc3ff431a4dad702da1c26af030766fc"
+    },
+    {
+      "bytes": 15932,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-4791943399604224.docx",
+      "sha256": "096a1119c0fd110d7fb7b93db16bd1a302513732d8dd0bd7641ecedafbe36f43"
+    },
+    {
+      "bytes": 50918,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-4959857092198400.docx",
+      "sha256": "f45e20bb8d8c4ed61413c9874927a784307b75e22a6d7be775e6485dc60e1abb"
+    },
+    {
+      "bytes": 35568,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-4961551840247808.docx",
+      "sha256": "04a57da257ee6af6d33ba88999e2c12a54d266c1d1ffb56eefc1cd04bd1c9be6"
+    },
+    {
+      "bytes": 12890,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5166796835258368.docx",
+      "sha256": "9a78086d1bfd6aab90fa1c1e12569c166267a1d7e1e6c5d36e4bfb64c5ee10b9"
+    },
+    {
+      "bytes": 4764,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5313273089884160.docx",
+      "sha256": "b418f2b0e307e6f526f85ef90979fe582d5c2644a4597a882597ccd18300d838"
+    },
+    {
+      "bytes": 34995,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5564805011079168.docx",
+      "sha256": "d9eb560e2285db6cf38c5b2ed0edd7a44b1b4de45343085c9232b82426c51632"
+    },
+    {
+      "bytes": 6043,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-5569740188549120.docx",
+      "sha256": "9c9d14a0ed831cc9adca4ca212a86ec19df760f54ce0c495996808fd9c015af7"
+    },
+    {
+      "bytes": 7789,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-6061520554164224.docx",
+      "sha256": "af0490674ff7c414b1d34ae6bae2140e9e2a3166e5b7ef524201ffb576c74d57"
+    },
+    {
+      "bytes": 43758,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-6120975439364096.docx",
+      "sha256": "7d34e905b8df2a09b9b671e1e1243c7898da94cf935797b98fc4131faeb55f25"
+    },
+    {
+      "bytes": 4941,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-6442791109263360.docx",
+      "sha256": "dbb8b118a4bc0a3d75a65722805f4ab039d3067626c98b209dde41a2f0af86f8"
+    },
+    {
+      "bytes": 20757,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "invalidPackage",
+        "decompressedBytes": 89631,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/clusterfuzz-testcase-minimized-POIXWPFFuzzer-6733884933668864.docx",
+      "sha256": "a1f9d9fd811700ea52b571c72aaaceea012d53f83ef2e6baace0238168c4b206"
+    },
+    {
+      "bytes": 4926,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 10,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 11634,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 45
+      },
+      "path": "office/apache-poi/test-data/document/comment.docx",
+      "sha256": "23bbfe33e1acf7073253bd87552cbee5be0a07cbd08a479a4bf139f09b1dd6dc"
+    },
+    {
+      "bytes": 14458,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 65376,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 226
+      },
+      "path": "office/apache-poi/test-data/document/ComplexNumberedLists.docx",
+      "sha256": "297a085a7d433af2eeee7661e8db21539452cb585096484774a1e9f5f258b0b6"
+    },
+    {
+      "bytes": 7789,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/crash-517626e815e0afa9decd0ebb6d1dee63fb9907dd.docx",
+      "sha256": "4fa1dc1cd5bddeaa5a14169d9a4f5abdc687d732c3beb06901cf9a701533d466"
+    },
+    {
+      "bytes": 17198,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 3,
+        "category": "defaultStructuralHardLimit",
+        "decompressedBytes": 1209795,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 15005,
+        "reason": "maxNestingDepth",
+        "tableCells": 5000,
+        "tableRows": 5000,
+        "wordTextCharacters": 83890
+      },
+      "path": "office/apache-poi/test-data/document/deep-table-cell.docx",
+      "sha256": "31c5bfe1f68c98699cb356891de2e02fe223f633706d666c430ca79fd2cdf6bb"
+    },
+    {
+      "bytes": 17720,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 120653,
+        "externalRelationships": 7,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 2442
+      },
+      "path": "office/apache-poi/test-data/document/delins.docx",
+      "sha256": "7ecad102602586be7f1371f117fc567ea47f3ed0ca703b353e003002f1ff8d3f"
+    },
+    {
+      "bytes": 14204,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 42816,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 413
+      },
+      "path": "office/apache-poi/test-data/document/DiffFirstPageHeadFoot.docx",
+      "sha256": "e94332c7b86b1bbce960f93fec90078486ab8abc3913a024a24be391a0b42151"
+    },
+    {
+      "bytes": 23503,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 44910,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 12
+      },
+      "path": "office/apache-poi/test-data/document/documentProperties.docx",
+      "sha256": "1cff7a0a94dfce307a70032d21070d26ae34b9fdf742cf70fa66d4a2078ec9d5"
+    },
+    {
+      "bytes": 9868,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29792,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 24
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_comments_no_password.docx",
+      "sha256": "d15cd04edecf3489c2028864e70736494a1c5259b6e92097e50457efd934d78c"
+    },
+    {
+      "bytes": 9924,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29899,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 29
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_forms_no_password.docx",
+      "sha256": "5c299d134577cb3a752548e6891701d2b3447570bd2bb0b38bf16efc026ee0a2"
+    },
+    {
+      "bytes": 9884,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29827,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 13
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_no_protection.docx",
+      "sha256": "5d1cce05b576fc527981c56dd9844df3b6669967bcd9b981adfc043bd516f62c"
+    },
+    {
+      "bytes": 9923,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29897,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 24
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_no_protection_tag_existing.docx",
+      "sha256": "1fb9592a737a350cad1a2a7d9136c7fa6106c5c18c88980251ee9273ddd4ec32"
+    },
+    {
+      "bytes": 9856,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29740,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 24
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_readonly_no_password.docx",
+      "sha256": "5d4c919f2e06b84fbe35cfaaa4012e8f469b811e1f643deb3e660b798bfe4544"
+    },
+    {
+      "bytes": 9940,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29929,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 31
+      },
+      "path": "office/apache-poi/test-data/document/documentProtection_trackedChanges_no_password.docx",
+      "sha256": "f57113d70213bf8d2fb739fc980662a84e3530f3d1b128ab92d00ab587cd3eb4"
+    },
+    {
+      "bytes": 95247,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 22,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 389160,
+        "externalRelationships": 11,
+        "maximumGridSpan": 3,
+        "maximumXmlDepth": 18,
+        "reason": "packagePreflightPassed",
+        "tableCells": 25,
+        "tableRows": 18,
+        "wordTextCharacters": 57798
+      },
+      "path": "office/apache-poi/test-data/document/drawing.docx",
+      "sha256": "5e83462dd7ac3cf0a333fe09cf0837602dbd41775cdcec813a6e288b5d55dff8"
+    },
+    {
+      "bytes": 13268,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 53032,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 48
+      },
+      "path": "office/apache-poi/test-data/document/EmbeddedDocument.docx",
+      "sha256": "3cb521da0faab3b8a9e7c5d155961b4f5506fb2ceda8e69e0790d03ee01767f2"
+    },
+    {
+      "bytes": 14549,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 42731,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 12
+      },
+      "path": "office/apache-poi/test-data/document/EmptyDocumentWithHeaderFooter.docx",
+      "sha256": "a6ac4223c9b7217426a54303ca52307f3c69cd8cd05b7e788e43fab449b7b45c"
+    },
+    {
+      "bytes": 13349,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 64861,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 54
+      },
+      "path": "office/apache-poi/test-data/document/emptyPPr.docx",
+      "sha256": "0db26e190d0d4888d3d11fa831cb4815fdf821b448ae2b2c5503bac697e6a530"
+    },
+    {
+      "bytes": 13553,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39414,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 962
+      },
+      "path": "office/apache-poi/test-data/document/endnotes.docx",
+      "sha256": "6e2e1b2dabb0ae6b9b26ddd613dca446ba0710ecc8b4008722abc4ed592934e3"
+    },
+    {
+      "bytes": 11321,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 45593,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 27
+      },
+      "path": "office/apache-poi/test-data/document/EnforcedWith.docx",
+      "sha256": "0727ecf6523dd8026c53129255b11dec8de4437060f2927643d99cd77e82a41b"
+    },
+    {
+      "bytes": 12756,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "policyRejected",
+        "decompressedBytes": 47345,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "dtdOrEntityDeclaration",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/ExternalEntityInText.docx",
+      "sha256": "5cf7340ffd6516c2fd168f445ff78cf64bd86409fe69db68997fc9f94820c223"
+    },
+    {
+      "bytes": 12876,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40238,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 268
+      },
+      "path": "office/apache-poi/test-data/document/FancyFoot.docx",
+      "sha256": "1cfd2b4fb1f7233062671b0f58789e1b0b437fbf79deb7d62167cffb85191f7a"
+    },
+    {
+      "bytes": 17034,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 66722,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 98
+      },
+      "path": "office/apache-poi/test-data/document/FieldCodes.docx",
+      "sha256": "9247f85ab90b15f11d0cf14d0070fdcb5cdf47c65d6bc77cc32cb7ee682aad24"
+    },
+    {
+      "bytes": 12837,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 49720,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 14
+      },
+      "path": "office/apache-poi/test-data/document/FldSimple.docx",
+      "sha256": "6cf7364676d465e702cbbac44ca92331c525476e36a29c26f780cb9d7643b631"
+    },
+    {
+      "bytes": 12823,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 35534,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 40
+      },
+      "path": "office/apache-poi/test-data/document/footnotes.docx",
+      "sha256": "9070094b27ff5201477f4de4b2c027730c66cb889106a1609c5adeed207a59c1"
+    },
+    {
+      "bytes": 27824,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 152844,
+        "externalRelationships": 0,
+        "maximumGridSpan": 15,
+        "maximumXmlDepth": 15,
+        "reason": "packagePreflightPassed",
+        "tableCells": 77,
+        "tableRows": 30,
+        "wordTextCharacters": 6544
+      },
+      "path": "office/apache-poi/test-data/document/form_footnotes.docx",
+      "sha256": "a890294bfbdc63f6d03eab61efc1e98cb51d59f0920541150dd7082f9bdf31f1"
+    },
+    {
+      "bytes": 28423,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 18,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 54373,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 54
+      },
+      "path": "office/apache-poi/test-data/document/headerFooter.docx",
+      "sha256": "0ad90c6ee8ec8b9fab1ae8219387eca8d934b739580918d76a1b6c911bc41913"
+    },
+    {
+      "bytes": 15079,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 44706,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 487
+      },
+      "path": "office/apache-poi/test-data/document/HeaderFooterUnicode.docx",
+      "sha256": "ec439ac0643294e1e2961b381983304e044444f3a8f0dc465a98adf9ebee0e67"
+    },
+    {
+      "bytes": 16206,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 41918,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/headerPic.docx",
+      "sha256": "50d9b17f7575c8a91129fd8a3e6a70feec886480ab9f089e29a7f8ac7e5ed51a"
+    },
+    {
+      "bytes": 13076,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39658,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 27
+      },
+      "path": "office/apache-poi/test-data/document/Headers.docx",
+      "sha256": "bdf91038f9a5454355e6393b7b74fd819a4adc480b4a7011a86e878403952b5b"
+    },
+    {
+      "bytes": 74810,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 93448,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1797
+      },
+      "path": "office/apache-poi/test-data/document/heading123.docx",
+      "sha256": "dac67500b907811030ab2bdd5b1c65cda97a15651d6ec0d33592ef70d34a5550"
+    },
+    {
+      "bytes": 22858,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 237004,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 48,
+        "tableRows": 16,
+        "wordTextCharacters": 5650
+      },
+      "path": "office/apache-poi/test-data/document/IllustrativeCases.docx",
+      "sha256": "4c2407d338f02a6ae107eac0b3e925ffb3d37921942ebe88db8660dea0891a00"
+    },
+    {
+      "bytes": 423363,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 451520,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/issue_51265_1.docx",
+      "sha256": "711adad4316f4a1937b08f4647e679aac00a42dc134d205e81759777a0cda8a7"
+    },
+    {
+      "bytes": 421828,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 447751,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/issue_51265_2.docx",
+      "sha256": "f06f14a64bd7bb58cc93a832059f722c7af0c7854e0f3bebe5945e7d23e149ae"
+    },
+    {
+      "bytes": 529742,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 22,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 566940,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/issue_51265_3.docx",
+      "sha256": "219c78b7bb2750d85dfb32cc13f38162a7b1ed5cfe610fa1dacd8364f578479b"
+    },
+    {
+      "bytes": 102103,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "invalidPackage",
+        "decompressedBytes": 257913,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "wordMainBodyCount",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/MultipleBodyBug.docx",
+      "sha256": "7b34a3e9458daa3cb4a56c012e279dc8edab71300404b3d9da6f145cb743211d"
+    },
+    {
+      "bytes": 10380,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 31984,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 169
+      },
+      "path": "office/apache-poi/test-data/document/NoHeadFoot.docx",
+      "sha256": "dc6a67b1c118658acadc87ba41200f0b90ead05ada95e7ce6fa72a97700430c5"
+    },
+    {
+      "bytes": 13808,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 64611,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 95
+      },
+      "path": "office/apache-poi/test-data/document/Numbering.docx",
+      "sha256": "776a59dcf0e290f1988602e6305e2d9cb2e31f631dc4aa751593c23cddbaad4d"
+    },
+    {
+      "bytes": 12978,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 55110,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "office/apache-poi/test-data/document/NumberingWithOutOfOrderId.docx",
+      "sha256": "fa2843a6297bb3e874f9c6dc8aac944704fba4d0d631b94627be7dbeaf12ed0f"
+    },
+    {
+      "bytes": 15190,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 144230,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 32
+      },
+      "path": "office/apache-poi/test-data/document/NumberingWOverrides.docx",
+      "sha256": "3754dee43880ce4c9e962eca41ac78c353999888282c9ada528efbb826e2bee6"
+    },
+    {
+      "bytes": 22994,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 26,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 75707,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 10,
+        "reason": "packagePreflightPassed",
+        "tableCells": 10,
+        "tableRows": 4,
+        "wordTextCharacters": 441
+      },
+      "path": "office/apache-poi/test-data/document/PageSpecificHeadFoot.docx",
+      "sha256": "90bb8251b18c9f94e0b8fb91192413922a09dbe418a4a210116221054378eaad"
+    },
+    {
+      "bytes": 10082,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30280,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 16
+      },
+      "path": "office/apache-poi/test-data/document/protected_sample.docx",
+      "sha256": "688b994faa8c909d7d3fc3f48fdccce538426affb1cf562d107a2847ec561beb"
+    },
+    {
+      "bytes": 6838,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 10,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 33401,
+        "externalRelationships": 24,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 7,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 755
+      },
+      "path": "office/apache-poi/test-data/document/rtl.docx",
+      "sha256": "d159b6ac6734f14a9ecf8e97ca5029bdcddbfae2d33ba0128aa774924e0b190d"
+    },
+    {
+      "bytes": 14860,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 42444,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1542
+      },
+      "path": "office/apache-poi/test-data/document/sample.docx",
+      "sha256": "be4fc1bf778ad8183f714e09b9df40669de34e9ecbc3adecfc8953f00749036f"
+    },
+    {
+      "bytes": 11611,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 33235,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 130
+      },
+      "path": "office/apache-poi/test-data/document/SampleDoc.docx",
+      "sha256": "ea2c517bd7be4628887eb97f630334b93b894f4522d2c0adae263e602d76df92"
+    },
+    {
+      "bytes": 2959626,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 30,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 5367197,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 26
+      },
+      "path": "office/apache-poi/test-data/document/saut_page.docx",
+      "sha256": "748f34f3dc285f4d48474930758b2c37382d17965545a1729cb7400cada793da"
+    },
+    {
+      "bytes": 27520,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 120639,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 18,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 230
+      },
+      "path": "office/apache-poi/test-data/document/shapes-with-text.docx",
+      "sha256": "1ef4d8cbfd5e2333897ab3193b58ce445cee7e45476d39e5626a4c7097f72d95"
+    },
+    {
+      "bytes": 13112,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40479,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 284
+      },
+      "path": "office/apache-poi/test-data/document/SimpleHeadThreeColFoot.docx",
+      "sha256": "c682ea30e50785784969ee00b4d6ed8da31e725a64e0251a4f21077f02f19d8e"
+    },
+    {
+      "bytes": 11862,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 43621,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 224
+      },
+      "path": "office/apache-poi/test-data/document/smarttag-snippet.docx",
+      "sha256": "693ad667f07b6ca90c4375e024a122adb970e9f5cc7e29a1cd53e0a9cbfb6de9"
+    },
+    {
+      "bytes": 10905,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 36026,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 32
+      },
+      "path": "office/apache-poi/test-data/document/Styles.docx",
+      "sha256": "63f3fe4c3b4fbdc211eca8fa7fd31a799ff4438afbf4ca6e771b3aef107c732e"
+    },
+    {
+      "bytes": 15519,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 114733,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 54,
+        "tableRows": 18,
+        "wordTextCharacters": 342
+      },
+      "path": "office/apache-poi/test-data/document/table-alignment.docx",
+      "sha256": "ee36729e0d050e529fea0b444006a194bea72b35cf8958ae58c6624c26156b41"
+    },
+    {
+      "bytes": 7639,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 84354,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 8,
+        "reason": "packagePreflightPassed",
+        "tableCells": 84,
+        "tableRows": 21,
+        "wordTextCharacters": 224
+      },
+      "path": "office/apache-poi/test-data/document/table-indent.docx",
+      "sha256": "aaa3fd6a1c0d6ac222ccacad213257b9061be7d706396a36b3ffedacb3a56c9b"
+    },
+    {
+      "bytes": 13177,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 37712,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 6,
+        "tableRows": 3,
+        "wordTextCharacters": 24
+      },
+      "path": "office/apache-poi/test-data/document/table_footnotes.docx",
+      "sha256": "69666500a7dd00600da64cc7676f8939c84df8804967ec2fc75567fad41f21a9"
+    },
+    {
+      "bytes": 65298,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 17,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 115245,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 43
+      },
+      "path": "office/apache-poi/test-data/document/testComment.docx",
+      "sha256": "06b63b13f0b78a7179151af52c2282557c1ed204899feee9fcef4ca575344f97"
+    },
+    {
+      "bytes": 10861,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 34037,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 174
+      },
+      "path": "office/apache-poi/test-data/document/TestDocument.docx",
+      "sha256": "527a906b3cc31d0a72a47290a6c8a53854a89a31178a60fa3cb314d70b57a413"
+    },
+    {
+      "bytes": 13380,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 50659,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 66
+      },
+      "path": "office/apache-poi/test-data/document/TestPoiXMLDocumentCorePropertiesGetKeywords.docx",
+      "sha256": "722eb8f8d5cccdbb53af226ac270dc750b5e071ae7ca91c73151ed9fb771959a"
+    },
+    {
+      "bytes": 11712,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 47507,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 4,
+        "tableRows": 2,
+        "wordTextCharacters": 15
+      },
+      "path": "office/apache-poi/test-data/document/TestTableCellAlign.docx",
+      "sha256": "2968d4a5d5de21dce1cbeae3235e545cdf4bfd7ae508fe0eed3a9b032773ce17"
+    },
+    {
+      "bytes": 12672,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 55701,
+        "externalRelationships": 0,
+        "maximumGridSpan": 2,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 15,
+        "tableRows": 4,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/TestTableColumns.docx",
+      "sha256": "3b1965a295c4a5c24573a6d5f2ded93f7de3e7a46ffe26b881456f1c4ddd6335"
+    },
+    {
+      "bytes": 13061,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40405,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 241
+      },
+      "path": "office/apache-poi/test-data/document/ThreeColFoot.docx",
+      "sha256": "584ef284e9b106fd7f1d283e918bdb6b579f5c73162d075acba921c10c63930b"
+    },
+    {
+      "bytes": 12508,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 38812,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 247
+      },
+      "path": "office/apache-poi/test-data/document/ThreeColHead.docx",
+      "sha256": "304656fd791bd829f5cabebf8e7ec058260b669e9f572e500f69ff176387e090"
+    },
+    {
+      "bytes": 13123,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 40382,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 306
+      },
+      "path": "office/apache-poi/test-data/document/ThreeColHeadFoot.docx",
+      "sha256": "c2d16e89c23a8c1f7366f3b65ab33c6e14fcf00f916dfecfd8af1a3e7797f73d"
+    },
+    {
+      "bytes": 16665,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 74662,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/tika-3388.docx",
+      "sha256": "3a1b5f73e61be4071c5bef5be3e52d344142f45c78681a673b14bc38bc07f717"
+    },
+    {
+      "bytes": 22374,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 107190,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 10,
+        "tableRows": 5,
+        "wordTextCharacters": 103
+      },
+      "path": "office/apache-poi/test-data/document/tika-3816.docx",
+      "sha256": "ab5b32d15d2fd14c633452cc5a8b1cd27cd65038cd208a11ede29d6f8fe24259"
+    },
+    {
+      "bytes": 17913,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 64048,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 10,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 3
+      },
+      "path": "office/apache-poi/test-data/document/Tika-792.docx",
+      "sha256": "95de9f3b655bfec5b619ee31d1319e5a9a6ce4f253a9738898876640a2969665"
+    },
+    {
+      "bytes": 19785,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/truncated62886.docx",
+      "sha256": "39619851dab09369e91f926a94499caba0749ca2fa57d30b2fc2bc4a937292d0"
+    },
+    {
+      "bytes": 5720,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 12695,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 6,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1
+      },
+      "path": "office/apache-poi/test-data/document/unicode-path.docx",
+      "sha256": "4d8b0b3dd8ada4eb6bf141e88f8dffc07f993545d9fdd25f505d8ac839918946"
+    },
+    {
+      "bytes": 103677,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 177978,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 59
+      },
+      "path": "office/apache-poi/test-data/document/VariousPictures.docx",
+      "sha256": "c1eecbca7de9f99e21c677e1d5b045eaa1d5a442eff4c82f0cbe9af93726a070"
+    },
+    {
+      "bytes": 20875,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 72512,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 591
+      },
+      "path": "office/apache-poi/test-data/document/WithGIF.docx",
+      "sha256": "fb9f0bfa791921c43fe113005d3bb7d639ab2946c082e7d24d31e0bf73003036"
+    },
+    {
+      "bytes": 14190,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 51029,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 2
+      },
+      "path": "office/apache-poi/test-data/document/WithTabs.docx",
+      "sha256": "c6460c33b3343b0656189d5cba344fadafea821f8982ea01619c5324fa87a266"
+    },
+    {
+      "bytes": 144959,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 31,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 264675,
+        "externalRelationships": 3,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 15,
+        "tableRows": 3,
+        "wordTextCharacters": 708
+      },
+      "path": "office/apache-poi/test-data/document/WordWithAttachments.docx",
+      "sha256": "90352263823e6d3d39a4ec88212134b74bcb0f86b603bc3b51d712a3ec3df9f2"
+    },
+    {
+      "bytes": 10469,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 15628,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/document/zero-length.docx",
+      "sha256": "8e39d68e61deed4d3afcbfc3bcea9b1c3d5a1e50ee0e0af3e15a705c8d186bbe"
+    },
+    {
+      "bytes": 16997,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 84942,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 44,
+        "tableRows": 11,
+        "wordTextCharacters": 2285
+      },
+      "path": "office/apache-poi/test-data/integration/stress001.docx",
+      "sha256": "e5a046b17acca2e2454f668b969c31c72ae16c57c137c1a659d29c2f156c68f0"
+    },
+    {
+      "bytes": 103978,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 456921,
+        "externalRelationships": 5,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 43,
+        "tableRows": 17,
+        "wordTextCharacters": 41496
+      },
+      "path": "office/apache-poi/test-data/integration/stress003.docx",
+      "sha256": "35bfe2e4c99e193b52692a90317f027650e07fc35150ce9523af68e936ae38fc"
+    },
+    {
+      "bytes": 529658,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 37,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2305780,
+        "externalRelationships": 1,
+        "maximumGridSpan": 6,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 46,
+        "tableRows": 21,
+        "wordTextCharacters": 131387
+      },
+      "path": "office/apache-poi/test-data/integration/stress004.docx",
+      "sha256": "ac9e1510b76a96868f4df82c59e4a3b852d7e66d3ad7ba785de2a86d9a7f523d"
+    },
+    {
+      "bytes": 46459,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 27,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 339159,
+        "externalRelationships": 0,
+        "maximumGridSpan": 3,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 14,
+        "tableRows": 8,
+        "wordTextCharacters": 14324
+      },
+      "path": "office/apache-poi/test-data/integration/stress005.docx",
+      "sha256": "0c58de6a757f69fef210440bf0e0f95dc018d908401aee866cfbfeca1309d43c"
+    },
+    {
+      "bytes": 19274,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 192261,
+        "externalRelationships": 23,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 5031
+      },
+      "path": "office/apache-poi/test-data/integration/stress006.docx",
+      "sha256": "5ccd91b2cb7ecc8a5b27f81ecc0d165f2290ebfc3328e478b1d8b7a6455d6dd0"
+    },
+    {
+      "bytes": 16017,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 96957,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1062
+      },
+      "path": "office/apache-poi/test-data/integration/stress007.docx",
+      "sha256": "8f4e499bd93e2a8ec93f44ca6ddf8a9b729c432687977bd314717c6b14b36c68"
+    },
+    {
+      "bytes": 291278,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1255435,
+        "externalRelationships": 3,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 381406
+      },
+      "path": "office/apache-poi/test-data/integration/stress008.docx",
+      "sha256": "ecab21e4458b8d4a8014774dd60cb92a88a6acf364512f6ea0fc49e6ff9a0508"
+    },
+    {
+      "bytes": 61054,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 26,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 203510,
+        "externalRelationships": 14,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1748
+      },
+      "path": "office/apache-poi/test-data/integration/stress009.docx",
+      "sha256": "d081c4c6e5ba299e6fca4296dad434408a7c5de3046e4918d6b7abbd4a8b9a98"
+    },
+    {
+      "bytes": 263616,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 25,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1848216,
+        "externalRelationships": 0,
+        "maximumGridSpan": 3,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 915,
+        "tableRows": 186,
+        "wordTextCharacters": 223769
+      },
+      "path": "office/apache-poi/test-data/integration/stress010.docx",
+      "sha256": "48bbb9a5b330705a0abb2a954937a15b5c7f6baad761320027af49cff608ffa5"
+    },
+    {
+      "bytes": 127751,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 29,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 552837,
+        "externalRelationships": 9,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 6,
+        "tableRows": 2,
+        "wordTextCharacters": 63557
+      },
+      "path": "office/apache-poi/test-data/integration/stress011.docx",
+      "sha256": "59fdcfe90b1d6e18d93a8378f4255fb70f847f69989b56d72571d41ddf16e8bf"
+    },
+    {
+      "bytes": 6283,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 17850,
+        "altChunkRelationships": 1,
+        "archiveEntries": 6,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 21451,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/integration/stress012.docx",
+      "sha256": "19ca555e1c2bfd92974c152ea6402d1100f83ca0257e10afa1a80c143a37b102"
+    },
+    {
+      "bytes": 240784,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 341512,
+        "externalRelationships": 2,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 15,
+        "reason": "packagePreflightPassed",
+        "tableCells": 2,
+        "tableRows": 1,
+        "wordTextCharacters": 8409
+      },
+      "path": "office/apache-poi/test-data/integration/stress014.docx",
+      "sha256": "958cc680955ae5ef86bee0834a762996b53a0e5c0c9016d99cd59b2989bcff8b"
+    },
+    {
+      "bytes": 343372,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 22,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 652704,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 15,
+        "reason": "packagePreflightPassed",
+        "tableCells": 138,
+        "tableRows": 33,
+        "wordTextCharacters": 7817
+      },
+      "path": "office/apache-poi/test-data/integration/stress015.docx",
+      "sha256": "1609d3eed78c3a6bb5308726ea242b2351d3e8ec690b26267f8af544599fe2ea"
+    },
+    {
+      "bytes": 56365,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 19,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 214792,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 13,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 18662
+      },
+      "path": "office/apache-poi/test-data/integration/stress016.docx",
+      "sha256": "cebd91383486a63d4d9a79b77fc771faa6ccfdb081a5e72b5d358eddfb640f75"
+    },
+    {
+      "bytes": 110028,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 20,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 491456,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 17,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1898
+      },
+      "path": "office/apache-poi/test-data/integration/stress017.docx",
+      "sha256": "24598df56cf6282d4f21898b01e9db934cd9bd3efa355a45a5e5aff1d663de44"
+    },
+    {
+      "bytes": 321860,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 754039,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 95391
+      },
+      "path": "office/apache-poi/test-data/integration/stress018.docx",
+      "sha256": "51272c835875c822b1f92a465c7dce34ca217374261f2fb180e1a67cda81c649"
+    },
+    {
+      "bytes": 49296,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 452005,
+        "externalRelationships": 3,
+        "maximumGridSpan": 8,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 160,
+        "tableRows": 45,
+        "wordTextCharacters": 6146
+      },
+      "path": "office/apache-poi/test-data/integration/stress019.docx",
+      "sha256": "6565a369e05dbe7fd1fd75373c0335bd0ed5c38c351579dda393c1ffaf346394"
+    },
+    {
+      "bytes": 358387,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 24,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 601970,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 14,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 33028
+      },
+      "path": "office/apache-poi/test-data/integration/stress023.docx",
+      "sha256": "32b036e66eb701f37e8b64a3c491bf1d6234be3cee1e6e36d2e8435f4516cc94"
+    },
+    {
+      "bytes": 3108,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 5,
+        "category": "invalidPackage",
+        "decompressedBytes": 8347,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "nonWordMainPart",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/integration/stress025.docx",
+      "sha256": "80bd96317d8557f82f908cd919480b02cff7304c96620a53a517694b12bb7ddd"
+    },
+    {
+      "bytes": 27082,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 21,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 81951,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 9
+      },
+      "path": "office/apache-poi/test-data/integration/test_recursive_embedded.docx",
+      "sha256": "c4b7fab030a8b6a9d6691f6699ac8e6f82bc53764a0f1430d134ae3b70c32654"
+    },
+    {
+      "bytes": 34139,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 22,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 93348,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 70
+      },
+      "path": "office/apache-poi/test-data/integration/testPDFEmbeddingAndEmbedded.docx",
+      "sha256": "908d3fdd5b961c3bb2c837acee609b5e4396e97945d1f5bd993619df1bf7ca53"
+    },
+    {
+      "bytes": 43853,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 23,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 118632,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 240
+      },
+      "path": "office/apache-poi/test-data/openxml4j/MultipleCoreProperties.docx",
+      "sha256": "2ba428c52ae6b34cfbc61a88868d0008571b26ff9ae1f64b7dd7ff732a945be9"
+    },
+    {
+      "bytes": 13159,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 18,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39633,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_AlternateTimezones.docx",
+      "sha256": "2d1856ab17ee065074572a6d16f7823e5416a69d97863f5d7c91406b0d4628c3"
+    },
+    {
+      "bytes": 9788,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30285,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_DCTermsNamespaceLimitedUseFAIL.docx",
+      "sha256": "133ccb353022ded1147dfed64416ca1ca6160cf918e89b5855ecd8e6565ee9bb"
+    },
+    {
+      "bytes": 9801,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30313,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_DoNotUseCompatibilityMarkupFAIL.docx",
+      "sha256": "bf4183712d8611daa9ce9a3a837abed44d9c70d7e59ad708b1a479a8370a5328"
+    },
+    {
+      "bytes": 9786,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30249,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_LimitedXSITypeAttribute_NotPresentFAIL.docx",
+      "sha256": "dc1b3ecc6bb5ee8b02762bad477a7a5dbcc2b56776f7d82b7b5f405438095fd0"
+    },
+    {
+      "bytes": 9787,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30267,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_LimitedXSITypeAttribute_PresentWithUnauthorizedValueFAIL.docx",
+      "sha256": "c05b8865dafce506809953b6475504112d2cf9ef447c2e163376114e1f377581"
+    },
+    {
+      "bytes": 10058,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30241,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_OnlyOneCorePropertiesPart.docx",
+      "sha256": "e2e8b6c95a034bbcb6f9239ce1519b7814e45d165d261775ac2ff58eef0a2b60"
+    },
+    {
+      "bytes": 24250,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 99954,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_OnlyOneCorePropertiesPartFAIL.docx",
+      "sha256": "e47a11c96726d915f8ed51537123bf2de1c11aa4c2bb2f97d20eb5c7c62deda5"
+    },
+    {
+      "bytes": 10058,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30241,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_SUCCESS.docx",
+      "sha256": "e2e8b6c95a034bbcb6f9239ce1519b7814e45d165d261775ac2ff58eef0a2b60"
+    },
+    {
+      "bytes": 9814,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30338,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_UnauthorizedXMLLangAttributeFAIL.docx",
+      "sha256": "5266327422483db156b75ca5e9a0b2e76998bc40711adc831dadb2d5f6eed7d1"
+    },
+    {
+      "bytes": 24759,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 98759,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/OPCCompliance_DerivedPartNameFAIL.docx",
+      "sha256": "a57fe168c5dcd49a877b4c41ec453571181c3a0644b5b305c76c6ff385b39c29"
+    },
+    {
+      "bytes": 14470,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39579,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/sample.docx",
+      "sha256": "54c8f2157d6ab461f3284982f9d5b04bfdbc17308caeb6c567783ceb6121297a"
+    },
+    {
+      "bytes": 1412,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 4,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 1732,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 16
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestCreatePackageOUTPUT.docx",
+      "sha256": "73764641f86bd72e3892509fa9a6c1d15b88e2d47327263d742edf3461b2d524"
+    },
+    {
+      "bytes": 10079,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30263,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 262
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestOpenPackageINPUT.docx",
+      "sha256": "725f6b642d4f0d91cf408fffe6e187fbf50192d9e4a03d3f89059bff7027666f"
+    },
+    {
+      "bytes": 1983,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 5,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 2875,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 5,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 16
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestOpenPackageOUTPUT.docx",
+      "sha256": "739b07a98ef123a0fb237adf10c1e9807a18b21a8cd53ce0c61051cd6987cda2"
+    },
+    {
+      "bytes": 24745,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 13,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 98759,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestPackageCommon.docx",
+      "sha256": "e711bd73d1fd7e67126f93b2684fbe1cdfdf55d8ea2c8b2ed9cc90159102c587"
+    },
+    {
+      "bytes": 9859,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30555,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestPackageCoreProperiesGetters.docx",
+      "sha256": "f9c7b5b3081b80caab356c3397312d837d13dab03771b2d81496277b376964f8"
+    },
+    {
+      "bytes": 9859,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 30555,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestPackageCoreProperiesSetters.docx",
+      "sha256": "f9c7b5b3081b80caab356c3397312d837d13dab03771b2d81496277b376964f8"
+    },
+    {
+      "bytes": 13925,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 12,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 39458,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 12,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 1196
+      },
+      "path": "office/apache-poi/test-data/openxml4j/TestPackageThumbnail.docx",
+      "sha256": "0e0e108b573e6f8603c53596de912410c3796e38faeae791fe457a94703fedc8"
+    },
+    {
+      "bytes": 19456,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "policyRejected",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "compoundContainerNotAllowed",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/apache-poi/test-data/poifs/protected_agile.docx",
+      "sha256": "39ae9e6928ad91fa82a54d1aeac665337801ff73071bdfebd0e10d533e4b3cd9"
+    },
+    {
+      "bytes": 14447,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 53659,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hello-world-office-2010-technical-preview-unsigned.docx",
+      "sha256": "1a0d53ef6c2902e0c2c7c1c1a1b3dcf44ee55d311da424bf8537abdf6a41c0ca"
+    },
+    {
+      "bytes": 17044,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 18,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 60440,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hello-world-office-2010-technical-preview.docx",
+      "sha256": "95427cdd2c198031ca82ae7367b74274bc84cdf6d8be8c210246215014f5dd60"
+    },
+    {
+      "bytes": 16099,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 45110,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hello-world-signed-twice.docx",
+      "sha256": "e95ff2845328a023bb326f99c01a6acbe156a834aec4dd965944adbd03a5277a"
+    },
+    {
+      "bytes": 13244,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 14,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 37708,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hello-world-signed.docx",
+      "sha256": "9b29a40d57508d1f53d1066792c2da0064a4c36110949d1fad52119ede0ab05e"
+    },
+    {
+      "bytes": 9898,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 11,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 29802,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hello-world-unsigned.docx",
+      "sha256": "2a45959eb038c1e601f925fe79b56b6d9e861a9f914a4dbf136957275bcbe7a5"
+    },
+    {
+      "bytes": 24070,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 77055,
+        "externalRelationships": 1,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 32
+      },
+      "path": "office/apache-poi/test-data/xmldsign/hyperlink-example-signed.docx",
+      "sha256": "f7bbd397b77bc8556bd2f15437edbe871d5536f8779eaee06b917337fee5f7cf"
+    },
+    {
+      "bytes": 16142,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 56358,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/ms-office-2010-signed.docx",
+      "sha256": "bc55c0362722818823a6dd95f8e0ca9869e179ace972a0915241feb4677bde5f"
+    },
+    {
+      "bytes": 15390,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 16,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 66340,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 9,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 7
+      },
+      "path": "office/apache-poi/test-data/xmldsign/office2007prettyPrintedRels.docx",
+      "sha256": "78e1afe278da7b447165829e11d8f66654af903db0e805afa5c308c0a3082fe4"
+    },
+    {
+      "bytes": 23649,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 15,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 75691,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 11
+      },
+      "path": "office/apache-poi/test-data/xmldsign/Office2010-SP1-XAdES-X-L.docx",
+      "sha256": "832ae159e95be7326cfe95bcbd23a9d32905f1b5e5cda90accd8beb8fc50773e"
+    },
+    {
+      "bytes": 23428,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": 18,
+        "category": "validPolicyAllowed",
+        "decompressedBytes": 79009,
+        "externalRelationships": 0,
+        "maximumGridSpan": 0,
+        "maximumXmlDepth": 11,
+        "reason": "packagePreflightPassed",
+        "tableCells": 0,
+        "tableRows": 0,
+        "wordTextCharacters": 531
+      },
+      "path": "office/apache-poi/test-data/xmldsign/signed.docx",
+      "sha256": "759682d4b9d443a5504827ec56479e9c39e7c0ffb1340f0a325776b0325108c8"
+    },
+    {
+      "bytes": 11760,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-01.docx",
+      "sha256": "a4e9b7e51d6356d609074f850a0b7aefccc53a3e355601448f6bfaba2886b85b"
+    },
+    {
+      "bytes": 12246,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-02.docx",
+      "sha256": "5d5d47a53eead343806be3a82eb55cb2a84eb9eb7c8f336cc5da222de046a28a"
+    },
+    {
+      "bytes": 16272,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-03.docx",
+      "sha256": "d09c0173733c393032dc22f4d2eb89370e27711a24cf941a4a164bd2e0a32b7f"
+    },
+    {
+      "bytes": 13551,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-04.docx",
+      "sha256": "21f44f5cb85cc11cf64a310c3d81fe8ab753604a58100689365985d38ee9ca54"
+    },
+    {
+      "bytes": 15219,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-06.docx",
+      "sha256": "be2a1e89bfd66e142be314e0f80d997b99b6fd4915947557f8f6ba5ba3f13c14"
+    },
+    {
+      "bytes": 18618,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-07.docx",
+      "sha256": "35499583b70bab68da3911b4386ea82ce8a51c91290b0d01682edf11f70bcb06"
+    },
+    {
+      "bytes": 12252,
+      "classification": {
+        "activeParts": 0,
+        "altChunkInternalBytes": 0,
+        "altChunkRelationships": 0,
+        "archiveEntries": null,
+        "category": "invalidPackage",
+        "decompressedBytes": null,
+        "externalRelationships": 0,
+        "maximumGridSpan": null,
+        "maximumXmlDepth": null,
+        "reason": "badZipFile",
+        "tableCells": null,
+        "tableRows": null,
+        "wordTextCharacters": 0
+      },
+      "path": "office/simplified-chinese/supreme-court-public-notice/court-attachment-08.docx",
+      "sha256": "af81c60126329be72229c996d5e9b4decd1e7d0d0717c0446dfa29b4dc66af93"
+    }
+  ],
+  "schemaVersion": 1,
+  "selection": {
+    "algorithm": "case-folded-relative-path-order, first 250 regular DOCX paths",
+    "duplicatePayloadGroups": [
+      {
+        "paths": [
+          "office/apache-poi/test-data/document/59030.docx",
+          "office/apache-poi/test-data/document/TestTableCellAlign.docx"
+        ],
+        "sha256": "2968d4a5d5de21dce1cbeae3235e545cdf4bfd7ae508fe0eed3a9b032773ce17"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/headerPic.docx",
+          "office/apache-poi/test-data/document/headerPic.docx"
+        ],
+        "sha256": "50d9b17f7575c8a91129fd8a3e6a70feec886480ab9f089e29a7f8ac7e5ed51a"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD.docx",
+          "office/apache-poi/test-data/document/bug65738.docx"
+        ],
+        "sha256": "67797f5691cb5346201f1c40000a959f9f08d05d0b4493b4291e8d5f16e81e65"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/footnotes.docx",
+          "office/apache-poi/test-data/document/footnotes.docx"
+        ],
+        "sha256": "9070094b27ff5201477f4de4b2c027730c66cb889106a1609c5adeed207a59c1"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-pdf-module/src/test/resources/test-documents/testPDFEmbeddingAndEmbedded.docx",
+          "office/apache-poi/test-data/integration/testPDFEmbeddingAndEmbedded.docx"
+        ],
+        "sha256": "908d3fdd5b961c3bb2c837acee609b5e4396e97945d1f5bd993619df1bf7ca53"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_missing_ooxml_bean1.docx",
+          "office/apache-poi/test-data/document/Tika-792.docx"
+        ],
+        "sha256": "95de9f3b655bfec5b619ee31d1319e5a9a6ce4f253a9738898876640a2969665"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_phonetic.docx",
+          "office/apache-poi/test-data/document/61470.docx"
+        ],
+        "sha256": "abda850b3685027eef32a4c583b2b5f7f20f243026d8c453cdb3315348ed6ff0"
+      },
+      {
+        "paths": [
+          "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/test_recursive_embedded.docx",
+          "office/apache-poi/test-data/integration/test_recursive_embedded.docx"
+        ],
+        "sha256": "c4b7fab030a8b6a9d6691f6699ac8e6f82bc53764a0f1430d134ae3b70c32654"
+      },
+      {
+        "paths": [
+          "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_OnlyOneCorePropertiesPart.docx",
+          "office/apache-poi/test-data/openxml4j/OPCCompliance_CoreProperties_SUCCESS.docx"
+        ],
+        "sha256": "e2e8b6c95a034bbcb6f9239ce1519b7814e45d165d261775ac2ff58eef0a2b60"
+      },
+      {
+        "paths": [
+          "office/apache-poi/test-data/openxml4j/TestPackageCoreProperiesGetters.docx",
+          "office/apache-poi/test-data/openxml4j/TestPackageCoreProperiesSetters.docx"
+        ],
+        "sha256": "f9c7b5b3081b80caab356c3397312d837d13dab03771b2d81496277b376964f8"
+      }
+    ],
+    "rawFiles": 250,
+    "uniquePayloads": 240
+  }
+}
