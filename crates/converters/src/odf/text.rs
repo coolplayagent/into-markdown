@@ -1,5 +1,7 @@
 use crate::odf::annotations::annotation_text;
-use crate::odf::model::{DRAW_NS, OFFICE_NS, ParseState, TEXT_NS, XLINK_NS, limit, malformed};
+use crate::odf::model::{
+    DRAW_NS, OFFICE_NS, ParseState, SVG_NS, TEXT_NS, XLINK_NS, limit, malformed,
+};
 use crate::odf::styles::{StyleMap, style_marks};
 use crate::odf::tables::parse_repeat;
 use crate::odf::xml::{XmlContent, XmlNode, bounded_text};
@@ -28,7 +30,11 @@ pub(super) fn parse_inlines(
     for value in &node.content {
         match value {
             XmlContent::Text(text) => push_text(&mut output, text, marks, state, options)?,
-            XmlContent::Node(child) if child.is(TEXT_NS, "span") => {
+            XmlContent::Node(child)
+                if child.is(TEXT_NS, "span")
+                    || child.is(SVG_NS, "title")
+                    || child.is(SVG_NS, "desc") =>
+            {
                 let marks = style_marks(styles, "text", child.attr(TEXT_NS, "style-name"), marks);
                 output.extend(parse_inlines(child, styles, state, options, locator, &marks)?);
             }
@@ -95,6 +101,9 @@ pub(super) fn parse_inlines(
                     || child.is(TEXT_NS, "reference-mark-start")
                     || child.is(TEXT_NS, "reference-mark-end") => {}
             XmlContent::Node(child) if child.name.ns == TEXT_NS || child.name.ns == OFFICE_NS => {
+                if child.is(TEXT_NS, "conditional-text") {
+                    state.warning("odf.cachedField", "Conditional field retains its stored display text; expression was not evaluated", locator.clone());
+                }
                 output.extend(parse_inlines(child, styles, state, options, locator, marks)?);
             }
             XmlContent::Node(child) if child.name.ns == DRAW_NS => {
@@ -134,7 +143,7 @@ fn push_text(
     Ok(())
 }
 
-fn validate_link(value: &str) -> Result<(), ConversionError> {
+pub(super) fn validate_link(value: &str) -> Result<(), ConversionError> {
     if value.starts_with('#') && value.len() > 1 {
         return Ok(());
     }

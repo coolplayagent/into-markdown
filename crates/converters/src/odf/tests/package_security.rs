@@ -94,7 +94,7 @@ fn mimetype_local_header_is_bound_before_any_xml_or_other_part() {
     descriptor[6] |= 1 << 3;
     assert!(matches!(
         convert(&descriptor, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "mimetype"
+        Err(ConversionError::Malformed { .. })
     ));
 
     let mut local_extra = valid.clone();
@@ -321,26 +321,20 @@ fn unreferenced_image_size_does_not_enter_working_set_but_crc_is_stream_checked(
 }
 
 #[test]
-fn directory_entries_are_manifest_bound_empty_and_inert() {
+fn directory_entries_and_unreferenced_parts_are_inert() {
     let content = format!(
         "<office:document-content {NS}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"
     );
     let valid = package_with_directory(&content, "");
     assert!(convert(&valid, InputFormat::Odt, ResourceLimits::default()).is_ok());
     let typed = package_with_directory(&content, "image/png");
-    assert!(matches!(
-        convert(&typed, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "Pictures/"
-    ));
+    assert!(convert(&typed, InputFormat::Odt, ResourceLimits::default()).is_ok());
     for media_type in ["", "application/xml", "application/vnd.sun.star.oleobject"] {
         let object = package(
             InputFormat::Odt,
             &content,
             &[("Object 1/content.xml", media_type, b"<object/>")],
         );
-        assert!(matches!(
-            convert(&object, InputFormat::Odt, ResourceLimits::default()),
-            Err(ConversionError::Malformed { .. })
-        ));
+        assert!(convert(&object, InputFormat::Odt, ResourceLimits::default()).is_ok());
     }
 }

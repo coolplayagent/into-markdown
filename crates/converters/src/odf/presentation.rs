@@ -1,7 +1,7 @@
 use crate::odf::model::{DRAW_NS, PRESENTATION_NS, ParseState, limit};
 use crate::odf::package::Package;
 use crate::odf::semantic::{parse_blocks, parse_drawing};
-use crate::odf::styles::StyleMap;
+use crate::odf::styles::StyleCatalog;
 use crate::odf::text::ParseMode;
 use crate::odf::xml::XmlNode;
 use into_markdown_core::{
@@ -10,12 +10,13 @@ use into_markdown_core::{
 
 pub(super) fn parse_presentation(
     payload: &XmlNode,
-    styles: &StyleMap,
+    catalog: &StyleCatalog<'_>,
     package: &Package,
     state: &mut ParseState,
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
+    let styles = &catalog.text;
     let pages: Vec<_> = payload.children().filter(|child| child.is(DRAW_NS, "page")).collect();
     if u32::try_from(pages.len()).unwrap_or(u32::MAX) > options.limits.max_pages {
         return Err(limit(
@@ -93,8 +94,51 @@ pub(super) fn parse_presentation(
                 ParseMode::Slide,
             )?);
         }
+        blocks.extend(master_text(page, catalog, package, state, options, context, &locator)?);
         let slide = state.node(Block::Slide { number, title, blocks }, locator)?;
         state.document.blocks.push(slide);
     }
     Ok(())
+}
+
+fn master_text(
+    page: &XmlNode,
+    catalog: &StyleCatalog<'_>,
+    package: &Package,
+    state: &mut ParseState,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    locator: &SourceLocator,
+) -> Result<Vec<into_markdown_core::BlockNode>, ConversionError> {
+    let mut blocks = Vec::new();
+    if let Some(master) =
+        page.attr(DRAW_NS, "master-page-name").and_then(|name| catalog.masters.get(name))
+    {
+        let locator = SourceLocator { part: Some("styles.xml".into()), ..locator.clone() };
+        for frame in master.children().filter(|node| {
+            node.is(DRAW_NS, "frame")
+                && node
+                    .attr(PRESENTATION_NS, "class")
+                    .is_some_and(|class| matches!(class, "header" | "footer"))
+        }) {
+            if !frame.text().trim().is_empty() {
+                blocks.extend(parse_drawing(
+                    frame,
+                    &catalog.text,
+                    package,
+                    state,
+                    options,
+                    context,
+                    &locator,
+                    ParseMode::Slide,
+                )?);
+                state.warning(
+                    "odf.masterText",
+                    "Static header/footer text from the referenced slide master was retained",
+                    locator.clone(),
+                );
+            }
+        }
+    }
+    Ok(blocks)
 }

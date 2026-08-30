@@ -91,6 +91,41 @@ pub(super) struct LocalMimetypeHeader {
     data_start: u64,
 }
 
+pub(super) fn mimetype_header_for_policy(
+    bytes: &[u8],
+    expected: &str,
+    options: &into_markdown_core::ConversionOptions,
+) -> Result<Option<LocalMimetypeHeader>, ConversionError> {
+    let result = validate_first_mimetype_local_header(bytes, expected);
+    if options.error_policy == into_markdown_core::ErrorPolicy::Strict || result.is_ok() {
+        return result.map(Some);
+    }
+    // Only packing deviations are deferred. Complete raw ZIP local/central/descriptor
+    // binding and streamed payload CRC checks still run before the package is accepted.
+    if read_u32(bytes, 0) == Some(0x0403_4b50)
+        && (validated_local_zip_name(bytes, 0)? != "mimetype"
+            || read_u16(bytes, 8).is_some_and(|method| method != 0)
+            || read_u16(bytes, 6).is_some_and(|flags| flags & 8 != 0))
+    {
+        return Ok(None);
+    }
+    result.map(Some)
+}
+
+pub(super) fn validate_relaxed_mimetype_extras(
+    bytes: &[u8],
+    entry: &zip::read::ZipFile<'_>,
+) -> Result<(), ConversionError> {
+    let local = usize::try_from(entry.header_start())
+        .map_err(|_| malformed(Some("mimetype"), "local offset overflow"))?;
+    let central = usize::try_from(entry.central_header_start())
+        .map_err(|_| malformed(Some("mimetype"), "central offset overflow"))?;
+    if read_u16(bytes, local + 28) != Some(0) || read_u16(bytes, central + 30) != Some(0) {
+        return Err(malformed(Some("mimetype"), "mimetype extra fields are not supported"));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_first_mimetype_local_header(
     bytes: &[u8],
     expected: &str,
@@ -391,8 +426,6 @@ pub(super) fn validate_zip_directory_layout(
             || uncompressed == u32::MAX
             || local_offset == u32::MAX
             || disk_start != 0
-            || extra_len != 0
-            || comment_len != 0
             || next > eocd
         {
             if compressed == u32::MAX || uncompressed == u32::MAX || local_offset == u32::MAX {
@@ -402,7 +435,7 @@ pub(super) fn validate_zip_directory_layout(
             }
             return Err(malformed(
                 None,
-                "split ZIP entries, central comments, and central extra fields are forbidden",
+                "split ZIP entry or central-directory boundary is invalid",
             ));
         }
         layouts.push(CentralLayout {
@@ -473,23 +506,39 @@ pub(super) fn validate_zip_directory_layout(
         let central_semantic =
             validate_raw_zip_name(central_name, layout.flags, "central directory")?;
         validate_zip_extra(local_extra, local_semantic)?;
+        let descriptor = local_flags & (1 << 3) != 0;
+        let local_sizes_match = if descriptor {
+            (local_crc == 0 || local_crc == layout.crc32)
+                && (local_compressed == 0 || local_compressed == layout.compressed)
+                && (local_uncompressed == 0 || local_uncompressed == layout.uncompressed)
+        } else {
+            local_crc == layout.crc32
+                && local_compressed == layout.compressed
+                && local_uncompressed == layout.uncompressed
+        };
         if local_flags != layout.flags
-            || local_flags & (1 << 3) != 0
             || local_method != layout.method
-            || local_crc != layout.crc32
-            || local_compressed != layout.compressed
-            || local_uncompressed != layout.uncompressed
+            || !local_sizes_match
             || local_name != central_name
             || local_semantic != central_semantic
-            || local_extra_len != 0
             || local_data_end > central_start
         {
             return Err(malformed(
                 None,
-                "ZIP local/central headers disagree or use data descriptors/ZIP64",
+                "ZIP local/central headers disagree or exceed the central-directory boundary",
             ));
         }
-        expected_offset = local_data_end;
+        expected_offset = if descriptor {
+            descriptor_end(
+                &bytes[..central_start],
+                local_data_end,
+                layout.crc32,
+                layout.compressed,
+                layout.uncompressed,
+            )?
+        } else {
+            local_data_end
+        };
     }
     if expected_offset != central_start {
         return Err(malformed(
@@ -498,6 +547,30 @@ pub(super) fn validate_zip_directory_layout(
         ));
     }
     Ok(())
+}
+
+// ZipArchive verifies streamed payload CRC/size against the central directory. Bind the
+// optional descriptor too, so accepting bit 3 does not introduce unchecked gaps/overlaps.
+fn descriptor_end(
+    bytes: &[u8],
+    offset: usize,
+    crc32: u32,
+    compressed: u32,
+    uncompressed: u32,
+) -> Result<usize, ConversionError> {
+    for signature_bytes in [0, 4] {
+        if signature_bytes == 4 && read_u32(bytes, offset) != Some(0x0807_4b50) {
+            continue;
+        }
+        let start = offset + signature_bytes;
+        if read_u32(bytes, start) == Some(crc32)
+            && read_u32(bytes, start + 4) == Some(compressed)
+            && read_u32(bytes, start + 8) == Some(uncompressed)
+        {
+            return Ok(start + 12);
+        }
+    }
+    Err(malformed(None, "ZIP data descriptor is truncated or disagrees with central CRC/sizes"))
 }
 
 pub(super) fn bind_mimetype_central(
@@ -579,33 +652,29 @@ pub(super) fn bind_mimetype_central(
     Ok(())
 }
 
-fn validate_zip_extra(bytes: &[u8], part: &str) -> Result<(), ConversionError> {
-    if bytes.is_empty() {
-        return Ok(());
+fn validate_zip_extra(mut bytes: &[u8], part: &str) -> Result<(), ConversionError> {
+    while !bytes.is_empty() {
+        let id =
+            read_u16(bytes, 0).ok_or_else(|| malformed(Some(part), "truncated ZIP extra field"))?;
+        let length = usize::from(
+            read_u16(bytes, 2).ok_or_else(|| malformed(Some(part), "truncated ZIP extra field"))?,
+        );
+        bytes = bytes
+            .get(4 + length..)
+            .ok_or_else(|| malformed(Some(part), "truncated ZIP extra field"))?;
+        if id == 0x0001 {
+            return Err(ConversionError::Unsupported {
+                detail: "ZIP64 ODF packages are outside the supported profile".into(),
+            });
+        }
+        if id == 0x7075 {
+            return Err(malformed(
+                Some(part),
+                "Info-ZIP Unicode Path extra fields are forbidden because they can rename parts",
+            ));
+        }
     }
-    if bytes.len() < 4 {
-        return Err(malformed(Some(part), "truncated ZIP extra field"));
-    }
-    let id = u16::from_le_bytes([bytes[0], bytes[1]]);
-    let length = usize::from(u16::from_le_bytes([bytes[2], bytes[3]]));
-    if bytes.get(4..).is_none_or(|payload| payload.len() < length) {
-        return Err(malformed(Some(part), "truncated ZIP extra field"));
-    }
-    if id == 0x0001 {
-        return Err(ConversionError::Unsupported {
-            detail: "ZIP64 ODF packages are outside the supported profile".into(),
-        });
-    }
-    if id == 0x7075 {
-        return Err(malformed(
-            Some(part),
-            "Info-ZIP Unicode Path extra fields are forbidden because they can rename parts",
-        ));
-    }
-    Err(malformed(
-        Some(part),
-        format!("ZIP extra field 0x{id:04x} is outside the closed ODF package profile"),
-    ))
+    Ok(())
 }
 
 pub(super) fn validate_raw_zip_name<'a>(

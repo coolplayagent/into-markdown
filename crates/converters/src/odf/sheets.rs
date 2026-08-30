@@ -1,7 +1,8 @@
 use crate::odf::model::{ParseState, TABLE_NS, limit};
 use crate::odf::package::Package;
-use crate::odf::semantic::parse_table;
+use crate::odf::semantic::{parse_drawing, parse_table};
 use crate::odf::styles::StyleMap;
+use crate::odf::text::ParseMode;
 use crate::odf::xml::XmlNode;
 use into_markdown_core::{
     Block, ConversionError, ConversionOptions, ExecutionContext, SourceLocator,
@@ -35,7 +36,23 @@ pub(super) fn parse_spreadsheet(
         };
         let table_node =
             parse_table(table, styles, package, state, options, context, &locator, Some(&name))?;
-        let sheet = state.node(Block::Sheet { name, blocks: vec![table_node] }, locator)?;
+        let empty = matches!(&table_node.block, Block::Table { rows, .. } if rows.iter().all(|row| row.cells.is_empty()));
+        let mut blocks = if empty { vec![] } else { vec![table_node] };
+        for shapes in table.children().filter(|child| child.is(TABLE_NS, "shapes")) {
+            for drawing in shapes.children() {
+                blocks.extend(parse_drawing(
+                    drawing,
+                    styles,
+                    package,
+                    state,
+                    options,
+                    context,
+                    &locator,
+                    ParseMode::Text,
+                )?);
+            }
+        }
+        let sheet = state.node(Block::Sheet { name, blocks }, locator)?;
         state.document.blocks.push(sheet);
     }
     Ok(())

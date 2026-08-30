@@ -15,19 +15,19 @@ pub(super) struct Name {
     pub(super) local: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Attr {
     pub(super) name: Name,
     pub(super) value: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum XmlContent {
     Text(String),
     Node(XmlNode),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct XmlNode {
     pub(super) name: Name,
     pub(super) attrs: Vec<Attr>,
@@ -281,6 +281,21 @@ fn xml_node(
             })?
             .into_owned();
         validate_xml_chars(&value, part)?;
+        if name.ns == TABLE_NS && name.local == "formula" && !value.starts_with("of:=") {
+            let (prefix, expression) = value
+                .split_once(":=")
+                .filter(|(_, expression)| !expression.is_empty())
+                .ok_or_else(|| {
+                    malformed(Some(part), "formula must have a namespace-prefixed expression")
+                })?;
+            let qname = format!("{prefix}:formula");
+            let resolved = resolved_name(reader, quick_xml::name::QName(qname.as_bytes()), part)?;
+            if resolved.ns != "http://schemas.microsoft.com/office/excel/formula"
+                || expression.is_empty()
+            {
+                return Err(malformed(Some(part), "unsupported producer formula namespace"));
+            }
+        }
         attrs.push(Attr { name, value });
     }
     Ok(XmlNode { name, attrs, content: Vec::new() })
@@ -330,6 +345,8 @@ fn validate_known_namespace(name: &Name, part: &str) -> Result<(), ConversionErr
         NUMBER_NS,
     ]
     .contains(&name.ns.as_str())
+        || super::compatibility::producer_namespace(&name.ns)
+        || super::recovery::optional_namespace(&name.ns)
     {
         Ok(())
     } else {
@@ -360,6 +377,8 @@ fn validate_known_attribute_namespace(name: &Name, part: &str) -> Result<(), Con
             NUMBER_NS,
         ]
         .contains(&name.ns.as_str())
+        || super::compatibility::producer_namespace(&name.ns)
+        || super::recovery::optional_namespace(&name.ns)
     {
         Ok(())
     } else {

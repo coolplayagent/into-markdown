@@ -2,9 +2,11 @@ use crate::odf::annotations::annotation_text;
 use crate::odf::geometry::{Transform, drawing_bounds, parse_transform, transform_bounds};
 use crate::odf::images::image_block;
 use crate::odf::model::{
-    DRAW_NS, OFFICE_NS, PRESENTATION_NS, ParseState, TABLE_NS, TEXT_NS, XML_NS, limit, malformed,
+    DRAW_NS, OFFICE_NS, PRESENTATION_NS, ParseState, SVG_NS, TABLE_NS, TEXT_NS, XML_NS, limit,
+    malformed,
 };
 use crate::odf::package::Package;
+use crate::odf::paragraphs::{ParagraphPart, split_drawings};
 use crate::odf::styles::{StyleMap, style_marks};
 use crate::odf::tables::{
     cell_has_content, cell_semantic_value, parse_odf_bool, parse_repeat, parse_span,
@@ -41,16 +43,33 @@ pub(super) fn parse_blocks(
                 .unwrap_or(1)
                 .clamp(1, 6);
             let marks = style_marks(styles, "paragraph", child.attr(TEXT_NS, "style-name"), &[]);
-            let inlines = parse_inlines(child, styles, state, options, locator, &marks)?;
-            if inlines.is_empty() && mode != ParseMode::Cell {
-                continue;
+            for part in split_drawings(child) {
+                match part {
+                    ParagraphPart::Drawing(drawing) => {
+                        state.warning(
+                            "odf.inlineDrawing",
+                            "Inline drawing emitted as a block at its source position",
+                            locator.clone(),
+                        );
+                        blocks.extend(parse_drawing(
+                            drawing, styles, package, state, options, context, locator, mode,
+                        )?);
+                    }
+                    ParagraphPart::Text(text) => {
+                        let inlines =
+                            parse_inlines(&text, styles, state, options, locator, &marks)?;
+                        if inlines.is_empty() && mode != ParseMode::Cell {
+                            continue;
+                        }
+                        let block = if child.is(TEXT_NS, "h") {
+                            Block::Heading { level, content: inlines }
+                        } else {
+                            Block::Paragraph(inlines)
+                        };
+                        blocks.push(state.node(block, locator.clone())?);
+                    }
+                }
             }
-            let block = if child.is(TEXT_NS, "h") {
-                Block::Heading { level, content: inlines }
-            } else {
-                Block::Paragraph(inlines)
-            };
-            blocks.push(state.node(block, locator.clone())?);
         } else if child.is(TEXT_NS, "list") {
             blocks.extend(parse_list(
                 child, styles, package, state, options, context, locator, mode, list_level,
@@ -202,19 +221,23 @@ fn parse_list(
             }
             saw_item = true;
             if let Some(value) = child.attr(TEXT_NS, "start-value") {
-                if !spec.ordered || !items.is_empty() {
-                    return Err(malformed(
-                        Some("content.xml"),
-                        "text:list-item start-value is only representable on the first ordered item",
-                    ));
-                }
-                start = value
+                let requested = value
                     .parse::<u64>()
                     .ok()
                     .filter(|value| *value > 0 && u32::try_from(*value).is_ok())
                     .ok_or_else(|| {
                         malformed(Some("content.xml"), "invalid list-item start-value")
                     })?;
+                if !spec.ordered || !items.is_empty() {
+                    super::recovery::require_best_effort(
+                        options,
+                        "content.xml",
+                        "list restart cannot be represented at this item",
+                    )?;
+                    state.warning("odf.listRestart", format!("List item restart {requested} not represented in Markdown numbering; item body retained"), locator.clone());
+                } else {
+                    start = requested;
+                }
             }
             sequence_items = sequence_items
                 .checked_add(1)
@@ -244,6 +267,9 @@ fn parse_list(
         && state.list_sequences.insert(id.to_owned(), (spec.ordered, next)).is_some()
     {
         return Err(malformed(Some("content.xml"), "duplicate xml:id for text:list"));
+    }
+    if items.is_empty() {
+        return Ok(blocks);
     }
     blocks.push(state.node(
         Block::List {
@@ -464,7 +490,7 @@ fn parse_table_row(
             }
             continue;
         }
-        let semantic = cell_semantic_value(child)?;
+        let semantic = cell_semantic_value(child, options)?;
         let meaningful =
             cell_has_content(child) || semantic.cached.is_some() || semantic.formula.is_some();
         // Trailing repeated empty cells are sparse coordinate padding and need not be retained.
@@ -510,8 +536,11 @@ fn parse_table_row(
                 blocks.push(paragraph);
             }
             if let Some(formula) = semantic.formula.clone() {
+                if semantic.formula_language.is_none() {
+                    state.warning("odf.cachedProducerFormula", "Producer formula retained verbatim with cached value; not evaluated or labeled OpenFormula", locator.clone());
+                }
                 blocks.push(state.node(
-                    Block::Code { language: Some("openformula".into()), text: formula },
+                    Block::Code { language: semantic.formula_language.clone(), text: formula },
                     locator.clone(),
                 )?);
             }
@@ -666,9 +695,20 @@ fn parse_drawing_transformed(
     for child in node.children() {
         context.checkpoint()?;
         if child.is(DRAW_NS, "image") {
-            if let Some(block) = image_block(child, package, state, options, context, &locator)? {
+            if let Some(mut block) = image_block(child, package, state, options, context, &locator)?
+            {
+                if let Block::Image { alt, .. } = &mut block.block
+                    && alt.is_none()
+                {
+                    *alt = node
+                        .children()
+                        .find(|value| value.is(SVG_NS, "title") || value.is(SVG_NS, "desc"))
+                        .map(XmlNode::text);
+                }
                 blocks.push(block);
             }
+        } else if child.is(SVG_NS, "title") || child.is(SVG_NS, "desc") {
+            // Frame accessibility metadata is attached to its image, not a second body block.
         } else if child.is(DRAW_NS, "text-box") || child.is(PRESENTATION_NS, "notes") {
             blocks.extend(parse_blocks(
                 child, styles, package, state, options, context, &locator, mode, 1,
@@ -692,6 +732,9 @@ fn parse_drawing_transformed(
                 format!("unsupported drawing child {}:{}", child.name.ns, child.name.local),
             ));
         }
+    }
+    if blocks.is_empty() {
+        blocks.extend(super::recovery::drawing_placeholder(node, state, options, &locator)?);
     }
     Ok(blocks)
 }

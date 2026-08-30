@@ -1,6 +1,6 @@
 use crate::odf::model::{DRAW_NS, OFFICE_NS, TABLE_NS, TEXT_NS, limit, malformed};
 use crate::odf::xml::XmlNode;
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ConversionOptions};
 
 pub(super) fn cell_has_content(node: &XmlNode) -> bool {
     node.children().any(|child| {
@@ -16,9 +16,13 @@ pub(super) fn cell_has_content(node: &XmlNode) -> bool {
 pub(super) struct CellSemanticValue {
     pub(super) cached: Option<String>,
     pub(super) formula: Option<String>,
+    pub(super) formula_language: Option<String>,
 }
 
-pub(super) fn cell_semantic_value(node: &XmlNode) -> Result<CellSemanticValue, ConversionError> {
+pub(super) fn cell_semantic_value(
+    node: &XmlNode,
+    options: &ConversionOptions,
+) -> Result<CellSemanticValue, ConversionError> {
     let value_type = node.attr(OFFICE_NS, "value-type");
     let candidates = [
         ("string-value", node.attr(OFFICE_NS, "string-value")),
@@ -78,8 +82,21 @@ pub(super) fn cell_semantic_value(node: &XmlNode) -> Result<CellSemanticValue, C
             .find(|(name, _)| *name == expected)
             .and_then(|(_, value)| value.map(str::to_owned))
     });
+    let mut formula_language = None;
     let formula = formula
         .map(|value| {
+            if !value.starts_with("of:=")
+                && value.split_once(":=").is_some_and(|(_, expression)| !expression.is_empty())
+            {
+                // xml_node binds this prefix to the producer formula namespace before here.
+                super::recovery::require_best_effort(
+                    options,
+                    "content.xml",
+                    "producer formula retained as inert source, without evaluation",
+                )?;
+                return Ok(value.to_owned());
+            }
+            formula_language = Some("openformula".into());
             value
                 .strip_prefix("of:=")
                 .filter(|value| !value.is_empty())
@@ -92,7 +109,7 @@ pub(super) fn cell_semantic_value(node: &XmlNode) -> Result<CellSemanticValue, C
                 })
         })
         .transpose()?;
-    Ok(CellSemanticValue { cached, formula })
+    Ok(CellSemanticValue { cached, formula, formula_language })
 }
 
 pub(super) fn parse_repeat(

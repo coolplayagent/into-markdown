@@ -127,6 +127,14 @@ pub(super) fn make_raw_name_invalid(bytes: &mut [u8], target: &[u8]) {
 }
 
 pub(super) fn package_with_directory(content: &str, media_type: &str) -> Vec<u8> {
+    package_with_optional_directory(content, media_type, true)
+}
+
+pub(super) fn package_with_optional_directory(
+    content: &str,
+    media_type: &str,
+    physical: bool,
+) -> Vec<u8> {
     let mimetype = media_type_for(InputFormat::Odt).unwrap();
     let declaration = format!(
         "<manifest:file-entry manifest:full-path='Pictures/' manifest:media-type='{media_type}'/>"
@@ -145,7 +153,9 @@ pub(super) fn package_with_directory(content: &str, media_type: &str) -> Vec<u8>
         writer.write_all(content.as_bytes()).unwrap();
         writer.start_file("META-INF/manifest.xml", SimpleFileOptions::default()).unwrap();
         writer.write_all(manifest(mimetype, &declaration).as_bytes()).unwrap();
-        writer.add_directory("Pictures/", SimpleFileOptions::default()).unwrap();
+        if physical {
+            writer.add_directory("Pictures/", SimpleFileOptions::default()).unwrap();
+        }
         writer.finish().unwrap();
     }
     cursor.into_inner()
@@ -180,6 +190,7 @@ pub(super) fn package_with_central_extra(
             writer.start_file("content.xml", SimpleFileOptions::default()).unwrap();
         } else {
             let mut options = FileOptions::<ExtendedFileOptions>::default();
+            options.add_extra_data(0x5455, Box::from([1_u8, 0, 0, 0, 0]), false).unwrap();
             options.add_extra_data(header_id, payload.take().unwrap(), true).unwrap();
             writer.start_file("content.xml", options).unwrap();
         }
