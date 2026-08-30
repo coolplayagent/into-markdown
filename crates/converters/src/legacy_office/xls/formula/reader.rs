@@ -32,8 +32,18 @@ impl<'a> Tokens<'a> {
         Ok(u16::from_le_bytes([value[0], value[1]]))
     }
 
+    pub(super) fn dword(&mut self) -> Result<u32> {
+        let bytes = self.take(4)?.try_into().map_err(|_| "truncated-token")?;
+        Ok(u32::from_le_bytes(bytes))
+    }
+
     pub(super) fn string(&mut self, biff8: bool) -> Result<String> {
         let count = usize::from(self.byte()?);
+        let value = self.text(count, biff8)?;
+        Ok(format!("\"{}\"", value.replace('"', "\"\"")))
+    }
+
+    pub(super) fn text(&mut self, count: usize, biff8: bool) -> Result<String> {
         let flags = if biff8 { self.byte()? } else { 0 };
         let value = match flags {
             0 => {
@@ -53,6 +63,6 @@ impl<'a> Tokens<'a> {
             }
             _ => return Err("unsupported-string-flags"),
         };
-        Ok(format!("\"{}\"", value.replace('"', "\"\"")))
+        Ok(value)
     }
 }

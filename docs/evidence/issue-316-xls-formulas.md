@@ -5,7 +5,8 @@
 The XLS inventory authenticates the original Formula record framing and hashes
 its original token slice before constructing the calamine reader view. A bounded
 RPN decoder preserves literals, operators, local references/areas, authenticated
-same-workbook 3D references and a finite worksheet-function vocabulary. It does
+same-workbook 3D references, ordinary local defined-name identifiers and a finite
+worksheet-function vocabulary. It does
 not calculate formulas, open external workbooks, or execute functions/macros.
 
 `0x0c` is `>=`, and `0x0d` is `>`, per the Microsoft
@@ -16,8 +17,13 @@ display, not column arithmetic. Ref and Area share that decoding and the existin
 workbook `cell_name` implementation. External XTI/SupBook identity is never
 discarded to manufacture a local sheet reference.
 
+Local [PtgName](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls/5f05c166-dfe3-4bbf-85aa-31c09c0258c0)
+ordinals are resolved against authenticated `Lbl` names and scopes. Name definitions
+are not evaluated or expanded. Cross-sheet local names receive their quoted sheet
+qualifier; duplicate scoped names and shadowed global names are not guessed.
+
 An explicit `Decoded`/`CachedOnly` state replaces the optional formula override.
-Unsupported names, external references, array/shared/table formulas and other
+Unsupported external/macro/ambiguous names, external references, array/shared/table formulas and other
 unsupported syntax produce inert cached-only text containing the reason, exact
 original token bytes and SHA-256. There is no fallback to calamine's expression
 text. Diagnostics aggregate by reason with a first-cell locator; every affected

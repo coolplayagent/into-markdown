@@ -301,8 +301,14 @@ fn collect_formula(
         });
     }
     let tokens = formula_tokens(record.body, part)?;
-    let value =
-        super::formula::decode(tokens, record.biff_version, &global.references, budget, memory)?;
+    let value = super::formula::decode(
+        tokens,
+        record.biff_version,
+        &global.references,
+        record.sheet_index,
+        budget,
+        memory,
+    )?;
     output.formula_expressions.push(LegacyFormulaExpression {
         sheet_index: record.sheet_index,
         row,
@@ -411,7 +417,9 @@ fn collect_globals(
                 output.references.add_sheet(&sheet.name);
                 output.sheets.push(sheet);
             }
-            0x01ae | 0x0017 if biff_version == super::BIFF8 => output.references.record(kind, body),
+            0x01ae | 0x0017 | 0x0018 if biff_version == super::BIFF8 => {
+                output.references.record(kind, body);
+            }
             FORMAT => {
                 let index = if biff_version == BIFF4 {
                     let index = legacy_format_index;

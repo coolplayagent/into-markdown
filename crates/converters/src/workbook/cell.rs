@@ -17,7 +17,7 @@ pub(crate) fn cell_name(row: u32, column: u32) -> String {
     format!("{}{}", letters.into_iter().collect::<String>(), row + 1)
 }
 
-pub(super) fn parse_cell_ref(value: &str) -> Result<CellCoordinate, ConversionError> {
+pub(crate) fn parse_cell_ref(value: &str) -> Result<CellCoordinate, ConversionError> {
     if value.len() > 16 {
         return Err(malformed(None, "spreadsheet coordinate is too long"));
     }

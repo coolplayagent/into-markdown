@@ -8,6 +8,7 @@ pub(in crate::legacy_office::xls) struct References {
     local_books: Vec<bool>,
     xtis: Vec<(u16, u16, u16)>,
     invalid: bool,
+    defined_names: super::names::Names,
 }
 
 impl References {
@@ -20,17 +21,38 @@ impl References {
     pub(super) fn expansion_bytes(&self, token_bytes: usize) -> u64 {
         // The shortest 3D reference occupies seven token bytes. Account for two
         // long sheet names per range, quoting scratch, retained atoms and output.
+        let named_bytes = if self.defined_names.maximum_bytes == 0 {
+            0
+        } else {
+            self.defined_names
+                .maximum_bytes
+                .saturating_mul(4)
+                .saturating_add(self.maximum_name_bytes.saturating_mul(3))
+        };
         u64::try_from(token_bytes / 7)
             .unwrap_or(u64::MAX)
             .saturating_mul(u64::try_from(self.maximum_name_bytes).unwrap_or(u64::MAX))
             .saturating_mul(6)
+            .saturating_add(
+                u64::try_from(token_bytes / 5)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(u64::try_from(named_bytes).unwrap_or(u64::MAX)),
+            )
     }
 
     pub(in crate::legacy_office::xls) fn record(&mut self, kind: u16, body: &[u8]) {
+        if kind == 0x0018 {
+            self.defined_names.record(body);
+            return;
+        }
         let mut input = Tokens::new(body);
         if self.read_record(kind, &mut input).is_err() {
             self.invalid = true;
         }
+    }
+
+    pub(super) fn defined_name(&self, index: u32, sheet: usize) -> Result<String> {
+        self.defined_names.resolve(index, sheet, &self.names)
     }
 
     fn read_record(&mut self, kind: u16, input: &mut Tokens<'_>) -> Result<()> {

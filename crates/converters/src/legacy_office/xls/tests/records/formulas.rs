@@ -20,7 +20,7 @@ fn original_formula_tokens_are_authoritative_in_both_error_policies_and_repeated
         (vec![0x24, 28, 0, 26, 0xc0], "=AA29"),
         (vec![0x25, 0, 0, 1, 0, 0, 0xc0, 1, 0xc0], "=A1:B2"),
         (vec![0x20, 0, 0, 0, 0, 0, 0, 0], "[formula cached-only: array-constant]"),
-        (vec![0x23, 1, 0, 0, 0], "[formula cached-only: defined-name]"),
+        (vec![0x23, 1, 0, 0, 0], "[formula cached-only: unknown-defined-name]"),
     ] {
         let bytes = formula_workbook(&tokens, 42.0);
         let expected_hash = format!("[biff-sha256:{:x}]", Sha256::digest(&tokens));

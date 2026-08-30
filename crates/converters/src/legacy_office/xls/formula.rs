@@ -4,6 +4,7 @@
 mod diagnostics;
 mod expression;
 mod functions;
+mod names;
 mod reader;
 mod references;
 
@@ -20,6 +21,7 @@ pub(super) fn decode(
     tokens: &[u8],
     version: u16,
     references: &References,
+    sheet_index: usize,
     budget: &mut LegacyBudget<'_>,
     retained: &mut ResourceReservation,
 ) -> Result<LegacyFormulaValue, ConversionError> {
@@ -32,7 +34,7 @@ pub(super) fn decode(
     let _scratch = budget.cfb_memory(scratch_bytes)?;
     budget.work(u64::try_from(tokens.len()).unwrap_or(u64::MAX), "XLS formula tokens")?;
     let mut expression = Expression::default();
-    let decoded = parse(tokens, version == BIFF8, references, &mut expression);
+    let decoded = parse(tokens, version == BIFF8, references, sheet_index, &mut expression);
     let capacity =
         if decoded.is_ok() { expression.capacity().max(tokens.len()) } else { tokens.len() };
     if u64::try_from(capacity).unwrap_or(u64::MAX) > budget.max_field_bytes() {
@@ -51,6 +53,7 @@ fn parse(
     bytes: &[u8],
     biff8: bool,
     references: &References,
+    sheet_index: usize,
     expression: &mut Expression,
 ) -> TokenResult<()> {
     let mut input = Tokens::new(bytes);
@@ -88,6 +91,7 @@ fn parse(
                 expression.call(name, count)?;
             }
             0x24 => expression.atom(references::reference(&mut input, biff8)?),
+            0x23 if biff8 => expression.atom(references.defined_name(input.dword()?, sheet_index)?),
             0x25 => expression.atom(references::area(&mut input, biff8)?),
             0x2a | 0x2b => {
                 let address_bytes = if biff8 { 4 } else { 3 };
@@ -106,7 +110,8 @@ fn parse(
             0x01 => return Err("shared-or-array-formula"),
             0x02 => return Err("data-table-formula"),
             0x20 => return Err("array-constant"),
-            0x23 | 0x39 => return Err("defined-name"),
+            0x23 => return Err("legacy-defined-name"),
+            0x39 => return Err("external-defined-name"),
             0x3a..=0x3d => return Err("unsupported-3d-reference"),
             0x2c | 0x2d => return Err("relative-shared-reference"),
             _ => return Err("unsupported-token"),
