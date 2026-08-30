@@ -19,7 +19,7 @@ const PROVIDER: &str = "builtin.converter.epub";
 // Assembly owns the cross-module boundary values so all identity rewrites are transactional.
 pub(super) fn assemble(
     mut package: Package,
-    navigation: Option<Navigation>,
+    mut navigation: Option<Navigation>,
     mut spine: SpineResult,
     resources: ResourceStore,
     cover: Option<CoverResource>,
@@ -29,6 +29,23 @@ pub(super) fn assemble(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
+    if let Some(navigation) = &mut navigation {
+        for entry in &mut navigation.entries {
+            let Some(target) = entry.target.take() else { continue };
+            let (path, fragment) = target
+                .split_once('#')
+                .map_or((target.as_str(), None), |(path, fragment)| (path, Some(fragment)));
+            entry.target =
+                match spine.path_resolutions.get(path) {
+                    Some(None) => None,
+                    Some(Some(resolved)) if resolved != path => Some(fragment.map_or_else(
+                        || resolved.clone(),
+                        |fragment| format!("{resolved}#{fragment}"),
+                    )),
+                    _ => Some(target),
+                };
+        }
+    }
     let anchors = spine
         .chapters
         .iter()
@@ -46,10 +63,13 @@ pub(super) fn assemble(
         }
     }
     validate_targets(&spine, navigation.as_ref(), &anchors, &chapter_paths, &footnote_labels)?;
+    let recovery_memory = spine.recovery_memory;
 
     let metadata = std::mem::take(&mut package.metadata);
     let mut output =
         ConverterOutput::new(Document { metadata, ..Document::default() }, Vec::new(), Vec::new());
+    output.diagnostics.append(&mut package.diagnostics);
+    output.diagnostics.append(&mut spine.diagnostics);
     if let Some(navigation) = navigation {
         append_navigation(&mut output.document.blocks, navigation)?;
     }
@@ -169,7 +189,9 @@ pub(super) fn assemble(
             }
         }
     })?;
-    output.account_retained(context)
+    let output = output.account_retained(context)?;
+    drop(recovery_memory);
+    Ok(output)
 }
 
 fn non_linear_spine_diagnostic(skipped: usize, package_path: &str) -> Diagnostic {

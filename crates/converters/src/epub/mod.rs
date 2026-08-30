@@ -1,4 +1,4 @@
-//! Strict, offline EPUB 2/3 conversion.
+//! Security-hardened, offline EPUB 2/3 conversion.
 
 mod budget;
 mod container;
@@ -14,6 +14,7 @@ mod reachability;
 mod resources;
 mod spine;
 mod xhtml;
+mod xhtml_security;
 mod xml;
 
 #[cfg(test)]
@@ -23,8 +24,9 @@ use crate::zip_converter::archive_api::SafeArchive;
 use budget::EpubBudget;
 use encryption::EncryptionPolicy;
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
+    BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, Diagnostic,
+    DiagnosticSeverity, ErrorPolicy, ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome,
+    ResolvedInput, Services, SourceLocator,
 };
 use navigation::Navigation;
 use resources::ResourceStore;
@@ -101,7 +103,7 @@ async fn convert_epub(
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let mut archive = SafeArchive::open(bytes, options, context)?;
-    validate_mimetype(&mut archive)?;
+    let mimetype_diagnostic = validate_mimetype(&mut archive, options.error_policy)?;
     if !archive.contains(CONTAINER_PATH) {
         return Err(malformed(CONTAINER_PATH, "OCF container document is missing"));
     }
@@ -113,8 +115,17 @@ async fn convert_epub(
         return Err(malformed(&package_path, "package rootfile is missing"));
     }
     let package_entry = archive.read(&package_path)?;
-    let package = package::parse(&package_path, &package_entry.bytes, &archive, &mut budget)?;
+    let mut package = package::parse(
+        &package_path,
+        &package_entry.bytes,
+        &archive,
+        &mut budget,
+        options.error_policy,
+    )?;
     drop(package_entry);
+    if let Some(diagnostic) = mimetype_diagnostic {
+        package.diagnostics.push(diagnostic);
+    }
 
     let encryption = if archive.contains(ENCRYPTION_PATH) {
         let entry = archive.read(ENCRYPTION_PATH)?;
@@ -125,9 +136,19 @@ async fn convert_epub(
         EncryptionPolicy::default()
     };
     let rights_metadata = archive.contains(RIGHTS_PATH);
-    let navigation = read_navigation(&package, &mut archive, &mut budget)?;
-    let mut spine =
-        spine::convert(&package, &mut archive, options, services, &mut budget, context).await?;
+    let NavigationRead { navigation, deferred_path } =
+        read_navigation(&mut package, &mut archive, &mut budget, options.error_policy)?;
+    let mut spine = spine::convert(
+        &package,
+        &mut archive,
+        deferred_path,
+        options,
+        services,
+        &mut budget,
+        context,
+    )
+    .await?;
+    let navigation = navigation.or_else(|| spine.navigation.take());
     let omitted = reachability::omitted_resources(
         &package,
         navigation.as_ref(),
@@ -146,6 +167,7 @@ async fn convert_epub(
         )?;
     }
     let cover = resources.cover(&package, &mut archive, context)?;
+    archive.validate_remaining()?;
     merge::assemble(
         package,
         navigation,
@@ -159,36 +181,61 @@ async fn convert_epub(
     )
 }
 
-fn validate_mimetype(archive: &mut SafeArchive<'_, '_>) -> Result<(), ConversionError> {
-    let first = archive
-        .first_physical_entry()
-        .ok_or_else(|| malformed("mimetype", "EPUB archive is empty"))?;
-    if first.path != "mimetype"
-        || first.directory
-        || !first.stored
-        || first.physical_start != 0
-        || first.central_extra_len != 0
-        || first.local_extra_len != 0
-        || first.expanded_size != u64::try_from(MIMETYPE.len()).unwrap_or(u64::MAX)
-        || first.compressed_size != first.expanded_size
-    {
+fn validate_mimetype(
+    archive: &mut SafeArchive<'_, '_>,
+    error_policy: ErrorPolicy,
+) -> Result<Option<Diagnostic>, ConversionError> {
+    let canonical_layout = {
+        let first = archive
+            .first_physical_entry()
+            .ok_or_else(|| malformed("mimetype", "EPUB archive is empty"))?;
+        let mimetype = archive
+            .info("mimetype")
+            .ok_or_else(|| malformed("mimetype", "EPUB mimetype entry is missing"))?;
+        if mimetype.directory {
+            return Err(malformed("mimetype", "mimetype must be a file"));
+        }
+        first.path == "mimetype"
+            && mimetype.stored
+            && mimetype.physical_start == 0
+            && mimetype.central_extra_len == 0
+            && mimetype.local_extra_len == 0
+            && mimetype.expanded_size == u64::try_from(MIMETYPE.len()).unwrap_or(u64::MAX)
+            && mimetype.compressed_size == mimetype.expanded_size
+    };
+    let entry = archive.read("mimetype")?;
+    let canonical_content = entry.bytes == MIMETYPE;
+    let crlf_content = entry.bytes.strip_suffix(b"\r\n") == Some(MIMETYPE);
+    if !canonical_content && !crlf_content {
+        return Err(malformed("mimetype", "mimetype content is not application/epub+zip"));
+    }
+    if canonical_layout && canonical_content {
+        return Ok(None);
+    }
+    if error_policy == ErrorPolicy::Strict {
         return Err(malformed(
             "mimetype",
             "mimetype must be the physical first entry, stored, have no extra fields, and use the exact length",
         ));
     }
-    let entry = archive.read("mimetype")?;
-    if entry.bytes != MIMETYPE {
-        return Err(malformed("mimetype", "mimetype content is not application/epub+zip"));
-    }
-    Ok(())
+    Ok(Some(Diagnostic {
+        code: "epub.mimetypeLayoutRecovered".into(),
+        severity: DiagnosticSeverity::Info,
+        message: if crlf_content {
+            "accepted an EPUB mimetype entry with a non-canonical trailing CRLF".into()
+        } else {
+            "accepted a valid EPUB mimetype entry with a non-canonical ZIP layout".into()
+        },
+        locator: Some(SourceLocator { part: Some("mimetype".into()), ..SourceLocator::default() }),
+    }))
 }
 
 fn read_navigation(
-    package: &package::Package,
+    package: &mut package::Package,
     archive: &mut SafeArchive<'_, '_>,
     budget: &mut EpubBudget<'_>,
-) -> Result<Option<Navigation>, ConversionError> {
+    error_policy: ErrorPolicy,
+) -> Result<NavigationRead, ConversionError> {
     let version =
         package.metadata.properties.get("epub.version").map(String::as_str).unwrap_or_default();
     if version.starts_with('3') {
@@ -197,8 +244,26 @@ fn read_navigation(
             if item.media_type != "application/xhtml+xml" {
                 return Err(malformed(&item.path, "EPUB navigation item is not XHTML"));
             }
-            let entry = archive.read(&item.path)?;
-            return navigation::parse_nav(&item.path, &entry.bytes, archive, budget).map(Some);
+            let path = item.path.clone();
+            if spine::linear_spine_uses_path(package, &path)? {
+                return Ok(NavigationRead { navigation: None, deferred_path: Some(path) });
+            }
+            let entry = archive.read(&path)?;
+            let navigation =
+                navigation::parse_nav(&path, &entry.bytes, archive, budget, error_policy)?;
+            if navigation.entries.is_empty() {
+                package.diagnostics.push(Diagnostic {
+                    code: "epub.navigationOmitted".into(),
+                    severity: DiagnosticSeverity::Info,
+                    message: "an empty EPUB navigation document was omitted".into(),
+                    locator: Some(SourceLocator {
+                        part: Some(path.clone()),
+                        ..SourceLocator::default()
+                    }),
+                });
+                return Ok(NavigationRead { navigation: None, deferred_path: None });
+            }
+            return Ok(NavigationRead { navigation: Some(navigation), deferred_path: None });
         }
         return Err(malformed(&package.path, "EPUB 3 navigation document is missing"));
     }
@@ -209,11 +274,18 @@ fn read_navigation(
                 return Err(malformed(&item.path, "EPUB NCX item has the wrong media type"));
             }
             let entry = archive.read(&item.path)?;
-            return navigation::parse_ncx(&item.path, &entry.bytes, archive, budget).map(Some);
+            return navigation::parse_ncx(&item.path, &entry.bytes, archive, budget).map(
+                |navigation| NavigationRead { navigation: Some(navigation), deferred_path: None },
+            );
         }
         return Err(malformed(&package.path, "EPUB 2 NCX navigation document is missing"));
     }
     Err(malformed(&package.path, "unsupported EPUB package version"))
+}
+
+struct NavigationRead {
+    navigation: Option<Navigation>,
+    deferred_path: Option<String>,
 }
 
 fn malformed(part: &str, detail: impl Into<String>) -> ConversionError {

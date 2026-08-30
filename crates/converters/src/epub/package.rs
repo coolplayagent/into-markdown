@@ -4,7 +4,9 @@ use super::budget::EpubBudget;
 use super::path::{BasePath, Reference};
 use super::xml::{self, Attribute, Name};
 use crate::zip_converter::archive_api::SafeArchive;
-use into_markdown_core::{ConversionError, DocumentMetadata};
+use into_markdown_core::{
+    ConversionError, Diagnostic, DiagnosticSeverity, DocumentMetadata, ErrorPolicy, SourceLocator,
+};
 use quick_xml::events::Event;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +37,7 @@ pub(super) struct Package {
     pub(super) nav_id: Option<String>,
     pub(super) ncx_id: Option<String>,
     pub(super) cover_id: Option<String>,
+    pub(super) diagnostics: Vec<Diagnostic>,
 }
 
 impl Package {
@@ -63,6 +66,7 @@ struct Frame {
     meta_content: Option<String>,
     meta_property: Option<String>,
     meta_refines: Option<String>,
+    duplicate_metadata_id: bool,
 }
 
 #[allow(clippy::too_many_lines)] // OPF section and reference invariants are checked in one pass.
@@ -71,6 +75,7 @@ pub(super) fn parse(
     bytes: &[u8],
     archive: &SafeArchive<'_, '_>,
     budget: &mut EpubBudget<'_>,
+    error_policy: ErrorPolicy,
 ) -> Result<Package, ConversionError> {
     let mut reader = xml::reader(bytes);
     let initial_base = BasePath::document(package_path)?;
@@ -78,6 +83,9 @@ pub(super) fn parse(
     let mut root_seen = false;
     let mut sections = BTreeSet::new();
     let mut ids = BTreeSet::new();
+    let mut metadata_ids = BTreeSet::new();
+    let mut duplicate_metadata_ids = BTreeSet::new();
+    let mut refined_metadata_ids = BTreeSet::new();
     let mut manifest_paths = BTreeSet::new();
     let mut manifest = BTreeMap::new();
     let mut spine = Vec::new();
@@ -90,6 +98,7 @@ pub(super) fn parse(
     let mut ncx_id = None;
     let mut cover_id = None;
     let mut modified = None;
+    let mut diagnostics = Vec::new();
     let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
@@ -115,12 +124,30 @@ pub(super) fn parse(
                 let base = xml::optional(&attributes, Some(xml::XML_NS), b"base")
                     .map_or_else(|| Ok(parent_base.clone()), |value| parent_base.apply(value))?;
                 let id = xml::optional(&attributes, None, b"id").map(str::to_owned);
-                if let Some(id) = &id
-                    && (!valid_id(id) || !ids.insert(id.clone()))
-                {
-                    return Err(xml::malformed("package contains an invalid or duplicate ID"));
-                }
                 let depth = stack.len() + 1;
+                let metadata_child = depth == 3
+                    && stack
+                        .last()
+                        .is_some_and(|frame| frame.name.matches(Some(OPF_NS), b"metadata"));
+                let mut duplicate_metadata_id = false;
+                if let Some(id) = &id {
+                    if !valid_id(id) {
+                        return Err(xml::malformed("package contains an invalid ID"));
+                    }
+                    if !ids.insert(id.clone()) {
+                        if error_policy == ErrorPolicy::BestEffort
+                            && metadata_child
+                            && metadata_ids.contains(id)
+                        {
+                            duplicate_metadata_ids.insert(id.clone());
+                            duplicate_metadata_id = true;
+                        } else {
+                            return Err(xml::malformed("package contains a duplicate ID"));
+                        }
+                    } else if metadata_child {
+                        metadata_ids.insert(id.clone());
+                    }
+                }
                 if depth == 1 {
                     if !name.matches(Some(OPF_NS), b"package") {
                         return Err(xml::malformed("expected OPF package root and namespace"));
@@ -166,10 +193,8 @@ pub(super) fn parse(
                     {
                         return Err(xml::malformed("multiple EPUB navigation items"));
                     }
-                    if item.properties.contains("cover-image")
-                        && cover_id.replace(item.id.clone()).is_some()
-                    {
-                        return Err(xml::malformed("multiple EPUB cover-image items"));
+                    if item.properties.contains("cover-image") {
+                        select_cover(&mut cover_id, item.id.clone())?;
                     }
                     if manifest.insert(item.id.clone(), item).is_some() {
                         return Err(xml::malformed("duplicate manifest item ID"));
@@ -200,7 +225,15 @@ pub(super) fn parse(
                     meta_content: xml::optional(&attributes, None, b"content").map(str::to_owned),
                     meta_property: xml::optional(&attributes, None, b"property").map(str::to_owned),
                     meta_refines: xml::optional(&attributes, None, b"refines").map(str::to_owned),
+                    duplicate_metadata_id,
                 };
+                if metadata_child
+                    && !duplicate_metadata_id
+                    && let Some(target) = frame.meta_refines.as_deref()
+                    && let Some(target) = target.strip_prefix('#')
+                {
+                    refined_metadata_ids.insert(target.to_owned());
+                }
                 if empty {
                     finish_frame(
                         frame,
@@ -258,26 +291,88 @@ pub(super) fn parse(
     }
     let unique_identifier =
         unique_identifier.ok_or_else(|| xml::malformed("unique identifier missing"))?;
+    if duplicate_metadata_ids.contains(&unique_identifier)
+        || duplicate_metadata_ids.iter().any(|id| refined_metadata_ids.contains(id))
+    {
+        return Err(xml::malformed(
+            "duplicate metadata ID makes unique-identifier or refines relationships ambiguous",
+        ));
+    }
+    if !duplicate_metadata_ids.is_empty() {
+        diagnostics.push(Diagnostic {
+            code: "epub.metadataDuplicateIdOmitted".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "omitted {} metadata field(s) with duplicate unreferenced IDs",
+                duplicate_metadata_ids.len()
+            ),
+            locator: Some(SourceLocator {
+                part: Some(package_path.into()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
     let identifier =
         identifiers.get(&unique_identifier).filter(|value| !value.is_empty()).ok_or_else(|| {
             xml::malformed("package unique-identifier does not name a non-empty dc:identifier")
         })?;
     if metadata.title.as_deref().is_none_or(str::is_empty) {
-        return Err(xml::malformed("package dc:title is missing"));
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("package dc:title is missing"));
+        }
+        diagnostics.push(metadata_missing_diagnostic(
+            package_path,
+            "package dc:title is missing; chapter titles and paths remain available",
+        ));
     }
     if metadata.properties.get("epub.language").is_none_or(String::is_empty) {
-        return Err(xml::malformed("package dc:language is missing"));
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("package dc:language is missing"));
+        }
+        diagnostics.push(metadata_missing_diagnostic(
+            package_path,
+            "package dc:language is missing; content language remains unspecified",
+        ));
     }
     let version = version.ok_or_else(|| xml::malformed("package version missing"))?;
     if version.starts_with('3') {
-        let modified = modified
-            .as_deref()
-            .filter(|value| valid_modified(value))
-            .ok_or_else(|| xml::malformed("EPUB 3 dcterms:modified is missing or invalid"))?;
-        metadata.properties.insert("epub.meta.dcterms:modified".into(), modified.into());
+        match modified.as_deref().filter(|value| valid_modified(value)) {
+            Some(modified) => {
+                metadata.properties.insert("epub.meta.dcterms:modified".into(), modified.into());
+            }
+            None if error_policy == ErrorPolicy::Strict => {
+                return Err(xml::malformed("EPUB 3 dcterms:modified is missing or invalid"));
+            }
+            None => diagnostics.push(metadata_missing_diagnostic(
+                package_path,
+                "EPUB 3 dcterms:modified is missing or invalid; content ordering is unaffected",
+            )),
+        }
     }
     metadata.properties.insert("epub.identifier".into(), identifier.clone());
     metadata.properties.insert("epub.version".into(), version);
+    let missing_spine_items =
+        spine.iter().filter(|item| !manifest.contains_key(&item.idref)).count();
+    if missing_spine_items != 0 {
+        if error_policy == ErrorPolicy::Strict {
+            return Err(xml::malformed("spine itemref names a missing manifest item"));
+        }
+        spine.retain(|item| manifest.contains_key(&item.idref));
+        if !spine.iter().any(|item| item.linear) {
+            return Err(xml::malformed("all linear spine itemrefs name missing manifest items"));
+        }
+        diagnostics.push(Diagnostic {
+            code: "epub.spine.missingItemOmitted".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "omitted {missing_spine_items} spine itemref(s) with no manifest declaration"
+            ),
+            locator: Some(SourceLocator {
+                part: Some(package_path.into()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
     validate_references(
         &manifest,
         &spine,
@@ -285,7 +380,28 @@ pub(super) fn parse(
         ncx_id.as_deref(),
         cover_id.as_deref(),
     )?;
-    Ok(Package { path: package_path.into(), metadata, manifest, spine, nav_id, ncx_id, cover_id })
+    Ok(Package {
+        path: package_path.into(),
+        metadata,
+        manifest,
+        spine,
+        nav_id,
+        ncx_id,
+        cover_id,
+        diagnostics,
+    })
+}
+
+fn metadata_missing_diagnostic(package_path: &str, message: &str) -> Diagnostic {
+    Diagnostic {
+        code: "epub.metadataMissing".into(),
+        severity: DiagnosticSeverity::Info,
+        message: message.into(),
+        locator: Some(SourceLocator {
+            part: Some(package_path.into()),
+            ..SourceLocator::default()
+        }),
+    }
 }
 
 fn manifest_item(
@@ -319,6 +435,9 @@ fn finish_frame(
     modified: &mut Option<String>,
     budget: &EpubBudget<'_>,
 ) -> Result<(), ConversionError> {
+    if frame.duplicate_metadata_id {
+        return Ok(());
+    }
     let text = normalize(&frame.text);
     budget.field("metadata field", text.len())?;
     if frame.name.namespace.as_deref() == Some(DC_NS) {
@@ -327,7 +446,7 @@ fn finish_frame(
             b"creator" if !text.is_empty() => metadata.authors.push(text),
             b"identifier" if !text.is_empty() => {
                 if let Some(id) = frame.id {
-                    identifiers.insert(id, text);
+                    identifiers.entry(id).or_insert(text);
                 }
             }
             b"language" if !text.is_empty() => {
@@ -345,9 +464,7 @@ fn finish_frame(
                 .meta_content
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| xml::malformed("EPUB 2 cover meta is missing its manifest ID"))?;
-            if cover_id.replace(value).is_some() {
-                return Err(xml::malformed("multiple EPUB 2 cover metadata entries"));
-            }
+            select_cover(cover_id, value)?;
         } else if let Some(property) = frame.meta_property
             && !text.is_empty()
         {
@@ -359,6 +476,15 @@ fn finish_frame(
                 metadata.properties.entry(format!("epub.meta.{property}")).or_insert(text);
             }
         }
+    }
+    Ok(())
+}
+
+fn select_cover(cover_id: &mut Option<String>, value: String) -> Result<(), ConversionError> {
+    match cover_id {
+        None => *cover_id = Some(value),
+        Some(current) if current == &value => {}
+        Some(_) => return Err(xml::malformed("conflicting EPUB cover declarations")),
     }
     Ok(())
 }

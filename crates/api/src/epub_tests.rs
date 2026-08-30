@@ -1,6 +1,6 @@
 use crate::{
-    Block, ConversionError, ConversionOptions, ConversionRequest, ErrorCode, ExecutionOptions,
-    FormatHint, Inline, InputFormat, InputRef, default_engine,
+    Block, ConversionError, ConversionOptions, ConversionOutcome, ConversionRequest, ErrorCode,
+    ErrorPolicy, ExecutionOptions, FormatHint, Inline, InputFormat, InputRef, default_engine,
 };
 use std::fmt::Write as _;
 use std::future::Future;
@@ -48,7 +48,12 @@ pub(super) fn epub(entries: &[(&str, &[u8])]) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
-fn invalid_mimetype_layout(deflated: bool, leading_entry: bool) -> Vec<u8> {
+fn noncanonical_mimetype_layout(
+    entries: &[(&str, &[u8])],
+    deflated: bool,
+    leading_entry: bool,
+    extra: Option<bool>,
+) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
     let stored = SimpleFileOptions::default()
@@ -58,32 +63,65 @@ fn invalid_mimetype_layout(deflated: bool, leading_entry: bool) -> Vec<u8> {
         writer.start_file("leading.txt", stored).unwrap();
         writer.write_all(b"before mimetype").unwrap();
     }
-    let options = SimpleFileOptions::default()
-        .compression_method(if deflated {
-            zip::CompressionMethod::Deflated
-        } else {
-            zip::CompressionMethod::Stored
-        })
-        .unix_permissions(0o644);
-    writer.start_file("mimetype", options).unwrap();
+    if let Some(central_only) = extra {
+        let mut options = FullFileOptions::default()
+            .compression_method(if deflated {
+                zip::CompressionMethod::Deflated
+            } else {
+                zip::CompressionMethod::Stored
+            })
+            .unix_permissions(0o644);
+        options.add_extra_data(0xcafe, Vec::new().into_boxed_slice(), central_only).unwrap();
+        writer.start_file("mimetype", options).unwrap();
+    } else {
+        let options = SimpleFileOptions::default()
+            .compression_method(if deflated {
+                zip::CompressionMethod::Deflated
+            } else {
+                zip::CompressionMethod::Stored
+            })
+            .unix_permissions(0o644);
+        writer.start_file("mimetype", options).unwrap();
+    }
     writer.write_all(b"application/epub+zip").unwrap();
+    let deflated = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    for (path, bytes) in entries {
+        writer.start_file(*path, deflated).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
     writer.finish().unwrap().into_inner()
 }
 
-fn mimetype_with_extra(central_only: bool) -> Vec<u8> {
+fn epub_with_mimetype_content(entries: &[(&str, &[u8])], content: &[u8]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
     let mut writer = zip::ZipWriter::new(cursor);
-    let mut options = FullFileOptions::default()
+    let stored = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
         .unix_permissions(0o644);
-    options.add_extra_data(0xcafe, Vec::new().into_boxed_slice(), central_only).unwrap();
-    writer.start_file("mimetype", options).unwrap();
-    writer.write_all(b"application/epub+zip").unwrap();
+    writer.start_file("mimetype", stored).unwrap();
+    writer.write_all(content).unwrap();
+    let deflated = SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+    for (path, bytes) in entries {
+        writer.start_file(*path, deflated).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
     writer.finish().unwrap().into_inner()
 }
 
 pub(super) fn convert(bytes: Vec<u8>) -> Result<crate::ConversionResult, ConversionError> {
     convert_with(bytes, ConversionOptions::default(), ExecutionOptions::default())
+}
+
+pub(super) fn convert_strict(bytes: Vec<u8>) -> Result<crate::ConversionResult, ConversionError> {
+    convert_with(
+        bytes,
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() },
+        ExecutionOptions::default(),
+    )
 }
 
 fn convert_with(
@@ -218,7 +256,7 @@ fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {
 fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
     let package = std::str::from_utf8(epub3_package()).unwrap().replace(
         "</manifest>",
-        r#"<item id="font" href="fonts/book.woff2" media-type="font/woff2"/></manifest>"#,
+        r#"<item id="imported" href="styles/imported.css" media-type="text/css"/><item id="font" href="fonts/book.woff2" media-type="font/woff2"/></manifest>"#,
     );
     let chapter = std::str::from_utf8(chapter_one()).unwrap().replace(
         "<title>Chapter One</title>",
@@ -235,7 +273,11 @@ fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
             b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>skip me</p></body></html>",
         ),
         ("OPS/images/cover.png", PNG),
-        ("OPS/styles/book.css", b"@font-face{src:url('../fonts/book.woff2')}"),
+        (
+            "OPS/styles/book.css",
+            br#"a{content:"url('../missing-string.woff2')"}/* url('../missing-comment.woff2') */@import url('imported.css');"#,
+        ),
+        ("OPS/styles/imported.css", b"@font-face{src:url('../fonts/book.woff2')}"),
         ("OPS/fonts/book.woff2", b"font"),
     ]);
 
@@ -245,8 +287,194 @@ fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
         .iter()
         .find(|item| item.code == "epub.linkedResourcesOmitted")
         .expect("linked resources must be disclosed");
-    assert!(diagnostic.message.contains("1 reachable CSS"));
+    assert!(diagnostic.message.contains("2 reachable CSS"));
     assert!(diagnostic.message.contains("1 reachable font"));
+    assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn large_reachable_css_is_scanned_in_place_under_the_shared_memory_limit() {
+    let css = r#"a{content:"url('../missing-string.woff2')"}/* url('../missing-comment.woff2') */"#
+        .repeat(8 * 1024);
+    let chapter = std::str::from_utf8(chapter_one()).unwrap().replace(
+        "<title>Chapter One</title>",
+        r#"<title>Chapter One</title><link rel="stylesheet" href="../styles/book.css"/>"#,
+    );
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter.as_bytes()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        (
+            "OPS/text/extra.xhtml",
+            b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>",
+        ),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", css.as_bytes()),
+    ]);
+    let mut options = ConversionOptions::default();
+    options.limits.max_memory_bytes = 8 * 1024 * 1024;
+    options.limits.max_archive_compression_ratio = 10_000;
+    let result = convert_with(bytes, options, ExecutionOptions::default()).unwrap();
+    assert!(result.markdown.contains("Alpha"));
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "epub.linkedResourcesOmitted")
+        .unwrap();
+    assert!(diagnostic.message.contains("1 reachable CSS"));
+    assert!(diagnostic.message.contains("0 reachable font"));
+}
+
+#[test]
+fn metadata_duplicate_ids_fail_only_when_they_make_retained_relationships_ambiguous() {
+    let base = String::from_utf8(epub3_package().to_vec()).unwrap();
+    let opaque = base.replace(
+        "</metadata>",
+        r#"<meta id="opaque" property="schema:first">first</meta><meta id="opaque" property="schema:second">second</meta></metadata>"#,
+    );
+    let result = convert(epub3_book(opaque.as_bytes(), Some(nav3()))).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "epub.metadataDuplicateIdOmitted")
+    );
+    assert_eq!(
+        result.document.metadata.properties.get("epub.meta.schema:first").map(String::as_str),
+        Some("first")
+    );
+    assert!(!result.document.metadata.properties.contains_key("epub.meta.schema:second"));
+    assert_eq!(
+        convert_strict(epub3_book(opaque.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+
+    for ambiguous in [
+        base.replace(
+            "</metadata>",
+            r#"<dc:identifier id="book-id">second</dc:identifier></metadata>"#,
+        ),
+        base.replace(
+            "</metadata>",
+            r##"<meta id="target" property="schema:first">first</meta><meta id="target" property="schema:second">second</meta><meta property="schema:relation" refines="#target">relation</meta></metadata>"##,
+        ),
+    ] {
+        assert_eq!(
+            convert(epub3_book(ambiguous.as_bytes(), Some(nav3()))).unwrap_err().code(),
+            ErrorCode::Malformed
+        );
+    }
+}
+
+#[test]
+fn matching_epub2_and_epub3_cover_declarations_are_not_conflicts() {
+    let epub3 = String::from_utf8(epub3_package().to_vec()).unwrap().replace(
+        "</metadata>",
+        r#"<meta name="cover" content="cover"/><meta name="cover" content="cover"/></metadata>"#,
+    );
+    assert_eq!(convert(epub3_book(epub3.as_bytes(), Some(nav3()))).unwrap().assets.len(), 1);
+
+    let epub2 = String::from_utf8(epub2_package().to_vec()).unwrap().replace(
+        r#"<meta name="cover" content="cover"/>"#,
+        r#"<meta name="cover" content="cover"/><meta name="cover" content="cover"/>"#,
+    );
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub2.as_bytes()),
+        ("OPS/text/toc.ncx", ncx2()),
+        ("OPS/text/dummy.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+        ("OPS/text/one.xhtml", epub2_one()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+    ]);
+    assert_eq!(convert(bytes).unwrap().assets.len(), 1);
+}
+
+#[test]
+fn authoritative_outcome_distinguishes_compatibility_audit_from_content_loss() {
+    let package = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">outcome-contract</dc:identifier><dc:title>Outcome Contract</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-30T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="chapter" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="chapter"/></spine></package>"#;
+    let navigation = br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="chapter.xhtml">Chapter</a></li></ol></nav></body></html>"#;
+    let chapter = chapter_two();
+    let common = [
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", package),
+        ("OPS/nav.xhtml", navigation),
+        ("OPS/chapter.xhtml", chapter),
+    ];
+
+    let mut audited_entries = common.to_vec();
+    audited_entries.push(("META-INF/rights.xml", b"<rights/>"));
+    let audited = convert(epub(&audited_entries)).unwrap();
+    assert!(audited.diagnostics.iter().any(|item| item.code == "epub.rightsMetadataIgnored"));
+    assert_eq!(
+        audited.outcome(),
+        ConversionOutcome::Complete,
+        "unexpected diagnostics: {:?}",
+        audited.diagnostics
+    );
+
+    let recovered = convert(noncanonical_mimetype_layout(&common, false, true, None)).unwrap();
+    assert!(recovered.diagnostics.iter().any(|item| item.code == "epub.mimetypeLayoutRecovered"));
+    assert_eq!(recovered.outcome(), ConversionOutcome::Complete);
+
+    let active = br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Active</title></head><body><main><script>discard()</script><p>Usable content.</p></main></body></html>"#;
+    let degraded = convert(epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", package),
+        ("OPS/nav.xhtml", navigation),
+        ("OPS/chapter.xhtml", active),
+    ]))
+    .unwrap();
+    assert!(degraded.diagnostics.iter().any(|item| item.code == "epub.spine.activeContentRemoved"));
+    assert_eq!(degraded.outcome(), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn large_navigation_drops_raw_storage_and_a_late_spine_nav_is_read_once() {
+    let mut state = 0x1234_5678_u32;
+    let mut label = String::with_capacity(512 * 1024 + 4);
+    for _ in 0..512 * 1024 {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        label.push(char::from(b'a' + u8::try_from((state >> 24) % 26).unwrap()));
+    }
+    label.push_str("TAIL");
+    let navigation = format!(
+        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>Contents</title></head><body><nav epub:type=\"toc\"><ol><li><a href=\"text/one.xhtml\">{label}</a></li></ol></nav></body></html>"
+    );
+    let package = br#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book">nav-memory</dc:identifier><dc:title>Navigation Memory</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-08-30T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>"#;
+    let mut options = ConversionOptions::default();
+    options.limits.max_memory_bytes = 32 * 1024 * 1024;
+    let outside_spine = convert_with(
+        epub(&[
+            ("META-INF/container.xml", container()),
+            ("OPS/content.opf", package),
+            ("OPS/nav.xhtml", navigation.as_bytes()),
+            ("OPS/text/one.xhtml", chapter_two()),
+        ]),
+        options.clone(),
+        ExecutionOptions::default(),
+    )
+    .unwrap();
+    assert!(outside_spine.markdown.contains("TAIL"));
+
+    let late_package = String::from_utf8(package.to_vec())
+        .unwrap()
+        .replace("</spine>", "<itemref idref=\"nav\"/></spine>");
+    let late_spine = convert_with(
+        epub(&[
+            ("META-INF/container.xml", container()),
+            ("OPS/content.opf", late_package.as_bytes()),
+            ("OPS/nav.xhtml", navigation.as_bytes()),
+            ("OPS/text/one.xhtml", chapter_two()),
+        ]),
+        options,
+        ExecutionOptions::default(),
+    )
+    .unwrap();
+    assert!(late_spine.markdown.contains("TAIL"));
+    assert!(late_spine.markdown.contains("Omega"));
 }
 
 #[test]
@@ -338,17 +566,6 @@ fn malformed_mimetype_and_missing_fragment_are_rejected() {
         .unwrap();
     wrong[position] = b'X';
     assert_eq!(convert(wrong).unwrap_err().code(), ErrorCode::Malformed);
-    assert_eq!(
-        convert(invalid_mimetype_layout(true, false)).unwrap_err().code(),
-        ErrorCode::Malformed
-    );
-    assert_eq!(
-        convert(invalid_mimetype_layout(false, true)).unwrap_err().code(),
-        ErrorCode::Malformed
-    );
-    assert_eq!(convert(mimetype_with_extra(true)).unwrap_err().code(), ErrorCode::Malformed);
-    assert_eq!(convert(mimetype_with_extra(false)).unwrap_err().code(), ErrorCode::Malformed);
-
     let broken_two = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><main><h1>Two</h1><p>Omega</p></main></body></html>"#;
     let broken = epub(&[
         ("META-INF/container.xml", container()),
@@ -364,6 +581,53 @@ fn malformed_mimetype_and_missing_fragment_are_rejected() {
         ("OPS/styles/book.css", b"body{}"),
     ]);
     assert_eq!(convert(broken).unwrap_err().code(), ErrorCode::Malformed);
+}
+
+#[test]
+fn best_effort_recovers_noncanonical_mimetype_layout_but_strict_rejects_it() {
+    let entries = [
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter_one()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        (
+            "OPS/text/extra.xhtml",
+            b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>".as_slice(),
+        ),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}".as_slice()),
+    ];
+    for bytes in [
+        noncanonical_mimetype_layout(&entries, true, false, None),
+        noncanonical_mimetype_layout(&entries, false, true, None),
+        noncanonical_mimetype_layout(&entries, false, false, Some(true)),
+        noncanonical_mimetype_layout(&entries, false, false, Some(false)),
+    ] {
+        let result = convert(bytes.clone()).unwrap();
+        assert!(result.markdown.contains("Alpha"));
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "epub.mimetypeLayoutRecovered")
+        );
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    }
+
+    let crlf = epub_with_mimetype_content(&entries, b"application/epub+zip\r\n");
+    let result = convert(crlf.clone()).unwrap();
+    assert!(result.markdown.contains("Alpha"));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "epub.mimetypeLayoutRecovered")
+    );
+    assert_eq!(convert_strict(crlf).unwrap_err().code(), ErrorCode::Malformed);
+
+    let trailing_space = epub_with_mimetype_content(&entries, b"application/epub+zip ");
+    assert_eq!(convert(trailing_space).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -383,8 +647,6 @@ fn package_version_metadata_navigation_and_multiple_rootfiles_follow_epub_contra
 
     let invalid = [
         base.replace("version=\"3.0\"", "version=\"3.future\""),
-        base.replace("<dc:language>en</dc:language>", ""),
-        base.replace("<meta property=\"dcterms:modified\">2026-08-13T00:00:00Z</meta>", ""),
         base.replace(" properties=\"nav\"", ""),
     ];
     for package in invalid {
@@ -408,10 +670,7 @@ fn package_version_metadata_navigation_and_multiple_rootfiles_follow_epub_contra
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(
-        convert(bytes).unwrap().document.metadata.title.as_deref(),
-        Some("Original EPUB Three")
-    );
+    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
 
     let too_deep = deep_nav(16);
     assert!(matches!(
@@ -470,7 +729,6 @@ fn encryption_metadata_distinguishes_font_obfuscation_from_drm() {
 fn package_reference_cycles_missing_ids_and_alias_entries_fail_closed() {
     let base = String::from_utf8(epub3_package().to_vec()).unwrap();
     let cases = [
-        base.replace("idref=\"two\"", "idref=\"missing\""),
         base.replace(
             "id=\"one\" href=\"text/one.xhtml\" media-type=\"application/xhtml+xml\"",
             "id=\"one\" href=\"text/one.xhtml\" media-type=\"application/xhtml+xml\" fallback=\"two\"",
@@ -514,6 +772,48 @@ fn package_reference_cycles_missing_ids_and_alias_entries_fail_closed() {
         ("OPS/styles/book.css", b"body{}"),
     ]);
     assert_eq!(convert(aliases).unwrap_err().code(), ErrorCode::Malformed);
+}
+
+#[test]
+fn missing_spine_targets_are_omitted_only_when_linear_content_remains() {
+    let base = String::from_utf8(epub3_package().to_vec()).unwrap();
+    for package in [
+        base.replace(
+            "<spine><itemref idref=\"one\"/>",
+            "<spine><itemref idref=\"missing-before\"/><itemref idref=\"one\"/>",
+        ),
+        base.replace("idref=\"two\"", "idref=\"missing-after\""),
+    ] {
+        let bytes = epub3_book(package.as_bytes(), Some(nav3()));
+        let result = convert(bytes.clone()).unwrap();
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "epub.spine.missingItemOmitted")
+        );
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    }
+
+    let all_missing = base
+        .replace("idref=\"one\"", "idref=\"missing-one\"")
+        .replace("idref=\"two\"", "idref=\"missing-two\"");
+    assert_eq!(
+        convert(epub3_book(all_missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+}
+
+#[test]
+fn empty_navigation_is_omitted_only_in_best_effort() {
+    let empty_nav = br#"<?xml version="1.0"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><h2>Contents</h2><ol/></nav></body></html>"#;
+    let bytes = epub3_book(epub3_package(), Some(empty_nav));
+    let result = convert(bytes.clone()).unwrap();
+    assert!(result.markdown.contains("Alpha"));
+    assert!(
+        result.diagnostics.iter().any(|diagnostic| diagnostic.code == "epub.navigationOmitted")
+    );
+    assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]

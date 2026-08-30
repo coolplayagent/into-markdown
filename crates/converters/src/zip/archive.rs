@@ -4,6 +4,10 @@ use super::raw_central::RawInventory;
 use into_markdown_core::{ConversionError, ResourceReservation};
 use std::io::{Cursor, Read};
 
+const VALIDATION_SCRATCH_BYTES: usize = 64 * 1024;
+const VALIDATION_SCRATCH_MEMORY_BYTES: u64 = 64 * 1024;
+const DEFLATE_WORKSPACE_BYTES: u64 = 256 * 1024;
+
 #[cfg(test)]
 use std::cell::Cell;
 
@@ -23,6 +27,7 @@ pub(super) struct EntryMeta {
     pub(super) physical_start: usize,
     pub(super) central_extra_len: usize,
     pub(super) local_extra_len: usize,
+    pub(super) verified: bool,
 }
 
 pub(super) struct EntryData {
@@ -121,6 +126,63 @@ impl<'a> Archive<'a> {
             )));
         }
         Ok(EntryData { bytes, memory })
+    }
+
+    /// Stream one member through the decoder so length and CRC are checked
+    /// without retaining its expanded bytes.
+    pub(super) fn validate_entry(
+        &mut self,
+        meta: &EntryMeta,
+        budget: &mut ArchiveBudget<'_>,
+    ) -> Result<(), ConversionError> {
+        budget.validate_member(&meta.name, meta.compressed_size, meta.expanded_size)?;
+        budget.charge_expanded(&meta.name, meta.expanded_size)?;
+        let working_bytes = VALIDATION_SCRATCH_MEMORY_BYTES
+            + if meta.deflated { DEFLATE_WORKSPACE_BYTES } else { 0 };
+        let mut working_memory = budget.context().reserve_memory(working_bytes)?;
+        let mut scratch = Vec::new();
+        scratch.try_reserve_exact(VALIDATION_SCRATCH_BYTES).map_err(|error| {
+            memory_limit(format!("reserve ZIP validation scratch buffer: {error}"))
+        })?;
+        let actual_scratch = u64::try_from(scratch.capacity()).unwrap_or(u64::MAX);
+        if actual_scratch > VALIDATION_SCRATCH_MEMORY_BYTES {
+            working_memory.grow(actual_scratch - VALIDATION_SCRATCH_MEMORY_BYTES)?;
+        } else {
+            working_memory.shrink(VALIDATION_SCRATCH_MEMORY_BYTES - actual_scratch)?;
+        }
+        scratch.resize(VALIDATION_SCRATCH_BYTES, 0);
+        let mut entry = self.inner.by_index(meta.index).map_err(|error| {
+            malformed(format!("cannot open archive member {:?}: {error}", meta.name))
+        })?;
+        let mut expanded = 0_u64;
+        loop {
+            budget.context().checkpoint()?;
+            let read = entry.read(&mut scratch).map_err(|error| {
+                malformed(format!(
+                    "archive member {:?} failed CRC/length validation: {error}",
+                    meta.name
+                ))
+            })?;
+            if read == 0 {
+                break;
+            }
+            expanded = expanded
+                .checked_add(u64::try_from(read).unwrap_or(u64::MAX))
+                .ok_or_else(|| malformed("archive member expanded length overflowed"))?;
+            if expanded > meta.expanded_size {
+                return Err(malformed(format!(
+                    "archive member {:?} expands beyond its declared size",
+                    meta.name
+                )));
+            }
+        }
+        if expanded != meta.expanded_size {
+            return Err(malformed(format!(
+                "archive member {:?} expanded to {expanded} bytes, expected {}",
+                meta.name, meta.expanded_size
+            )));
+        }
+        Ok(())
     }
 }
 
