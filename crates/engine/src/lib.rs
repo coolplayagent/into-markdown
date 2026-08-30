@@ -5,6 +5,7 @@ mod artifact_output;
 mod collecting;
 mod fixed_alloc;
 mod nested;
+mod page_enrichment;
 mod preparation;
 mod recovery;
 mod rendering;
@@ -403,6 +404,7 @@ impl Engine {
                 &attempt.candidate,
                 &request.options,
                 &self.services,
+                &self.enrichers,
                 &context,
             )
             .await?

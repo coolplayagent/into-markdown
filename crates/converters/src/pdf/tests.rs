@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEMPORARY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
 
+#[path = "page_lifetime_tests.rs"]
+mod page_lifetime;
+
 #[test]
 fn direct_pdf_probe_accepts_only_the_header_or_one_utf8_bom() {
     let context = ExecutionContext::new(

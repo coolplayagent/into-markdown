@@ -4,11 +4,13 @@
 //! and collector admission boundaries independently reviewable.
 
 use crate::collecting::CollectingArtifactSink;
+use crate::page_enrichment::{EMBEDDED_OCR, PageEnrichmentSink};
 use into_markdown_core::{
     ConversionError, ConversionOptions, ConverterOutput, ConverterStream, ExecutionContext,
-    FormatCandidate, ResolvedInput, Services, StreamConsumerKind, estimate_retained_output,
-    estimate_validation_working_set,
+    FormatCandidate, OutputEnricher, ResolvedInput, Services, StreamConsumerKind,
+    estimate_retained_output, estimate_validation_working_set,
 };
+use std::sync::Arc;
 
 pub(crate) async fn invoke_native_collecting(
     converter: &dyn ConverterStream,
@@ -16,17 +18,19 @@ pub(crate) async fn invoke_native_collecting(
     candidate: &FormatCandidate,
     options: &ConversionOptions,
     services: &Services,
+    enrichers: &[Arc<dyn OutputEnricher>],
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    invoke_native(
+    invoke_native(NativeRequest {
         converter,
         input,
         candidate,
         options,
         services,
+        enrichers,
         context,
-        StreamConsumerKind::Collecting,
-    )
+        consumer: StreamConsumerKind::Collecting,
+    })
     .await
 }
 
@@ -36,36 +40,68 @@ pub(crate) async fn invoke_native_immediate(
     candidate: &FormatCandidate,
     options: &ConversionOptions,
     services: &Services,
+    enrichers: &[Arc<dyn OutputEnricher>],
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    invoke_native(
+    invoke_native(NativeRequest {
         converter,
         input,
         candidate,
         options,
         services,
+        enrichers,
         context,
-        StreamConsumerKind::Immediate,
-    )
+        consumer: StreamConsumerKind::Immediate,
+    })
     .await
 }
 
-async fn invoke_native(
-    converter: &dyn ConverterStream,
-    input: &ResolvedInput,
-    candidate: &FormatCandidate,
-    options: &ConversionOptions,
-    services: &Services,
-    context: &ExecutionContext,
+struct NativeRequest<'a> {
+    converter: &'a dyn ConverterStream,
+    input: &'a ResolvedInput,
+    candidate: &'a FormatCandidate,
+    options: &'a ConversionOptions,
+    services: &'a Services,
+    enrichers: &'a [Arc<dyn OutputEnricher>],
+    context: &'a ExecutionContext,
     consumer: StreamConsumerKind,
-) -> Result<ConverterOutput, ConversionError> {
+}
+
+async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, ConversionError> {
+    let NativeRequest {
+        converter,
+        input,
+        candidate,
+        options,
+        services,
+        enrichers,
+        context,
+        consumer,
+    } = request;
     let plan = converter.planned_stream_bytes(input, candidate, options, context, consumer)?;
     let mut admission = context.reserve_memory(plan)?;
     let credited = context.with_memory_credit(&mut admission)?;
     let mut sink = CollectingArtifactSink::new(&credited);
-    let completion = context
-        .run(converter.convert_stream(input, candidate, options, services, &credited, &mut sink))
-        .await??;
+    let completion = {
+        let mut pages = PageEnrichmentSink {
+            destination: &mut sink,
+            enricher: enrichers
+                .iter()
+                .find(|enricher| enricher.id() == EMBEDDED_OCR)
+                .map(AsRef::as_ref),
+            converter_id: converter.id(),
+            format: candidate.format,
+            options,
+            services,
+            context: &credited,
+        };
+        context
+            .run(
+                converter
+                    .convert_stream(input, candidate, options, services, &credited, &mut pages),
+            )
+            .await??
+    };
     let output = sink.finish(completion)?;
     let retained = estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
     let validation =

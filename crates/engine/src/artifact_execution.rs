@@ -44,6 +44,7 @@ pub(crate) async fn execute(
             &attempt.candidate,
             &request.options,
             &engine.services,
+            &engine.enrichers,
             &context,
         )
         .await?

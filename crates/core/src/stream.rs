@@ -90,6 +90,27 @@ pub trait ConverterStream: Converter {
 
 /// Synchronous destination for owned converter events.
 pub trait ConverterEventSink {
+    /// Whether this sink can enrich an owned transient page before its pixels
+    /// are released. This does not change the single `write_output` contract.
+    fn supports_page_enrichment(&self) -> bool {
+        false
+    }
+
+    /// Enrich one unpublished page using the enclosing converter's memory credit.
+    /// The returned output owns its diagnostics and authenticated leases; the
+    /// producer must consume it before extracting the next transient page.
+    fn enrich_page<'a>(
+        &'a mut self,
+        output: ConverterOutput,
+    ) -> LocalBoxFuture<'a, Result<ConverterOutput, ConversionError>> {
+        Box::pin(async move {
+            drop(output);
+            Err(ConversionError::Unsupported {
+                detail: "semantic sink does not support page enrichment".into(),
+            })
+        })
+    }
+
     /// Observe cancellation or timeout before the next allocation or callback.
     ///
     /// # Errors
