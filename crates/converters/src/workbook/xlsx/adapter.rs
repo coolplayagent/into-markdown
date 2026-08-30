@@ -1,16 +1,14 @@
 use crate::workbook::error::{limit, malformed, warning};
 use crate::workbook::model::PackagePreflight;
 use crate::workbook::xlsx::emitter::{PreparedSheet, emit};
-use crate::workbook::xlsx::formulas::{DisplayProfile, read_date_system, read_number_formats};
 use crate::workbook::xlsx::regions::{MergeRange, SparseRegion};
-use crate::workbook::xlsx::shared_strings::read_selected;
 use crate::workbook::xlsx::sheet_index::{read_cells_into, read_layout};
 use crate::workbook::xlsx::staging::{StagingTelemetry, StagingWriter};
 use into_markdown_core::{
     ConversionError, ConversionOptions, ConverterOutput, ExecutionContext, SourceLocator,
 };
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufReader, Cursor};
+use std::sync::{Arc, Mutex};
 
 pub(in crate::workbook) fn convert_xlsx(
     bytes: &[u8],
@@ -20,19 +18,20 @@ pub(in crate::workbook) fn convert_xlsx(
 ) -> Result<ConverterOutput, ConversionError> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| malformed(None, format!("cannot reopen authenticated XLSX: {error}")))?;
-    let (layouts, required_shared) = prepare_layouts(&mut archive, preflight, options, context)?;
-    let shared_strings = read_shared_strings(&mut archive, &required_shared, options, context)?;
-    let display = read_display_profile(&mut archive, options, context)?;
-    let (prepared, telemetry, diagnostics) =
-        stage_sheets(&mut archive, layouts, preflight, options, context)?;
-    let (mut document, diagnostics) =
-        emit(prepared, &display, &shared_strings, diagnostics, options, context)?;
-    attach_telemetry(
-        &mut document,
-        telemetry,
-        preflight.sheet_order.len(),
-        !required_shared.is_empty(),
-    );
+    let layouts = prepare_layouts(&mut archive, preflight, options, context)?;
+    let staged = stage_sheets(&mut archive, layouts, preflight, options, context)?;
+    let (mut document, diagnostics) = emit(
+        staged.prepared,
+        preflight.xml_display_profile.as_ref().ok_or_else(|| {
+            malformed(Some("xl/styles.xml"), "prepared display profile is missing")
+        })?,
+        &preflight.xml_shared_strings,
+        staged.diagnostics,
+        options,
+        context,
+    )?;
+    let telemetry = collect_telemetry(&staged.telemetry_handles)?;
+    attach_telemetry(&mut document, telemetry, preflight);
     if telemetry.staged_bytes > options.limits.max_temporary_bytes {
         return Err(limit(
             "max_temporary_bytes",
@@ -51,14 +50,19 @@ struct LayoutPlan {
     populated_merge_subordinates: bool,
 }
 
+struct StagedSheets {
+    prepared: Vec<PreparedSheet>,
+    telemetry_handles: Vec<Arc<Mutex<StagingTelemetry>>>,
+    diagnostics: Vec<into_markdown_core::Diagnostic>,
+}
+
 fn prepare_layouts(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     preflight: &PackagePreflight,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<(Vec<LayoutPlan>, BTreeSet<u64>), ConversionError> {
+) -> Result<Vec<LayoutPlan>, ConversionError> {
     let mut layouts = Vec::new();
-    let mut required_shared = BTreeSet::new();
     for name in &preflight.sheet_order {
         context.checkpoint()?;
         let (part, expected_cells) = preflight.xml_sheets.get(name).ok_or_else(|| {
@@ -78,7 +82,6 @@ fn prepare_layouts(
                 "worksheet physical cell count changed after preflight",
             ));
         }
-        required_shared.extend(layout.required_shared.iter().copied());
         let merges = layout
             .merges
             .iter()
@@ -102,49 +105,7 @@ fn prepare_layouts(
             populated_merge_subordinates,
         });
     }
-    Ok((layouts, required_shared))
-}
-
-fn read_shared_strings(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    required: &BTreeSet<u64>,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<BTreeMap<u64, String>, ConversionError> {
-    if required.is_empty() {
-        Ok(BTreeMap::default())
-    } else {
-        let part = "xl/sharedStrings.xml";
-        let entry = archive.by_name(part).map_err(|error| {
-            malformed(Some(part), format!("shared-string part is missing: {error}"))
-        })?;
-        read_selected(BufReader::with_capacity(64 * 1024, entry), required, part, options, context)
-    }
-}
-
-fn read_display_profile(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<DisplayProfile, ConversionError> {
-    let mut display = if let Ok(entry) = archive.by_name("xl/styles.xml") {
-        read_number_formats(
-            BufReader::with_capacity(64 * 1024, entry),
-            "xl/styles.xml",
-            options,
-            context,
-        )?
-    } else {
-        DisplayProfile::default()
-    };
-    if let Ok(entry) = archive.by_name("xl/workbook.xml") {
-        display = display.with_date_system(read_date_system(
-            BufReader::with_capacity(16 * 1024, entry),
-            "xl/workbook.xml",
-            context,
-        )?);
-    }
-    Ok(display)
+    Ok(layouts)
 }
 
 fn stage_sheets(
@@ -153,15 +114,13 @@ fn stage_sheets(
     preflight: &PackagePreflight,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<
-    (Vec<PreparedSheet>, StagingTelemetry, Vec<into_markdown_core::Diagnostic>),
-    ConversionError,
-> {
+) -> Result<StagedSheets, ConversionError> {
     let mut prepared = Vec::new();
-    let mut telemetry = StagingTelemetry::default();
+    let mut telemetry_handles = Vec::new();
     let mut diagnostics = Vec::new();
     for plan in layouts {
         let LayoutPlan { name, part, layout, regions, merges, populated_merge_subordinates } = plan;
+        diagnostics.extend(layout.diagnostics.iter().cloned());
         context.checkpoint()?;
         let entry = archive.by_name(&part).map_err(|error| {
             malformed(Some(&part), format!("worksheet part is missing: {error}"))
@@ -181,8 +140,7 @@ fn stage_sheets(
             ));
         }
         let cells = writer.finish(context)?;
-        let sheet_telemetry = cells.telemetry();
-        absorb_telemetry(&mut telemetry, sheet_telemetry);
+        telemetry_handles.push(cells.telemetry_handle());
         if layout
             .declared_bounds
             .zip(layout.bounds)
@@ -227,7 +185,7 @@ fn stage_sheets(
             extras: preflight.extras.get(&name).cloned().unwrap_or_default(),
         });
     }
-    Ok((prepared, telemetry, diagnostics))
+    Ok(StagedSheets { prepared, telemetry_handles, diagnostics })
 }
 
 fn has_populated_merge_subordinates(
@@ -264,13 +222,14 @@ fn has_populated_merge_subordinates(
 fn attach_telemetry(
     document: &mut into_markdown_core::Document,
     telemetry: StagingTelemetry,
-    sheet_count: usize,
-    shared_strings_read: bool,
+    preflight: &PackagePreflight,
 ) {
     for (name, value) in [
-        ("layoutPasses", u64::try_from(sheet_count).unwrap_or(u64::MAX)),
-        ("dataPasses", u64::try_from(sheet_count).unwrap_or(u64::MAX)),
-        ("sharedStringPasses", u64::from(shared_strings_read)),
+        ("workbookPasses", preflight.xml_workbook_passes),
+        ("layoutPasses", u64::try_from(preflight.xml_layouts.len()).unwrap_or(u64::MAX)),
+        ("dataPasses", telemetry.data_passes),
+        ("stylePasses", preflight.xml_styles_passes),
+        ("sharedStringPasses", preflight.xml_shared_string_passes),
         ("stagingWrites", telemetry.writes),
         ("stagingFlushes", telemetry.flushes),
         ("stagingReads", telemetry.reads),
@@ -286,12 +245,25 @@ fn attach_telemetry(
 }
 
 fn absorb_telemetry(total: &mut StagingTelemetry, sheet: StagingTelemetry) {
+    total.data_passes = total.data_passes.saturating_add(sheet.data_passes);
     total.writes = total.writes.saturating_add(sheet.writes);
     total.flushes = total.flushes.saturating_add(sheet.flushes);
     total.reads = total.reads.saturating_add(sheet.reads);
     total.seeks = total.seeks.saturating_add(sheet.seeks);
     total.staged_bytes = total.staged_bytes.saturating_add(sheet.staged_bytes);
     total.temporary_high_water = total.temporary_high_water.max(sheet.temporary_high_water);
+}
+
+fn collect_telemetry(
+    handles: &[Arc<Mutex<StagingTelemetry>>],
+) -> Result<StagingTelemetry, ConversionError> {
+    let mut total = StagingTelemetry::default();
+    for handle in handles {
+        let telemetry =
+            *handle.lock().map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?;
+        absorb_telemetry(&mut total, telemetry);
+    }
+    Ok(total)
 }
 
 #[cfg(test)]

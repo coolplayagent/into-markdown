@@ -1822,7 +1822,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "d8bf223846629dbb60468011666b5656e8aa1bfd0d11bba700ccfd48336839ea",
+        "semantic_sha256": "7b243685e53fba2af28b544e2f7cbf19f9f6e4a841385c871c6da22ef039d45c",
         "description": "merged cell span retains a bounded covered grid"
       }
     },

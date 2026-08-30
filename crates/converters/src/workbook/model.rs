@@ -25,6 +25,11 @@ pub(super) struct PackagePreflight {
     pub(super) xml_sheets: BTreeMap<String, (String, u64)>,
     pub(super) xml_layouts: BTreeMap<String, crate::workbook::xlsx::sheet_index::SheetLayout>,
     pub(super) xml_regions: BTreeMap<String, Vec<crate::workbook::xlsx::regions::SparseRegion>>,
+    pub(super) xml_shared_strings: BTreeMap<u64, String>,
+    pub(super) xml_display_profile: Option<crate::workbook::xlsx::formulas::DisplayProfile>,
+    pub(super) xml_workbook_passes: u64,
+    pub(super) xml_styles_passes: u64,
+    pub(super) xml_shared_string_passes: u64,
     pub(super) sheet_bounds: BTreeMap<String, CellCoordinate>,
     pub(super) extras: BTreeMap<String, SheetExtras>,
     pub(super) diagnostics: Vec<Diagnostic>,
@@ -115,6 +120,7 @@ pub(super) struct WorkbookParts {
     pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) inventory: WorkbookInventory,
     pub(super) binary_formula_context: BinaryFormulaContext,
+    pub(super) date_1904: bool,
 }
 
 #[derive(Debug, Clone)]

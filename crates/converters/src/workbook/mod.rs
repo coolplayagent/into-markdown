@@ -29,8 +29,7 @@ use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink, ConverterOutput,
     ConverterStream, ConverterStreamCompletion, ConverterStreamMode, ExecutionContext,
     FormatCandidate, InputFormat, LocalBoxFuture, ProbeOutcome, ResolvedInput, ResourceReservation,
-    Services, SourceContentEvidence, StreamConsumerKind, document_is_empty,
-    stream_converter_output,
+    Services, SourceContentEvidence, document_is_empty, stream_converter_output,
 };
 use std::collections::{BTreeMap, BTreeSet};
 

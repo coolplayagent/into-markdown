@@ -5,7 +5,7 @@ use quick_xml::events::Event;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 
-pub(super) fn read_selected<R: BufRead>(
+pub(in crate::workbook) fn read_selected<R: BufRead>(
     input: R,
     required: &BTreeSet<u64>,
     part: &str,

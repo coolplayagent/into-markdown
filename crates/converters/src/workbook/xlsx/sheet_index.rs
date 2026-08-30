@@ -1,10 +1,13 @@
 use crate::workbook::cell::{parse_cell_range, parse_cell_ref};
-use crate::workbook::error::{limit, malformed};
+use crate::workbook::error::{limit, malformed, warning};
 use crate::workbook::model::CellCoordinate;
 use crate::workbook::opc::relationships::{
     decode_attr, is_spreadsheet_namespace, validate_xml_reference,
 };
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{
+    CellRef, ConversionError, ConversionOptions, Diagnostic, ErrorPolicy, ExecutionContext,
+    SourceLocator,
+};
 use quick_xml::events::Event;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
@@ -48,6 +51,7 @@ pub(in crate::workbook) struct SheetLayout {
     pub(in crate::workbook) shared_formula_slots: u64,
     pub(in crate::workbook) bounds: Option<CellCoordinate>,
     pub(in crate::workbook) declared_bounds: Option<CellCoordinate>,
+    pub(in crate::workbook) diagnostics: Vec<Diagnostic>,
 }
 
 pub(in crate::workbook) fn read_layout<R: BufRead>(
@@ -468,12 +472,17 @@ fn finish_cell(
     } else {
         CellValueToken::Raw(std::mem::take(&mut cell.value))
     };
-    finish_formula(cell, shared_formulas, coordinate, part)?;
-    let populated = !cell.formula.is_empty()
-        || match &value {
-            CellValueToken::Shared(_) => true,
-            CellValueToken::Raw(value) => !value.is_empty(),
-        };
+    let cached = match &value {
+        CellValueToken::Shared(_) => true,
+        CellValueToken::Raw(value) => !value.is_empty(),
+    };
+    let omit = finish_formula(cell, shared_formulas, coordinate, cached, layout, options, part)?;
+    let populated = !omit
+        && (!cell.formula.is_empty()
+            || match &value {
+                CellValueToken::Shared(_) => true,
+                CellValueToken::Raw(value) => !value.is_empty(),
+            });
     if populated {
         layout.populated_cells = layout.populated_cells.saturating_add(1);
         record_populated_coordinate(layout, coordinate);
@@ -510,8 +519,11 @@ fn finish_formula(
     cell: &mut CurrentCell,
     shared_formulas: &mut BTreeMap<u64, SharedFormula>,
     coordinate: CellCoordinate,
+    cached: bool,
+    layout: &mut SheetLayout,
+    options: &ConversionOptions,
     part: &str,
-) -> Result<(), ConversionError> {
+) -> Result<bool, ConversionError> {
     if cell.formula_type == "array" {
         let range = cell
             .formula_reference
@@ -524,9 +536,30 @@ fn finish_formula(
             .shared_formula_index
             .ok_or_else(|| malformed(Some(part), "shared formula index is missing"))?;
         if cell.formula.is_empty() {
-            let shared = shared_formulas
-                .get_mut(&index)
-                .ok_or_else(|| malformed(Some(part), "shared formula anchor is missing"))?;
+            if cell.formula_reference.is_some() {
+                return Err(malformed(Some(part), "invalid shared formula anchor"));
+            }
+            let Some(shared) = shared_formulas.get_mut(&index) else {
+                if options.error_policy != ErrorPolicy::BestEffort {
+                    return Err(malformed(Some(part), "shared formula anchor is missing"));
+                }
+                layout.diagnostics.push(warning(
+                    "spreadsheet.sharedFormula.omitted",
+                    if cached {
+                        "shared formula anchor is missing; preserved the cached display value"
+                            .into()
+                    } else {
+                        "shared formula anchor and cached value are missing; omitted the cell"
+                            .into()
+                    },
+                    Some(SourceLocator {
+                        cell: Some(CellRef { row: coordinate.0, column: coordinate.1 }),
+                        part: Some(part.to_owned()),
+                        ..SourceLocator::default()
+                    }),
+                ));
+                return Ok(!cached);
+            };
             if !contains_coordinate((shared.start, shared.end), coordinate) {
                 return Err(malformed(Some(part), "shared formula lies outside its range"));
             }
@@ -550,7 +583,7 @@ fn finish_formula(
     } else if cell.shared_formula_index.is_some() || cell.formula_reference.is_some() {
         return Err(malformed(Some(part), "formula metadata has no supported formula type"));
     }
-    Ok(())
+    Ok(false)
 }
 
 fn contains_coordinate(

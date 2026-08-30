@@ -2,11 +2,13 @@ use crate::workbook::error::{limit, malformed};
 use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
 use into_markdown_core::{ConversionError, ExecutionContext, TemporaryFile};
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
 
 const WRITE_BATCH_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct StagingTelemetry {
+    pub(super) data_passes: u64,
     pub(super) writes: u64,
     pub(super) flushes: u64,
     pub(super) reads: u64,
@@ -18,7 +20,7 @@ pub(super) struct StagingTelemetry {
 pub(super) struct StagedCells {
     file: TemporaryFile,
     count: u64,
-    telemetry: StagingTelemetry,
+    telemetry: Arc<Mutex<StagingTelemetry>>,
 }
 
 pub(super) struct StagingWriter {
@@ -32,6 +34,7 @@ pub(super) struct StagedReader {
     _owner: TemporaryFile,
     reader: BufReader<std::fs::File>,
     remaining: u64,
+    telemetry: Arc<Mutex<StagingTelemetry>>,
 }
 
 impl StagingWriter {
@@ -64,7 +67,12 @@ impl StagingWriter {
         flush_batch(&mut self.file, &mut self.batch, &mut self.telemetry, context)?;
         self.file.flush()?;
         self.telemetry.flushes = self.telemetry.flushes.saturating_add(1);
-        Ok(StagedCells { file: self.file, count: self.count, telemetry: self.telemetry })
+        self.telemetry.data_passes = self.telemetry.data_passes.saturating_add(1);
+        Ok(StagedCells {
+            file: self.file,
+            count: self.count,
+            telemetry: Arc::new(Mutex::new(self.telemetry)),
+        })
     }
 }
 
@@ -82,17 +90,22 @@ pub(super) fn stage(
 }
 
 impl StagedCells {
-    pub(super) fn telemetry(&self) -> StagingTelemetry {
-        StagingTelemetry { reads: self.count, seeks: 1, ..self.telemetry }
+    pub(super) fn telemetry_handle(&self) -> Arc<Mutex<StagingTelemetry>> {
+        Arc::clone(&self.telemetry)
     }
 
     pub(super) fn into_reader(mut self) -> Result<StagedReader, ConversionError> {
         self.file.seek(SeekFrom::Start(0)).map_err(ConversionError::from)?;
+        self.telemetry
+            .lock()
+            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
+            .seeks += 1;
         let reader = self.file.as_file()?.try_clone().map_err(ConversionError::from)?;
         Ok(StagedReader {
             _owner: self.file,
             reader: BufReader::new(reader),
             remaining: self.count,
+            telemetry: self.telemetry,
         })
     }
 
@@ -102,7 +115,10 @@ impl StagedCells {
         context: &ExecutionContext,
     ) -> Result<(Vec<CellToken>, StagingTelemetry), ConversionError> {
         self.file.seek(SeekFrom::Start(0)).map_err(ConversionError::from)?;
-        self.telemetry.seeks = self.telemetry.seeks.saturating_add(1);
+        self.telemetry
+            .lock()
+            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
+            .seeks += 1;
         let mut output = Vec::new();
         output
             .try_reserve_exact(usize::try_from(self.count).unwrap_or(usize::MAX))
@@ -111,9 +127,16 @@ impl StagedCells {
         for _ in 0..self.count {
             context.checkpoint()?;
             output.push(decode_cell(&mut reader)?);
-            self.telemetry.reads = self.telemetry.reads.saturating_add(1);
+            self.telemetry
+                .lock()
+                .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
+                .reads += 1;
         }
-        Ok((output, self.telemetry))
+        let telemetry = *self
+            .telemetry
+            .lock()
+            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?;
+        Ok((output, telemetry))
     }
 }
 
@@ -124,6 +147,10 @@ impl StagedReader {
         }
         let cell = decode_cell(&mut self.reader)?;
         self.remaining -= 1;
+        self.telemetry
+            .lock()
+            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
+            .reads += 1;
         Ok(Some(cell))
     }
 }
@@ -244,6 +271,8 @@ mod tests {
         let staged = stage(&cells, &context).unwrap();
         let (decoded, telemetry) = staged.read_all(&context).unwrap();
         assert_eq!(decoded, cells);
+        assert_eq!(telemetry.data_passes, 1);
+        assert_eq!(telemetry.reads, 16_384);
         assert!(telemetry.writes < 512);
         assert_eq!(telemetry.seeks, 1);
         assert_eq!(context.reserved_temporary_bytes(), 0);

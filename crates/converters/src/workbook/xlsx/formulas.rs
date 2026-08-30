@@ -1,12 +1,9 @@
 use crate::workbook::error::malformed;
-use crate::workbook::opc::relationships::{decode_attr, is_spreadsheet_namespace};
 use crate::workbook::output::data_text;
 use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
 use calamine::{Data, ExcelDateTime, ExcelDateTimeType};
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
-use quick_xml::events::Event;
+use into_markdown_core::ConversionError;
 use std::collections::BTreeMap;
-use std::io::BufRead;
 
 pub(super) fn translate_shared_formula(
     formula: &str,
@@ -102,19 +99,19 @@ fn column_name(mut column: u32) -> String {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum NumberKind {
+pub(in crate::workbook) enum NumberKind {
     DateTime,
     Duration,
 }
 
-#[derive(Default)]
-pub(super) struct DisplayProfile {
-    styles: BTreeMap<u64, NumberKind>,
-    is_1904: bool,
+#[derive(Debug, Default)]
+pub(in crate::workbook) struct DisplayProfile {
+    pub(in crate::workbook) styles: BTreeMap<u64, NumberKind>,
+    pub(in crate::workbook) is_1904: bool,
 }
 
 impl DisplayProfile {
-    pub(super) fn with_date_system(mut self, is_1904: bool) -> Self {
+    pub(in crate::workbook) fn with_date_system(mut self, is_1904: bool) -> Self {
         self.is_1904 = is_1904;
         self
     }
@@ -152,120 +149,7 @@ impl DisplayProfile {
     }
 }
 
-pub(super) fn read_number_formats<R: BufRead>(
-    input: R,
-    part: &str,
-    _options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<DisplayProfile, ConversionError> {
-    let mut reader = quick_xml::reader::NsReader::from_reader(input);
-    let mut buffer = Vec::with_capacity(64 * 1024);
-    let mut custom = BTreeMap::<u64, NumberKind>::new();
-    let mut profile = DisplayProfile::default();
-    let mut depth = 0_u16;
-    let mut cell_xfs_depth = None;
-    let mut style_index = 0_u64;
-    loop {
-        context.checkpoint()?;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| malformed(Some(part), format!("invalid styles XML: {error}")))?;
-        let core = is_spreadsheet_namespace(&namespace);
-        match event {
-            raw @ (Event::Start(_) | Event::Empty(_)) if core => {
-                let empty = matches!(raw, Event::Empty(_));
-                let (Event::Start(element) | Event::Empty(element)) = raw else { unreachable!() };
-                match element.local_name().as_ref() {
-                    b"cellXfs" => cell_xfs_depth = Some(depth),
-                    b"numFmt" => {
-                        let id = attribute(&element, b"numFmtId", part)?
-                            .and_then(|value| value.parse::<u64>().ok());
-                        let format_code = attribute(&element, b"formatCode", part)?;
-                        if let Some((id, kind)) =
-                            id.zip(format_code.as_deref().and_then(detect_number_kind))
-                        {
-                            custom.insert(id, kind);
-                        }
-                    }
-                    b"xf" if cell_xfs_depth.is_some_and(|value| value + 1 == depth) => {
-                        let id = attribute(&element, b"numFmtId", part)?
-                            .and_then(|value| value.parse::<u64>().ok())
-                            .unwrap_or_default();
-                        if let Some(kind) =
-                            builtin_number_kind(id).or_else(|| custom.get(&id).copied())
-                        {
-                            profile.styles.insert(style_index, kind);
-                        }
-                        style_index = style_index.saturating_add(1);
-                    }
-                    _ => {}
-                }
-                if !empty {
-                    depth = depth.saturating_add(1);
-                }
-            }
-            Event::End(element) if core => {
-                depth = depth.saturating_sub(1);
-                if element.local_name().as_ref() == b"cellXfs" {
-                    cell_xfs_depth = None;
-                }
-            }
-            Event::DocType(_) => return Err(malformed(Some(part), "DTD is forbidden")),
-            Event::Eof => break,
-            _ => {}
-        }
-        buffer.clear();
-    }
-    Ok(profile)
-}
-
-pub(super) fn read_date_system<R: BufRead>(
-    input: R,
-    part: &str,
-    context: &ExecutionContext,
-) -> Result<bool, ConversionError> {
-    let mut reader = quick_xml::reader::NsReader::from_reader(input);
-    let mut buffer = Vec::with_capacity(8 * 1024);
-    loop {
-        context.checkpoint()?;
-        let (namespace, event) = reader
-            .read_resolved_event_into(&mut buffer)
-            .map_err(|error| malformed(Some(part), format!("invalid workbook XML: {error}")))?;
-        if is_spreadsheet_namespace(&namespace)
-            && let Event::Start(ref element) | Event::Empty(ref element) = event
-            && element.local_name().as_ref() == b"workbookPr"
-        {
-            return Ok(matches!(
-                attribute(element, b"date1904", part)?.as_deref(),
-                Some("1" | "true")
-            ));
-        }
-        if matches!(event, Event::DocType(_)) {
-            return Err(malformed(Some(part), "DTD is forbidden"));
-        }
-        if matches!(event, Event::Eof) {
-            return Ok(false);
-        }
-        buffer.clear();
-    }
-}
-
-fn attribute(
-    element: &quick_xml::events::BytesStart<'_>,
-    name: &[u8],
-    part: &str,
-) -> Result<Option<String>, ConversionError> {
-    for attribute in element.attributes().with_checks(false) {
-        let attribute = attribute
-            .map_err(|error| malformed(Some(part), format!("invalid style attribute: {error}")))?;
-        if attribute.key.local_name().as_ref() == name {
-            return decode_attr(&attribute, part).map(Some);
-        }
-    }
-    Ok(None)
-}
-
-fn builtin_number_kind(id: u64) -> Option<NumberKind> {
+pub(in crate::workbook) fn builtin_number_kind(id: u64) -> Option<NumberKind> {
     match id {
         14..=22 | 45 | 47 => Some(NumberKind::DateTime),
         46 => Some(NumberKind::Duration),
@@ -273,7 +157,7 @@ fn builtin_number_kind(id: u64) -> Option<NumberKind> {
     }
 }
 
-fn detect_number_kind(format: &str) -> Option<NumberKind> {
+pub(in crate::workbook) fn detect_number_kind(format: &str) -> Option<NumberKind> {
     let lower = format.to_ascii_lowercase();
     if lower.contains("[h]") || lower.contains("[m]") || lower.contains("[s]") {
         return Some(NumberKind::Duration);
