@@ -1,4 +1,6 @@
-use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
+use into_markdown_core::{
+    ConversionError, ConversionOptions, ExecutionContext, ResourceReservation,
+};
 
 use super::ole::CompoundBudget;
 
@@ -135,6 +137,10 @@ impl<'a> MsgBudget<'a> {
 }
 
 impl CompoundBudget for MsgBudget<'_> {
+    fn cfb_memory(&self, bytes: u64) -> Result<ResourceReservation, ConversionError> {
+        self.context.reserve_memory(bytes)
+    }
+
     fn cfb_entry(&mut self) -> Result<(), ConversionError> {
         self.entry()
     }
