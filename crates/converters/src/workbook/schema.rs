@@ -19,8 +19,12 @@ pub(super) const DRAWINGML_NS: &[u8] = b"http://schemas.openxmlformats.org/drawi
 pub(super) const CHART_NS: &[u8] = b"http://schemas.openxmlformats.org/drawingml/2006/chart";
 pub(super) const SPREADSHEET_MAIN: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
+pub(super) const SPREADSHEET_TEMPLATE_MAIN: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml";
 pub(super) const SPREADSHEET_MACRO_MAIN: &str =
     "application/vnd.ms-excel.sheet.macroEnabled.main+xml";
+pub(super) const SPREADSHEET_MACRO_TEMPLATE_MAIN: &str =
+    "application/vnd.ms-excel.template.macroEnabled.main+xml";
 pub(super) const SPREADSHEET_BINARY_MAIN: &str =
     "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 pub(super) const ROOT_OFFICE_DOCUMENT: &str =
@@ -46,6 +50,8 @@ pub(super) const XML_SHARED_STRINGS_CT: &str =
 pub(super) const XLSB_SHARED_STRINGS_CT: &str = "application/vnd.ms-excel.sharedStrings";
 pub(super) const XML_COMMENTS_CT: &str =
     "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml";
+pub(super) const XML_TABLE_CT: &str =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml";
 pub(super) const XLSB_COMMENTS_CT: &str = "application/vnd.ms-excel.comments";
 pub(super) const DRAWING_CT: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 pub(super) const CHART_CT: &str =

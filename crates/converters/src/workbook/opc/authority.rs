@@ -1,5 +1,7 @@
 use crate::workbook::error::{limit, malformed, warning};
-use crate::workbook::model::{BinaryFormulaContext, WorkbookKind, WorkbookParts};
+use crate::workbook::model::{
+    BinaryFormulaContext, WorkbookInventory, WorkbookKind, WorkbookParts,
+};
 use crate::workbook::opc::content_types::{ContentTypeMap, require_content_type};
 use crate::workbook::opc::package::{PackageEntry, read_entry};
 use crate::workbook::opc::relationships::{
@@ -7,13 +9,13 @@ use crate::workbook::opc::relationships::{
 };
 use crate::workbook::schema::{
     ROOT_OFFICE_DOCUMENT, ROOT_OFFICE_DOCUMENT_STRICT, SPREADSHEET_BINARY_MAIN,
-    SPREADSHEET_MACRO_MAIN, SPREADSHEET_MAIN, XLSB_CHARTSHEET_CT, XLSB_DIALOGSHEET_CT,
-    XLSB_MACROSHEET_CT, XLSB_SHARED_STRINGS_CT, XLSB_STYLES_CT, XLSB_WORKSHEET_CT,
-    XML_CHARTSHEET_CT, XML_DIALOGSHEET_CT, XML_MACROSHEET_CT, XML_SHARED_STRINGS_CT, XML_STYLES_CT,
-    XML_WORKSHEET_CT,
+    SPREADSHEET_MACRO_MAIN, SPREADSHEET_MACRO_TEMPLATE_MAIN, SPREADSHEET_MAIN,
+    SPREADSHEET_TEMPLATE_MAIN, XLSB_CHARTSHEET_CT, XLSB_DIALOGSHEET_CT, XLSB_MACROSHEET_CT,
+    XLSB_SHARED_STRINGS_CT, XLSB_STYLES_CT, XLSB_WORKSHEET_CT, XML_CHARTSHEET_CT,
+    XML_DIALOGSHEET_CT, XML_MACROSHEET_CT, XML_SHARED_STRINGS_CT, XML_STYLES_CT, XML_WORKSHEET_CT,
 };
 use crate::workbook::xlsb::workbook::{parse_binary_workbook_sheets, scan_binary_workbook_surface};
-use crate::workbook::xlsx::workbook::{parse_xml_workbook_sheets, scan_xml_workbook_surface};
+use crate::workbook::xlsx::workbook::scan_xml_workbook_surface;
 use into_markdown_core::{
     ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, SourceLocator,
 };
@@ -58,8 +60,12 @@ pub(in crate::workbook) fn root_workbook_authority(
         .for_part(&relationship.target)
         .ok_or_else(|| malformed(Some(&relationship.target), "workbook has no content type"))?;
     let (kind, macro_present, expected_target) = match actual_type {
-        SPREADSHEET_MAIN => (WorkbookKind::Xml, false, "xl/workbook.xml"),
-        SPREADSHEET_MACRO_MAIN => (WorkbookKind::Xml, true, "xl/workbook.xml"),
+        SPREADSHEET_MAIN | SPREADSHEET_TEMPLATE_MAIN => {
+            (WorkbookKind::Xml, false, "xl/workbook.xml")
+        }
+        SPREADSHEET_MACRO_MAIN | SPREADSHEET_MACRO_TEMPLATE_MAIN => {
+            (WorkbookKind::Xml, true, "xl/workbook.xml")
+        }
         SPREADSHEET_BINARY_MAIN => (WorkbookKind::Binary, true, "xl/workbook.bin"),
         other => {
             return Err(ConversionError::Unsupported {
@@ -181,27 +187,12 @@ pub(in crate::workbook) fn workbook_sheet_parts(
         &relationship_part,
         options,
     )?;
-    let workbook_index = zip
-        .index_for_name(workbook_part)
-        .ok_or_else(|| malformed(Some(workbook_part), "workbook part is missing"))?;
-    let workbook = read_entry(zip, workbook_index, workbook_part)?;
-    let (names_to_ids, inventory, binary_formula_context) = match kind {
-        WorkbookKind::Xml => (
-            parse_xml_workbook_sheets(&workbook, options, context)?,
-            scan_xml_workbook_surface(&workbook, options, context)?,
-            BinaryFormulaContext::default(),
-        ),
-        WorkbookKind::Binary => {
-            let (inventory, formula_context) =
-                scan_binary_workbook_surface(&workbook, options, context)?;
-            (parse_binary_workbook_sheets(&workbook, options, context)?, inventory, formula_context)
-        }
-    };
+    let scanned = scan_workbook(zip, kind, workbook_part, options, context)?;
     let mut output = BTreeMap::new();
     let mut sheet_order = Vec::new();
     let mut diagnostics = Vec::new();
     let mut targets = BTreeSet::new();
-    for (name, relationship_id) in names_to_ids {
+    for (name, relationship_id) in scanned.names_to_ids {
         let Some(relationship) = resolve_sheet_relationship(
             &relationships,
             &relationship_id,
@@ -252,9 +243,51 @@ pub(in crate::workbook) fn workbook_sheet_parts(
         sheets: output,
         sheet_order,
         diagnostics,
-        inventory,
-        binary_formula_context,
+        inventory: scanned.inventory,
+        binary_formula_context: scanned.binary_formula_context,
+        date_1904: scanned.date_1904,
     })
+}
+
+struct ScannedWorkbook {
+    names_to_ids: Vec<(String, String)>,
+    inventory: WorkbookInventory,
+    binary_formula_context: BinaryFormulaContext,
+    date_1904: bool,
+}
+
+fn scan_workbook(
+    zip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    kind: WorkbookKind,
+    workbook_part: &str,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ScannedWorkbook, ConversionError> {
+    let workbook_index = zip
+        .index_for_name(workbook_part)
+        .ok_or_else(|| malformed(Some(workbook_part), "workbook part is missing"))?;
+    let workbook = read_entry(zip, workbook_index, workbook_part)?;
+    match kind {
+        WorkbookKind::Xml => {
+            let surface = scan_xml_workbook_surface(&workbook, options, context)?;
+            Ok(ScannedWorkbook {
+                names_to_ids: surface.sheets,
+                inventory: surface.inventory,
+                binary_formula_context: BinaryFormulaContext::default(),
+                date_1904: surface.date_1904,
+            })
+        }
+        WorkbookKind::Binary => {
+            let (inventory, binary_formula_context) =
+                scan_binary_workbook_surface(&workbook, options, context)?;
+            Ok(ScannedWorkbook {
+                names_to_ids: parse_binary_workbook_sheets(&workbook, options, context)?,
+                inventory,
+                binary_formula_context,
+                date_1904: false,
+            })
+        }
+    }
 }
 
 fn insert_sheet_part(

@@ -1,6 +1,14 @@
+use crate::workbook::cell::parse_cell_range;
 use crate::workbook::error::{limit, malformed};
+use crate::workbook::model::CellCoordinate;
+use crate::workbook::opc::relationships::{
+    decode_attr, is_spreadsheet_namespace, require_spreadsheet_namespace, validate_xml_reference,
+};
+use crate::workbook::schema::{OFFICE_REL_NS, OFFICE_REL_STRICT_NS};
 use crate::workbook::xlsx::sheet_index::SheetLayout;
-use into_markdown_core::ConversionError;
+use into_markdown_core::{ConversionError, ExecutionContext};
+use quick_xml::events::Event;
+use quick_xml::name::ResolveResult;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap};
 
@@ -49,10 +57,12 @@ pub(in crate::workbook) struct RegionPage {
 pub(super) fn build_sparse_regions(
     runs: &[SparseRun],
     merges: &[MergeRange],
+    tables: &[(CellCoordinate, CellCoordinate)],
     empty_cell_budget: u64,
 ) -> Result<RegionPlan, ConversionError> {
     let mut regions = regions_from_runs(runs)?;
     append_merge_regions(&mut regions, merges)?;
+    append_table_regions(&mut regions, tables)?;
     let (regions, empty_cells_used) = coalesce_regions(regions, empty_cell_budget)?;
     // Every merge is itself an input region, and coalescing unconditionally unions
     // intersecting merge owners. A non-overlap sweep therefore proves that each
@@ -70,6 +80,7 @@ pub(super) fn build_sparse_regions(
 
 pub(in crate::workbook) fn plan_sheet_regions(
     layout: &SheetLayout,
+    tables: &[(CellCoordinate, CellCoordinate)],
     empty_cell_budget: u64,
 ) -> Result<RegionPlan, ConversionError> {
     let runs = layout
@@ -91,11 +102,12 @@ pub(in crate::workbook) fn plan_sheet_regions(
             last_column: end.1,
         })
         .collect::<Vec<_>>();
-    let mut plan = build_sparse_regions(&runs, &merges, empty_cell_budget)?;
+    let mut plan = build_sparse_regions(&runs, &merges, tables, empty_cell_budget)?;
     let required_end = layout
         .merges
         .iter()
         .map(|(_, end)| *end)
+        .chain(tables.iter().map(|(_, end)| *end))
         .chain(layout.bounds)
         .reduce(|left, right| (left.0.max(right.0), left.1.max(right.1)));
     if let Some(declared) = layout.declared_bounds
@@ -108,6 +120,100 @@ pub(in crate::workbook) fn plan_sheet_regions(
         plan.empty_cells_used = region_area(region).saturating_sub(layout.populated_cells);
     }
     Ok(plan)
+}
+
+pub(in crate::workbook) fn parse_table_part_ids(
+    xml: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<Vec<String>, ConversionError> {
+    let mut reader = quick_xml::reader::NsReader::from_reader(xml);
+    let mut ids = Vec::new();
+    loop {
+        context.checkpoint()?;
+        match reader.read_resolved_event() {
+            Ok((namespace, Event::Start(event) | Event::Empty(event)))
+                if event.local_name().as_ref() == b"tablePart" =>
+            {
+                require_spreadsheet_namespace(&namespace, part)?;
+                let mut relationship_id = None;
+                for attr in event.attributes().with_checks(false) {
+                    let attr = attr.map_err(|error| {
+                        malformed(Some(part), format!("invalid tablePart attribute: {error}"))
+                    })?;
+                    if attr.key.local_name().as_ref() == b"id"
+                        && matches!(
+                            reader.resolve_attribute(attr.key),
+                            (ResolveResult::Bound(namespace), _)
+                                if namespace.as_ref() == OFFICE_REL_NS
+                                    || namespace.as_ref() == OFFICE_REL_STRICT_NS
+                        )
+                        && relationship_id.replace(decode_attr(&attr, part)?).is_some()
+                    {
+                        return Err(malformed(Some(part), "duplicate table relationship id"));
+                    }
+                }
+                let relationship_id = relationship_id
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| malformed(Some(part), "table relationship id is missing"))?;
+                if ids.contains(&relationship_id) {
+                    return Err(malformed(Some(part), "duplicate table relationship reference"));
+                }
+                ids.push(relationship_id);
+            }
+            Ok((_, Event::DocType(_))) => return Err(malformed(Some(part), "DTD is forbidden")),
+            Ok((_, Event::GeneralRef(reference))) => {
+                validate_xml_reference(reference.as_ref(), part)?;
+            }
+            Ok((_, Event::Eof)) => break,
+            Err(error) => {
+                return Err(malformed(Some(part), format!("invalid worksheet XML: {error}")));
+            }
+            _ => {}
+        }
+    }
+    Ok(ids)
+}
+
+pub(in crate::workbook) fn parse_table_range(
+    xml: &[u8],
+    part: &str,
+    context: &ExecutionContext,
+) -> Result<(CellCoordinate, CellCoordinate), ConversionError> {
+    let mut reader = quick_xml::reader::NsReader::from_reader(xml);
+    let mut range = None;
+    loop {
+        context.checkpoint()?;
+        match reader.read_resolved_event() {
+            Ok((namespace, Event::Start(event) | Event::Empty(event)))
+                if event.local_name().as_ref() == b"table"
+                    && is_spreadsheet_namespace(&namespace) =>
+            {
+                require_spreadsheet_namespace(&namespace, part)?;
+                if range.is_some() {
+                    return Err(malformed(Some(part), "duplicate table root"));
+                }
+                for attr in event.attributes().with_checks(false) {
+                    let attr = attr.map_err(|error| {
+                        malformed(Some(part), format!("invalid table attribute: {error}"))
+                    })?;
+                    if attr.key.as_ref() == b"ref"
+                        && range.replace(parse_cell_range(&decode_attr(&attr, part)?)?).is_some()
+                    {
+                        return Err(malformed(Some(part), "duplicate table range"));
+                    }
+                }
+            }
+            Ok((_, Event::DocType(_))) => return Err(malformed(Some(part), "DTD is forbidden")),
+            Ok((_, Event::GeneralRef(reference))) => {
+                validate_xml_reference(reference.as_ref(), part)?;
+            }
+            Ok((_, Event::Eof)) => break,
+            Err(error) => return Err(malformed(Some(part), format!("invalid table XML: {error}"))),
+            _ => {}
+        }
+    }
+    range.ok_or_else(|| malformed(Some(part), "table range is missing"))
 }
 
 pub(super) fn compact_declared_region(
@@ -272,6 +378,46 @@ fn append_merge_regions(
     for merge_range in ordered {
         let merge_region: SparseRegion = merge_range.into();
         regions.push(merge_region);
+    }
+    Ok(())
+}
+
+fn append_table_regions(
+    regions: &mut Vec<SparseRegion>,
+    tables: &[(CellCoordinate, CellCoordinate)],
+) -> Result<(), ConversionError> {
+    regions
+        .try_reserve_exact(tables.len())
+        .map_err(|_| limit("max_memory_bytes", "cannot reserve worksheet table regions"))?;
+    for &(start, end) in tables {
+        if start.0 > end.0 || start.1 > end.1 {
+            return Err(malformed(None, "worksheet table range is reversed"));
+        }
+        let mut table_region = SparseRegion {
+            first_row: start.0,
+            last_row: end.0,
+            first_column: start.1,
+            last_column: end.1,
+            occupied_cells: 0,
+            contains_merge: false,
+        };
+        loop {
+            let mut absorbed = false;
+            let mut untouched = Vec::with_capacity(regions.len());
+            for region in regions.drain(..) {
+                if intersects(region, table_region) {
+                    table_region = union(table_region, region);
+                    absorbed = true;
+                } else {
+                    untouched.push(region);
+                }
+            }
+            *regions = untouched;
+            if !absorbed {
+                break;
+            }
+        }
+        regions.push(table_region);
     }
     Ok(())
 }
@@ -513,6 +659,7 @@ mod tests {
                 SparseRun { row: 1_048_575, first_column: 16_383, last_column: 16_383 },
             ],
             &[],
+            &[],
             4_096,
         )
         .unwrap();
@@ -531,6 +678,7 @@ mod tests {
                 SparseRun { row: 0, first_column: 16_383, last_column: 16_383 },
                 SparseRun { row: 1, first_column: 0, last_column: 2 },
             ],
+            &[],
             &[],
             1,
         )
@@ -557,8 +705,8 @@ mod tests {
             SparseRun { row: 0, first_column: 0, last_column: 0 },
             SparseRun { row: 1, first_column: 0, last_column: 1 },
         ];
-        let without_slack = build_sparse_regions(&runs, &[], 0).unwrap();
-        let with_slack = build_sparse_regions(&runs, &[], 1).unwrap();
+        let without_slack = build_sparse_regions(&runs, &[], &[], 0).unwrap();
+        let with_slack = build_sparse_regions(&runs, &[], &[], 1).unwrap();
 
         assert_eq!(without_slack.regions.len(), 2);
         assert_eq!(without_slack.empty_cells_used, 0);
@@ -602,6 +750,7 @@ mod tests {
                 SparseRun { row: 1, first_column: 1, last_column: 1 },
             ],
             &[merge_range],
+            &[],
             0,
         )
         .unwrap();

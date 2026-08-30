@@ -22,8 +22,9 @@ use crate::workbook::xlsb::tables::{scan_binary_shared_strings, scan_binary_styl
 use crate::workbook::xlsx::emitter::{NATIVE_TABLE_NODE_CEILING, table_node_upper_bound_for};
 use crate::workbook::xlsx::regions::plan_sheet_regions;
 use crate::workbook::xlsx::regions::{MergeRange, SparseRegion, paginate_region};
+use crate::workbook::xlsx::shared_strings::read_selected;
 use crate::workbook::xlsx::sheet_index::read_layout;
-use crate::workbook::xlsx::tables::{scan_xml_shared_strings, scan_xml_style_counts};
+use crate::workbook::xlsx::tables::{scan_xml_shared_strings_selected, scan_xml_styles};
 use into_markdown_core::{
     ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, ResourceReservation,
     SourceLocator,
@@ -372,18 +373,29 @@ pub(super) fn preflight_package(
             xml_layouts.remove(part).map(|layout| (sheet_name.clone(), layout))
         })
         .collect::<BTreeMap<_, _>>();
+    let required_shared = xml_layouts
+        .values()
+        .flat_map(|layout| layout.required_shared.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut xml_shared_strings = BTreeMap::new();
+    let mut xml_display_profile = None;
+    let mut xml_styles_passes = 0_u64;
+    let mut xml_shared_string_passes = 0_u64;
     match kind {
         WorkbookKind::Xml => {
             if exact.contains("xl/styles.xml") {
                 require_content_type(&content_types, "xl/styles.xml", &[XML_STYLES_CT])?;
                 let entry = entry_map.get("xl/styles.xml").unwrap();
                 let data = read_entry(&mut zip, entry.index, "xl/styles.xml")?;
-                match scan_xml_style_counts(&data, caller_options, context) {
-                    Ok(styles) => {
+                xml_styles_passes = xml_styles_passes.saturating_add(1);
+                match scan_xml_styles(&data, caller_options, context) {
+                    Ok((styles, display)) => {
                         inventory.styles = styles.styles;
                         inventory.fonts = styles.fonts;
                         inventory.number_formats = styles.number_formats;
                         inventory.style_format_bytes = styles.style_format_bytes;
+                        xml_display_profile =
+                            Some(display.with_date_system(workbook_parts.date_1904));
                     }
                     Err(ConversionError::Malformed { detail, .. })
                         if options.error_policy == ErrorPolicy::BestEffort =>
@@ -408,11 +420,18 @@ pub(super) fn preflight_package(
                 )?;
                 let entry = entry_map.get("xl/sharedStrings.xml").unwrap();
                 let data = read_entry(&mut zip, entry.index, "xl/sharedStrings.xml")?;
-                match scan_xml_shared_strings(&data, caller_options, context) {
-                    Ok(strings) => {
+                xml_shared_string_passes = xml_shared_string_passes.saturating_add(1);
+                match scan_xml_shared_strings_selected(
+                    &data,
+                    &required_shared,
+                    caller_options,
+                    context,
+                ) {
+                    Ok((strings, selected)) => {
                         inventory.shared_strings = strings.shared_strings;
                         inventory.shared_string_bytes = strings.shared_string_bytes;
                         inventory.max_shared_string_bytes = strings.max_shared_string_bytes;
+                        xml_shared_strings = selected;
                     }
                     Err(ConversionError::Malformed { detail, .. })
                         if options.error_policy == ErrorPolicy::BestEffort =>
@@ -422,6 +441,14 @@ pub(super) fn preflight_package(
                             .map_or(0, |index| index.saturating_add(1));
                         inventory.shared_string_bytes =
                             entry_size(&entries, "xl/sharedStrings.xml");
+                        xml_shared_strings = read_selected(
+                            Cursor::new(&data),
+                            &required_shared,
+                            "xl/sharedStrings.xml",
+                            options,
+                            context,
+                        )?;
+                        xml_shared_string_passes = xml_shared_string_passes.saturating_add(1);
                         diagnostics.push(warning(
                             "spreadsheet.extension.omitted",
                             format!("non-core shared-string metadata was normalized: {detail}"),
@@ -459,6 +486,12 @@ pub(super) fn preflight_package(
             }
         }
     }
+    if kind == WorkbookKind::Xml && xml_display_profile.is_none() {
+        xml_display_profile = Some(
+            crate::workbook::xlsx::formulas::DisplayProfile::default()
+                .with_date_system(workbook_parts.date_1904),
+        );
+    }
     if inventory.max_shared_string_index.is_some_and(|index| index >= inventory.shared_strings) {
         return Err(malformed(
             None,
@@ -480,22 +513,27 @@ pub(super) fn preflight_package(
             ));
         }
     }
-    let ExtractedSheetExtras { sheets: mut extras, mut assets, diagnostics: extras_diagnostics } =
-        extract_sheet_extras(
-            &mut zip,
-            kind,
-            &sheet_parts,
-            &exact,
-            &content_types,
-            options,
-            context,
-        )?;
+    let ExtractedSheetExtras {
+        sheets: mut extras,
+        table_ranges,
+        mut assets,
+        diagnostics: extras_diagnostics,
+    } = extract_sheet_extras(
+        &mut zip,
+        kind,
+        &sheet_parts,
+        &exact,
+        &content_types,
+        options,
+        context,
+    )?;
     diagnostics.extend(extras_diagnostics);
     let mut xml_regions = BTreeMap::new();
     let mut empty_cell_slack = inventory.cells.div_ceil(10);
     for sheet_name in &sheet_order {
         if let Some(layout) = xml_layouts.get(sheet_name) {
-            let plan = plan_sheet_regions(layout, empty_cell_slack)?;
+            let tables = table_ranges.get(sheet_name).map(Vec::as_slice).unwrap_or_default();
+            let plan = plan_sheet_regions(layout, tables, empty_cell_slack)?;
             empty_cell_slack = empty_cell_slack.saturating_sub(plan.empty_cells_used);
             xml_regions.insert(sheet_name.clone(), plan.regions);
         }
@@ -674,7 +712,11 @@ pub(super) fn preflight_package(
         .and_then(|value| value.checked_add(metadata_memory))
         .and_then(|value| value.checked_add(extras_memory))
         .and_then(|value| value.checked_add(media_bytes))
-        .and_then(|value| value.checked_add(8 * 1024 * 1024))
+        // Keep a converter-local retained-output cushion inside the same
+        // authenticated request permit. This covers allocator capacity and
+        // Markdown transaction owners that are not represented by XML byte
+        // counts without increasing the caller's shared memory budget.
+        .and_then(|value| value.checked_add(24 * 1024 * 1024))
         .ok_or_else(|| limit("max_memory_bytes", "workbook peak memory overflow"))?;
     let decode_peak = package_materialization
         .checked_add(assets.decode_working_set_peak)
@@ -737,6 +779,11 @@ pub(super) fn preflight_package(
             xml_sheets,
             xml_layouts,
             xml_regions,
+            xml_shared_strings,
+            xml_display_profile,
+            xml_workbook_passes: u64::from(kind == WorkbookKind::Xml),
+            xml_styles_passes,
+            xml_shared_string_passes,
             sheet_bounds,
             extras,
             diagnostics,

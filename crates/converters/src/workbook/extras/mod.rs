@@ -20,8 +20,11 @@ use crate::workbook::opc::package::{has_extension, read_entry};
 use crate::workbook::opc::relationships::{
     is_relationship_kind, parse_relationships, relationship_part,
 };
-use crate::workbook::schema::{DRAWING_CT, XLSB_COMMENTS_CT, XML_COMMENTS_CT, XML_STYLES_CT};
+use crate::workbook::schema::{
+    DRAWING_CT, XLSB_COMMENTS_CT, XML_COMMENTS_CT, XML_STYLES_CT, XML_TABLE_CT,
+};
 use crate::workbook::xlsb::sheet::scan_xlsb_sheet;
+use crate::workbook::xlsx::regions::{parse_table_part_ids, parse_table_range};
 use into_markdown_core::{
     ConversionError, ConversionOptions, Diagnostic, ErrorPolicy, ExecutionContext, SourceLocator,
 };
@@ -30,6 +33,10 @@ use std::io::Cursor;
 
 pub(in crate::workbook) struct ExtractedSheetExtras {
     pub(in crate::workbook) sheets: BTreeMap<String, SheetExtras>,
+    pub(in crate::workbook) table_ranges: BTreeMap<
+        String,
+        Vec<(crate::workbook::model::CellCoordinate, crate::workbook::model::CellCoordinate)>,
+    >,
     pub(in crate::workbook) assets: ExtractedAssets,
     pub(in crate::workbook) diagnostics: Vec<Diagnostic>,
 }
@@ -45,6 +52,7 @@ pub(in crate::workbook) fn extract_sheet_extras(
     context: &ExecutionContext,
 ) -> Result<ExtractedSheetExtras, ConversionError> {
     let mut output = BTreeMap::new();
+    let mut table_ranges = BTreeMap::new();
     let mut assets = ExtractedAssets::default();
     let mut diagnostics = Vec::new();
     let styles = if kind == WorkbookKind::Xml && package_parts.contains("xl/styles.xml") {
@@ -67,12 +75,35 @@ pub(in crate::workbook) fn extract_sheet_extras(
             BTreeMap::new()
         };
         let mut extras = SheetExtras::default();
+        let mut sheet_table_ranges = Vec::new();
         let drawing_relationship_ids;
         if kind == WorkbookKind::Xml && has_extension(sheet_part, "xml") {
             let index = zip
                 .index_for_name(sheet_part)
                 .ok_or_else(|| malformed(Some(sheet_part), "worksheet part is missing"))?;
             let xml = read_entry(zip, index, sheet_part)?;
+            for relationship_id in parse_table_part_ids(&xml, sheet_part, context)? {
+                let relationship = relationships.get(&relationship_id).ok_or_else(|| {
+                    malformed(
+                        Some(sheet_part),
+                        format!("missing table relationship {relationship_id}"),
+                    )
+                })?;
+                if relationship.external || !is_relationship_kind(&relationship.kind, "table") {
+                    return Err(malformed(Some(sheet_part), "invalid table relationship"));
+                }
+                require_package_part(package_parts, &relationship.target)?;
+                require_content_type(content_types, &relationship.target, &[XML_TABLE_CT])?;
+                let table_index = zip.index_for_name(&relationship.target).ok_or_else(|| {
+                    malformed(Some(&relationship.target), "table part is missing")
+                })?;
+                let table_xml = read_entry(zip, table_index, &relationship.target)?;
+                sheet_table_ranges.push(parse_table_range(
+                    &table_xml,
+                    &relationship.target,
+                    context,
+                )?);
+            }
             let (hyperlinks, omitted_hyperlinks) =
                 parse_sheet_hyperlinks(&xml, sheet_part, &relationships, options, context)?;
             extras.hyperlinks = hyperlinks;
@@ -221,8 +252,9 @@ pub(in crate::workbook) fn extract_sheet_extras(
             return Err(malformed(Some(sheet_part), "worksheet contains duplicate cell comments"));
         }
         output.insert(sheet_name.clone(), extras);
+        table_ranges.insert(sheet_name.clone(), sheet_table_ranges);
     }
-    Ok(ExtractedSheetExtras { sheets: output, assets, diagnostics })
+    Ok(ExtractedSheetExtras { sheets: output, table_ranges, assets, diagnostics })
 }
 
 #[cfg(test)]

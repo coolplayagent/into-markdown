@@ -361,7 +361,7 @@ impl TablePlanOwners {
 // an uncharged heap allocation. Calls are not nested: the shape is discarded
 // before planning any cell's child blocks.
 #[allow(clippy::large_stack_arrays)]
-fn table_shape(rows: &[TableRow]) -> Result<(usize, bool), ConversionError> {
+fn table_shape(rows: &[TableRow]) -> Result<(usize, bool, bool), ConversionError> {
     let mut occupancy = [0_u32; into_markdown_core::MAX_TABLE_COLUMNS];
     let mut width = 0_usize;
     for row in rows {
@@ -392,7 +392,26 @@ fn table_shape(rows: &[TableRow]) -> Result<(usize, bool), ConversionError> {
     let first_has_header = rows
         .first()
         .is_some_and(|row| !row.cells.is_empty() && row.cells.iter().all(|cell| cell.header));
-    Ok((width, first_has_header))
+    occupancy.fill(0);
+    let mut requires_html = false;
+    for row in rows {
+        let mut column = 0_usize;
+        for cell in &row.cells {
+            while occupancy.get(column).is_some_and(|remaining| *remaining > 0) {
+                column = column.saturating_add(1);
+            }
+            let span = usize::try_from(cell.column_span).map_err(|_| render_plan_overflow())?;
+            let end = column.checked_add(span).ok_or_else(render_plan_overflow)?;
+            occupancy[column..end].fill(cell.row_span);
+            column = end;
+            requires_html |= cell.row_span > 1 || cell.column_span > 1;
+        }
+        requires_html |= occupancy[..width].contains(&0);
+        for remaining in &mut occupancy[..width] {
+            *remaining = remaining.saturating_sub(1);
+        }
+    }
+    Ok((width, first_has_header, requires_html))
 }
 
 fn checked_product(left: usize, right: usize) -> Result<u64, ConversionError> {
@@ -539,6 +558,16 @@ fn table_plan_owners(
         .checked_mul(4)
         .and_then(|value| value.checked_add(u64::try_from(rendered_rows).ok()? * 2))
         .ok_or_else(render_plan_overflow)?;
+    let cells = rows.iter().try_fold(0_u64, |total, row| {
+        total
+            .checked_add(u64::try_from(row.cells.len()).map_err(|_| render_plan_overflow())?)
+            .ok_or_else(render_plan_overflow)
+    })?;
+    let html_overhead = cells
+        .checked_mul(128)
+        .and_then(|value| value.checked_add(u64::try_from(rows_len).ok()?.saturating_mul(32)))
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(render_plan_overflow)?;
     Ok(TablePlanOwners {
         occupancy: checked_product(width, std::mem::size_of::<u32>())?,
         grid_rows: checked_product(rows_len, std::mem::size_of::<Vec<String>>())?,
@@ -554,6 +583,7 @@ fn table_plan_owners(
         output: cell_strings
             .checked_add(separators)
             .and_then(|value| value.checked_add(row_overhead))
+            .and_then(|value| value.checked_add(html_overhead))
             .ok_or_else(render_plan_overflow)?,
     })
 }
@@ -704,7 +734,7 @@ fn planned_render_peak(
                     rendered
                 }
                 Block::Table { rows, .. } => {
-                    let (width, first_has_header) = table_shape(rows)?;
+                    let (width, first_has_header, _) = table_shape(rows)?;
                     for row in rows {
                         plan.unit()?;
                         for _ in &row.cells {
@@ -724,7 +754,29 @@ fn planned_render_peak(
                     owners.output
                 }
                 Block::Code { language, text } => {
-                    if language.as_deref() == Some("tsv") && longest_run(text, '`') <= 2 {
+                    if language.as_deref() == Some("xlsx-merge-html") {
+                        let source =
+                            u64::try_from(text.len()).map_err(|_| render_plan_overflow())?;
+                        let ranges = u64::try_from(text.lines().count())
+                            .map_err(|_| render_plan_overflow())?;
+                        let mut rendered = source
+                            .checked_mul(8)
+                            .and_then(|value| value.checked_add(ranges.saturating_mul(160)))
+                            .and_then(|value| value.checked_add(64))
+                            .ok_or_else(render_plan_overflow)?;
+                        plan.add(rendered)?;
+                        for _ in 0..depth {
+                            plan.add(rendered)?;
+                            rendered = rendered
+                                .checked_add(ranges.saturating_mul(4))
+                                .and_then(|value| value.checked_add(64))
+                                .ok_or_else(render_plan_overflow)?;
+                            plan.add(rendered)?;
+                            plan.add(rendered)?;
+                            plan.add(rendered)?;
+                        }
+                        rendered
+                    } else if language.as_deref() == Some("tsv") && longest_run(text, '`') <= 2 {
                         let source =
                             u64::try_from(text.len()).map_err(|_| render_plan_overflow())?;
                         let newlines =
@@ -953,7 +1005,11 @@ impl RenderContext<'_> {
             }
             Block::Table { rows, alignments } => self.render_table(rows, alignments),
             Block::Code { language, text } => {
-                Ok(render_fence(text, language.as_deref().map(sanitize_info_string).as_deref()))
+                if language.as_deref() == Some("xlsx-merge-html") {
+                    render_merge_html(text)
+                } else {
+                    Ok(render_fence(text, language.as_deref().map(sanitize_info_string).as_deref()))
+                }
             }
             Block::Formula(value) => Ok(render_fence(value, Some("math"))),
             Block::Footnote { label, blocks } => {
@@ -1097,7 +1153,10 @@ impl RenderContext<'_> {
         rows: &[TableRow],
         alignments: &[TableAlignment],
     ) -> Result<(String, TablePlanOwners), ConversionError> {
-        let (width, first_has_header) = table_shape(rows)?;
+        let (width, first_has_header, requires_html) = table_shape(rows)?;
+        if requires_html {
+            return self.render_html_table(rows, width, first_has_header);
+        }
         let (grid, mut actual) = self.table_grid(rows, width)?;
         let fallback = (!first_has_header)
             .then(|| exact_empty_strings(width, "table fallback header allocation failed"))
@@ -1137,6 +1196,102 @@ impl RenderContext<'_> {
         )?;
         actual.verify_within(&planned)?;
         Ok((output, actual))
+    }
+
+    fn render_html_table(
+        &self,
+        rows: &[TableRow],
+        width: usize,
+        first_has_header: bool,
+    ) -> Result<(String, TablePlanOwners), ConversionError> {
+        let mut output = String::from("<table>\n");
+        let mut actual = TablePlanOwners::default();
+        for row in rows {
+            output.push_str("  <tr>\n");
+            for cell in &row.cells {
+                let tag = if cell.header { "th" } else { "td" };
+                output.push_str("    <");
+                output.push_str(tag);
+                if cell.row_span > 1 {
+                    write!(&mut output, " rowspan=\"{}\"", cell.row_span)
+                        .map_err(|_| render_plan_overflow())?;
+                }
+                if cell.column_span > 1 {
+                    write!(&mut output, " colspan=\"{}\"", cell.column_span)
+                        .map_err(|_| render_plan_overflow())?;
+                }
+                output.push('>');
+                let (rendered, temporary) = self.render_html_cell(cell)?;
+                actual.cell_strings = actual
+                    .cell_strings
+                    .checked_add(
+                        u64::try_from(rendered.capacity()).map_err(|_| render_plan_overflow())?,
+                    )
+                    .ok_or_else(render_plan_overflow)?;
+                actual.cell_block_joins = actual
+                    .cell_block_joins
+                    .checked_add(temporary)
+                    .ok_or_else(render_plan_overflow)?;
+                output.push_str(&rendered);
+                output.push_str("</");
+                output.push_str(tag);
+                output.push_str(">\n");
+            }
+            output.push_str("  </tr>\n");
+        }
+        output.push_str("</table>");
+        let output = exact_string(&output, "HTML table output allocation failed")?;
+        actual.output = u64::try_from(output.capacity()).map_err(|_| render_plan_overflow())?;
+        let planned = table_plan_owners(
+            rows,
+            width,
+            first_has_header,
+            actual.cell_strings,
+            actual.cell_block_joins,
+        )?;
+        actual.verify_within(&planned)?;
+        Ok((output, actual))
+    }
+
+    fn render_html_cell(&self, cell: &Cell) -> Result<(String, u64), ConversionError> {
+        let mut output = String::new();
+        let mut temporary = 0_u64;
+        for (index, node) in cell.blocks.iter().enumerate() {
+            if index != 0 {
+                output.push_str("<br>");
+            }
+            match &node.block {
+                Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
+                    output.push_str(&render_html_inlines(inlines)?);
+                }
+                Block::Code { text, .. } => {
+                    output.push_str("<pre><code>");
+                    output.push_str(&escape_html_code(text, InlineContext::Normal));
+                    output.push_str("</code></pre>");
+                }
+                Block::Formula(value) => {
+                    output.push_str("<code>");
+                    output.push_str(&escape_html_code(value, InlineContext::Normal));
+                    output.push_str("</code>");
+                }
+                _ => {
+                    let rendered = self
+                        .render_blocks_in(std::slice::from_ref(node), InlineContext::TableCell)?;
+                    temporary = temporary
+                        .checked_add(
+                            u64::try_from(rendered.capacity())
+                                .map_err(|_| render_plan_overflow())?,
+                        )
+                        .ok_or_else(render_plan_overflow)?;
+                    output.push_str(&escape_html_text(&rendered));
+                }
+            }
+        }
+        let exact = exact_string(&output, "HTML table cell allocation failed")?;
+        temporary = temporary
+            .checked_add(u64::try_from(output.capacity()).map_err(|_| render_plan_overflow())?)
+            .ok_or_else(render_plan_overflow)?;
+        Ok((exact, temporary))
     }
 
     fn table_grid(
@@ -1336,6 +1491,64 @@ fn render_inlines(inlines: &[Inline], context: InlineContext) -> Result<String, 
     Ok(output)
 }
 
+fn render_html_inlines(inlines: &[Inline]) -> Result<String, ConversionError> {
+    let mut output = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text { value, marks }
+            | Inline::SourceText { value, marks, .. }
+            | Inline::OcrText { value, marks, .. } => {
+                let mut rendered = escape_html_text(&normalize_lf(value)).replace('\n', "<br>");
+                let marks = marks.iter().copied().collect::<BTreeSet<_>>();
+                for mark in [
+                    InlineMark::Subscript,
+                    InlineMark::Superscript,
+                    InlineMark::Underline,
+                    InlineMark::Strikethrough,
+                    InlineMark::Italic,
+                    InlineMark::Bold,
+                ] {
+                    if marks.contains(&mark) {
+                        let tag = match mark {
+                            InlineMark::Bold => "strong",
+                            InlineMark::Italic => "em",
+                            InlineMark::Strikethrough => "del",
+                            InlineMark::Underline => "u",
+                            InlineMark::Superscript => "sup",
+                            InlineMark::Subscript => "sub",
+                        };
+                        rendered = format!("<{tag}>{rendered}</{tag}>");
+                    }
+                }
+                output.push_str(&rendered);
+            }
+            Inline::Code(value) | Inline::Formula(value) => {
+                output.push_str("<code>");
+                output.push_str(&escape_html_code(value, InlineContext::Normal));
+                output.push_str("</code>");
+            }
+            Inline::Link { target, content } => {
+                validate_link_target(target)?;
+                output.push_str("<a href=\"");
+                output.push_str(&escape_html_attribute(target));
+                output.push_str("\">");
+                output.push_str(&render_html_inlines(content)?);
+                output.push_str("</a>");
+            }
+            Inline::FootnoteReference(label) => {
+                output.push_str("[^");
+                output.push_str(&escape_html_text(label));
+                output.push(']');
+            }
+            Inline::LineBreak => output.push_str("<br>"),
+            _ => {
+                return Err(render_error("document contains an unsupported future inline variant"));
+            }
+        }
+    }
+    Ok(output)
+}
+
 fn render_marked_text(value: &str, marks: &[InlineMark], context: InlineContext) -> String {
     let mut rendered = escape_text(&single_line(value), context);
     let marks = marks.iter().copied().collect::<BTreeSet<_>>();
@@ -1372,6 +1585,56 @@ fn render_code_span(value: &str, context: InlineContext) -> String {
     let fence = "`".repeat(longest_run(&value, '`').saturating_add(1).max(1));
     let padding = value.starts_with([' ', '`']) || value.ends_with([' ', '`']);
     if padding { format!("{fence} {value} {fence}") } else { format!("{fence}{value}{fence}") }
+}
+
+fn render_merge_html(value: &str) -> Result<String, ConversionError> {
+    let mut output = String::new();
+    output
+        .try_reserve(value.len().saturating_mul(4))
+        .map_err(|_| render_error("merge HTML output allocation failed"))?;
+    output.push_str("<table>\n<tbody>\n");
+    for line in value.lines() {
+        let (row_span, column_span) = parse_merge_span(line)
+            .ok_or_else(|| render_error("invalid prepared XLSX merge range"))?;
+        output.push_str("<tr><th scope=\"row\">");
+        output.push_str(&escape_html_text(line));
+        output.push_str("</th><td");
+        if row_span > 1 {
+            write!(output, " rowspan=\"{row_span}\"")
+                .map_err(|_| render_error("merge HTML row span failed"))?;
+        }
+        if column_span > 1 {
+            write!(output, " colspan=\"{column_span}\"")
+                .map_err(|_| render_error("merge HTML column span failed"))?;
+        }
+        output.push_str("></td></tr>\n");
+    }
+    output.push_str("</tbody>\n</table>");
+    Ok(output)
+}
+
+fn parse_merge_span(value: &str) -> Option<(u32, u32)> {
+    let (start, end) = value.split_once(':')?;
+    let (start_row, start_column) = parse_merge_cell(start)?;
+    let (end_row, end_column) = parse_merge_cell(end)?;
+    Some((
+        end_row.checked_sub(start_row)?.checked_add(1)?,
+        end_column.checked_sub(start_column)?.checked_add(1)?,
+    ))
+}
+
+fn parse_merge_cell(value: &str) -> Option<(u32, u32)> {
+    let split = value.bytes().position(|byte| byte.is_ascii_digit())?;
+    if split == 0 || split == value.len() {
+        return None;
+    }
+    let (column, row) = value.split_at(split);
+    let row = row.parse::<u32>().ok()?.checked_sub(1)?;
+    let column = column.bytes().try_fold(0_u32, |total, byte| {
+        let digit = u32::from(byte.to_ascii_uppercase().checked_sub(b'A')?.checked_add(1)?);
+        total.checked_mul(26)?.checked_add(digit)
+    })?;
+    Some((row, column.checked_sub(1)?))
 }
 
 fn render_fence(value: &str, info: Option<&str>) -> String {
@@ -1468,6 +1731,23 @@ fn escape_html_code(value: &str, _: InlineContext) -> String {
         }
     }
     output
+}
+
+fn escape_html_text(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+fn escape_html_attribute(value: &str) -> String {
+    escape_html_text(value).replace('"', "&quot;").replace('\'', "&#39;")
 }
 
 fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
@@ -1988,7 +2268,7 @@ mod tests {
         ];
         assert_eq!(
             output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
-            "| <strong><span data-rowspan=\"2\" data-colspan=\"1\">A\\|x</span></strong> | <strong><span data-rowspan=\"1\" data-colspan=\"2\">B line</span></strong> |  |\n| --- | --- | --- |\n|  | C | D |\n"
+            "<table>\n  <tr>\n    <th rowspan=\"2\">A|x</th>\n    <th colspan=\"2\">B<br>line</th>\n  </tr>\n  <tr>\n    <td>C</td>\n    <td>D</td>\n  </tr>\n</table>\n"
         );
     }
 
@@ -2009,7 +2289,38 @@ mod tests {
         ];
         assert_eq!(
             output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
-            "|  |  |  |  |\n| --- | --- | --- | --- |\n| <span data-rowspan=\"2\" data-colspan=\"2\">A</span> |  | <span data-rowspan=\"1\" data-colspan=\"2\">B</span> |  |\n|  |  | <span data-rowspan=\"2\" data-colspan=\"1\">C</span> | D |\n| E | F |  | G |\n"
+            "<table>\n  <tr>\n    <td rowspan=\"2\" colspan=\"2\">A</td>\n    <td colspan=\"2\">B</td>\n  </tr>\n  <tr>\n    <td rowspan=\"2\">C</td>\n    <td>D</td>\n  </tr>\n  <tr>\n    <td>E</td>\n    <td>F</td>\n    <td>G</td>\n  </tr>\n</table>\n"
+        );
+    }
+
+    #[test]
+    fn html_table_cells_escape_source_markup() {
+        let rows = vec![
+            TableRow {
+                cells: vec![Cell {
+                    row_span: 2,
+                    column_span: 1,
+                    header: false,
+                    blocks: vec![paragraph("unsafe", "<img src=x onerror=alert(1)>&")],
+                }],
+            },
+            TableRow { cells: Vec::new() },
+        ];
+        let markdown =
+            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
+        assert!(markdown.contains("&lt;img src=x onerror=alert(1)&gt;&amp;"));
+        assert!(!markdown.contains("<img"));
+    }
+
+    #[test]
+    fn prepared_xlsx_merge_ranges_render_as_safe_bounded_html() {
+        let doc = document(vec![node(
+            "merges",
+            Block::Code { language: Some("xlsx-merge-html".into()), text: "A1:B1\nC2:D4\n".into() },
+        )]);
+        assert_eq!(
+            output(&doc),
+            "<table>\n<tbody>\n<tr><th scope=\"row\">A1:B1</th><td colspan=\"2\"></td></tr>\n<tr><th scope=\"row\">C2:D4</th><td rowspan=\"3\" colspan=\"2\"></td></tr>\n</tbody>\n</table>\n"
         );
     }
 
@@ -2604,7 +2915,7 @@ mod tests {
                 })
             }
 
-            let (width, has_header) = table_shape(rows).unwrap();
+            let (width, has_header, _) = table_shape(rows).unwrap();
             assert_eq!(width, expected_width);
             assert!(!has_header);
             let options = ConversionOptions::default();
@@ -2628,11 +2939,11 @@ mod tests {
                 planned_cell_block_joins,
             )
             .unwrap();
-            assert_eq!(actual.occupancy, planned.occupancy);
-            assert_eq!(actual.grid_rows, planned.grid_rows);
-            assert_eq!(actual.grid_slots, planned.grid_slots);
-            assert_eq!(actual.fallback_header, planned.fallback_header);
-            assert_eq!(actual.separator_slots, planned.separator_slots);
+            assert!(actual.occupancy <= planned.occupancy);
+            assert!(actual.grid_rows <= planned.grid_rows);
+            assert!(actual.grid_slots <= planned.grid_slots);
+            assert!(actual.fallback_header <= planned.fallback_header);
+            assert!(actual.separator_slots <= planned.separator_slots);
             assert!(actual.separator_strings <= planned.separator_strings);
             assert!(actual.cell_strings <= planned.cell_strings);
             assert!(actual.cell_block_joins <= planned.cell_block_joins);
@@ -2648,7 +2959,7 @@ mod tests {
                 cells: vec![cell("a", false, 1, 1), cell("b", false, 1, 1), cell("c", false, 1, 1)],
             },
         ];
-        let (width, has_header) = table_shape(&span_rows).unwrap();
+        let (width, has_header, _) = table_shape(&span_rows).unwrap();
         assert_eq!((width, has_header), (3, true));
         let owners = table_plan_owners(&span_rows, width, has_header, 1_000, 2_000).unwrap();
         assert_eq!(owners.occupancy, 3 * u64::try_from(std::mem::size_of::<u32>()).unwrap());
@@ -2669,7 +2980,7 @@ mod tests {
 
         let no_header =
             vec![TableRow { cells: vec![cell("body", false, 1, 1), cell("", false, 1, 2)] }];
-        let (width, has_header) = table_shape(&no_header).unwrap();
+        let (width, has_header, _) = table_shape(&no_header).unwrap();
         assert_eq!((width, has_header), (3, false));
         let owners = table_plan_owners(&no_header, width, has_header, 0, 0).unwrap();
         assert_eq!(
@@ -2688,8 +2999,8 @@ mod tests {
             TableRow { cells: vec![cell("growth\nbody", false, 1, growth_boundary_span + 1)] },
         ];
         let growth_markdown = assert_measured_owners(&growth_boundary, 8_194);
-        assert!(growth_markdown.contains("growth<br><br>first"));
-        assert!(growth_markdown.contains("growth<br><br>body"));
+        assert!(growth_markdown.contains("growth<br>first"));
+        assert!(growth_markdown.contains("growth<br>body"));
 
         let maximum_span = u32::try_from(into_markdown_core::MAX_TABLE_COLUMNS).unwrap();
         let adversarial_first_span = 8_193_u32;
@@ -2705,8 +3016,8 @@ mod tests {
         ];
         let wide_markdown = assert_measured_owners(&maximum, into_markdown_core::MAX_TABLE_COLUMNS);
         let options = ConversionOptions::default();
-        assert!(wide_markdown.contains("maximum<br><br>first"));
-        assert!(wide_markdown.contains("maximum<br><br>body"));
+        assert!(wide_markdown.contains("maximum<br>first"));
+        assert!(wide_markdown.contains("maximum<br>body"));
 
         for rows in [span_rows, no_header, growth_boundary, maximum] {
             let document =

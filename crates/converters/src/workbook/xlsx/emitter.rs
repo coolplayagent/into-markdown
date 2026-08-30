@@ -17,8 +17,14 @@ use into_markdown_core::{
 use std::collections::BTreeMap;
 
 const TSV_CHUNK_TARGET_BYTES: usize = 4 * 1024 * 1024;
-const MERGE_RANGES_PER_LINE: usize = 256;
 pub(in crate::workbook) const NATIVE_TABLE_NODE_CEILING: u64 = MAX_DOCUMENT_NODES as u64;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum EmissionMode {
+    Table,
+    Tsv,
+    HybridMerge,
+}
 
 pub(super) struct PreparedSheet {
     pub(super) name: String,
@@ -63,41 +69,28 @@ pub(super) fn emit(
         );
         append_sheet_metadata(&mut document, &sheet, sheet_index, options, context)?;
         let table_nodes = table_node_upper_bound(&sheet)?;
-        let use_tsv = sheet.populated_merge_subordinates
-            || sheet.regions.len() != 1
-            || !regions_are_stream_ordered(&sheet.regions)
-            || planned_nodes.saturating_add(table_nodes)
-                > u64::try_from(MAX_DOCUMENT_NODES).unwrap_or(u64::MAX);
-        let mut blocks = if use_tsv {
-            let (code, message) = if sheet.populated_merge_subordinates {
-                (
-                    "spreadsheet.mergeCellsPaged",
-                    format!(
-                        "worksheet {} contains populated non-owner merged cells and was emitted as TSV with exact merge ranges",
-                        sheet.name
-                    ),
-                )
-            } else {
-                (
-                    "spreadsheet.largeTablePaged",
-                    format!(
-                        "worksheet {} was emitted as ordered TSV row chunks to keep document nodes bounded",
-                        sheet.name
-                    ),
-                )
-            };
-            diagnostics.push(Diagnostic {
-                code: code.into(),
-                severity: DiagnosticSeverity::Warning,
-                message,
-                locator: Some(SourceLocator {
-                    sheet: Some(sheet.name.clone()),
-                    ..SourceLocator::default()
-                }),
-            });
-            emit_tsv_regions(&mut sheet, display, shared_strings, sheet_index, options, context)?
-        } else {
-            emit_regions(&mut sheet, display, shared_strings, sheet_index, options, context)?
+        let mode = emission_mode(&sheet, table_nodes, planned_nodes);
+        append_emission_diagnostics(&mut diagnostics, &sheet, mode);
+        let mut blocks = match mode {
+            EmissionMode::Table => {
+                emit_regions(&mut sheet, display, shared_strings, sheet_index, options, context)?
+            }
+            EmissionMode::Tsv => emit_tsv_regions(
+                &mut sheet,
+                display,
+                shared_strings,
+                sheet_index,
+                options,
+                context,
+            )?,
+            EmissionMode::HybridMerge => emit_hybrid_merge_regions(
+                &mut sheet,
+                display,
+                shared_strings,
+                sheet_index,
+                options,
+                context,
+            )?,
         };
         append_sheet_extras_for_native(
             &mut blocks,
@@ -106,11 +99,7 @@ pub(super) fn emit(
             sheet_index,
             options,
         )?;
-        let emitted_nodes = if use_tsv {
-            u64::try_from(blocks.len()).unwrap_or(u64::MAX).saturating_add(1)
-        } else {
-            table_nodes
-        };
+        let emitted_nodes = actual_block_nodes(&blocks).saturating_add(1);
         planned_nodes = planned_nodes
             .checked_add(emitted_nodes)
             .ok_or_else(|| limit("documentNodes", "native XLSX document node count overflow"))?;
@@ -124,6 +113,81 @@ pub(super) fn emit(
         });
     }
     Ok((document, diagnostics))
+}
+
+fn emission_mode(sheet: &PreparedSheet, table_nodes: u64, planned_nodes: u64) -> EmissionMode {
+    let paged = sheet.regions.len() != 1
+        || !regions_are_stream_ordered(&sheet.regions)
+        || planned_nodes.saturating_add(table_nodes)
+            > u64::try_from(MAX_DOCUMENT_NODES).unwrap_or(u64::MAX);
+    match (paged, sheet.merges.is_empty()) {
+        (false, _) => EmissionMode::Table,
+        (true, true) => EmissionMode::Tsv,
+        (true, false) => EmissionMode::HybridMerge,
+    }
+}
+
+fn append_emission_diagnostics(
+    diagnostics: &mut Vec<Diagnostic>,
+    sheet: &PreparedSheet,
+    mode: EmissionMode,
+) {
+    if mode != EmissionMode::Table {
+        let detail = if mode == EmissionMode::HybridMerge {
+            "ordered TSV row chunks with merged ranges retained as bounded HTML tables"
+        } else {
+            "ordered TSV row chunks"
+        };
+        diagnostics.push(Diagnostic {
+            code: "spreadsheet.largeTablePaged".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "worksheet {} was emitted as {detail} to keep document nodes bounded",
+                sheet.name
+            ),
+            locator: Some(SourceLocator {
+                sheet: Some(sheet.name.clone()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
+    if sheet.populated_merge_subordinates {
+        diagnostics.push(Diagnostic {
+            code: "spreadsheet.mergeCellsPaged".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "worksheet {} contains populated non-owner merged cells; their values were retained inside the owning HTML table cell",
+                sheet.name
+            ),
+            locator: Some(SourceLocator {
+                sheet: Some(sheet.name.clone()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
+}
+
+fn actual_block_nodes(nodes: &[BlockNode]) -> u64 {
+    nodes.iter().fold(0_u64, |total, node| {
+        let nested = match &node.block {
+            Block::Table { rows, .. } => rows.iter().fold(0_u64, |row_total, row| {
+                let cells = row.cells.iter().fold(0_u64, |cell_total, cell| {
+                    cell_total.saturating_add(1).saturating_add(actual_block_nodes(&cell.blocks))
+                });
+                row_total.saturating_add(1).saturating_add(cells)
+            }),
+            Block::Sheet { blocks, .. }
+            | Block::Page { blocks, .. }
+            | Block::Slide { blocks, .. }
+            | Block::Footnote { blocks, .. } => actual_block_nodes(blocks),
+            Block::List { items, .. } => items
+                .iter()
+                .map(|item| actual_block_nodes(&item.blocks))
+                .fold(0_u64, u64::saturating_add),
+            _ => 0,
+        };
+        total.saturating_add(1).saturating_add(nested)
+    })
 }
 
 fn extras_node_count(sheet: &PreparedSheet) -> u64 {
@@ -244,14 +308,37 @@ fn emit_tsv_regions(
     let staged =
         sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
     let mut reader = staged.into_reader()?;
-    let mut next_cell = reader.next()?;
+    let mut tokens = Vec::new();
+    while let Some(token) = reader.next()? {
+        tokens.push(token);
+    }
+    emit_tsv_tokens(
+        sheet,
+        tokens.into_iter(),
+        display,
+        shared_strings,
+        sheet_index,
+        options,
+        context,
+    )
+}
+
+fn emit_tsv_tokens(
+    sheet: &PreparedSheet,
+    mut tokens: std::vec::IntoIter<CellToken>,
+    display: &DisplayProfile,
+    shared_strings: &BTreeMap<u64, String>,
+    sheet_index: usize,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    let mut next_cell = tokens.next();
     let mut blocks = Vec::new();
     let mut text = String::new();
     let mut chunk_start = None;
     let mut chunk_index = 0_usize;
     let mut chunk_has_data = false;
     let mut previous_run = None;
-    append_merge_directives(&mut text, &mut chunk_start, &sheet.merges);
     while let Some(token) = next_cell.take() {
         context.checkpoint()?;
         let start = token.coordinate;
@@ -260,7 +347,7 @@ fn emit_tsv_regions(
         let value = display.display(&token, shared_strings)?;
         let rendered = render_tsv_token(sheet, &token, &value, options)?;
         append_tsv_value(&mut row_text, &rendered)?;
-        next_cell = reader.next()?;
+        next_cell = tokens.next();
         while next_cell.as_ref().is_some_and(|next| {
             next.coordinate.0 == start.0 && next.coordinate.1 == end.1.saturating_add(1)
         }) {
@@ -270,7 +357,7 @@ fn emit_tsv_regions(
             let value = display.display(&token, shared_strings)?;
             let rendered = render_tsv_token(sheet, &token, &value, options)?;
             append_tsv_value(&mut row_text, &rendered)?;
-            next_cell = reader.next()?;
+            next_cell = tokens.next();
         }
         row_text.push('\n');
         if !text.is_empty() && text.len().saturating_add(row_text.len()) >= TSV_CHUNK_TARGET_BYTES {
@@ -301,81 +388,6 @@ fn emit_tsv_regions(
     }
     push_tsv_chunk(&mut blocks, &mut text, &mut chunk_start, &mut chunk_index, sheet, sheet_index);
     Ok(blocks)
-}
-
-fn append_merge_directives(
-    text: &mut String,
-    chunk_start: &mut Option<CellCoordinate>,
-    merges: &[MergeRange],
-) {
-    let mut groups = BTreeMap::<(u32, u32, u32), Vec<MergeRange>>::new();
-    for merge_range in merges.iter().copied() {
-        groups
-            .entry((
-                merge_range.first_column,
-                merge_range.last_column,
-                merge_range.last_row - merge_range.first_row,
-            ))
-            .or_default()
-            .push(merge_range);
-    }
-    let mut singles = Vec::new();
-    for ranges in groups.values_mut() {
-        ranges.sort_unstable_by_key(|range| (range.first_row, range.last_row));
-        let mut first = 0;
-        while first < ranges.len() {
-            let mut end = first + 1;
-            let step = ranges
-                .get(first + 1)
-                .map(|next| next.first_row.saturating_sub(ranges[first].first_row));
-            if let Some(step) = step.filter(|step| *step > 0) {
-                while end < ranges.len()
-                    && ranges[end].first_row.saturating_sub(ranges[end - 1].first_row) == step
-                    && ranges[end].last_row.saturating_sub(ranges[end - 1].last_row) == step
-                {
-                    end += 1;
-                }
-            }
-            if end - first >= 4 {
-                let start = ranges[first];
-                let finish = ranges[end - 1];
-                chunk_start.get_or_insert((start.first_row, start.first_column));
-                text.push_str("# merge-series=");
-                append_merge_range(text, start);
-                text.push_str("..");
-                append_merge_range(text, finish);
-                text.push_str(";stepRows=");
-                text.push_str(&step.unwrap_or_default().to_string());
-                text.push_str(";count=");
-                text.push_str(&(end - first).to_string());
-                text.push('\n');
-            } else {
-                singles.extend_from_slice(&ranges[first..end]);
-            }
-            first = end;
-        }
-    }
-    singles.sort_unstable_by_key(|range| {
-        (range.first_row, range.first_column, range.last_row, range.last_column)
-    });
-    for batch in singles.chunks(MERGE_RANGES_PER_LINE) {
-        let Some(first) = batch.first() else { continue };
-        chunk_start.get_or_insert((first.first_row, first.first_column));
-        text.push_str("# merges=");
-        for (index, merge_range) in batch.iter().enumerate() {
-            if index != 0 {
-                text.push(',');
-            }
-            append_merge_range(text, *merge_range);
-        }
-        text.push('\n');
-    }
-}
-
-fn append_merge_range(text: &mut String, merge_range: MergeRange) {
-    text.push_str(&cell_name(merge_range.first_row, merge_range.first_column));
-    text.push(':');
-    text.push_str(&cell_name(merge_range.last_row, merge_range.last_column));
 }
 
 fn append_range_fence(text: &mut String, start: CellCoordinate, end: CellCoordinate) {
@@ -490,6 +502,85 @@ fn append_tsv_value(output: &mut String, value: &str) -> Result<(), ConversionEr
     Ok(())
 }
 
+fn emit_hybrid_merge_regions(
+    sheet: &mut PreparedSheet,
+    display: &DisplayProfile,
+    shared_strings: &BTreeMap<u64, String>,
+    sheet_index: usize,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    let staged =
+        sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
+    let mut reader = staged.into_reader()?;
+    let mut tokens = Vec::new();
+    while let Some(token) = reader.next()? {
+        tokens.push(token);
+    }
+    let mut blocks = emit_tsv_tokens(
+        sheet,
+        tokens.into_iter(),
+        display,
+        shared_strings,
+        sheet_index,
+        options,
+        context,
+    )?;
+    blocks.extend(emit_merge_html_chunks(sheet, sheet_index, context)?);
+    Ok(blocks)
+}
+
+fn emit_merge_html_chunks(
+    sheet: &PreparedSheet,
+    sheet_index: usize,
+    context: &ExecutionContext,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    let mut ordered = sheet.merges.clone();
+    ordered.sort_unstable_by_key(|range| {
+        (range.first_row, range.first_column, range.last_row, range.last_column)
+    });
+    let mut output = Vec::new();
+    let mut text = String::new();
+    let mut first_coordinate = None;
+    for merge_range in ordered {
+        context.checkpoint()?;
+        if !text.is_empty() && text.len() >= TSV_CHUNK_TARGET_BYTES {
+            push_merge_html_chunk(
+                &mut output,
+                &mut text,
+                &mut first_coordinate,
+                sheet,
+                sheet_index,
+            );
+        }
+        first_coordinate.get_or_insert((merge_range.first_row, merge_range.first_column));
+        text.push_str(&cell_name(merge_range.first_row, merge_range.first_column));
+        text.push(':');
+        text.push_str(&cell_name(merge_range.last_row, merge_range.last_column));
+        text.push('\n');
+    }
+    push_merge_html_chunk(&mut output, &mut text, &mut first_coordinate, sheet, sheet_index);
+    Ok(output)
+}
+
+fn push_merge_html_chunk(
+    output: &mut Vec<BlockNode>,
+    text: &mut String,
+    first_coordinate: &mut Option<CellCoordinate>,
+    sheet: &PreparedSheet,
+    sheet_index: usize,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let coordinate = first_coordinate.take().unwrap_or_default();
+    output.push(BlockNode {
+        id: NodeId(format!("workbook-merge-{sheet_index}-{}", output.len())),
+        block: Block::Code { language: Some("xlsx-merge-html".into()), text: std::mem::take(text) },
+        provenance: provenance(&sheet.name, Some(coordinate.0), Some(coordinate.1)),
+    });
+}
+
 fn emit_regions(
     sheet: &mut PreparedSheet,
     display: &DisplayProfile,
@@ -501,100 +592,184 @@ fn emit_regions(
     let staged =
         sheet.cells.take().ok_or_else(|| malformed(None, "worksheet staging owner is missing"))?;
     let mut reader = staged.into_reader()?;
-    let mut next_cell = reader.next()?;
+    let mut tokens = Vec::new();
+    while let Some(token) = reader.next()? {
+        tokens.push(token);
+    }
+    let mut merge_subordinates = extract_merge_subordinates(sheet, &mut tokens);
+    let mut next_tokens = tokens.into_iter().peekable();
     let total_area = regions_area(&sheet.regions)?;
     enforce_total_cells(total_area, options)?;
     let mut blocks = Vec::new();
     blocks
         .try_reserve_exact(sheet.regions.len())
         .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX table regions"))?;
+    let emission = TableEmission { sheet, display, shared_strings, sheet_index, options, context };
     for (region_index, region) in sheet.regions.iter().copied().enumerate() {
-        context.checkpoint()?;
-        let width = u64::from(region.last_column - region.first_column) + 1;
-        if width > options.limits.max_table_columns {
-            return Err(limit(
-                "max_table_columns",
-                format!("{width} > {}", options.limits.max_table_columns),
-            ));
-        }
-        let height = u64::from(region.last_row - region.first_row) + 1;
-        if height > options.limits.max_table_rows {
-            return Err(limit(
-                "max_table_rows",
-                format!("{height} > {}", options.limits.max_table_rows),
-            ));
-        }
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(usize::try_from(height).unwrap_or(usize::MAX))
-            .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX rows"))?;
-        for page in paginate_region(region, &sheet.merges)? {
-            debug_assert_eq!(page.first_column, region.first_column);
-            debug_assert_eq!(page.last_column, region.last_column);
-            for row in page.first_row..=page.last_row {
-                context.checkpoint()?;
-                let mut cells = Vec::new();
-                for column in region.first_column..=region.last_column {
-                    let coordinate = (row, column);
-                    let merge = merge_at(&sheet.merges, coordinate);
-                    if merge
-                        .is_some_and(|range| (range.first_row, range.first_column) != coordinate)
-                    {
-                        continue;
-                    }
-                    if next_cell.as_ref().is_some_and(|cell| cell.coordinate < coordinate) {
-                        return Err(malformed(
-                            None,
-                            "staged worksheet cells are out of region order",
-                        ));
-                    }
-                    let token =
-                        if next_cell.as_ref().is_some_and(|cell| cell.coordinate == coordinate) {
-                            let token = next_cell.take();
-                            next_cell = reader.next()?;
-                            token
-                        } else {
-                            None
-                        };
-                    let blocks = token.map_or_else(
-                        || Ok::<Vec<BlockNode>, ConversionError>(Vec::new()),
-                        |token| {
-                            cell_blocks(
-                                sheet,
-                                display,
-                                shared_strings,
-                                sheet_index,
-                                &token,
-                                options,
-                            )
-                        },
-                    )?;
-                    let (row_span, column_span) = merge.map_or((1, 1), |range| {
-                        (
-                            range.last_row - range.first_row + 1,
-                            range.last_column - range.first_column + 1,
-                        )
-                    });
-                    cells.push(Cell { row_span, column_span, header: false, blocks });
-                }
-                rows.push(TableRow { cells });
-            }
-        }
-        blocks.push(BlockNode {
-            id: NodeId(format!("workbook-table-{sheet_index}-{region_index}")),
-            block: Block::Table {
-                rows,
-                alignments: vec![
-                    TableAlignment::None;
-                    usize::try_from(width).unwrap_or(usize::MAX)
-                ],
-            },
-            provenance: provenance(&sheet.name, Some(region.first_row), Some(region.first_column)),
-        });
+        blocks.push(emit_region(
+            &emission,
+            region,
+            region_index,
+            &mut next_tokens,
+            &mut merge_subordinates,
+        )?);
     }
-    if next_cell.is_some() {
+    if next_tokens.next().is_some() || !merge_subordinates.is_empty() {
         return Err(malformed(None, "worksheet cell was not assigned to a data region"));
     }
     Ok(blocks)
+}
+
+type TokenStream = std::iter::Peekable<std::vec::IntoIter<CellToken>>;
+
+struct TableEmission<'a> {
+    sheet: &'a PreparedSheet,
+    display: &'a DisplayProfile,
+    shared_strings: &'a BTreeMap<u64, String>,
+    sheet_index: usize,
+    options: &'a ConversionOptions,
+    context: &'a ExecutionContext,
+}
+
+fn extract_merge_subordinates(
+    sheet: &PreparedSheet,
+    tokens: &mut Vec<CellToken>,
+) -> BTreeMap<CellCoordinate, Vec<CellToken>> {
+    let mut output = BTreeMap::<CellCoordinate, Vec<CellToken>>::new();
+    if sheet.populated_merge_subordinates {
+        tokens.retain(|token| {
+            let Some(merge) = merge_at(&sheet.merges, token.coordinate) else { return true };
+            let owner = (merge.first_row, merge.first_column);
+            if token.coordinate == owner {
+                true
+            } else {
+                output.entry(owner).or_default().push(token.clone());
+                false
+            }
+        });
+    }
+    output
+}
+
+fn emit_region(
+    emission: &TableEmission<'_>,
+    region: SparseRegion,
+    region_index: usize,
+    next_tokens: &mut TokenStream,
+    merge_subordinates: &mut BTreeMap<CellCoordinate, Vec<CellToken>>,
+) -> Result<BlockNode, ConversionError> {
+    emission.context.checkpoint()?;
+    let width = u64::from(region.last_column - region.first_column) + 1;
+    let height = u64::from(region.last_row - region.first_row) + 1;
+    if width > emission.options.limits.max_table_columns {
+        return Err(limit(
+            "max_table_columns",
+            format!("{width} > {}", emission.options.limits.max_table_columns),
+        ));
+    }
+    if height > emission.options.limits.max_table_rows {
+        return Err(limit(
+            "max_table_rows",
+            format!("{height} > {}", emission.options.limits.max_table_rows),
+        ));
+    }
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(usize::try_from(height).unwrap_or(usize::MAX))
+        .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX rows"))?;
+    for page in paginate_region(region, &emission.sheet.merges)? {
+        for row in page.first_row..=page.last_row {
+            rows.push(emit_table_row(emission, region, row, next_tokens, merge_subordinates)?);
+        }
+    }
+    Ok(BlockNode {
+        id: NodeId(format!("workbook-table-{}-{region_index}", emission.sheet_index)),
+        block: Block::Table {
+            rows,
+            alignments: vec![TableAlignment::None; usize::try_from(width).unwrap_or(usize::MAX)],
+        },
+        provenance: provenance(
+            &emission.sheet.name,
+            Some(region.first_row),
+            Some(region.first_column),
+        ),
+    })
+}
+
+fn emit_table_row(
+    emission: &TableEmission<'_>,
+    region: SparseRegion,
+    row: u32,
+    next_tokens: &mut TokenStream,
+    merge_subordinates: &mut BTreeMap<CellCoordinate, Vec<CellToken>>,
+) -> Result<TableRow, ConversionError> {
+    emission.context.checkpoint()?;
+    let width = usize::try_from(region.last_column - region.first_column + 1).unwrap_or(usize::MAX);
+    let mut cells = Vec::new();
+    cells
+        .try_reserve_exact(width)
+        .map_err(|_| limit("max_memory_bytes", "cannot reserve native XLSX cells"))?;
+    for column in region.first_column..=region.last_column {
+        let coordinate = (row, column);
+        let merge = merge_at(&emission.sheet.merges, coordinate);
+        if merge.is_some_and(|range| (range.first_row, range.first_column) != coordinate) {
+            continue;
+        }
+        if next_tokens.peek().is_some_and(|cell| cell.coordinate < coordinate) {
+            return Err(malformed(None, "staged worksheet cells are out of region order"));
+        }
+        let token = next_tokens
+            .peek()
+            .is_some_and(|cell| cell.coordinate == coordinate)
+            .then(|| next_tokens.next().expect("peeked staged cell"));
+        let mut blocks = token.map_or_else(
+            || Ok::<Vec<BlockNode>, ConversionError>(Vec::new()),
+            |token| cell_blocks_for_emission(emission, &token),
+        )?;
+        append_merge_subordinates(emission, &mut blocks, merge_subordinates.remove(&coordinate))?;
+        let (row_span, column_span) = merge.map_or((1, 1), |range| {
+            (range.last_row - range.first_row + 1, range.last_column - range.first_column + 1)
+        });
+        cells.push(Cell { row_span, column_span, header: false, blocks });
+    }
+    Ok(TableRow { cells })
+}
+
+fn cell_blocks_for_emission(
+    emission: &TableEmission<'_>,
+    token: &CellToken,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    cell_blocks(
+        emission.sheet,
+        emission.display,
+        emission.shared_strings,
+        emission.sheet_index,
+        token,
+        emission.options,
+    )
+}
+
+fn append_merge_subordinates(
+    emission: &TableEmission<'_>,
+    blocks: &mut Vec<BlockNode>,
+    subordinates: Option<Vec<CellToken>>,
+) -> Result<(), ConversionError> {
+    for subordinate in subordinates.unwrap_or_default() {
+        let mut retained = cell_blocks_for_emission(emission, &subordinate)?;
+        if let Some(BlockNode { block: Block::Paragraph(inlines), .. }) = retained.first_mut() {
+            inlines.insert(
+                0,
+                Inline::Text {
+                    value: format!(
+                        "{}: ",
+                        cell_name(subordinate.coordinate.0, subordinate.coordinate.1)
+                    ),
+                    marks: Vec::new(),
+                },
+            );
+        }
+        blocks.extend(retained);
+    }
+    Ok(())
 }
 
 fn cell_blocks(
@@ -686,8 +861,8 @@ fn regions_area(regions: &[SparseRegion]) -> Result<u64, ConversionError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_merge_directives, regions_are_stream_ordered};
-    use crate::workbook::xlsx::regions::{MergeRange, SparseRegion};
+    use super::regions_are_stream_ordered;
+    use crate::workbook::xlsx::regions::SparseRegion;
 
     fn region(first_row: u32, last_row: u32, first_column: u32, last_column: u32) -> SparseRegion {
         SparseRegion {
@@ -698,24 +873,6 @@ mod tests {
             occupied_cells: 1,
             contains_merge: false,
         }
-    }
-
-    #[test]
-    fn merge_directives_are_exact_and_batched() {
-        let merges = (0..257)
-            .map(|row| MergeRange {
-                first_row: row,
-                last_row: row,
-                first_column: 0,
-                last_column: 1,
-            })
-            .collect::<Vec<_>>();
-        let mut text = String::new();
-        let mut start = None;
-        append_merge_directives(&mut text, &mut start, &merges);
-        assert_eq!(start, Some((0, 0)));
-        assert_eq!(text.lines().count(), 1);
-        assert_eq!(text, "# merge-series=A1:B1..A257:B257;stepRows=1;count=257\n");
     }
 
     #[test]
