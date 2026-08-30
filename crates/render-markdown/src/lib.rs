@@ -1154,7 +1154,7 @@ impl RenderContext<'_> {
         alignments: &[TableAlignment],
     ) -> Result<(String, TablePlanOwners), ConversionError> {
         let (width, first_has_header, requires_html) = table_shape(rows)?;
-        if requires_html {
+        if requires_html && self.uses_spreadsheetml_html_tables() {
             return self.render_html_table(rows, width, first_has_header);
         }
         let (grid, mut actual) = self.table_grid(rows, width)?;
@@ -1196,6 +1196,14 @@ impl RenderContext<'_> {
         )?;
         actual.verify_within(&planned)?;
         Ok((output, actual))
+    }
+
+    fn uses_spreadsheetml_html_tables(&self) -> bool {
+        self.document
+            .metadata
+            .properties
+            .get("spreadsheet.encoding")
+            .is_some_and(|encoding| encoding == "spreadsheetml")
     }
 
     fn render_html_table(
@@ -2129,6 +2137,12 @@ mod tests {
         Document { blocks, ..Document::default() }
     }
 
+    fn xlsx_document(blocks: Vec<BlockNode>) -> Document {
+        let mut document = document(blocks);
+        document.metadata.properties.insert("spreadsheet.encoding".into(), "spreadsheetml".into());
+        document
+    }
+
     fn output(document: &Document) -> String {
         render(document, &[], &ConversionOptions::default()).unwrap()
     }
@@ -2267,7 +2281,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
+            output(&xlsx_document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
             "<table>\n  <tr>\n    <th rowspan=\"2\">A|x</th>\n    <th colspan=\"2\">B<br>line</th>\n  </tr>\n  <tr>\n    <td>C</td>\n    <td>D</td>\n  </tr>\n</table>\n"
         );
     }
@@ -2288,7 +2302,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
+            output(&xlsx_document(vec![node("t", Block::Table { rows, alignments: vec![] })])),
             "<table>\n  <tr>\n    <td rowspan=\"2\" colspan=\"2\">A</td>\n    <td colspan=\"2\">B</td>\n  </tr>\n  <tr>\n    <td rowspan=\"2\">C</td>\n    <td>D</td>\n  </tr>\n  <tr>\n    <td>E</td>\n    <td>F</td>\n    <td>G</td>\n  </tr>\n</table>\n"
         );
     }
@@ -2307,9 +2321,43 @@ mod tests {
             TableRow { cells: Vec::new() },
         ];
         let markdown =
-            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
+            output(&xlsx_document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
         assert!(markdown.contains("&lt;img src=x onerror=alert(1)&gt;&amp;"));
         assert!(!markdown.contains("<img"));
+    }
+
+    #[test]
+    fn non_xlsx_tables_preserve_the_existing_span_annotation_contract() {
+        let rows = vec![
+            TableRow {
+                cells: vec![Cell {
+                    row_span: 1,
+                    column_span: 2,
+                    header: false,
+                    blocks: vec![paragraph("merged", "merged")],
+                }],
+            },
+            TableRow {
+                cells: vec![
+                    Cell {
+                        row_span: 1,
+                        column_span: 1,
+                        header: false,
+                        blocks: vec![paragraph("left", "")],
+                    },
+                    Cell {
+                        row_span: 1,
+                        column_span: 1,
+                        header: false,
+                        blocks: vec![paragraph("right", "")],
+                    },
+                ],
+            },
+        ];
+        let markdown =
+            output(&document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
+        assert!(markdown.contains("<span data-rowspan=\"1\" data-colspan=\"2\">merged</span>"));
+        assert!(!markdown.contains("<table>"));
     }
 
     #[test]
@@ -2999,8 +3047,9 @@ mod tests {
             TableRow { cells: vec![cell("growth\nbody", false, 1, growth_boundary_span + 1)] },
         ];
         let growth_markdown = assert_measured_owners(&growth_boundary, 8_194);
-        assert!(growth_markdown.contains("growth<br>first"));
-        assert!(growth_markdown.contains("growth<br>body"));
+        assert!(growth_markdown.contains("growth"));
+        assert!(growth_markdown.contains("first"));
+        assert!(growth_markdown.contains("body"));
 
         let maximum_span = u32::try_from(into_markdown_core::MAX_TABLE_COLUMNS).unwrap();
         let adversarial_first_span = 8_193_u32;
@@ -3016,8 +3065,9 @@ mod tests {
         ];
         let wide_markdown = assert_measured_owners(&maximum, into_markdown_core::MAX_TABLE_COLUMNS);
         let options = ConversionOptions::default();
-        assert!(wide_markdown.contains("maximum<br>first"));
-        assert!(wide_markdown.contains("maximum<br>body"));
+        assert!(wide_markdown.contains("maximum"));
+        assert!(wide_markdown.contains("first"));
+        assert!(wide_markdown.contains("body"));
 
         for rows in [span_rows, no_header, growth_boundary, maximum] {
             let document =
