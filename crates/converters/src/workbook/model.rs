@@ -3,7 +3,6 @@ use into_markdown_core::{Asset, AssetId, ConversionError, Diagnostic, InlineMark
 use std::collections::BTreeMap;
 
 pub(super) type CellCoordinate = (u32, u32);
-pub(super) type XlsxSheetScan = (Option<CellCoordinate>, Option<CellCoordinate>, WorkbookInventory);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WorkbookKind {
@@ -17,6 +16,15 @@ pub(super) struct PackagePreflight {
     pub(super) macro_present: bool,
     pub(super) media_bytes: u64,
     pub(super) sheet_parts: BTreeMap<String, String>,
+    /// Logical worksheet order from workbook.xml. ZIP and relationship order
+    /// are not presentation order.
+    pub(super) sheet_order: Vec<String>,
+    /// Authenticated `SpreadsheetML` sheets and their physical cell counts.
+    /// The native adapter uses physical records rather than the untrusted
+    /// worksheet dimension to plan bounded regions.
+    pub(super) xml_sheets: BTreeMap<String, (String, u64)>,
+    pub(super) xml_layouts: BTreeMap<String, crate::workbook::xlsx::sheet_index::SheetLayout>,
+    pub(super) xml_regions: BTreeMap<String, Vec<crate::workbook::xlsx::regions::SparseRegion>>,
     pub(super) sheet_bounds: BTreeMap<String, CellCoordinate>,
     pub(super) extras: BTreeMap<String, SheetExtras>,
     pub(super) diagnostics: Vec<Diagnostic>,
@@ -33,6 +41,7 @@ pub(super) struct WorkbookInventory {
     pub(super) max_formula_bytes: u64,
     pub(super) shared_strings: u64,
     pub(super) shared_string_bytes: u64,
+    pub(super) max_shared_string_bytes: u64,
     pub(super) max_shared_string_index: Option<u64>,
     pub(super) styles: u64,
     pub(super) fonts: u64,
@@ -40,6 +49,7 @@ pub(super) struct WorkbookInventory {
     pub(super) style_format_bytes: u64,
     pub(super) max_style_index: Option<u64>,
     pub(super) cell_value_bytes: u64,
+    pub(super) max_cell_value_bytes: u64,
     pub(super) merge_ranges: u64,
     pub(super) hyperlink_ranges: u64,
     pub(super) record_bytes: u64,
@@ -59,23 +69,6 @@ impl WorkbookInventory {
             .and_then(|value| value.checked_add(self.defined_name_bytes))
             .and_then(|value| value.checked_add(self.cell_value_bytes))
             .ok_or_else(|| limit("max_memory_bytes", "workbook text budget overflow"))
-    }
-
-    pub(super) fn absorb_sheet(&mut self, sheet: &Self) {
-        self.cells = self.cells.saturating_add(sheet.cells);
-        self.formulas = self.formulas.saturating_add(sheet.formulas);
-        self.formula_bytes = self.formula_bytes.saturating_add(sheet.formula_bytes);
-        self.max_formula_bytes = self.max_formula_bytes.max(sheet.max_formula_bytes);
-        self.cell_value_bytes = self.cell_value_bytes.saturating_add(sheet.cell_value_bytes);
-        self.merge_ranges = self.merge_ranges.saturating_add(sheet.merge_ranges);
-        self.hyperlink_ranges = self.hyperlink_ranges.saturating_add(sheet.hyperlink_ranges);
-        self.shared_formula_slots =
-            self.shared_formula_slots.saturating_add(sheet.shared_formula_slots);
-        self.xlsb_formula_preallocation_cells =
-            self.xlsb_formula_preallocation_cells.max(sheet.xlsb_formula_preallocation_cells);
-        self.max_shared_string_index =
-            max_optional(self.max_shared_string_index, sheet.max_shared_string_index);
-        self.max_style_index = max_optional(self.max_style_index, sheet.max_style_index);
     }
 
     pub(super) fn formula_materialized_bytes(&self) -> Result<u64, ConversionError> {
@@ -118,6 +111,8 @@ pub(super) struct BinaryHyperlink {
 #[derive(Debug)]
 pub(super) struct WorkbookParts {
     pub(super) sheets: BTreeMap<String, String>,
+    pub(super) sheet_order: Vec<String>,
+    pub(super) diagnostics: Vec<Diagnostic>,
     pub(super) inventory: WorkbookInventory,
     pub(super) binary_formula_context: BinaryFormulaContext,
 }

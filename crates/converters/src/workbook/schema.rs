@@ -8,6 +8,7 @@ pub(super) const PACKAGE_REL_CT: &str = "application/vnd.openxmlformats-package.
 pub(super) const SPREADSHEET_NS: &[u8] =
     b"http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub(super) const SPREADSHEET_STRICT_NS: &[u8] = b"http://purl.oclc.org/ooxml/spreadsheetml/main";
+pub(super) const SPREADSHEET_BETA_NS: &[u8] = b"http://schemas.microsoft.com/office/excel/2006/2";
 pub(super) const OFFICE_REL_NS: &[u8] =
     b"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 pub(super) const OFFICE_REL_STRICT_NS: &[u8] =

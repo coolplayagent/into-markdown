@@ -13,7 +13,7 @@ use crate::workbook::schema::MAX_EXCEL_ROWS;
 use crate::workbook::xlsb::sheet::scan_xlsb_sheet;
 use base64::Engine as _;
 use into_markdown_core::{
-    Block, CellRef, ConversionError, ConversionOptions, ExecutionContext, Inline,
+    Block, CellRef, ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, Inline,
 };
 use std::collections::BTreeMap;
 
@@ -373,9 +373,10 @@ fn xlsx_extracts_safe_hyperlinks_comments_and_chart_titles() {
             if matches!(&content[0], Inline::Text { value, .. }
                 if value == "Chart: Revenue"))
     }));
-    let chart = blocks.iter().find(|node| matches!(node.block, Block::Heading { .. })).unwrap();
-    assert_eq!(chart.provenance.locator.part.as_deref(), Some("xl/drawings/drawing1.xml"));
-    assert_eq!(chart.provenance.locator.cell, Some(CellRef { row: 0, column: 0 }));
+    let chart_node =
+        blocks.iter().find(|node| matches!(node.block, Block::Heading { .. })).unwrap();
+    assert_eq!(chart_node.provenance.locator.part.as_deref(), Some("xl/drawings/drawing1.xml"));
+    assert_eq!(chart_node.provenance.locator.cell, Some(CellRef { row: 0, column: 0 }));
     assert_eq!(
         output.document.metadata.properties["spreadsheet.sheet.0.chart.0.target"],
         "xl/charts/chart1.xml"
@@ -387,11 +388,26 @@ fn xlsx_extracts_safe_hyperlinks_comments_and_chart_titles() {
 
     let unsafe_relationships =
         relationships.replace("https://example.invalid/book", "javascript:alert(1)");
-    let unsafe_bytes = xlsx_with_parts(sheet, Some(&unsafe_relationships), &[]);
-    assert!(matches!(
-        convert(&unsafe_bytes, &ConversionOptions::default()),
-        Err(ConversionError::Unsupported { .. })
-    ));
+    let unsafe_bytes = xlsx_with_parts(
+        sheet,
+        Some(&unsafe_relationships),
+        &[
+            ("xl/comments1.xml", comments),
+            ("xl/drawings/drawing1.xml", drawing),
+            ("xl/drawings/_rels/drawing1.xml.rels", drawing_relationships),
+            ("xl/charts/chart1.xml", chart),
+        ],
+    );
+    let best_effort = convert(&unsafe_bytes, &ConversionOptions::default()).unwrap();
+    assert!(
+        best_effort
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "spreadsheet.hyperlink.omitted")
+    );
+    let strict =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
+    assert!(matches!(convert(&unsafe_bytes, &strict), Err(ConversionError::Unsupported { .. })));
 }
 
 #[test]

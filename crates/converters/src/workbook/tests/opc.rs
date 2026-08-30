@@ -8,7 +8,7 @@ use crate::workbook::schema::{
     XML_CHARTSHEET_CT, XML_DIALOGSHEET_CT, XML_MACROSHEET_CT, XML_WORKSHEET_CT,
 };
 use crate::workbook::xlsx::tables::{scan_xml_shared_strings, scan_xml_style_counts};
-use into_markdown_core::{ConversionError, ConversionOptions};
+use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy};
 
 #[test]
 fn dtd_fails_before_workbook_parse() {
@@ -208,7 +208,16 @@ fn nonworksheet_sheet_relationships_are_consistently_unsupported_before_calamine
             ("xl/_rels/workbook.xml.rels", workbook_relationships.as_str()),
             (sheet_part.as_str(), sheet.as_str()),
         ]);
-        let error = convert(&bytes, &ConversionOptions::default()).unwrap_err();
+        let best_effort = convert(&bytes, &ConversionOptions::default()).unwrap();
+        assert!(
+            best_effort
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "spreadsheet.extension.omitted")
+        );
+        let strict =
+            ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
+        let error = convert(&bytes, &strict).unwrap_err();
         assert!(
             matches!(error, ConversionError::Unsupported { .. }),
             "{relationship_kind}: {error:?}"
