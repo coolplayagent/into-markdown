@@ -2,6 +2,7 @@ use super::{ConversionError, ExecutionContext};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker};
+#[cfg(test)]
 use std::time::Duration;
 
 static PDF_CONVERSION_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -45,6 +46,7 @@ pub(super) async fn acquire_pdf_conversion(
     .await
 }
 
+#[cfg(test)]
 pub(super) fn lock_pdf_conversion(
     context: &ExecutionContext,
 ) -> Result<PdfConversionPermit, ConversionError> {

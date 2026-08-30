@@ -83,6 +83,13 @@ async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, Co
     let credited = context.with_memory_credit(&mut admission)?;
     let mut sink = CollectingArtifactSink::new(&credited);
     let completion = {
+        let mut page_services = services.clone();
+        if candidate.format == into_markdown_core::InputFormat::Pdf {
+            page_services.ocr = services.ocr.as_ref().map(|provider| {
+                Arc::new(crate::page_ocr_cache::PageOcrCache::new(Arc::clone(provider)))
+                    as Arc<dyn into_markdown_core::OcrEngine>
+            });
+        }
         let mut pages = PageEnrichmentSink {
             destination: &mut sink,
             enricher: enrichers
@@ -92,7 +99,7 @@ async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, Co
             converter_id: converter.id(),
             format: candidate.format,
             options,
-            services,
+            services: &page_services,
             context: &credited,
         };
         context

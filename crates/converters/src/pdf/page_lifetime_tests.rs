@@ -50,6 +50,16 @@ impl OcrEngine for Recognizer {
         _: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<OcrRecognition, ConversionError>> {
         Box::pin(async move {
+            let mut yielded = false;
+            std::future::poll_fn(|task| {
+                if std::mem::replace(&mut yielded, true) {
+                    std::task::Poll::Ready(())
+                } else {
+                    task.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
             let ordinal = self.0.fetch_add(1, Ordering::SeqCst) + 1;
             let image = image::load_from_memory(request.image).unwrap();
             let identity = OcrInputIdentity::try_new(
@@ -185,10 +195,15 @@ fn request(page_count: u32) -> ConversionRequest {
         },
         hint: FormatHint { format: Some(InputFormat::Pdf), ..FormatHint::default() },
         options,
+        execution: ExecutionOptions::default(),
     }
 }
 
 fn scanned_pages(count: u32) -> Vec<u8> {
+    scanned_page_variants(count, false)
+}
+
+fn scanned_page_variants(count: u32, repeated: bool) -> Vec<u8> {
     let kids =
         (0..count).map(|index| format!("{} 0 R", 3 + index * 3)).collect::<Vec<_>>().join(" ");
     let mut objects = vec![
@@ -197,10 +212,11 @@ fn scanned_pages(count: u32) -> Vec<u8> {
     ];
     for index in 0..count {
         let page = 3 + index * 3;
-        let rotation = if index % 2 == 0 { 0 } else { 90 };
+        let variant = if repeated { 0 } else { index };
+        let rotation = if variant % 2 == 0 { 0 } else { 90 };
         objects.push(format!("<< /Type /Page /Parent 2 0 R /Rotate {rotation} /MediaBox [0 0 100 200] /Resources << /XObject << /Im1 {} 0 R >> >> /Contents {} 0 R >>", page + 2, page + 1).into_bytes());
         objects.push(stream_object("", b"q 100 0 0 200 0 0 cm /Im1 Do Q\n"));
-        objects.push(stream_object("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[u8::try_from(index + 1).unwrap(), 0, 0]));
+        objects.push(stream_object("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", &[u8::try_from(variant + 1).unwrap(), 0, 0]));
     }
     assemble_pdf(&objects)
 }
@@ -360,4 +376,83 @@ fn permanent_assets_still_obey_document_total_budget() {
         assert!(pages.entries.lock().unwrap().is_empty());
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn mixed_pdf_modes_yield_runtime_admission_on_one_executor() {
+    for mode in [into_markdown_core::AssetMode::Omit, into_markdown_core::AssetMode::Extract] {
+        let pages = Arc::new(ObservedPages::default());
+        let ocr = Arc::new(Recognizer::default());
+        let engine = engine(pages, ocr.clone());
+        let scanning = request(1);
+        let mut aggregate = request(1);
+        aggregate.options.ocr.policy = into_markdown_core::OcrPolicy::Off;
+        aggregate.options.output.asset_mode = mode;
+        let scanning_context = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::from_secs(5)),
+                ..ExecutionOptions::default()
+            },
+            scanning.options.limits.clone(),
+        );
+        let aggregate_context = ExecutionContext::new(
+            ExecutionOptions {
+                timeout: Some(std::time::Duration::from_secs(5)),
+                ..ExecutionOptions::default()
+            },
+            aggregate.options.limits.clone(),
+        );
+        // Recognizer yields while owning PDFium. A synchronous permit wait in
+        // the aggregate future would prevent the first future from resuming.
+        let (scan, plain) = block_on(async {
+            futures::join!(
+                engine.convert_with_context(scanning, scanning_context.clone()),
+                engine.convert_with_context(aggregate, aggregate_context.clone()),
+            )
+        });
+        let scan = scan.unwrap();
+        let plain = plain.unwrap();
+        assert!(scan.markdown.contains("recognized body"));
+        assert_eq!(plain.document.blocks.len(), 1);
+        assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
+        drop((scan, plain));
+        assert_eq!(scanning_context.reserved_memory_bytes(), 0);
+        assert_eq!(aggregate_context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
+    let pages = Arc::new(ObservedPages::default());
+    let ocr = Arc::new(Recognizer::default());
+    let engine = engine(pages.clone(), ocr.clone());
+    let mut request = request(4);
+    request.input = InputRef::Bytes {
+        data: Arc::from(scanned_page_variants(4, true)),
+        name: Some("repeated.pdf".into()),
+    };
+    let context =
+        ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
+    let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
+    assert_eq!(result.markdown.matches("recognized body 1").count(), 4);
+    assert_eq!(result.document.blocks.len(), 4);
+    assert!(result.assets.is_empty());
+    for (index, node) in result.document.blocks.iter().enumerate() {
+        assert!(
+            matches!(node.block, Block::Page { number, .. } if usize::try_from(number).unwrap() == index + 1)
+        );
+        assert!(serde_json::to_string(node).unwrap().contains("recognized body 1"));
+    }
+    let entries = pages.entries.lock().unwrap();
+    assert_eq!(entries.len(), 4);
+    assert!(
+        entries.last().unwrap().2 < entries[0].2 + 512 * 1024,
+        "cached contributions must not retain source pixels: {entries:?}"
+    );
+    drop(result);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.reserved_temporary_bytes(), 0);
 }

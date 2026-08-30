@@ -1,7 +1,7 @@
 //! Page-bounded OCR-only pixel lifetime; final semantic ownership moves once.
 
 use super::{
-    PdfConverter, convert_pdf, image_pixels_required, open_document, pages,
+    PdfConverter, convert_pdf_admitted, image_pixels_required, open_document, pages,
     runtime::acquire_pdf_conversion,
 };
 use into_markdown_core::{
@@ -50,10 +50,13 @@ impl ConverterStream for PdfConverter {
     ) -> LocalBoxFuture<'a, Result<ConverterStreamCompletion, ConversionError>> {
         Box::pin(async move {
             let path = self.runtime_path()?;
-            if !ocr_only_pixels(options) || !sink.supports_page_enrichment() {
-                return stream_converter_output(convert_pdf(&path, input, options, context)?, sink);
-            }
             let _permit = acquire_pdf_conversion(context).await?;
+            if !ocr_only_pixels(options) || !sink.supports_page_enrichment() {
+                return stream_converter_output(
+                    convert_pdf_admitted(&path, input, options, context)?,
+                    sink,
+                );
+            }
             let runtime = pages::load_runtime(&path, options)?;
             let pdf = open_document(&runtime, input, context)?;
             let mut counts = pages::Counts::default();

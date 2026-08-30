@@ -26,6 +26,7 @@ use geometry::{
     displayed_dimensions, normalize_rect, page_locator, render_dimensions, safe_link_target,
 };
 use ir::{allocation_capacity_bound, character_working_set_bytes, provenance, text_block};
+#[cfg(test)]
 use runtime::lock_pdf_conversion;
 
 #[cfg(test)]
@@ -336,11 +337,13 @@ impl Converter for PdfConverter {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
             let path = self.runtime_path()?;
-            convert_pdf(&path, input, options, context)
+            let _permit = runtime::acquire_pdf_conversion(context).await?;
+            convert_pdf_admitted(&path, input, options, context)
         })
     }
 }
 
+#[cfg(test)]
 fn convert_pdf(
     runtime_path: &Path,
     input: &ResolvedInput,
@@ -349,6 +352,16 @@ fn convert_pdf(
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
     let _conversion_guard = lock_pdf_conversion(context)?;
+    convert_pdf_admitted(runtime_path, input, options, context)
+}
+
+fn convert_pdf_admitted(
+    runtime_path: &Path,
+    input: &ResolvedInput,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    context.checkpoint()?;
     let runtime = pages::load_runtime(runtime_path, options)?;
     let pdf = open_document(&runtime, input, context)?;
     let mut output = pages::PdfOutput::new(pdf.page_count(), context)?;

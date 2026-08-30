@@ -6,6 +6,7 @@ mod collecting;
 mod fixed_alloc;
 mod nested;
 mod page_enrichment;
+mod page_ocr_cache;
 mod preparation;
 mod recovery;
 mod rendering;
