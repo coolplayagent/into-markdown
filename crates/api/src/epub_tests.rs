@@ -256,7 +256,7 @@ fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {
 fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
     let package = std::str::from_utf8(epub3_package()).unwrap().replace(
         "</manifest>",
-        r#"<item id="font" href="fonts/book.woff2" media-type="font/woff2"/></manifest>"#,
+        r#"<item id="imported" href="styles/imported.css" media-type="text/css"/><item id="font" href="fonts/book.woff2" media-type="font/woff2"/></manifest>"#,
     );
     let chapter = std::str::from_utf8(chapter_one()).unwrap().replace(
         "<title>Chapter One</title>",
@@ -273,7 +273,11 @@ fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
             b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>skip me</p></body></html>",
         ),
         ("OPS/images/cover.png", PNG),
-        ("OPS/styles/book.css", b"@font-face{src:url('../fonts/book.woff2')}"),
+        (
+            "OPS/styles/book.css",
+            br#"a{content:"url('../missing-string.woff2')"}/* url('../missing-comment.woff2') */@import url('imported.css');"#,
+        ),
+        ("OPS/styles/imported.css", b"@font-face{src:url('../fonts/book.woff2')}"),
         ("OPS/fonts/book.woff2", b"font"),
     ]);
 
@@ -283,9 +287,109 @@ fn only_reachable_styles_and_their_css_dependencies_are_reported_as_omitted() {
         .iter()
         .find(|item| item.code == "epub.linkedResourcesOmitted")
         .expect("linked resources must be disclosed");
-    assert!(diagnostic.message.contains("1 reachable CSS"));
+    assert!(diagnostic.message.contains("2 reachable CSS"));
     assert!(diagnostic.message.contains("1 reachable font"));
     assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+}
+
+#[test]
+fn large_reachable_css_is_scanned_in_place_under_the_shared_memory_limit() {
+    let css = r#"a{content:"url('../missing-string.woff2')"}/* url('../missing-comment.woff2') */"#
+        .repeat(8 * 1024);
+    let chapter = std::str::from_utf8(chapter_one()).unwrap().replace(
+        "<title>Chapter One</title>",
+        r#"<title>Chapter One</title><link rel="stylesheet" href="../styles/book.css"/>"#,
+    );
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter.as_bytes()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        (
+            "OPS/text/extra.xhtml",
+            b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>",
+        ),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", css.as_bytes()),
+    ]);
+    let mut options = ConversionOptions::default();
+    options.limits.max_memory_bytes = 8 * 1024 * 1024;
+    options.limits.max_archive_compression_ratio = 10_000;
+    let result = convert_with(bytes, options, ExecutionOptions::default()).unwrap();
+    assert!(result.markdown.contains("Alpha"));
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "epub.linkedResourcesOmitted")
+        .unwrap();
+    assert!(diagnostic.message.contains("1 reachable CSS"));
+    assert!(diagnostic.message.contains("0 reachable font"));
+}
+
+#[test]
+fn metadata_duplicate_ids_fail_only_when_they_make_retained_relationships_ambiguous() {
+    let base = String::from_utf8(epub3_package().to_vec()).unwrap();
+    let opaque = base.replace(
+        "</metadata>",
+        r#"<meta id="opaque" property="schema:first">first</meta><meta id="opaque" property="schema:second">second</meta></metadata>"#,
+    );
+    let result = convert(epub3_book(opaque.as_bytes(), Some(nav3()))).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "epub.metadataDuplicateIdOmitted")
+    );
+    assert_eq!(
+        result.document.metadata.properties.get("epub.meta.schema:first").map(String::as_str),
+        Some("first")
+    );
+    assert!(!result.document.metadata.properties.contains_key("epub.meta.schema:second"));
+    assert_eq!(
+        convert_strict(epub3_book(opaque.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
+
+    for ambiguous in [
+        base.replace(
+            "</metadata>",
+            r#"<dc:identifier id="book-id">second</dc:identifier></metadata>"#,
+        ),
+        base.replace(
+            "</metadata>",
+            r##"<meta id="target" property="schema:first">first</meta><meta id="target" property="schema:second">second</meta><meta property="schema:relation" refines="#target">relation</meta></metadata>"##,
+        ),
+    ] {
+        assert_eq!(
+            convert(epub3_book(ambiguous.as_bytes(), Some(nav3()))).unwrap_err().code(),
+            ErrorCode::Malformed
+        );
+    }
+}
+
+#[test]
+fn matching_epub2_and_epub3_cover_declarations_are_not_conflicts() {
+    let epub3 = String::from_utf8(epub3_package().to_vec()).unwrap().replace(
+        "</metadata>",
+        r#"<meta name="cover" content="cover"/><meta name="cover" content="cover"/></metadata>"#,
+    );
+    assert_eq!(convert(epub3_book(epub3.as_bytes(), Some(nav3()))).unwrap().assets.len(), 1);
+
+    let epub2 = String::from_utf8(epub2_package().to_vec()).unwrap().replace(
+        r#"<meta name="cover" content="cover"/>"#,
+        r#"<meta name="cover" content="cover"/><meta name="cover" content="cover"/>"#,
+    );
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub2.as_bytes()),
+        ("OPS/text/toc.ncx", ncx2()),
+        ("OPS/text/dummy.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>"),
+        ("OPS/text/one.xhtml", epub2_one()),
+        ("OPS/text/two.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+    ]);
+    assert_eq!(convert(bytes).unwrap().assets.len(), 1);
 }
 
 #[test]

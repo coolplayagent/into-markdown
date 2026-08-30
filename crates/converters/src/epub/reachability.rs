@@ -47,7 +47,7 @@ pub(super) fn omitted_resources(
             "text/css" => {
                 omitted.css += 1;
                 let entry = archive.read(&path)?;
-                let references = css_references(&path, &entry.bytes, archive)?;
+                let references = css_references(&path, &entry.bytes, archive, context)?;
                 drop(entry);
                 queue.extend(references);
             }
@@ -65,86 +65,189 @@ fn css_references(
     path: &str,
     bytes: &[u8],
     archive: &SafeArchive<'_, '_>,
+    context: &ExecutionContext,
 ) -> Result<BTreeSet<String>, ConversionError> {
     let text = std::str::from_utf8(bytes).map_err(|_| ConversionError::Malformed {
         part: Some(path.into()),
         detail: "reachable CSS resource is not UTF-8".into(),
     })?;
-    let without_comments = strip_comments(text);
-    let lower = without_comments.to_ascii_lowercase();
     let base = BasePath::document(path)?;
-    let mut values = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = lower[cursor..].find("url(") {
-        let start = cursor + relative + 4;
-        let end =
-            without_comments[start..].find(')').ok_or_else(|| ConversionError::Malformed {
-                part: Some(path.into()),
-                detail: "reachable CSS contains an unterminated url()".into(),
-            })? + start;
-        values.push(trim_css_url(&without_comments[start..end])?);
-        cursor = end + 1;
-    }
-    cursor = 0;
-    while let Some(relative) = lower[cursor..].find("@import") {
-        let start = cursor + relative + "@import".len();
-        let tail = without_comments[start..].trim_start();
-        if let Some(quote @ ('\'' | '"')) = tail.chars().next() {
-            let value = &tail[quote.len_utf8()..];
-            let end = value.find(quote).ok_or_else(|| ConversionError::Malformed {
-                part: Some(path.into()),
-                detail: "reachable CSS contains an unterminated @import".into(),
-            })?;
-            values.push(value[..end].trim());
-        }
-        cursor = start;
-    }
+    let bytes = text.as_bytes();
     let mut output = BTreeSet::new();
-    for value in values {
-        if value.is_empty() || value.starts_with('#') || value.starts_with("data:") {
+    let mut cursor = 0;
+    let mut next_checkpoint = 4 * 1024;
+    while cursor < bytes.len() {
+        if cursor >= next_checkpoint {
+            context.checkpoint()?;
+            next_checkpoint = next_checkpoint.saturating_add(4 * 1024);
+        }
+        if starts_comment(bytes, cursor) {
+            cursor = skip_comment(bytes, cursor);
             continue;
         }
-        let reference = base.resolve(value)?.require_existing(archive)?;
-        if let Reference::Internal { path, .. } = reference {
-            output.insert(path);
+        if matches!(bytes[cursor], b'\'' | b'"') {
+            cursor = quoted_value(text, cursor)?.1;
+            continue;
         }
+        if bytes[cursor] == b'@' {
+            let name_start = cursor + 1;
+            let name_end = identifier_end(bytes, name_start);
+            if bytes[name_start..name_end].eq_ignore_ascii_case(b"import") {
+                let start = skip_layout(bytes, name_end);
+                if start < bytes.len() && matches!(bytes[start], b'\'' | b'"') {
+                    let (value, end) = quoted_value(text, start)?;
+                    insert_reference(value, &base, archive, &mut output)?;
+                    cursor = end;
+                    continue;
+                }
+                let token_end = identifier_end(bytes, start);
+                if bytes[start..token_end].eq_ignore_ascii_case(b"url") {
+                    let open = skip_layout(bytes, token_end);
+                    if bytes.get(open) == Some(&b'(') {
+                        let (value, end) = url_value(text, open)?;
+                        insert_reference(value, &base, archive, &mut output)?;
+                        cursor = end;
+                        continue;
+                    }
+                }
+            }
+            cursor = name_end.max(cursor + 1);
+            continue;
+        }
+        if identifier_byte(bytes[cursor]) {
+            let end = identifier_end(bytes, cursor);
+            if bytes[cursor..end].eq_ignore_ascii_case(b"url") {
+                let open = skip_layout(bytes, end);
+                if bytes.get(open) == Some(&b'(') {
+                    let (value, end) = url_value(text, open)?;
+                    insert_reference(value, &base, archive, &mut output)?;
+                    cursor = end;
+                    continue;
+                }
+            }
+            cursor = end;
+            continue;
+        }
+        cursor += 1;
     }
     Ok(output)
 }
 
-fn trim_css_url(value: &str) -> Result<&str, ConversionError> {
+fn insert_reference(
+    value: &str,
+    base: &BasePath,
+    archive: &SafeArchive<'_, '_>,
+    output: &mut BTreeSet<String>,
+) -> Result<(), ConversionError> {
     let value = value.trim();
-    if let Some(quote @ ('\'' | '"')) = value.chars().next() {
-        return value
-            .strip_prefix(quote)
-            .and_then(|value| value.strip_suffix(quote))
-            .map(str::trim)
-            .ok_or_else(|| ConversionError::Malformed {
-                part: None,
-                detail: "reachable CSS contains mismatched url() quotes".into(),
-            });
+    if value.is_empty()
+        || value.starts_with('#')
+        || value.get(..5).is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return Ok(());
     }
-    Ok(value)
+    let reference = base.resolve(value)?.require_existing(archive)?;
+    if let Reference::Internal { path, .. } = reference {
+        output.insert(path);
+    }
+    Ok(())
 }
 
-fn strip_comments(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut remaining = value;
-    while let Some(start) = remaining.find("/*") {
-        output.push_str(&remaining[..start]);
-        let Some(end) = remaining[start + 2..].find("*/") else { return output };
-        remaining = &remaining[start + 2 + end + 2..];
+fn url_value(text: &str, open: usize) -> Result<(&str, usize), ConversionError> {
+    let bytes = text.as_bytes();
+    let start = skip_layout(bytes, open + 1);
+    if start >= bytes.len() {
+        return Err(malformed_css("unterminated url()"));
     }
-    output.push_str(remaining);
-    output
+    if matches!(bytes[start], b'\'' | b'"') {
+        let (value, end) = quoted_value(text, start)?;
+        let close = skip_layout(bytes, end);
+        if bytes.get(close) != Some(&b')') {
+            return Err(malformed_css("url() has trailing tokens or no closing parenthesis"));
+        }
+        return Ok((value, close + 1));
+    }
+    let mut cursor = start;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b')' => return Ok((&text[start..cursor], cursor + 1)),
+            b'\\' => cursor = (cursor + 2).min(bytes.len()),
+            b'\'' | b'"' => return Err(malformed_css("url() contains an unexpected quote")),
+            _ => cursor += 1,
+        }
+    }
+    Err(malformed_css("unterminated url()"))
+}
+
+fn quoted_value(text: &str, start: usize) -> Result<(&str, usize), ConversionError> {
+    let bytes = text.as_bytes();
+    let quote = bytes[start];
+    let value_start = start + 1;
+    let mut cursor = value_start;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor = (cursor + 2).min(bytes.len()),
+            value if value == quote => return Ok((&text[value_start..cursor], cursor + 1)),
+            _ => cursor += 1,
+        }
+    }
+    Err(malformed_css("unterminated string"))
+}
+
+fn skip_layout(bytes: &[u8], mut cursor: usize) -> usize {
+    loop {
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if !starts_comment(bytes, cursor) {
+            return cursor;
+        }
+        cursor = skip_comment(bytes, cursor);
+    }
+}
+
+fn starts_comment(bytes: &[u8], cursor: usize) -> bool {
+    bytes.get(cursor) == Some(&b'/') && bytes.get(cursor + 1) == Some(&b'*')
+}
+
+fn skip_comment(bytes: &[u8], mut cursor: usize) -> usize {
+    cursor += 2;
+    while cursor + 1 < bytes.len() {
+        if bytes[cursor] == b'*' && bytes[cursor + 1] == b'/' {
+            return cursor + 2;
+        }
+        cursor += 1;
+    }
+    bytes.len()
+}
+
+fn identifier_end(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(|byte| identifier_byte(*byte)) {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+}
+
+fn malformed_css(detail: &str) -> ConversionError {
+    ConversionError::Malformed { part: None, detail: format!("reachable CSS contains {detail}") }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::strip_comments;
+    use super::{identifier_end, quoted_value, skip_comment, skip_layout, url_value};
 
     #[test]
-    fn comments_do_not_create_resource_edges() {
-        assert_eq!(strip_comments("a{/* url(orphan.woff) */color:red}"), "a{color:red}");
+    fn css_scanner_skips_comments_and_strings_without_normalizing_the_document() {
+        let css = r#"/* url(orphan.woff) */a{content:"url('text.woff')";src:url(real.woff)}"#;
+        assert_eq!(skip_comment(css.as_bytes(), 0), 22);
+        let quote = css.find('"').unwrap();
+        assert_eq!(quoted_value(css, quote).unwrap().0, "url('text.woff')");
+        let url = css.rfind("url").unwrap();
+        let open = skip_layout(css.as_bytes(), identifier_end(css.as_bytes(), url));
+        assert_eq!(url_value(css, open).unwrap().0, "real.woff");
     }
 }
