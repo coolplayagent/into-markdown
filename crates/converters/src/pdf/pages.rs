@@ -5,8 +5,8 @@ use super::IMAGE_BITMAP_MATERIALIZATIONS;
 use super::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
     Diagnostic, DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext, HashSet, Inline,
-    Limits, MAX_RENDER_DIMENSION, MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE, NodeId,
-    OcrPolicy, PageCoverage, Path, Pdfium, Rect, ResourceReservation, account_asset,
+    Limits, LinkTarget, MAX_RENDER_DIMENSION, MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE,
+    NodeId, OcrPolicy, PageCoverage, Path, Pdfium, Rect, ResourceReservation, account_asset,
     allocation_capacity_bound, asset_record_overhead, character_working_set_bytes, checked_count,
     content_asset_id, diagnostic_overhead, displayed_dimensions, image_bitmap_to_bmp,
     image_pixels_required, map_pdfium_error, materialize_after_reserve, normalize_rect,
