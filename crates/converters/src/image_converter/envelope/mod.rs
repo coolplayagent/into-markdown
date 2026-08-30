@@ -8,6 +8,8 @@ mod png;
 mod tiff;
 mod webp;
 
+pub(crate) use jpeg::codestream_end as jpeg_codestream_end;
+
 use super::format::RasterFormat;
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceLimits};
 
