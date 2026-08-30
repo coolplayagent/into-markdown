@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "71e7fea09687de175b3b14c27bc24f6761d2f3622c61312c8fd92a5d8c8d185f",
+  "cargo_lock_sha256": "1be4bd507d2e2c565c3431a8125a2bd05105f1c1a3d80a82b5ed3504d91a9e2f",
   "workspace_manifest_sha256": {
     "Cargo.toml": "11bfce1064ec89a202761de0b7b5d1ae74c86efaad626818cdb7e7a08fb8655b",
     "apps/cli/Cargo.toml": "5a7badd4acb08c0ea95413aacd2bf2d129bb100290ba1793322b298ad4e96580",
     "apps/official-provider/Cargo.toml": "ff280ebe22ace51d7d9ed6b895cd29ebe636aacefb49d72ac5148830fbabaa75",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
-    "crates/api/Cargo.toml": "055ab15d210d664c6a361111d848852b0a7fa590d90fce98fd4b966d64f6ec7f",
+    "crates/api/Cargo.toml": "ea7bdb200eef0b32e0bb453fb8424304e4a44a074128c3803b1a511ab9cfc471",
     "crates/asr/Cargo.toml": "3f49f957b4949fc673c81f8514fc5b8834529a8f0e25aeb07455c11c1d87816c",
     "crates/converters/Cargo.toml": "c4feee83625baedf9548f11d3e7a677bee21a1782f5c1ae2e67d4bb187fe5c3b",
     "crates/core/Cargo.toml": "7c93a33a5e435723ab22262f9200637134d6047cf39fa1f162976cb1a643226f",
