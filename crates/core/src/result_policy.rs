@@ -49,11 +49,14 @@ pub(crate) enum DocumentContent {
 }
 
 impl DocumentContent {
-    fn merge(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Visible, _) | (_, Self::Visible) => Self::Visible,
-            (Self::AssetsOnly, _) | (_, Self::AssetsOnly) => Self::AssetsOnly,
-            _ => Self::Empty,
+    fn merge_non_visible(&mut self, other: Self) -> bool {
+        match other {
+            Self::Visible => true,
+            Self::AssetsOnly => {
+                *self = Self::AssetsOnly;
+                false
+            }
+            Self::Empty => false,
         }
     }
 }
@@ -62,11 +65,7 @@ impl DocumentContent {
 /// format-specific container structure.
 #[must_use]
 pub(crate) fn document_content(document: &Document) -> DocumentContent {
-    document
-        .blocks
-        .iter()
-        .map(|node| block_content(&node.block))
-        .fold(DocumentContent::Empty, DocumentContent::merge)
+    nodes_content(&document.blocks)
 }
 
 /// Whether a converter result has no visible semantic body content.
@@ -113,38 +112,37 @@ pub fn classify_result(
     assets: &[Asset],
     diagnostics: &[Diagnostic],
 ) -> Result<ResultContent, ConversionError> {
-    let empty_source = has_reason(diagnostics, EMPTY_SOURCE_REASON_CODE);
-    let asset_only = has_reason(diagnostics, ASSET_ONLY_REASON_CODE);
+    if markdown_has_visible_content(markdown) {
+        return Ok(ResultContent::Markdown);
+    }
+    let (empty_source, asset_only) = evidence_reasons(diagnostics);
     if empty_source && asset_only {
         return Err(ConversionError::Internal {
             detail: "result carries conflicting empty-source and asset-only evidence".into(),
         });
     }
-    let content = document_content(document);
     if empty_source {
-        if content != DocumentContent::Empty || !assets.is_empty() {
+        if !assets.is_empty() || document_content(document) != DocumentContent::Empty {
             return Err(ConversionError::Internal {
                 detail: "empty-source evidence conflicts with retained document content".into(),
             });
         }
-        if markdown_has_visible_content(markdown) {
-            return Ok(ResultContent::Markdown);
-        }
         return Ok(ResultContent::EmptySource);
     }
+    if assets.is_empty() {
+        return Err(ConversionError::EmptyContent);
+    }
+    let content = document_content(document);
     if asset_only {
         if content != DocumentContent::AssetsOnly || assets.is_empty() {
             return Err(ConversionError::Internal {
                 detail: "asset-only evidence requires asset-only IR and retained assets".into(),
             });
         }
-        if markdown_has_visible_content(markdown) {
-            return Ok(ResultContent::Markdown);
-        }
         return Ok(ResultContent::AssetsOnly);
     }
-    if markdown_has_visible_content(markdown) {
-        Ok(ResultContent::Markdown)
+    if content == DocumentContent::AssetsOnly {
+        Ok(ResultContent::AssetsOnly)
     } else {
         Err(ConversionError::EmptyContent)
     }
@@ -178,8 +176,18 @@ impl ConversionResult {
         } else if has_reason(&self.diagnostics, ASSET_ONLY_REASON_CODE) {
             Some(ASSET_ONLY_REASON_CODE)
         } else {
-            None
+            match self.content().ok()? {
+                ResultContent::AssetsOnly => Some(ASSET_ONLY_REASON_CODE),
+                ResultContent::Markdown | ResultContent::EmptySource => None,
+            }
         }
+    }
+
+    /// Whether every retained asset can be represented by a destination that
+    /// accepts local payloads and/or external URI metadata.
+    #[must_use]
+    pub fn assets_are_deliverable(&self, payloads: bool, external_references: bool) -> bool {
+        assets_are_deliverable(&self.assets, payloads, external_references)
     }
 }
 
@@ -206,9 +214,43 @@ impl crate::ConversionSummary {
         } else if has_reason(&self.diagnostics, ASSET_ONLY_REASON_CODE) {
             Some(ASSET_ONLY_REASON_CODE)
         } else {
-            None
+            match self.content? {
+                ResultContent::AssetsOnly => Some(ASSET_ONLY_REASON_CODE),
+                ResultContent::Markdown | ResultContent::EmptySource => None,
+            }
         }
     }
+
+    /// Whether every retained asset can be represented by a destination that
+    /// accepts local payloads and/or external URI metadata.
+    #[must_use]
+    pub const fn assets_are_deliverable(&self, payloads: bool, external_references: bool) -> bool {
+        (payloads || self.payload_only_assets == 0)
+            && (external_references || self.external_only_assets == 0)
+            && (payloads || external_references || self.dual_representation_assets == 0)
+    }
+}
+
+fn evidence_reasons(diagnostics: &[Diagnostic]) -> (bool, bool) {
+    let mut empty_source = false;
+    let mut asset_only = false;
+    for diagnostic in diagnostics {
+        match diagnostic.code.as_str() {
+            EMPTY_SOURCE_REASON_CODE => empty_source = true,
+            ASSET_ONLY_REASON_CODE => asset_only = true,
+            _ => {}
+        }
+        if empty_source && asset_only {
+            break;
+        }
+    }
+    (empty_source, asset_only)
+}
+
+fn assets_are_deliverable(assets: &[Asset], payloads: bool, external_references: bool) -> bool {
+    assets.iter().all(|asset| {
+        !asset.bytes.is_empty() && payloads || asset.external_uri.is_some() && external_references
+    })
 }
 
 fn has_reason(diagnostics: &[Diagnostic], code: &str) -> bool {
@@ -221,11 +263,15 @@ fn block_content(block: &Block) -> DocumentContent {
         Block::Heading { content, .. } | Block::TimedSegment { content, .. } => {
             inline_content(content)
         }
-        Block::List { items, .. } => items
-            .iter()
-            .flat_map(|item| &item.blocks)
-            .map(|node| block_content(&node.block))
-            .fold(DocumentContent::Empty, DocumentContent::merge),
+        Block::List { items, .. } => {
+            let mut content = DocumentContent::Empty;
+            for item in items {
+                if content.merge_non_visible(nodes_content(&item.blocks)) {
+                    return DocumentContent::Visible;
+                }
+            }
+            content
+        }
         Block::Table { rows, .. } => {
             if rows.is_empty() {
                 DocumentContent::Empty
@@ -242,24 +288,24 @@ fn block_content(block: &Block) -> DocumentContent {
         }
         Block::Footnote { blocks, .. }
         | Block::Page { blocks, .. }
-        | Block::Sheet { blocks, .. } => blocks
-            .iter()
-            .map(|node| block_content(&node.block))
-            .fold(DocumentContent::Empty, DocumentContent::merge),
+        | Block::Sheet { blocks, .. } => nodes_content(blocks),
         Block::Slide { title, blocks, .. } => {
             let title = title.as_deref().is_some_and(|value| !value.trim().is_empty());
-            if title {
-                DocumentContent::Visible
-            } else {
-                blocks
-                    .iter()
-                    .map(|node| block_content(&node.block))
-                    .fold(DocumentContent::Empty, DocumentContent::merge)
-            }
+            if title { DocumentContent::Visible } else { nodes_content(blocks) }
         }
         Block::Image { .. } => DocumentContent::AssetsOnly,
         Block::Rule => DocumentContent::Visible,
     }
+}
+
+fn nodes_content(nodes: &[crate::BlockNode]) -> DocumentContent {
+    let mut content = DocumentContent::Empty;
+    for node in nodes {
+        if content.merge_non_visible(block_content(&node.block)) {
+            return DocumentContent::Visible;
+        }
+    }
+    content
 }
 
 fn inline_content(values: &[Inline]) -> DocumentContent {
@@ -368,6 +414,26 @@ mod tests {
         assert_eq!(
             classify_result(&document, "", &assets, &diagnostics).unwrap(),
             ResultContent::AssetsOnly
+        );
+    }
+
+    #[test]
+    fn visible_markdown_short_circuits_a_large_ir_inventory() {
+        let prototype = crate::BlockNode {
+            id: crate::NodeId("empty".into()),
+            block: Block::Paragraph(Vec::new()),
+            provenance: crate::Provenance {
+                kind: crate::ProvenanceKind::NativeParser,
+                provider: "test".into(),
+                locator: crate::SourceLocator::default(),
+                confidence: None,
+            },
+        };
+        let document = Document { blocks: vec![prototype; 100_000], ..Document::default() };
+
+        assert_eq!(
+            classify_result(&document, "visible", &[], &[]).unwrap(),
+            ResultContent::Markdown
         );
     }
 }

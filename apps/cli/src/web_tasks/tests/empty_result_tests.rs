@@ -1,4 +1,8 @@
 use super::*;
+use into_markdown::{
+    Asset, AssetId, Block, BlockNode, ConversionResult, Document, NodeId, Provenance,
+    ProvenanceKind, SourceLocator,
+};
 use std::io::Cursor;
 use zip::write::SimpleFileOptions;
 
@@ -39,6 +43,46 @@ fn empty_source_and_empty_content_share_the_web_terminal_contract() {
     let failure = backend.web_record(omitted).unwrap().failure.unwrap();
     assert_eq!(failure.code, "malformed");
     assert_eq!(failure.reason_code.as_deref(), Some("emptyContent"));
+}
+
+#[test]
+fn web_rejects_external_uri_only_asset_results_it_cannot_publish() {
+    let id = AssetId("external".into());
+    let result = ConversionResult::new(
+        Document {
+            blocks: vec![BlockNode {
+                id: NodeId("image".into()),
+                block: Block::Image { asset: id.clone(), alt: None },
+                provenance: Provenance {
+                    kind: ProvenanceKind::NativeParser,
+                    provider: "test".into(),
+                    locator: SourceLocator::default(),
+                    confidence: None,
+                },
+            }],
+            ..Document::default()
+        },
+        String::new(),
+        vec![Asset {
+            id,
+            filename: Some("external.png".into()),
+            media_type: "image/png".into(),
+            bytes: Vec::new(),
+            external_uri: Some("https://example.invalid/external.png".into()),
+        }],
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let error = validate_web_result_delivery(&result).unwrap_err();
+    assert!(matches!(
+        error,
+        WebTaskError::Conversion {
+            ref code,
+            reason_code: Some(ref reason_code),
+            ref stage,
+        } if code == "malformed" && reason_code == "emptyContent" && stage == "resultDelivery"
+    ));
 }
 
 fn alt_chunk_only_docx() -> Vec<u8> {

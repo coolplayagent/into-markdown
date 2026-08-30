@@ -26,6 +26,7 @@ pub(super) struct NavEntry {
 pub(super) struct Navigation {
     pub(super) source_path: String,
     pub(super) entries: Vec<NavEntry>,
+    pub(super) resource_paths: BTreeSet<String>,
 }
 
 #[allow(clippy::struct_excessive_bools)] // Streaming XHTML context is explicit and non-recursive.
@@ -64,6 +65,7 @@ pub(super) fn parse_nav(
     let mut root_seen = false;
     let mut toc_seen = false;
     let mut entries = Vec::new();
+    let mut resource_paths = BTreeSet::new();
     let mut document_events = xml::DocumentEvents::default();
     loop {
         let event = reader.read_event().map_err(|error| xml::malformed(error.to_string()))?;
@@ -92,6 +94,13 @@ pub(super) fn parse_nav(
                 }
                 if !label_policy::is_known_namespace(name.namespace.as_deref()) {
                     return Err(xml::malformed("navigation contains an unsupported namespace"));
+                }
+                if name.matches(Some(XHTML_NS), b"link")
+                    && let Some(href) = xml::optional(&attributes, None, b"href")
+                    && let Reference::Internal { path, .. } =
+                        base.resolve(href)?.require_existing(archive)?
+                {
+                    resource_paths.insert(path);
                 }
                 let parent_in_toc = stack.last().is_some_and(|frame| frame.in_toc);
                 let declared_toc = name.matches(Some(XHTML_NS), b"nav")
@@ -278,7 +287,7 @@ pub(super) fn parse_nav(
         return Err(xml::malformed("EPUB navigation toc is missing or incomplete"));
     }
     budget.items("navigation", entries.len())?;
-    Ok(Navigation { source_path: path.into(), entries })
+    Ok(Navigation { source_path: path.into(), entries, resource_paths })
 }
 
 fn close_nav_frame(
@@ -528,7 +537,7 @@ pub(super) fn parse_ncx(
         }
     }
     budget.items("NCX navigation", entries.len())?;
-    Ok(Navigation { source_path: path.into(), entries })
+    Ok(Navigation { source_path: path.into(), entries, resource_paths: BTreeSet::new() })
 }
 
 fn normalize(value: &str) -> String {

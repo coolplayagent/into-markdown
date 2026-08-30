@@ -2781,6 +2781,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 }
             }
         })?;
+        validate_web_result_delivery(&converted)?;
         let current = lock(&shared.task_store).get(&job.id)?.ok_or(WebTaskError::NotFound)?;
         if current.status == TaskStatus::Running {
             let converted_record = lock(&shared.task_store).transition(
@@ -2836,6 +2837,26 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             finish_terminal_or_stop(shared, &job.id, false);
         }
     }
+}
+
+fn validate_web_result_delivery(
+    result: &into_markdown::ConversionResult,
+) -> Result<(), WebTaskError> {
+    let content = result.content().map_err(|error| WebTaskError::Conversion {
+        code: error.code().as_str().into(),
+        reason_code: Some(error.reason_code().into()),
+        stage: "resultDelivery".into(),
+    })?;
+    if content == into_markdown::ResultContent::AssetsOnly
+        && !result.assets_are_deliverable(true, false)
+    {
+        return Err(WebTaskError::Conversion {
+            code: "malformed".into(),
+            reason_code: Some("emptyContent".into()),
+            stage: "resultDelivery".into(),
+        });
+    }
+    Ok(())
 }
 
 fn web_invocation_capabilities(

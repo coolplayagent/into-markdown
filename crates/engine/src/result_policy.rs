@@ -2,16 +2,13 @@
 
 use into_markdown_core::{
     ASSET_ONLY_REASON_CODE, ConversionError, ConverterOutput, Diagnostic, DiagnosticSeverity,
-    EMPTY_SOURCE_REASON_CODE, ExecutionContext, InputFormat, ResolvedInput, SourceContentEvidence,
-    document_is_asset_only, document_is_empty,
+    EMPTY_SOURCE_REASON_CODE, ExecutionContext, SourceContentEvidence, estimate_retained_output,
 };
 
-const EVIDENCE_DIAGNOSTIC_PEAK_BYTES: u64 = 512;
+const EVIDENCE_DIAGNOSTIC_PEAK_BYTES: u64 = 1_280;
 
 pub(crate) fn attach_evidence(
     mut output: ConverterOutput,
-    source: &ResolvedInput,
-    format: InputFormat,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     if output.diagnostics.iter().any(|diagnostic| {
@@ -21,45 +18,20 @@ pub(crate) fn attach_evidence(
             detail: "converter emitted an engine-reserved result diagnostic".into(),
         });
     }
-    let evidence = match output.source_content_evidence() {
-        SourceContentEvidence::Unknown
-            if format == InputFormat::Markdown
-                && document_is_empty(&output.document)
-                && output.assets.is_empty()
-                && utf8_source_is_blank(&source.bytes) =>
-        {
-            SourceContentEvidence::Empty
-        }
-        SourceContentEvidence::Unknown
-            if document_is_asset_only(&output.document) && !output.assets.is_empty() =>
-        {
-            SourceContentEvidence::AssetsOnly
-        }
-        evidence => evidence,
-    };
+    let evidence = output.source_content_evidence();
     let (code, message) = match evidence {
         SourceContentEvidence::Unknown => return Ok(output),
         SourceContentEvidence::Empty => {
-            if !document_is_empty(&output.document) || !output.assets.is_empty() {
-                return Err(ConversionError::Internal {
-                    detail: "empty-source evidence conflicts with retained document content".into(),
-                });
-            }
             (EMPTY_SOURCE_REASON_CODE, "source was fully scanned and contains no visible content")
         }
         SourceContentEvidence::AssetsOnly => {
-            if !document_is_asset_only(&output.document) || output.assets.is_empty() {
-                return Err(ConversionError::Internal {
-                    detail: "asset-only evidence requires asset-only IR and retained assets".into(),
-                });
-            }
             (ASSET_ONLY_REASON_CODE, "source contains only asset-backed structured content")
         }
     };
 
-    // Hold a conservative peak before allocating the small audit diagnostic;
-    // `account_retained` then transfers the exact retained charge to output.
-    let allocation_guard = context.reserve_memory(EVIDENCE_DIAGNOSTIC_PEAK_BYTES)?;
+    let retained_before =
+        estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
+    let mut allocation_guard = context.reserve_memory(EVIDENCE_DIAGNOSTIC_PEAK_BYTES)?;
     output.diagnostics.try_reserve(1).map_err(|error| ConversionError::ResourceLimit {
         limit: "max_memory_bytes",
         detail: format!("cannot reserve source-content diagnostic: {error}"),
@@ -70,39 +42,34 @@ pub(crate) fn attach_evidence(
         message: message.into(),
         locator: None,
     });
-    output = output.account_retained(context)?;
-    drop(allocation_guard);
+    let retained_after =
+        estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
+    let retained_delta = retained_after.saturating_sub(retained_before);
+    if retained_delta > EVIDENCE_DIAGNOSTIC_PEAK_BYTES {
+        return Err(ConversionError::Internal {
+            detail: format!(
+                "source-content diagnostic retained {retained_delta} bytes beyond its {EVIDENCE_DIAGNOSTIC_PEAK_BYTES}-byte allocation plan"
+            ),
+        });
+    }
+    allocation_guard.shrink(EVIDENCE_DIAGNOSTIC_PEAK_BYTES - retained_delta)?;
+    output.attach_memory_reservation(context, allocation_guard)?;
     Ok(output)
-}
-
-fn utf8_source_is_blank(bytes: &[u8]) -> bool {
-    let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
-    std::str::from_utf8(bytes).is_ok_and(|text| text.chars().all(char::is_whitespace))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use into_markdown_core::{
-        Asset, AssetId, Block, BlockNode, Document, ExecutionOptions, NodeId, Provenance,
-        ProvenanceKind, ResourceLimits, SourceLocator, SourceMetadata,
-    };
-    use std::sync::Arc;
+    use into_markdown_core::{ExecutionOptions, ResourceLimits};
 
     fn context() -> ExecutionContext {
         ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default())
     }
 
-    fn source(bytes: &'static [u8]) -> ResolvedInput {
-        ResolvedInput { metadata: SourceMetadata::default(), bytes: Arc::from(bytes) }
-    }
-
     #[test]
-    fn blank_markdown_gets_complete_audit_evidence() {
+    fn certified_empty_source_gets_complete_audit_evidence() {
         let output = attach_evidence(
-            ConverterOutput::default(),
-            &source(b"\xef\xbb\xbf \r\n"),
-            InputFormat::Markdown,
+            ConverterOutput::default().with_source_content_evidence(SourceContentEvidence::Empty),
             &context(),
         )
         .unwrap();
@@ -111,34 +78,39 @@ mod tests {
     }
 
     #[test]
-    fn asset_only_ir_is_certified_without_format_special_cases() {
-        let id = AssetId("asset".into());
-        let output = ConverterOutput::new(
-            Document {
-                blocks: vec![BlockNode {
-                    id: NodeId("image".into()),
-                    block: Block::Image { asset: id.clone(), alt: None },
-                    provenance: Provenance {
-                        kind: ProvenanceKind::NativeParser,
-                        provider: "test".into(),
-                        locator: SourceLocator::default(),
-                        confidence: None,
-                    },
-                }],
-                ..Document::default()
-            },
-            vec![Asset {
-                id,
-                filename: Some("asset.bin".into()),
-                media_type: "application/octet-stream".into(),
-                bytes: vec![1],
-                external_uri: None,
-            }],
-            Vec::new(),
-        );
-        let output =
-            attach_evidence(output, &source(b"asset"), InputFormat::Text, &context()).unwrap();
-        assert_eq!(output.diagnostics[0].code, ASSET_ONLY_REASON_CODE);
+    fn evidence_peak_plan_succeeds_at_the_exact_limit_without_double_charging() {
+        let limits = ResourceLimits {
+            max_memory_bytes: EVIDENCE_DIAGNOSTIC_PEAK_BYTES,
+            ..ResourceLimits::default()
+        };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let output = attach_evidence(
+            ConverterOutput::default().with_source_content_evidence(SourceContentEvidence::Empty),
+            &context,
+        )
+        .unwrap();
+
+        assert!(context.reserved_memory_bytes() > 0);
+        assert!(context.reserved_memory_bytes() < EVIDENCE_DIAGNOSTIC_PEAK_BYTES);
+        drop(output);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn evidence_peak_plan_fails_one_byte_below_the_exact_limit() {
+        let limits = ResourceLimits {
+            max_memory_bytes: EVIDENCE_DIAGNOSTIC_PEAK_BYTES - 1,
+            ..ResourceLimits::default()
+        };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        let error = attach_evidence(
+            ConverterOutput::default().with_source_content_evidence(SourceContentEvidence::Empty),
+            &context,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 }
 

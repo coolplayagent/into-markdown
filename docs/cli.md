@@ -151,8 +151,9 @@ into-md <INPUT...>
   空产物使用 `malformed` / `emptyContent`。
 - Engine 的空结果判定发生在 stdout 编码及文件事务 stage/commit 之前。除明确
   `emptySource` 外，成功或 degraded 的 Markdown 目标必须存在且非空；`emptyContent`
-  不创建目标，并使批处理失败计数和退出码与报告一致。asset-only 结果只允许
-  `result-json`、bundle，或带 `--asset-mode extract` 的 `ir-json`。
+  不创建目标，并使批处理失败计数和退出码与报告一致。asset-only 结果只有在所选
+  输出能表示每项资源时成功：`result-json` 可保留 payload 或外部 URI；bundle 和带
+  `--asset-mode extract` 的 `ir-json` 要求本地 payload。
 - `--dry-run` 只展开输入、验证配置和计算输出路径，不转换、不联网、不写任何文件。
 
 ### OCR 与 AI

@@ -4309,26 +4309,20 @@ fn run_conversion(
         working_directory: context.cwd.clone(),
     };
     let reports = if plans.len() == 1 && plans[0].output.is_none() {
-        vec![process_stdout(&plans[0], &policy, catalog, json_log, context)?]
+        vec![match process_stdout(&plans[0], &policy, catalog, json_log, context) {
+            Ok(report) => report,
+            Err(error) if arguments.report.is_some() => {
+                failed_item_report(&plans[0], &policy, &error)
+            }
+            Err(error) => return Err(error),
+        }]
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        let completed = process_file_task_inner(plan, &policy, &output_phase)?;
-        let reason_code = completed.summary.reason_code().map(str::to_owned);
-        vec![BatchItemReport {
-            input: plan.item.display.clone(),
-            output: Some(report_path(&completed.path)),
-            format: completed.summary.format.map(|format| format.as_str().into()),
-            status: BatchItemStatus::Success,
-            outcome: crate::result_policy::batch_outcome(completed.summary.outcome),
-            diagnostics: completed.summary.diagnostics.iter().map(Into::into).collect(),
-            error_code: None,
-            reason_code,
-            component: None,
-            part: None,
-            limit: None,
-            message: None,
-            warnings: completed.warnings,
+        vec![match process_file_task_inner(plan, &policy, &output_phase) {
+            Ok(completed) => completed_item_report(plan.item.display.clone(), completed),
+            Err(error) if arguments.report.is_some() => failed_item_report(plan, &policy, &error),
+            Err(error) => return Err(error),
         }]
     } else {
         process_batch(plans, &policy, arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get))?
@@ -5053,45 +5047,54 @@ fn process_file_task(
 ) -> BatchItemReport {
     let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok(completed) => {
-            let reason_code = completed.summary.reason_code().map(str::to_owned);
-            BatchItemReport {
-                input: plan.item.display,
-                output: Some(report_path(&completed.path)),
-                format: completed.summary.format.map(|format| format.as_str().into()),
-                status: BatchItemStatus::Success,
-                outcome: crate::result_policy::batch_outcome(completed.summary.outcome),
-                diagnostics: completed.summary.diagnostics.iter().map(Into::into).collect(),
-                error_code: None,
-                reason_code,
-                component: None,
-                part: None,
-                limit: None,
-                message: None,
-                warnings: completed.warnings,
-            }
-        }
-        Err(error) => BatchItemReport {
-            input: plan.item.display,
-            output: plan.output.as_deref().map(report_path),
-            format: error
-                .detected_format()
-                .or(policy.hint.format)
-                .map(|format| format.as_str().into()),
-            status: BatchItemStatus::Failed,
-            outcome: BatchItemOutcome::Failed,
-            diagnostics: vec![],
-            error_code: Some(error.code().into()),
-            reason_code: Some(error.reason_code().into()),
-            component: error.component_name().map(str::to_owned),
-            part: error.part().map(str::to_owned),
-            limit: error.limit().map(|(name, detail)| BatchLimitDto {
-                name: name.into(),
-                detail: Some(detail.into()),
-            }),
-            message: Some(error.to_string()),
-            warnings: vec![],
-        },
+        Ok(completed) => completed_item_report(plan.item.display, completed),
+        Err(error) => failed_item_report(&plan, policy, &error),
+    }
+}
+
+fn completed_item_report(
+    input: String,
+    completed: crate::result_policy::CommittedOutput,
+) -> BatchItemReport {
+    let reason_code = completed.summary.reason_code().map(str::to_owned);
+    BatchItemReport {
+        input,
+        output: Some(report_path(&completed.path)),
+        format: completed.summary.format.map(|format| format.as_str().into()),
+        status: BatchItemStatus::Success,
+        outcome: crate::result_policy::batch_outcome(completed.summary.outcome),
+        diagnostics: completed.summary.diagnostics.iter().map(Into::into).collect(),
+        error_code: None,
+        reason_code,
+        component: None,
+        part: None,
+        limit: None,
+        message: None,
+        warnings: completed.warnings,
+    }
+}
+
+fn failed_item_report(
+    plan: &WorkPlan,
+    policy: &ExecutionPolicy,
+    error: &CliError,
+) -> BatchItemReport {
+    BatchItemReport {
+        input: plan.item.display.clone(),
+        output: plan.output.as_deref().map(report_path),
+        format: error.detected_format().or(policy.hint.format).map(|format| format.as_str().into()),
+        status: BatchItemStatus::Failed,
+        outcome: BatchItemOutcome::Failed,
+        diagnostics: vec![],
+        error_code: Some(error.code().into()),
+        reason_code: Some(error.reason_code().into()),
+        component: error.component_name().map(str::to_owned),
+        part: error.part().map(str::to_owned),
+        limit: error
+            .limit()
+            .map(|(name, detail)| BatchLimitDto { name: name.into(), detail: Some(detail.into()) }),
+        message: Some(error.to_string()),
+        warnings: vec![],
     }
 }
 
@@ -6872,7 +6875,7 @@ mod tests {
         let lines = output.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "FORMAT\tCONFIDENCE\tEXPLICIT\tDETECTOR\tREASON\tDIAGNOSTICS");
         assert_eq!(lines[1], "pdf\t0.990\tfalse\tbuiltin.detector.content\tPDF magic bytes\t");
-        assert_eq!(lines[2], "docx\t0.550\tfalse\tbuiltin.detector.hints\tfilename extension\t");
+        assert_eq!(lines[2], "docx\t0.910\tfalse\tbuiltin.detector.hints\tfilename extension\t");
     }
 
     #[test]

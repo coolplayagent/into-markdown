@@ -602,12 +602,7 @@ pub(super) async fn convert(
             &context,
         )
         .await?;
-        let output = crate::result_policy::attach_evidence(
-            output,
-            source.input(),
-            attempt.candidate.format,
-            &context,
-        )?;
+        let output = crate::result_policy::attach_evidence(output, &context)?;
         validate_asset_inventory(&output.document, &output.assets, &request)?;
         validate_diagnostics(&output.diagnostics)?;
         store.commit(

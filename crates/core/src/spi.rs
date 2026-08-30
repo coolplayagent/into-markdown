@@ -157,6 +157,9 @@ pub struct ConversionSummary {
     /// Number of assets written.
     pub assets: u64,
     pub(crate) content: Option<crate::ResultContent>,
+    pub(crate) payload_only_assets: u64,
+    pub(crate) external_only_assets: u64,
+    pub(crate) dual_representation_assets: u64,
     pub(crate) _memory_lease: OutputMemoryLease,
 }
 
@@ -653,6 +656,21 @@ impl ConverterOutput {
         markdown_bytes: u64,
         content: crate::ResultContent,
     ) -> ConversionSummary {
+        let payload_only_assets = self
+            .assets
+            .iter()
+            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_none())
+            .count();
+        let external_only_assets = self
+            .assets
+            .iter()
+            .filter(|asset| asset.bytes.is_empty() && asset.external_uri.is_some())
+            .count();
+        let dual_representation_assets = self
+            .assets
+            .iter()
+            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_some())
+            .count();
         let Self { assets, diagnostics, memory_lease, .. } = self;
         let outcome = crate::conversion_outcome(&diagnostics);
         ConversionSummary {
@@ -662,6 +680,10 @@ impl ConverterOutput {
             markdown_bytes,
             assets: u64::try_from(assets.len()).unwrap_or(u64::MAX),
             content: Some(content),
+            payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
+            external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),
+            dual_representation_assets: u64::try_from(dual_representation_assets)
+                .unwrap_or(u64::MAX),
             _memory_lease: memory_lease,
         }
     }

@@ -125,6 +125,56 @@ fn empty_content_fails_batch_without_committing_a_false_success_target() {
 }
 
 #[test]
+fn empty_content_single_file_still_writes_a_failed_report_and_no_target() {
+    let temporary = tempfile::tempdir().unwrap();
+    let input = temporary.path().join("omitted.docx");
+    let output = temporary.path().join("omitted.md");
+    let report = temporary.path().join("report.json");
+    std::fs::write(&input, alt_chunk_only_docx()).unwrap();
+
+    let result = Command::new(binary())
+        .args(["--no-config", "--output"])
+        .arg(&output)
+        .args(["--report"])
+        .arg(&report)
+        .arg(&input)
+        .output()
+        .unwrap();
+
+    assert_eq!(result.status.code(), Some(10), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(!output.exists());
+    assert_failed_empty_content_report(&report);
+}
+
+#[test]
+fn empty_content_stdout_still_writes_a_failed_report_and_no_stdout() {
+    let temporary = tempfile::tempdir().unwrap();
+    let input = temporary.path().join("omitted.docx");
+    let report = temporary.path().join("report.json");
+    std::fs::write(&input, alt_chunk_only_docx()).unwrap();
+
+    let result = Command::new(binary())
+        .args(["--no-config", "--report"])
+        .arg(&report)
+        .arg(&input)
+        .output()
+        .unwrap();
+
+    assert_eq!(result.status.code(), Some(10), "{}", String::from_utf8_lossy(&result.stderr));
+    assert!(result.stdout.is_empty());
+    assert_failed_empty_content_report(&report);
+}
+
+fn assert_failed_empty_content_report(path: &std::path::Path) {
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(report["succeeded"], 0);
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["items"][0]["status"], "failed");
+    assert_eq!(report["items"][0]["outcome"], "failed");
+    assert_eq!(report["items"][0]["reasonCode"], "emptyContent");
+}
+
+#[test]
 fn recoverable_omission_commits_nonempty_degraded_output() {
     let temporary = tempfile::tempdir().unwrap();
     let input = temporary.path().join("recovered.rtf");

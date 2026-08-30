@@ -22,6 +22,7 @@ pub(super) struct Chapter {
     pub(super) internal_targets: BTreeSet<String>,
     pub(super) anchors: BTreeSet<String>,
     pub(super) footnotes: Vec<Footnote>,
+    pub(super) resource_paths: BTreeSet<String>,
 }
 
 pub(super) struct SpineResult {
@@ -107,6 +108,7 @@ pub(super) async fn convert(
             internal_targets: prepared.internal_targets,
             anchors: prepared.anchors,
             footnotes: prepared.footnotes,
+            resource_paths: prepared.resource_paths,
         });
     }
     if chapters.is_empty() {

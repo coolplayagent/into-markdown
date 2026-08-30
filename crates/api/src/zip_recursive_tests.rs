@@ -168,6 +168,73 @@ fn empty_is_valid_but_all_failed_members_are_not_pseudo_success() {
 }
 
 #[test]
+fn empty_zip_bytes_named_as_xlsx_never_fall_back_to_generic_zip_success() {
+    let invalid_xlsx = archive(&[], false);
+    for policy in [crate::ErrorPolicy::BestEffort, crate::ErrorPolicy::Strict] {
+        let mut request =
+            ConversionRequest::new(InputRef::bytes(invalid_xlsx.clone(), Some("invalid.xlsx")));
+        request.options.error_policy = policy;
+        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+    }
+
+    let nested = archive(&[("invalid.xlsx", &invalid_xlsx)], false);
+    let error =
+        convert(nested, ConversionOptions::default(), ExecutionOptions::default()).unwrap_err();
+    assert!(matches!(
+        error,
+        ConversionError::Malformed { .. }
+            | ConversionError::Unsupported { .. }
+            | ConversionError::NoConverter { .. }
+    ));
+}
+
+#[test]
+fn empty_zip_bytes_with_six_package_extensions_never_become_empty_zip_successes() {
+    let bytes = archive(&[], false);
+    for name in [
+        "invalid.docx",
+        "invalid.pptx",
+        "invalid.xlsx",
+        "invalid.odt",
+        "invalid.ods",
+        "invalid.odp",
+    ] {
+        let request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+        assert_ne!(error.reason_code(), "emptySource", "{name} was washed into an empty ZIP");
+    }
+}
+
+#[test]
+fn empty_text_members_empty_nested_zip_and_failed_siblings_have_stable_outcomes() {
+    let empty_text = archive(&[("empty.txt", b" \n"), ("empty.md", b"\xef\xbb\xbf\n")], false);
+    let result =
+        convert(empty_text, ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(result.content().unwrap(), ResultContent::Markdown);
+    assert!(result.markdown.contains("empty\\.txt"));
+    assert!(result.markdown.contains("empty\\.md"));
+    assert_eq!(result.outcome(), ConversionOutcome::Complete);
+
+    let empty_nested = archive(&[("nested.zip", &archive(&[], false))], false);
+    let result =
+        convert(empty_nested, ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(result.content().unwrap(), ResultContent::EmptySource);
+    assert_eq!(result.outcome(), ConversionOutcome::Complete);
+
+    let mixed = archive(&[("empty.txt", b"\n"), ("failed.bin", b"\0\x01\x02")], false);
+    let result = convert(mixed, ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(result.content().unwrap(), ResultContent::Markdown);
+    assert!(result.markdown.contains("empty\\.txt"));
+    assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "zip.entry.failed"
+            && diagnostic.locator.as_ref().and_then(|locator| locator.part.as_deref())
+                == Some("failed.bin")
+    }));
+}
+
+#[test]
 fn recursive_identity_footnotes_and_character_provenance_are_namespaced() {
     let footnotes = archive(
         &[

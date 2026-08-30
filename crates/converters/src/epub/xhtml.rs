@@ -25,6 +25,7 @@ pub(super) struct PreparedXhtml {
     pub(super) internal_targets: BTreeSet<String>,
     pub(super) anchors: BTreeSet<String>,
     pub(super) footnotes: Vec<Footnote>,
+    pub(super) resource_paths: BTreeSet<String>,
     pub(super) _memory: ResourceReservation,
 }
 
@@ -39,6 +40,13 @@ struct Frame {
 struct FootnoteBuilder {
     target: String,
     text: String,
+}
+
+#[derive(Default)]
+struct RewriteInventory {
+    references: BTreeMap<String, String>,
+    internal_targets: BTreeSet<String>,
+    resource_paths: BTreeSet<String>,
 }
 
 #[allow(clippy::too_many_lines)] // Rewriting and footnote extraction share the namespace stack.
@@ -76,8 +84,7 @@ pub(super) fn prepare(
     let mut stack = Vec::<Frame>::new();
     let mut root_seen = false;
     let mut document_events = xml::DocumentEvents::default();
-    let mut references = BTreeMap::new();
-    let mut internal_targets = BTreeSet::new();
+    let mut inventory = RewriteInventory::default();
     let mut anchors = BTreeSet::new();
     let mut footnotes = Vec::new();
     loop {
@@ -140,15 +147,8 @@ pub(super) fn prepare(
                 let suppressed_output =
                     is_footnote || stack.last().is_some_and(|frame| frame.suppressed_output);
                 if !suppressed_output {
-                    let rewritten = rewrite_element(
-                        &reader,
-                        &element,
-                        &name,
-                        &base,
-                        archive,
-                        &mut references,
-                        &mut internal_targets,
-                    )?;
+                    let rewritten =
+                        rewrite_element(&reader, &element, &name, &base, archive, &mut inventory)?;
                     writer
                         .write_event(if empty {
                             Event::Empty(rewritten)
@@ -222,10 +222,11 @@ pub(super) fn prepare(
     }
     Ok(PreparedXhtml {
         bytes: output,
-        references,
-        internal_targets,
+        references: inventory.references,
+        internal_targets: inventory.internal_targets,
         anchors,
         footnotes,
+        resource_paths: inventory.resource_paths,
         _memory: memory,
     })
 }
@@ -236,8 +237,7 @@ fn rewrite_element(
     name: &Name,
     base: &BasePath,
     archive: &SafeArchive<'_, '_>,
-    references: &mut BTreeMap<String, String>,
-    internal_targets: &mut BTreeSet<String>,
+    inventory: &mut RewriteInventory,
 ) -> Result<BytesStart<'static>, ConversionError> {
     let element_name = element.name();
     let qname = std::str::from_utf8(element_name.as_ref())
@@ -266,17 +266,33 @@ fn rewrite_element(
             && (name.local == b"a" && local.as_ref() == b"href"
                 || name.local == b"img" && local.as_ref() == b"src")
             && matches!(namespace, ResolveResult::Unbound);
+        let resource = name.namespace.as_deref() == Some(XHTML_NS)
+            && matches!(namespace, ResolveResult::Unbound)
+            && matches!(
+                (name.local.as_slice(), local.as_ref()),
+                (b"link", b"href")
+                    | (b"audio" | b"video" | b"source" | b"track" | b"iframe", b"src")
+                    | (b"video", b"poster")
+                    | (b"object", b"data")
+            );
+        if resource {
+            let reference = base.resolve(&value)?.require_existing(archive)?;
+            if let super::path::Reference::Internal { path, .. } = reference {
+                inventory.resource_paths.insert(path);
+            }
+        }
         if rewrite {
             let reference = base.resolve(&value)?.require_existing(archive)?;
             if let Some(synthetic) = reference.synthetic_url()? {
                 let canonical = reference.canonical_target();
-                if references
+                if inventory
+                    .references
                     .insert(synthetic.clone(), canonical.clone())
                     .is_some_and(|old| old != canonical)
                 {
                     return Err(xml::malformed("synthetic XHTML reference alias collision"));
                 }
-                internal_targets.insert(canonical);
+                inventory.internal_targets.insert(canonical);
                 value = synthetic;
             }
         }

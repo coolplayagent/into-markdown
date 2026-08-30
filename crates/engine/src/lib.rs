@@ -421,12 +421,7 @@ impl Engine {
             &context,
         )
         .await?;
-        let output = result_policy::attach_evidence(
-            output,
-            source.input(),
-            attempt.candidate.format,
-            &context,
-        )?;
+        let output = result_policy::attach_evidence(output, &context)?;
         let renderer = self.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
             detail: "no Markdown renderer is registered".into(),
         })?;
