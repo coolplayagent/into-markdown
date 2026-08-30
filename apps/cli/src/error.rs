@@ -50,7 +50,9 @@ pub struct CliError {
     broken_pipe: bool,
     language: Option<Language>,
     json_log: bool,
+    duration_ms: Option<f64>,
     processing_duration_ms: Option<f64>,
+    wall_duration_ms: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -72,7 +74,9 @@ impl CliError {
             broken_pipe: false,
             language: None,
             json_log: false,
+            duration_ms: None,
             processing_duration_ms: None,
+            wall_duration_ms: None,
         }
     }
 
@@ -136,8 +140,26 @@ impl CliError {
         self.processing_duration_ms
     }
 
+    pub const fn duration_ms(&self) -> Option<f64> {
+        self.duration_ms
+    }
+
+    pub const fn wall_duration_ms(&self) -> Option<f64> {
+        self.wall_duration_ms
+    }
+
+    pub fn with_duration(mut self, duration_ms: f64) -> Self {
+        self.duration_ms = Some(duration_ms);
+        self
+    }
+
     pub fn with_processing_duration(mut self, duration_ms: Option<f64>) -> Self {
         self.processing_duration_ms = duration_ms;
+        self
+    }
+
+    pub fn with_wall_duration(mut self, duration_ms: f64) -> Self {
+        self.wall_duration_ms = Some(duration_ms);
         self
     }
 
@@ -205,7 +227,9 @@ impl From<std::io::Error> for CliError {
                 broken_pipe: true,
                 language: None,
                 json_log: false,
+                duration_ms: None,
                 processing_duration_ms: None,
+                wall_duration_ms: None,
             }
         } else {
             Self::new(ExitClass::Io, "io", error.to_string())

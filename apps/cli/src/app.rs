@@ -4317,7 +4317,8 @@ fn run_conversion(
         catalog,
         json_log,
         context,
-    )?;
+    )
+    .map_err(|error| error.with_wall_duration(batch_timer.elapsed_ms()))?;
     finish_reports(
         reports,
         FinishReportsContext {
@@ -4351,7 +4352,7 @@ fn execute_plans(
             Err(error) if report_requested => {
                 failed_item_report(&plans[0], policy, &error, Some(item_timer.elapsed_ms()))
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.with_duration(item_timer.elapsed_ms())),
         }])
     } else if plans.len() == 1 {
         let plan = &plans[0];
@@ -4364,7 +4365,7 @@ fn execute_plans(
             Err(error) if report_requested => {
                 failed_item_report(plan, policy, &error, Some(item_timer.elapsed_ms()))
             }
-            Err(error) => return Err(error),
+            Err(error) => return Err(error.with_duration(item_timer.elapsed_ms())),
         }])
     } else {
         process_batch(plans, policy, jobs)
