@@ -77,19 +77,41 @@ pub(super) fn select(
     let images = cid_images(attachments);
     if let Some(html) = properties.binary(PR_HTML).filter(|value| !value.is_empty()) {
         let source = required_source(properties, PR_HTML)?;
-        let output = adapter.html(html, &images, options, context)?;
+        // Internet codepage describes binary HTML, not the Message String8 properties.
+        let _decoded_memory = context
+            .reserve_memory(u64::try_from(html.len()).unwrap_or(u64::MAX).saturating_mul(3))?;
+        let decoded = super::properties::decode_bytes(html, properties.html_codepage(), &source)?;
+        let mut html_options = options.clone();
+        html_options.text.charset = Some("utf-8".into());
+        let output = adapter.html(decoded.as_bytes(), &images, &html_options, context)?;
         return Ok(remap(BodyKind::Html, output, &source));
     }
     if let Some(html) = properties.text(PR_HTML).filter(|value| !value.is_empty()) {
         let source = required_source(properties, PR_HTML)?;
-        let output = adapter.html(html.as_bytes(), &images, options, context)?;
+        let mut html_options = options.clone();
+        html_options.text.charset = Some("utf-8".into());
+        let output = adapter.html(html.as_bytes(), &images, &html_options, context)?;
         return Ok(remap(BodyKind::Html, output, &source));
     }
     if let Some(compressed) = properties.binary(PR_RTF_COMPRESSED).filter(|value| !value.is_empty())
     {
         let source = required_source(properties, PR_RTF_COMPRESSED)?;
         let raw = lzfu::decompress(compressed, &source, budget)?;
-        let output = adapter.rtf(&raw, options, context)?;
+        let bytes = if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort {
+            if let Some(terminated) = raw.strip_suffix(&[0]) {
+                budget.warning(
+                    "msg.rtfTerminatorIgnored",
+                    "one terminating NUL in the authenticated RTF payload was excluded",
+                    &source,
+                );
+                terminated
+            } else {
+                &raw
+            }
+        } else {
+            &raw
+        };
+        let output = adapter.rtf(bytes, options, context)?;
         return Ok(remap(BodyKind::Rtf, output, &source));
     }
     if let Some(plain) = properties.text(PR_BODY).filter(|value| !value.is_empty()) {

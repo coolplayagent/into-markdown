@@ -1,6 +1,6 @@
 use super::budget::{MsgBudget, malformed};
 use super::ole::Storage;
-use super::properties::Properties;
+use super::properties::{Properties, PropertyScope};
 use into_markdown_core::{Asset, AssetId, ConversionError};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -27,6 +27,7 @@ pub(super) struct ParsedAttachment<'a> {
 
 pub(super) fn parse_all<'a>(
     root: Storage<'a>,
+    codepage: u32,
     budget: &mut MsgBudget<'_>,
 ) -> Result<Vec<ParsedAttachment<'a>>, ConversionError> {
     let mut storages = root
@@ -38,7 +39,7 @@ pub(super) fn parse_all<'a>(
     let mut output = Vec::with_capacity(storages.len());
     for (ordinal, storage) in storages.into_iter().enumerate() {
         budget.entry()?;
-        let properties = Properties::parse(storage, false, budget)?;
+        let properties = Properties::parse(storage, PropertyScope::Object, codepage, budget)?;
         let filename = properties
             .text(PR_ATTACH_LONG_FILENAME)
             .or_else(|| properties.text(PR_ATTACH_FILENAME))

@@ -7,6 +7,9 @@ const FREE: u32 = 0xffff_ffff;
 const FAT: u32 = 0xffff_fffd;
 const NONE: u32 = 0xffff_ffff;
 
+#[path = "compatibility_tests.rs"]
+mod compatibility_tests;
+
 #[test]
 fn converter_identity_is_stable() {
     assert_eq!(MsgConverter.id(), "builtin.converter.msg");
@@ -26,6 +29,56 @@ fn plain_message_extracts_headers_time_transport_and_provenance() {
         block.provenance.locator.part.as_deref().is_some_and(|part| part.starts_with("msg/"))
     }));
     assert!(paragraph_text(&output).contains("Plain body"));
+}
+
+#[test]
+fn storage_stream_metadata_recovers_only_in_best_effort() {
+    let original = message(
+        vec![AttachmentFixture::value("notes.txt", "text/plain", None, b"notes".to_vec())],
+        vec![],
+        Some("Body before attachments"),
+        None,
+        None,
+    );
+    let expected = convert(&original).unwrap();
+    for (start, size) in [(0, 0), (123_456, 987_654)] {
+        let mut bytes = original.clone();
+        // This fixture serializes directory sectors before the MiniFAT.
+        let directory_end =
+            (u32::from_le_bytes(bytes[60..64].try_into().unwrap()) as usize + 1) * 512;
+        for entry in bytes[512..directory_end].chunks_exact_mut(128) {
+            if entry[66] == 1 {
+                entry[116..120].copy_from_slice(&u32::to_le_bytes(start));
+                entry[120..128].copy_from_slice(&u64::to_le_bytes(size));
+            }
+        }
+        let mut options =
+            ConversionOptions { error_policy: ErrorPolicy::Strict, ..Default::default() };
+        assert_eq!(convert_with(&bytes, &options).unwrap_err().code(), ErrorCode::Malformed);
+        options.error_policy = ErrorPolicy::BestEffort;
+        let output = convert_with(&bytes, &options).unwrap();
+        assert_eq!(output.document, expected.document);
+        assert_eq!(output.assets, expected.assets);
+        assert_eq!(
+            output
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "msg.cfb.storageMetadataIgnored")
+                .count(),
+            1
+        );
+        let text = paragraph_text(&output);
+        let positions = [
+            "Repository MSG",
+            "From: Alice",
+            "To: Bob",
+            "Body before attachments",
+            "Attachments",
+            "notes.txt",
+        ]
+        .map(|needle| text.find(needle).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
 }
 
 #[test]
@@ -169,11 +222,11 @@ fn rtf_selection_uses_lzfu_then_the_narrow_adapter() {
         fn rtf(
             &self,
             bytes: &[u8],
-            _: &ConversionOptions,
-            _: &ExecutionContext,
+            options: &ConversionOptions,
+            context: &ExecutionContext,
         ) -> Result<ConverterOutput, ConversionError> {
             assert_eq!(bytes, b"{\\rtf1 repository}");
-            Ok(ConverterOutput::new(into_markdown_core::Document::default(), vec![], vec![]))
+            crate::rtf::convert_rtf_bytes(bytes, options, context)
         }
     }
     let raw = b"{\\rtf1 repository}";
@@ -274,8 +327,14 @@ fn corrupt_and_adversarial_cfb_fail_closed_without_panics() {
     minifat_cycle[minifat_offset..minifat_offset + 4].copy_from_slice(&mini_start.to_le_bytes());
     cases.push(minifat_cycle);
     for bytes in cases {
-        let error = convert(&bytes).unwrap_err();
-        assert!(matches!(error.code(), ErrorCode::Malformed | ErrorCode::ResourceLimit), "{error}");
+        for error_policy in [ErrorPolicy::Strict, ErrorPolicy::BestEffort] {
+            let options = ConversionOptions { error_policy, ..Default::default() };
+            let error = convert_with(&bytes, &options).unwrap_err();
+            assert!(
+                matches!(error.code(), ErrorCode::Malformed | ErrorCode::ResourceLimit),
+                "{error}"
+            );
+        }
     }
 }
 
@@ -492,10 +551,9 @@ fn embedded_message(body: &str) -> Vec<TestEntry> {
     let records = vec![property_unicode(0x0037, "Nested"), property_unicode(0x1000, body)];
     let mut entries = Vec::new();
     entries.extend(root_property_streams(&records));
-    entries.push(TestEntry {
-        path: vec!["__properties_version1.0".into()],
-        bytes: Some(root_properties_stream(&records, 0, 0)),
-    });
+    let mut header = root_properties_stream(&records, 0, 0);
+    header.drain(24..32);
+    entries.push(TestEntry { path: vec!["__properties_version1.0".into()], bytes: Some(header) });
     entries
 }
 

@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "9637d981335ae791682ac1febe2e93baa44434fbb3f24f46cfaf2a4ca9ff492f",
+    "sha256": "aba9ef9c5d52d587a49dd710ba081db0bea21ffc2747629cbaa8691cc15d4a85",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -915,7 +915,7 @@
       "scenario": "attachment",
       "path": "small/msg/attachment-nested.msg",
       "bytes": 6144,
-      "sha256": "cf045c0d06df7b2289ad36202eea5190d90435d0ca8bf0e13969887ec4483b32",
+      "sha256": "cefaaa2622f64928d1e2da866bd2a00ad26e70f70255bc7dc7b65278066b9f9d",
       "media_type": "application/vnd.ms-outlook",
       "license": {
         "spdx": "Apache-2.0",

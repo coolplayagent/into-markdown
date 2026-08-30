@@ -59,10 +59,17 @@ MSG 转换器默认离线读取 CFB/OLE 与 MAPI property streams，提取发件
 提交或送达时间、传输头和正文。正文选择顺序固定为 HTML、压缩 RTF、纯文本；HTML 复用同一
 HTML5 安全转换边界，纯文本直接进入统一 IR。压缩 RTF 先完整验证 MS-OXRTFCP header、CRC、
 dictionary 与 back-reference，再在同一请求 context 和 limits 下把解码 RTF bytes 交给窄 RTF
-转换接口，不会回退到低语义正文或复制另一套 parser。
+转换接口，不会回退到低语义正文或复制另一套 parser。空正文不视为损坏，保留真实主题、
+邮件头和附件，但不把它们当作非空正文；扫描全部受支持内容后确实全空的消息认证为 `emptySource`。
 
-String8 只接受显式受支持 MAPI codepage 并无替换解码；Unicode property stream 必须是对齐、
-有效且不含 NUL 的 UTF-16LE，property entry 的声明大小另外计入规范终止符。附件只接受离线
+String8 使用受支持的 Message codepage；缺失时使用已知 Windows locale 的 ANSI 默认值或
+原有 1252 默认值，收件人和附件继承消息编码。HTML 的 Internet codepage 单独用于正文，
+不强求与 Message codepage 一致。字符串均无替换解码；Unicode 必须是对齐、有效的 UTF-16LE。
+`strict` 保留规范终止符大小与 padding 审计；`best-effort` 可带诊断忽略存入流内的单个终止 NUL、
+空字符串属性和未使用 padding，但不忽略内部 NUL、错误大小或缺失的属性流。
+嵌套消息使用其 24 字节属性头；只有显示名的收件人可在 `best-effort` 下保留，不伪造地址。
+已认证的 RTF payload 在 `best-effort` 下可带诊断排除单个终止 NUL，独立 RTF parser 的边界不变。
+附件只接受离线
 by-value 和 embedded-message 方法，名称、MIME、
 Content-ID、单项与总字节数均先校验。只有 HTML 中 exact canonical `cid:` 引用且通过 PNG/JPEG
 结构审计的唯一附件会在引用位置绑定本地 Asset；未引用 CID 或非图片作为普通附件保留，重复
@@ -74,8 +81,9 @@ MSG property stream 时明确省略 `byteStart`/`byteEnd`，不伪造原文件�
 同一链也写入 namespaced metadata。
 
 CFB reader 在分配和发布前验证 version/sector shift、DIFAT/FAT/miniFAT、directory sibling/child
-图、stream 声明长度要求的 exact sector/mini-sector chain 及全部所有权（最后 sector 仅允许
-内容 padding）。循环、额外 sector、重复所有权、交叉重叠、越界、
+图、stream 声明长度要求的 sector/mini-sector chain 及全部所有权。`strict` 要求 exact chain；
+`best-effort` 复用旧 Office 的窄 CFB compatibility，包括 storage 的非 stream 字段与经过所有权
+校验的冗余尾指针，不能补造任何缺失的声明数据。循环、真实额外链、重复所有权、交叉重叠、越界、
 截断、扇区数量炸弹、重复大小写名称、危险附件路径、未知 codepage 和 property length 不一致
 均 fail closed。解析不调用网络、系统 Outlook、COM、外部命令或可选 AI 服务。
 

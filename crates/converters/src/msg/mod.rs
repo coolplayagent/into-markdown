@@ -1,6 +1,7 @@
 mod attachments;
 mod body;
 mod budget;
+mod compatibility;
 mod merge;
 pub(crate) mod ole;
 mod properties;
@@ -10,17 +11,17 @@ use attachments::ParsedAttachment;
 use body::{BodyAdapter, BuiltinBodyAdapter};
 use budget::MsgBudget;
 use into_markdown_core::{
-    BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
-    FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
+    BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ErrorPolicy,
+    ExecutionContext, FormatCandidate, InputFormat, ProbeOutcome, ResolvedInput, Services,
 };
 use merge::AttachmentOutput;
-use ole::{CompoundFile, Storage};
+use ole::{CompoundCompatibility, CompoundFile, Storage};
 
 const FORMATS: &[InputFormat] = &[InputFormat::OutlookMsg];
 const PROVIDER_ID: &str = "builtin.converter.msg";
 const CFB_SIGNATURE: &[u8; 8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 
-/// Strict, offline Outlook MSG converter.
+/// Bounded, offline Outlook MSG converter with explicit strict/best-effort policy.
 #[derive(Debug, Default)]
 pub struct MsgConverter;
 
@@ -90,8 +91,20 @@ fn convert_msg(
     adapter: &dyn BodyAdapter,
 ) -> Result<ConverterOutput, ConversionError> {
     let mut budget = MsgBudget::new(bytes.len(), options, context)?;
-    let file = CompoundFile::open(bytes, &mut budget)?;
-    convert_storage(file.root(), 0, "msg-root", options, context, adapter, &mut budget)
+    let file = if options.error_policy == ErrorPolicy::BestEffort {
+        CompoundFile::open_with_compatibility(
+            bytes,
+            &mut budget,
+            CompoundCompatibility::LegacyOfficeBestEffort,
+        )?
+    } else {
+        CompoundFile::open(bytes, &mut budget)?
+    };
+    let mut output =
+        convert_storage(file.root(), 0, "msg-root", options, context, adapter, &mut budget)?;
+    output.diagnostics.extend(file.recoveries().map(compatibility::compound_diagnostic));
+    output.diagnostics.append(&mut budget.diagnostics);
+    output.account_retained(context)
 }
 
 fn convert_storage(
@@ -104,9 +117,14 @@ fn convert_storage(
     budget: &mut MsgBudget<'_>,
 ) -> Result<ConverterOutput, ConversionError> {
     budget.depth(depth, &storage.path())?;
-    let properties = properties::Properties::parse(storage, true, budget)?;
+    let scope = if depth == 0 {
+        properties::PropertyScope::Message
+    } else {
+        properties::PropertyScope::EmbeddedMessage
+    };
+    let properties = properties::Properties::parse(storage, scope, 1252, budget)?;
     let sender = recipients::sender(&properties)?;
-    let recipient_list = recipients::parse_all(storage, budget)?;
+    let recipient_list = recipients::parse_all(storage, properties.codepage(), budget)?;
     if properties.recipient_count() != Some(u32::try_from(recipient_list.len()).unwrap_or(u32::MAX))
     {
         return Err(budget::malformed(
@@ -114,7 +132,7 @@ fn convert_storage(
             "declared MSG recipient count does not match recipient storages",
         ));
     }
-    let parsed_attachments = attachments::parse_all(storage, budget)?;
+    let parsed_attachments = attachments::parse_all(storage, properties.codepage(), budget)?;
     if properties.attachment_count()
         != Some(u32::try_from(parsed_attachments.len()).unwrap_or(u32::MAX))
     {
@@ -125,6 +143,10 @@ fn convert_storage(
     }
     let selected_body =
         body::select(&properties, &parsed_attachments, adapter, options, context, budget)?;
+    let empty_body_proven = into_markdown_core::document_is_empty(&selected_body.output.document)
+        && (matches!(selected_body.kind, body::BodyKind::Empty | body::BodyKind::Plain)
+            || selected_body.output.source_content_evidence()
+                == into_markdown_core::SourceContentEvidence::Empty);
     let mut completed = Vec::with_capacity(parsed_attachments.len());
     for (index, parsed) in parsed_attachments.into_iter().enumerate() {
         let ParsedAttachment { asset, nested, content_id, safe_image, filename, source } = parsed;
@@ -153,7 +175,7 @@ fn convert_storage(
             nested: nested_output,
         });
     }
-    let output = merge::assemble(
+    let mut output = merge::assemble(
         &properties,
         sender.as_ref(),
         &recipient_list,
@@ -162,6 +184,15 @@ fn convert_storage(
         prefix,
         context,
     )?;
+    // An empty body is not a damaged message: retain real headers and attachments.
+    // Certify the whole source only after all supported content domains were scanned.
+    if empty_body_proven
+        && output.assets.is_empty()
+        && into_markdown_core::document_is_empty(&output.document)
+    {
+        output =
+            output.with_source_content_evidence(into_markdown_core::SourceContentEvidence::Empty);
+    }
     output.document.validate().map_err(|error| ConversionError::Internal {
         detail: format!(
             "MSG merger returned invalid document IR ({} at {}): {}",

@@ -33,7 +33,7 @@ pub(crate) struct CompoundFile {
 
 /// Narrow compatibility recoveries for safely addressable legacy Office CFB files.
 ///
-/// The strict reader remains the default for MSG and all audit-oriented callers.  The
+/// The strict reader remains the default for all audit-oriented callers. The
 /// best-effort policy only relaxes redundant metadata; chain bounds, ownership, cycles,
 /// duplicate names, and resource accounting are identical in both modes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

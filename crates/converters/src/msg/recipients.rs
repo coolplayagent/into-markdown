@@ -1,7 +1,7 @@
 use super::budget::{MsgBudget, malformed};
 use super::ole::Storage;
-use super::properties::Properties;
-use into_markdown_core::ConversionError;
+use super::properties::{Properties, PropertyScope};
+use into_markdown_core::{ConversionError, ErrorPolicy};
 
 const PR_SENT_REPRESENTING_NAME: u16 = 0x0042;
 const PR_SENT_REPRESENTING_EMAIL_ADDRESS: u16 = 0x0065;
@@ -33,15 +33,19 @@ impl RecipientKind {
 #[derive(Clone, Debug)]
 pub(super) struct Mailbox {
     pub(super) display: Option<String>,
-    pub(super) address: String,
+    pub(super) address: Option<String>,
     pub(super) source: String,
 }
 
 impl Mailbox {
     pub(super) fn formatted(&self) -> String {
-        match self.display.as_deref().filter(|display| *display != self.address) {
-            Some(display) => format!("{display} <{}>", self.address),
-            None => self.address.clone(),
+        match (self.display.as_deref(), self.address.as_deref()) {
+            (Some(display), Some(address)) if display != address => {
+                format!("{display} <{address}>")
+            }
+            (_, Some(address)) => address.to_owned(),
+            (Some(display), None) => display.to_owned(),
+            (None, None) => String::new(),
         }
     }
 }
@@ -71,6 +75,7 @@ pub(super) fn sender(properties: &Properties) -> Result<Option<Mailbox>, Convers
 
 pub(super) fn parse_all(
     root: Storage<'_>,
+    codepage: u32,
     budget: &mut MsgBudget<'_>,
 ) -> Result<Vec<Recipient>, ConversionError> {
     let mut storages = root
@@ -81,7 +86,7 @@ pub(super) fn parse_all(
     let mut output = Vec::with_capacity(storages.len());
     for storage in storages {
         budget.entry()?;
-        let properties = Properties::parse(storage, false, budget)?;
+        let properties = Properties::parse(storage, PropertyScope::Object, codepage, budget)?;
         let raw_kind = properties
             .integer(PR_RECIPIENT_TYPE)
             .ok_or_else(|| malformed(storage.path(), "recipient has no PR_RECIPIENT_TYPE"))?;
@@ -98,12 +103,33 @@ pub(super) fn parse_all(
         };
         let address =
             properties.text(PR_SMTP_ADDRESS).or_else(|| properties.text(PR_EMAIL_ADDRESS));
-        let mailbox = mailbox(
+        let mut mailbox = mailbox(
             properties.text(PR_DISPLAY_NAME),
             address,
             properties.source(PR_SMTP_ADDRESS).or_else(|| properties.source(PR_EMAIL_ADDRESS)),
-        )?
-        .ok_or_else(|| malformed(storage.path(), "recipient has no address"))?;
+        )?;
+        if mailbox.is_none()
+            && budget.options().error_policy == ErrorPolicy::BestEffort
+            && let Some(display) =
+                properties.text(PR_DISPLAY_NAME).map(str::trim).filter(|value| !value.is_empty())
+        {
+            if !safe_header(display) {
+                return Err(malformed(storage.path(), "mailbox contains unsafe controls"));
+            }
+            let source = properties.source(PR_DISPLAY_NAME).unwrap_or("msg/recipient");
+            budget.warning(
+                "msg.recipientAddressMissing",
+                "recipient display name was retained without inventing an address",
+                source,
+            );
+            mailbox = Some(Mailbox {
+                display: Some(display.to_owned()),
+                address: None,
+                source: source.to_owned(),
+            });
+        }
+        let mailbox =
+            mailbox.ok_or_else(|| malformed(storage.path(), "recipient has no address"))?;
         if properties.text(PR_ADDRTYPE).is_some_and(|value| !safe_header(value)) {
             return Err(malformed(
                 storage.path(),
@@ -128,7 +154,7 @@ fn mailbox(
     }
     Ok(Some(Mailbox {
         display: display.map(str::trim).filter(|value| !value.is_empty()).map(str::to_owned),
-        address: address.to_owned(),
+        address: Some(address.to_owned()),
         source: source.unwrap_or("msg/__properties_version1.0").to_owned(),
     }))
 }
