@@ -7,6 +7,6 @@
   "crates_io_sha256": "2088172d00f936c348d6a72f488dc2660ab3f507263a195df308a3c2383229f6",
   "whisper_rs_sys_crates_io_sha256": "6986c0fe081241d391f09b9a071fbcbb59720c3563628c3c829057cf69f2a56f",
   "patch_scope": "Own abort/progress callback allocations in FullParams and release them on every drop path; bind Bazel to whisper.cpp 1.8.3; vendor whisper-rs-sys 0.15.0, enable authenticated x86 CPU runtime dispatch with a deterministic shared-library install directory, and report dynamic-mode SystemInfo through OS-aware x86 feature detection",
-  "tree_digest_algorithm": "sha256(sorted(relative_path NUL sha256(LF-normalized_bytes) LF), excluding PATCH-AUTHORITY.json)",
-  "tree_sha256": "4a836ad69e36ca9061cf14887294bf44ec8037cb29e28a60cfa24bee1b0f95a0"
+  "tree_digest_algorithm": "sha256(sorted(relative_path NUL sha256(raw_bytes) LF), excluding PATCH-AUTHORITY.json)",
+  "tree_sha256": "8ccfbbad32d501d7c919204373f9c165ed47afe4190ac00eced97f25329d53e8"
 }

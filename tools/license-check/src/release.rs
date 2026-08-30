@@ -27,16 +27,20 @@ pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<Stri
     rust::validate_bazel_bridge(repository, errors);
     ffmpeg::audit_repository(repository, errors);
     let mut notices = BTreeSet::new();
-    for target in SUPPORTED_TARGETS {
-        let path = repository
-            .join("tools/license-check/fixtures")
-            .join(format!("release-request-{target}.json"));
+    let mut generated = BTreeMap::new();
+    for relative in crate::release_authority::profile_paths() {
+        let path = repository.join(relative);
         let request = read(path, errors);
         match generate_release_inputs_unchecked(repository, &request) {
-            Ok(inputs) if inputs.target == target => {
-                notices.insert(inputs.third_party_notices.contents);
+            Ok(inputs) => {
+                if SUPPORTED_TARGETS.iter().any(|target| {
+                    *relative
+                        == format!("tools/license-check/fixtures/release-request-{target}.json")
+                }) {
+                    notices.insert(inputs.third_party_notices.contents.clone());
+                }
+                generated.insert((*relative).to_owned(), inputs);
             }
-            Ok(_) => errors.push(format!("release request fixture target disagrees with {target}")),
             Err(mut fixture_errors) => errors.append(&mut fixture_errors),
         }
     }
@@ -45,6 +49,7 @@ pub(crate) fn audit_repository_contract(repository: &Path, errors: &mut Vec<Stri
             "platform projections produce different component license conclusions".to_owned(),
         );
     }
+    crate::release_authority::validate_profiles(repository, &generated, errors);
 }
 
 /// Generate deterministic NOTICE and SBOM inputs for the exact component projection.
@@ -157,6 +162,22 @@ pub fn verify_archive_projection(
     repository: &Path,
     projection_json: &str,
 ) -> Result<(), Vec<String>> {
+    verify_archive_projection_with(repository, projection_json, generate_release_inputs)
+}
+
+#[cfg(test)]
+pub(crate) fn verify_archive_projection_unchecked(
+    repository: &Path,
+    projection_json: &str,
+) -> Result<(), Vec<String>> {
+    verify_archive_projection_with(repository, projection_json, generate_release_inputs_unchecked)
+}
+
+fn verify_archive_projection_with(
+    repository: &Path,
+    projection_json: &str,
+    generate: fn(&Path, &str) -> Result<ReleaseInputs, Vec<String>>,
+) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
     let projection: Option<ArchiveProjection> =
         parse("archive projection", projection_json, &mut errors);
@@ -182,7 +203,7 @@ pub fn verify_archive_projection(
             String::new()
         }
     };
-    let inputs = match generate_release_inputs(repository, &request_json) {
+    let inputs = match generate(repository, &request_json) {
         Ok(inputs) => Some(inputs),
         Err(mut input_errors) => {
             errors.append(&mut input_errors);

@@ -21,6 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import release as release_module
 from common import ROOT, ReleaseError, authority, run, sha256
+from deterministic_zip import create_deterministic_stored_zip
 from release import (
     CORE_COMPONENTS,
     OCR_COMPONENTS,
@@ -61,6 +62,7 @@ class PlatformReleaseTests(unittest.TestCase):
         required = [
             'component["id"] == "cargo:whisper-rs-sys@0.15.0"',
             '"cargo/whisper-rs-sys-0.15.0-vendored.zip"',
+            "create_deterministic_stored_zip(",
             '"whisper-rs-sys-Unlicense.txt"',
             '"whisper.cpp-MIT.txt"',
         ]
@@ -71,6 +73,39 @@ class PlatformReleaseTests(unittest.TestCase):
             source = (ROOT / relative).read_text(encoding="utf-8")
             for marker in required:
                 self.assertIn(marker, source, f"{relative} lacks {marker}")
+
+    def test_vendored_whisper_sys_archive_matches_reviewed_authority(self) -> None:
+        source = ROOT / "third_party/whisper-rs-0.16.0/sys"
+        reviewed = json.loads(
+            (ROOT / "third_party/licenses/release-material-authority.json").read_text(
+                encoding="utf-8"
+            )
+        )["whisper_rs_sys"]
+        with tempfile.TemporaryDirectory() as name:
+            archive = pathlib.Path(name) / "whisper-rs-sys-0.15.0-vendored.zip"
+            create_deterministic_stored_zip(source, archive, release_module.regular_files(source))
+            self.assertEqual(archive.stat().st_size, reviewed["bytes"])
+            self.assertEqual(sha256(archive), reviewed["sha256"])
+
+    def test_final_zip_is_compressed_but_reviewed_source_zip_is_stored(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            source = root / "source"
+            source.mkdir()
+            (source / "repetitive.txt").write_bytes(b"release archive compression\n" * 4096)
+            final_archive = root / "final.zip"
+            source_archive = root / "source.zip"
+            create_archive(source, final_archive, {"archive": "zip"}, 0)
+            create_deterministic_stored_zip(
+                source,
+                source_archive,
+                release_module.regular_files(source),
+            )
+            with zipfile.ZipFile(final_archive) as archive:
+                self.assertEqual(archive.infolist()[0].compress_type, zipfile.ZIP_DEFLATED)
+            with zipfile.ZipFile(source_archive) as archive:
+                self.assertEqual(archive.infolist()[0].compress_type, zipfile.ZIP_STORED)
+            self.assertLess(final_archive.stat().st_size, source_archive.stat().st_size)
 
     def test_macos_archive_calls_match_the_real_writer_signature(self) -> None:
         archive_path = ROOT / "tools/macos-release/archive.py"
@@ -93,7 +128,7 @@ class PlatformReleaseTests(unittest.TestCase):
             and isinstance(node.func, ast.Name)
             and node.func.id == "create_archive"
         ]
-        self.assertGreaterEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertTrue(all(len(call.args) == 3 and not call.keywords for call in calls))
 
     def test_web_release_spdx_binds_the_production_app(self) -> None:

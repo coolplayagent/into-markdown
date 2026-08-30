@@ -77,21 +77,7 @@ fn load_selected_roots(
             return Vec::new();
         }
     };
-    let mut approved = BTreeMap::new();
-    for (line_number, line) in approvals.lines().enumerate() {
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != 3 {
-            errors.push(format!("invalid Rust approval line {}", line_number + 1));
-            continue;
-        }
-        let key = (fields[0].to_owned(), fields[1].to_owned());
-        if approved.insert(key.clone(), fields[2].to_owned()).is_some() {
-            errors.push(format!("duplicate Rust release authority {}@{}", key.0, key.1));
-        }
-    }
+    let approved = crate::parse_approvals(approvals, errors);
     let registry_packages = lock
         .package
         .iter()
@@ -176,12 +162,38 @@ fn load_selected_roots(
             errors.push(format!("unreviewed local Cargo release component {}@{}", key.0, key.1));
             continue;
         };
-        if *license != package.license {
+        let is_whisper_sys = key == ("whisper-rs-sys".to_owned(), "0.15.0".to_owned());
+        let source_authority = is_whisper_sys
+            .then(|| crate::release_authority::whisper_rs_sys(repository, errors))
+            .flatten();
+        let license_matches = if is_whisper_sys {
+            package.license == "Unlicense" && license == "Unlicense AND MIT"
+        } else {
+            *license == package.license
+        };
+        if !license_matches {
             errors.push(format!(
                 "local Cargo release component {}@{} license differs: authority={license}, metadata={}",
                 key.0, key.1, package.license
             ));
         }
+        let integrity = source_authority.as_ref().map_or_else(Vec::new, |authority| {
+            vec![
+                IntegrityEvidence {
+                    algorithm: "SHA-256".to_owned(),
+                    digest: authority.crates_io_sha256.clone(),
+                    subject: "crates.io archive whisper-rs-sys@0.15.0".to_owned(),
+                    target: None,
+                },
+                IntegrityEvidence {
+                    algorithm: "SHA-256".to_owned(),
+                    digest: authority.sha256.clone(),
+                    subject: "reviewed deterministic vendored source archive whisper-rs-sys@0.15.0"
+                        .to_owned(),
+                    target: None,
+                },
+            ]
+        });
         components.push(Component {
             id: format!("cargo:{}@{}", key.0, key.1),
             kind: "rust-library".to_owned(),
@@ -191,14 +203,25 @@ fn load_selected_roots(
             manual_only: false,
             required_in_core: true,
             version: Some(key.1.clone()),
-            source: Some("https://codeberg.org/tazz4843/whisper-rs".to_owned()),
+            source: Some(if is_whisper_sys {
+                "https://codeberg.org/tazz4843/whisper-rs/src/commit/7558e1b72f54f2f22a53589afb77e65681834c36/sys"
+                    .to_owned()
+            } else {
+                "https://codeberg.org/tazz4843/whisper-rs".to_owned()
+            }),
             license: Some(license.clone()),
             obligations: Some(
                 "Preserve the concluded vendored license and reviewed source provenance."
                     .to_owned(),
             ),
-            integrity: Vec::new(),
-            authority: "Cargo.lock + vendored Cargo.toml + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json".to_owned(),
+            integrity,
+            authority: if is_whisper_sys {
+                "Cargo.lock + vendored Cargo.toml + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json + third_party/licenses/release-material-authority.json"
+                    .to_owned()
+            } else {
+                "Cargo.lock + vendored Cargo.toml + third_party/licenses/rust-lock.tsv + third_party/licenses/cargo-normal-runtime.json"
+                    .to_owned()
+            },
         });
     }
     for stale in approved.keys().filter(|key| !locked.contains(*key)) {
@@ -774,5 +797,72 @@ checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             load(&root, &lock_text, &approvals, &authority_text, "into-markdown-cli", &mut errors);
         assert!(errors.is_empty(), "{errors:?}");
         assert!(!components.iter().any(|component| component.id == "cargo:whisper-rs@0.16.0"));
+    }
+
+    fn release_authority_errors(lock_text: &str, approvals: &str) -> Vec<String> {
+        let root = crate::repository_root().unwrap();
+        let normal_runtime =
+            fs::read_to_string(root.join("third_party/licenses/cargo-normal-runtime.json"))
+                .unwrap();
+        let mut errors = Vec::new();
+        load(&root, lock_text, approvals, &normal_runtime, "into-markdown-cli", &mut errors);
+        errors
+    }
+
+    #[test]
+    fn release_authority_rejects_unknown_locked_component() {
+        let root = crate::repository_root().unwrap();
+        let mut lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        lock.push_str(
+            r#"
+[[package]]
+name = "authority-attack"
+version = "9.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+"#,
+        );
+        let approvals =
+            fs::read_to_string(root.join("third_party/licenses/rust-lock.tsv")).unwrap();
+        let errors = release_authority_errors(&lock, &approvals);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error == "unreviewed Cargo release component authority-attack@9.9.9"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn release_authority_rejects_locked_version_change() {
+        let root = crate::repository_root().unwrap();
+        let lock = fs::read_to_string(root.join("Cargo.lock")).unwrap().replacen(
+            "name = \"sysinfo\"\nversion = \"0.37.2\"",
+            "name = \"sysinfo\"\nversion = \"0.37.3\"",
+            1,
+        );
+        assert!(lock.contains("name = \"sysinfo\"\nversion = \"0.37.3\""));
+        let approvals =
+            fs::read_to_string(root.join("third_party/licenses/rust-lock.tsv")).unwrap();
+        let errors = release_authority_errors(&lock, &approvals);
+        assert!(
+            errors.iter().any(|error| error == "unreviewed Cargo release component sysinfo@0.37.3"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn release_authority_rejects_wildcard_approval() {
+        let root = crate::repository_root().unwrap();
+        let lock = fs::read_to_string(root.join("Cargo.lock")).unwrap();
+        let approvals = fs::read_to_string(root.join("third_party/licenses/rust-lock.tsv"))
+            .unwrap()
+            .replace("sysinfo\t0.37.2\tMIT", "sysinfo\t*\tMIT");
+        let errors = release_authority_errors(&lock, &approvals);
+        assert!(errors.iter().any(|error| error.contains("must not contain wildcards")));
+        assert!(
+            errors.iter().any(|error| error == "unreviewed Cargo release component sysinfo@0.37.2"),
+            "{errors:?}"
+        );
     }
 }

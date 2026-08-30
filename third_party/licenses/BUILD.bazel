@@ -15,6 +15,7 @@ exports_files([
     "npm/lucide-ISC-MIT.txt",
     "npm/react-MIT.txt",
     "policy.json",
+    "release-material-authority.json",
     "rust-lock.tsv",
     "silero-vad-MIT.txt",
     "wasmtime-Apache-2.0-LLVM-exception.txt",

@@ -25,6 +25,7 @@ from common import (
     sha256,
     write_json,
 )
+from deterministic_zip import create_deterministic_stored_zip
 from rust_package import materialize as materialize_rust
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "skill-release"))
@@ -436,11 +437,8 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
         if component["id"] == "cargo:whisper-rs-sys@0.15.0":
             source = destination / "cargo/whisper-rs-sys-0.15.0-vendored.zip"
             source.parent.mkdir(parents=True, exist_ok=True)
-            create_archive(
-                ROOT / "third_party/whisper-rs-0.16.0/sys",
-                source,
-                0,
-            )
+            vendored = ROOT / "third_party/whisper-rs-0.16.0/sys"
+            create_deterministic_stored_zip(vendored, source, regular_files(vendored))
             result.append(
                 material(
                     source,

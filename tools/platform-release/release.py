@@ -26,6 +26,7 @@ from common import (
     sha256,
     write_json,
 )
+from deterministic_zip import create_deterministic_stored_zip, create_deterministic_zip
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1] / "macos-release"))
 from rust_package import materialize as materialize_rust  # noqa: E402
@@ -723,12 +724,8 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
         if component["id"] == "cargo:whisper-rs-sys@0.15.0":
             source = destination / "cargo/whisper-rs-sys-0.15.0-vendored.zip"
             source.parent.mkdir(parents=True, exist_ok=True)
-            create_archive(
-                ROOT / "third_party/whisper-rs-0.16.0/sys",
-                source,
-                {"archive": "zip"},
-                0,
-            )
+            vendored = ROOT / "third_party/whisper-rs-0.16.0/sys"
+            create_deterministic_stored_zip(vendored, source, regular_files(vendored))
             result.append(
                 material(source, output, "upstream-source-archive", [component["id"]], [])
             )
@@ -845,13 +842,7 @@ def create_archive(source: pathlib.Path, destination: pathlib.Path, target_confi
         from archive import create
         create(source, destination, epoch)
         return
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as output:
-        for path in regular_files(source):
-            relative = path.relative_to(source).as_posix()
-            info = zipfile.ZipInfo(relative, (2026, 1, 1, 0, 0, 0))
-            info.create_system = 0
-            info.external_attr = 0o100644 << 16
-            output.writestr(info, path.read_bytes(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
+    create_deterministic_zip(source, destination, regular_files(source))
 
 
 def main() -> None:
