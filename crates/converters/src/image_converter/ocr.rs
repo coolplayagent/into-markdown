@@ -11,6 +11,9 @@ use into_markdown_core::{
 const MERGE_PROVIDER: &str = "builtin.converter.image.ocr-merge";
 const INSTALL_HINT: &str = "install the local OCR capability with `into-md setup ocr`";
 
+mod geometry;
+use geometry::{polygon_bounds, validate_region_bounds, validate_region_shape};
+
 #[derive(Debug)]
 pub(crate) struct OcrContribution {
     pub(crate) nodes: Vec<BlockNode>,
@@ -308,12 +311,7 @@ fn materialize_nodes(
         if index % 256 == 0 {
             materialize.execution.checkpoint()?;
         }
-        validate_region(
-            &region.polygon,
-            materialize.width,
-            materialize.height,
-            materialize.engine_id,
-        )?;
+        validate_region_bounds(&region.polygon, materialize)?;
         if !region.confidence.is_finite() || !(0.0..=1.0).contains(&region.confidence) {
             return Err(ConversionError::Ocr {
                 provider: materialize.engine_id.into(),
@@ -336,6 +334,9 @@ fn materialize_nodes(
             });
             continue;
         }
+        // Empty/low-confidence detector noise is already diagnosed above.
+        // Strict shape validation applies to evidence we actually publish.
+        validate_region_shape(&region.polygon, materialize.engine_id)?;
         let polygon = region.polygon.map(|(x, y)| SourcePoint { x, y });
         let bounds = polygon_bounds(&polygon);
         let locator =
@@ -495,54 +496,6 @@ fn preflight_unavailable(
         | ConversionError::ResourceLimit { .. } => Err(error),
         _ => Err(map_unavailable(provider, error)),
     }
-}
-
-fn validate_region(
-    polygon: &[(f32, f32); 4],
-    width: u32,
-    height: u32,
-    provider: &str,
-) -> Result<(), ConversionError> {
-    let width = dimension(width, provider)?;
-    let height = dimension(height, provider)?;
-    if polygon.iter().any(|(x, y)| {
-        !x.is_finite() || !y.is_finite() || *x < 0.0 || *y < 0.0 || *x > width || *y > height
-    }) {
-        return Err(ConversionError::Ocr {
-            provider: provider.into(),
-            detail: "OCR polygon lies outside the normalized image".into(),
-        });
-    }
-    let mut sign = 0_i8;
-    for index in 0..4 {
-        let a = polygon[index];
-        let b = polygon[(index + 1) % 4];
-        let c = polygon[(index + 2) % 4];
-        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
-        if cross == 0.0 {
-            return Err(ConversionError::Ocr {
-                provider: provider.into(),
-                detail: "OCR polygon must be a non-degenerate convex quadrilateral".into(),
-            });
-        }
-        let current = if cross > 0.0 { 1 } else { -1 };
-        if sign != 0 && sign != current {
-            return Err(ConversionError::Ocr {
-                provider: provider.into(),
-                detail: "OCR polygon must be convex and consistently ordered".into(),
-            });
-        }
-        sign = current;
-    }
-    Ok(())
-}
-
-fn polygon_bounds(points: &[SourcePoint; 4]) -> into_markdown_core::Rect {
-    let min_x = points.iter().map(|point| point.x).fold(f32::INFINITY, f32::min);
-    let max_x = points.iter().map(|point| point.x).fold(f32::NEG_INFINITY, f32::max);
-    let min_y = points.iter().map(|point| point.y).fold(f32::INFINITY, f32::min);
-    let max_y = points.iter().map(|point| point.y).fold(f32::NEG_INFINITY, f32::max);
-    into_markdown_core::Rect { x: min_x, y: min_y, width: max_x - min_x, height: max_y - min_y }
 }
 
 fn page_locator(
