@@ -6,7 +6,7 @@ use super::parser::{
     CellMerge, Destination, FontCharset, MAX_CONTROL_WORD_LEN, MAX_CONTROLS, MAX_NUMERIC_DIGITS,
     MAX_RTF_FONTS, Parser,
 };
-use super::text::{encoding_for_codepage, font_charset_codepage};
+use super::text::encoding_for_codepage;
 use into_markdown_core::{ConversionError, DiagnosticSeverity, Inline};
 
 impl Parser<'_> {
@@ -130,9 +130,6 @@ impl Parser<'_> {
                 "fcharset" => {
                     let charset = parameter_u16(parameter, "font charset")?;
                     if let Some(font) = self.font_table_font {
-                        let codepage = font_charset_codepage(charset).ok_or_else(|| {
-                            malformed(format!("unsupported RTF font charset {charset}"))
-                        })?;
                         if self.font_charsets.len() >= MAX_RTF_FONTS {
                             return Err(limit("rtf_font_count", format!(">= {MAX_RTF_FONTS}")));
                         }
@@ -140,7 +137,7 @@ impl Parser<'_> {
                             limit("rtf_font_count", "font definition order overflow")
                         })?;
                         reserve_vec(&mut self.font_charsets, 1, &mut self.memory)?;
-                        self.font_charsets.push(FontCharset { font, codepage, order });
+                        self.font_charsets.push(FontCharset { font, charset, order });
                     }
                 }
                 _ => {}

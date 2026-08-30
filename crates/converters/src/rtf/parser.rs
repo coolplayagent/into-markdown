@@ -140,7 +140,7 @@ pub(super) struct Field {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FontCharset {
     pub(super) font: i32,
-    pub(super) codepage: u16,
+    pub(super) charset: u16,
     pub(super) order: u32,
 }
 

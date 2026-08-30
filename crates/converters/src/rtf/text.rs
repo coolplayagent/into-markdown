@@ -2,7 +2,9 @@
 
 use super::budget::{hex, limit, locator, malformed, reserve_string, reserve_vec};
 use super::parser::{CHECKPOINT_INTERVAL, Destination, MAX_METADATA_BYTES, Parser};
-use encoding_rs::{BIG5, Encoding, GBK, SHIFT_JIS, WINDOWS_1252};
+use encoding_rs::{
+    BIG5, Encoding, GBK, SHIFT_JIS, UTF_8, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252,
+};
 use into_markdown_core::{
     ConversionError, DiagnosticSeverity, Inline, InlineMark, MAX_DOCUMENT_INLINES,
 };
@@ -10,7 +12,9 @@ use into_markdown_core::{
 impl Parser<'_> {
     pub(super) fn plain_text(&mut self) -> Result<(), ConversionError> {
         let start = self.offset;
-        let codepage = self.current_codepage();
+        // Unknown font declarations are harmless until text uses their encoding.
+        // Zero only disables DBCS token scanning; emit_ansi still rejects decoding.
+        let codepage = self.current_codepage().unwrap_or(0);
         while self.offset < self.bytes.len() {
             let byte = self.bytes[self.offset];
             if self.state().destination != Destination::Pict
@@ -95,8 +99,11 @@ impl Parser<'_> {
             return Ok(());
         }
         let codepage = self.current_codepage();
-        let (skip, skipped_units) =
-            skip_ansi_units(bytes, codepage, self.state().fallback_remaining);
+        let (skip, skipped_units) = skip_ansi_units(
+            bytes,
+            codepage.as_ref().copied().unwrap_or(0),
+            self.state().fallback_remaining,
+        );
         self.state_mut().fallback_remaining =
             self.state().fallback_remaining.saturating_sub(skipped_units);
         let bytes = &bytes[skip..];
@@ -104,7 +111,7 @@ impl Parser<'_> {
             return Ok(());
         }
         self.flush_pending_surrogate()?;
-        let encoding = encoding_for_codepage(codepage)?;
+        let encoding = encoding_for_codepage(codepage?)?;
         if !bytes.is_ascii() {
             let decode_bound = u64::try_from(bytes.len())
                 .unwrap_or(u64::MAX)
@@ -273,12 +280,16 @@ impl Parser<'_> {
         Ok(marks)
     }
 
-    pub(super) fn current_codepage(&self) -> u16 {
-        self.font_charsets
+    pub(super) fn current_codepage(&self) -> Result<u16, ConversionError> {
+        let selected = self
+            .font_charsets
             .binary_search_by_key(&self.state().font, |entry| entry.font)
             .ok()
-            .and_then(|index| self.font_charsets.get(index))
-            .map_or(self.state().ansi_codepage, |entry| entry.codepage)
+            .and_then(|index| self.font_charsets.get(index));
+        selected.map_or(Ok(self.state().ansi_codepage), |entry| {
+            font_charset_codepage(entry.charset)
+                .ok_or_else(|| malformed(format!("unsupported RTF font charset {}", entry.charset)))
+        })
     }
 }
 
@@ -323,7 +334,10 @@ fn skip_ansi_units(bytes: &[u8], codepage: u16, maximum: u8) -> (usize, u8) {
 
 pub(super) fn encoding_for_codepage(codepage: u16) -> Result<&'static Encoding, ConversionError> {
     match codepage {
+        1250 => Ok(WINDOWS_1250),
+        1251 => Ok(WINDOWS_1251),
         1252 => Ok(WINDOWS_1252),
+        65001 => Ok(UTF_8),
         936 => Ok(GBK),
         950 => Ok(BIG5),
         932 => Ok(SHIFT_JIS),
@@ -337,6 +351,8 @@ pub(super) fn font_charset_codepage(charset: u16) -> Option<u16> {
         128 => Some(932),
         134 => Some(936),
         136 => Some(950),
+        204 => Some(1251),
+        238 => Some(1250),
         _ => None,
     }
 }
