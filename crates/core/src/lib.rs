@@ -16,6 +16,8 @@ mod nested;
 mod ocr_binding;
 mod options;
 mod spi;
+mod stream;
+mod summary;
 
 pub use dto::{
     AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
@@ -71,4 +73,8 @@ pub use spi::{
 pub use spi::{
     estimate_retained_blocks, estimate_retained_output, estimate_retained_result,
     estimate_validation_working_set,
+};
+pub use stream::{
+    ConverterEventSink, ConverterStream, ConverterStreamCompletion, ConverterStreamMode,
+    LocalBoxFuture, StreamConsumerKind, stream_converter_output,
 };

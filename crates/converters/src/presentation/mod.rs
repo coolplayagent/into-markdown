@@ -23,16 +23,19 @@ mod xml;
 mod xml_base;
 
 #[cfg(test)]
+mod stream_tests;
+#[cfg(test)]
 mod test_observer;
 
 use allocation::try_clone_string;
 use error::{limit, malformed};
 use geometry::sort_shapes_for_reading;
 use into_markdown_core::{
-    Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, Diagnostic,
-    DiagnosticSeverity, ExecutionContext, FormatCandidate, Inline, InputFormat, ProbeOutcome,
-    ResolvedInput, Services, SourceLocator, estimate_retained_output,
-    estimate_validation_working_set,
+    Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink,
+    ConverterOutput, ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
+    DiagnosticSeverity, ExecutionContext, FormatCandidate, Inline, InputFormat, LocalBoxFuture,
+    ProbeOutcome, ResolvedInput, Services, SourceLocator, StreamConsumerKind,
+    estimate_retained_output, estimate_validation_working_set, stream_converter_output,
 };
 use model::{Package, ParseState};
 use output::shapes_to_blocks;
@@ -79,6 +82,10 @@ impl Converter for PresentationConverter {
 
     fn supported_formats(&self) -> &'static [InputFormat] {
         FORMATS
+    }
+
+    fn stream_support(&self) -> Option<&dyn ConverterStream> {
+        Some(self)
     }
 
     fn probe<'a>(
@@ -131,6 +138,43 @@ impl Converter for PresentationConverter {
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move { convert_presentation(&input.bytes, options, context) })
+    }
+}
+
+impl ConverterStream for PresentationConverter {
+    fn stream_mode(&self) -> ConverterStreamMode {
+        ConverterStreamMode::Native
+    }
+
+    fn stream_mode_for(
+        &self,
+        input: &ResolvedInput,
+        _: &FormatCandidate,
+        _: &ConversionOptions,
+        consumer: StreamConsumerKind,
+    ) -> ConverterStreamMode {
+        if consumer == StreamConsumerKind::Collecting
+            && input.bytes.starts_with(COMPOUND_FILE_SIGNATURE)
+        {
+            ConverterStreamMode::AggregateAdapter
+        } else {
+            ConverterStreamMode::Native
+        }
+    }
+
+    fn convert_stream<'a>(
+        &'a self,
+        input: &'a ResolvedInput,
+        _: &'a FormatCandidate,
+        options: &'a ConversionOptions,
+        _: &'a Services,
+        context: &'a ExecutionContext,
+        sink: &'a mut dyn ConverterEventSink,
+    ) -> LocalBoxFuture<'a, Result<ConverterStreamCompletion, ConversionError>> {
+        Box::pin(async move {
+            let output = convert_presentation(&input.bytes, options, context)?;
+            stream_converter_output(output, sink)
+        })
     }
 }
 

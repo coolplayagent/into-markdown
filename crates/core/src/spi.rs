@@ -141,7 +141,7 @@ pub enum ConversionOutcome {
 }
 
 /// Bounded completion metadata returned after all sink writes succeed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct ConversionSummary {
     /// Authoritative format selected after probing.
     pub format: Option<InputFormat>,
@@ -153,6 +153,7 @@ pub struct ConversionSummary {
     pub markdown_bytes: u64,
     /// Number of assets written.
     pub assets: u64,
+    pub(crate) _memory_lease: OutputMemoryLease,
 }
 
 /// Ordered destination for incremental Markdown and asset payloads.
@@ -1217,6 +1218,10 @@ pub trait Converter: Send + Sync {
     }
     /// Formats implemented by this converter.
     fn supported_formats(&self) -> &'static [InputFormat];
+    /// Expose an optional native semantic-stream capability.
+    fn stream_support(&self) -> Option<&dyn crate::ConverterStream> {
+        None
+    }
     /// Cheap applicability check that must not perform full conversion.
     fn probe<'a>(
         &'a self,

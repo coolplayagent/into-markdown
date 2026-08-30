@@ -3,6 +3,7 @@ mod extras;
 mod formulas;
 mod opc;
 mod resources;
+mod stream_mode;
 mod support;
 mod xlsb;
 mod xlsx;
