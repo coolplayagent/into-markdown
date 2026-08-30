@@ -2,7 +2,8 @@ use crate::workbook::cell::cell_name;
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::output::{data_text, provenance};
 use crate::workbook::{
-    LegacyCellFormat, LegacyFormulaCache, LegacyFormulaExpression, LegacyXlsHints,
+    LegacyCellFormat, LegacyFormulaCache, LegacyFormulaExpression, LegacyFormulaValue,
+    LegacyXlsHints,
 };
 use calamine::{Data, Dimensions, Range};
 use into_markdown_core::{
@@ -167,47 +168,74 @@ fn append_tsv_row(
             .unwrap_or(parsed_cache.as_ref());
         let parsed_formula = sheet.formulas.get_value((row, column)).map_or("", String::as_str);
         let formula_hint = legacy.formula_hint_at(sheet.index, row, column);
-        let formula = formula_hint.and_then(|hint| hint.value.as_deref()).unwrap_or(parsed_formula);
-        let formula_bytes = formula.len().saturating_add(formula_hint.map_or(0, |_| 82));
-        if u64::try_from(cached.len().max(formula_bytes)).unwrap_or(u64::MAX)
-            > options.limits.max_field_bytes
-        {
+        if u64::try_from(cached.len()).unwrap_or(u64::MAX) > options.limits.max_field_bytes {
             return Err(limit(
                 "max_field_bytes",
                 format!("{}!{} exceeds field limit", sheet.name, cell_name(row, column)),
             ));
         }
-        append_tsv_cell(page, formula, formula_hint.map(|hint| &hint.token_sha256), cached)?;
+        let rendered = render_formula(parsed_formula, formula_hint, cached, options)?;
+        append_tsv_value(page, rendered.as_deref().unwrap_or(cached))?;
     }
     page.push('\n');
     Ok(())
 }
 
-fn append_tsv_cell(
-    page: &mut String,
-    formula: &str,
-    token_sha256: Option<&[u8; 32]>,
+pub(super) fn render_formula(
+    parsed: &str,
+    hint: Option<&LegacyFormulaExpression>,
     cached: &str,
-) -> Result<(), ConversionError> {
-    if formula.is_empty() {
-        return append_tsv_value(page, cached);
+    options: &ConversionOptions,
+) -> Result<Option<String>, ConversionError> {
+    let (formula, degradation) = match hint.map(|hint| &hint.value) {
+        Some(LegacyFormulaValue::Decoded(value)) => (value.as_str(), None),
+        Some(LegacyFormulaValue::CachedOnly { reason, tokens }) => ("", Some((*reason, tokens))),
+        None if parsed.is_empty() => return Ok(None),
+        None => (parsed, None),
+    };
+    let formula = formula.strip_prefix('=').unwrap_or(formula);
+    let base_bytes = degradation.map_or(1 + formula.len(), |(reason, tokens)| {
+        "[formula cached-only: ] [biff-tokens:]"
+            .len()
+            .saturating_add(reason.len())
+            .saturating_add(tokens.len().saturating_mul(2))
+    });
+    let bytes = super::budget::checked_field_bytes(
+        options,
+        "formula evidence rendering",
+        &[
+            u64::try_from(base_bytes).unwrap_or(u64::MAX),
+            hint.map_or(0, |_| 64 + " [biff-sha256:]".len() as u64),
+            if cached.is_empty() { 0 } else { " [cached: ]".len() as u64 + cached.len() as u64 },
+        ],
+    )?;
+    let capacity = usize::try_from(bytes)
+        .map_err(|_| limit("max_memory_bytes", "formula output size overflow"))?;
+    let mut output = String::with_capacity(capacity);
+    if let Some((reason, tokens)) = degradation {
+        output.push_str("[formula cached-only: ");
+        output.push_str(reason);
+        output.push_str("] [biff-tokens:");
+        append_hex(&mut output, tokens);
+        output.push(']');
+    } else {
+        output.push('=');
+        output.push_str(formula);
     }
-    append_tsv_value(page, "=")?;
-    append_tsv_value(page, formula.strip_prefix('=').unwrap_or(formula))?;
-    if let Some(digest) = token_sha256 {
-        append_tsv_value(page, " [biff-sha256:")?;
-        append_digest(page, digest);
-        append_tsv_value(page, "]")?;
+    if let Some(hint) = hint {
+        output.push_str(" [biff-sha256:");
+        append_hex(&mut output, &hint.token_sha256);
+        output.push(']');
     }
     if !cached.is_empty() {
-        append_tsv_value(page, " [cached: ")?;
-        append_tsv_value(page, cached)?;
-        append_tsv_value(page, "]")?;
+        output.push_str(" [cached: ");
+        output.push_str(cached);
+        output.push(']');
     }
-    Ok(())
+    Ok(Some(output))
 }
 
-pub(super) fn append_digest(output: &mut String, digest: &[u8; 32]) {
+fn append_hex(output: &mut String, digest: &[u8]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     for byte in digest {
         output.push(char::from(HEX[usize::from(*byte >> 4)]));
@@ -338,7 +366,7 @@ pub(super) fn serialized_merges(
 
 #[cfg(test)]
 mod tests {
-    use super::append_tsv_value;
+    use super::*;
 
     #[test]
     fn paged_tsv_uses_reversible_single_line_escaping_and_bounds_fences() {
@@ -346,5 +374,50 @@ mod tests {
         append_tsv_value(&mut output, "a\tb\r\nc\\d```").unwrap();
         assert_eq!(output, "a\\tb\\r\\nc\\\\d\\`\\`\\`");
         assert!(!output.contains("```"));
+    }
+
+    #[test]
+    fn both_output_paths_keep_cached_only_evidence_without_parser_fallback() {
+        let options = ConversionOptions::default();
+        let hint = LegacyFormulaExpression {
+            sheet_index: 0,
+            row: 0,
+            column: 0,
+            value: LegacyFormulaValue::CachedOnly {
+                reason: "external-reference",
+                tokens: vec![0x5a, 0, 0, 5, 0, 6, 0xc0],
+            },
+            token_sha256: [0xab; 32],
+        };
+        let rendered =
+            render_formula("WrongLocal!Y6", Some(&hint), "42", &options).unwrap().unwrap();
+        assert!(rendered.starts_with("[formula cached-only: external-reference]"));
+        assert!(rendered.contains("[biff-tokens:5a0000050006c0]"));
+        assert!(rendered.contains(&format!("[biff-sha256:{}]", "ab".repeat(32))));
+        assert!(rendered.ends_with("[cached: 42]"));
+        assert!(!rendered.contains("WrongLocal"));
+        let hints = LegacyXlsHints { formula_expressions: vec![hint], ..LegacyXlsHints::default() };
+        let mut values = Range::new((0, 0), (0, 0));
+        values.set_value((0, 0), Data::Int(42));
+        let mut formulas = Range::new((0, 0), (0, 0));
+        formulas.set_value((0, 0), "WrongLocal!Y6".into());
+        let sheet = PagedSheet {
+            values: &values,
+            formulas: &formulas,
+            name: "A",
+            index: 0,
+            last_row: 0,
+            last_column: 0,
+        };
+        let mut page = String::new();
+        append_tsv_row(&mut page, &sheet, &mut LegacyHintCursor::new(Some(&hints)), 0, &options)
+            .unwrap();
+        assert_eq!(page, format!("{rendered}\n"));
+        let mut limited = options;
+        limited.limits.max_field_bytes = rendered.len() as u64 - 1;
+        assert!(matches!(
+            render_formula("wrong", Some(&hints.formula_expressions[0]), "42", &limited),
+            Err(ConversionError::ResourceLimit { limit: "max_field_bytes", .. })
+        ));
     }
 }

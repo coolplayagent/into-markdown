@@ -1,5 +1,6 @@
 use super::*;
 
+mod formulas;
 mod reader;
 
 fn sheet(kind: u16, text: &[u8]) -> Vec<u8> {

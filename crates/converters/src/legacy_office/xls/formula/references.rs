@@ -1,0 +1,137 @@
+use super::reader::{Result, Tokens};
+use crate::workbook::cell::cell_name;
+
+#[derive(Default)]
+pub(in crate::legacy_office::xls) struct References {
+    names: Vec<String>,
+    maximum_name_bytes: usize,
+    local_books: Vec<bool>,
+    xtis: Vec<(u16, u16, u16)>,
+    invalid: bool,
+    defined_names: super::names::Names,
+}
+
+impl References {
+    pub(in crate::legacy_office::xls) fn add_sheet(&mut self, name: &str) {
+        let quoted_bytes = name.len() + name.bytes().filter(|byte| *byte == b'\'').count();
+        self.maximum_name_bytes = self.maximum_name_bytes.max(quoted_bytes);
+        self.names.push(name.to_owned());
+    }
+
+    pub(super) fn expansion_bytes(&self, token_bytes: usize) -> u64 {
+        // The shortest 3D reference occupies seven token bytes. Account for two
+        // long sheet names per range, quoting scratch, retained atoms and output.
+        let named_bytes = if self.defined_names.maximum_bytes == 0 {
+            0
+        } else {
+            self.defined_names
+                .maximum_bytes
+                .saturating_mul(4)
+                .saturating_add(self.maximum_name_bytes.saturating_mul(3))
+        };
+        u64::try_from(token_bytes / 7)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(u64::try_from(self.maximum_name_bytes).unwrap_or(u64::MAX))
+            .saturating_mul(6)
+            .saturating_add(
+                u64::try_from(token_bytes / 5)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(u64::try_from(named_bytes).unwrap_or(u64::MAX)),
+            )
+    }
+
+    pub(in crate::legacy_office::xls) fn record(&mut self, kind: u16, body: &[u8]) {
+        if kind == 0x0018 {
+            self.defined_names.record(body);
+            return;
+        }
+        let mut input = Tokens::new(body);
+        if self.read_record(kind, &mut input).is_err() {
+            self.invalid = true;
+        }
+    }
+
+    pub(super) fn defined_name(&self, index: u32, sheet: usize) -> Result<String> {
+        self.defined_names.resolve(index, sheet, &self.names)
+    }
+
+    fn read_record(&mut self, kind: u16, input: &mut Tokens<'_>) -> Result<()> {
+        match kind {
+            0x01ae => {
+                // MS-XLS SupBook: ctab is undefined for self-referencing links.
+                input.word()?;
+                let kind = input.word()?;
+                // Only the exact self-referencing SupBook form authenticates local sheets.
+                self.local_books.push(kind == 0x0401 && input.remaining() == 0);
+            }
+            0x0017 => {
+                let count = usize::from(input.word()?);
+                if input.remaining() != count * 6 {
+                    return Err("invalid-externsheet");
+                }
+                for _ in 0..count {
+                    self.xtis.push((input.word()?, input.word()?, input.word()?));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn sheet_prefix(&self, ixti: u16) -> Result<String> {
+        if self.invalid {
+            return Err("invalid-reference-metadata");
+        }
+        let (book, first, last) = *self.xtis.get(usize::from(ixti)).ok_or("unknown-xti")?;
+        if !*self.local_books.get(usize::from(book)).ok_or("unknown-supbook")? {
+            return Err("external-reference");
+        }
+        if first > last {
+            return Err("invalid-local-reference");
+        }
+        let first_name = self.names.get(usize::from(first)).ok_or("invalid-local-reference")?;
+        let last_name = self.names.get(usize::from(last)).ok_or("invalid-local-reference")?;
+        let name =
+            if first == last { first_name.clone() } else { format!("{first_name}:{last_name}") };
+        Ok(format!("'{}'!", name.replace('\'', "''")))
+    }
+}
+
+pub(super) fn reference(input: &mut Tokens<'_>, biff8: bool) -> Result<String> {
+    let row = input.word()?;
+    let column = if biff8 { input.word()? } else { u16::from(input.byte()?) };
+    coordinate(row, column, biff8)
+}
+
+pub(super) fn area(input: &mut Tokens<'_>, biff8: bool) -> Result<String> {
+    let first_row = input.word()?;
+    let last_row = input.word()?;
+    let first_column = if biff8 { input.word()? } else { u16::from(input.byte()?) };
+    let last_column = if biff8 { input.word()? } else { u16::from(input.byte()?) };
+    let first = coordinate(first_row, first_column, biff8)?;
+    let last = coordinate(last_row, last_column, biff8)?;
+    Ok(format!("{first}:{last}"))
+}
+
+fn coordinate(row: u16, column: u16, biff8: bool) -> Result<String> {
+    // MS-XLS RgceLoc: flags describe absolute/relative display, not offsets.
+    // RgceLocRel (PtgRefN / shared formulas) is deliberately not handled here.
+    let (row, column, row_relative, column_relative) = if biff8 {
+        (row, column & 0x3fff, column & 0x8000 != 0, column & 0x4000 != 0)
+    } else {
+        (row & 0x3fff, column, row & 0x8000 != 0, row & 0x4000 != 0)
+    };
+    if column > 255 {
+        return Err("invalid-reference-column");
+    }
+    let name = cell_name(u32::from(row), u32::from(column));
+    let split =
+        name.find(|character: char| character.is_ascii_digit()).ok_or("invalid-reference")?;
+    Ok(format!(
+        "{}{}{}{}",
+        if column_relative { "" } else { "$" },
+        &name[..split],
+        if row_relative { "" } else { "$" },
+        &name[split..]
+    ))
+}
