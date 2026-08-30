@@ -112,6 +112,8 @@ pub struct ConversionResult {
     pub provenance: Vec<Provenance>,
     /// Format selected after detection and converter probing, when available.
     pub(crate) detected_format: Option<InputFormat>,
+    /// Monotonic engine processing time, excluding downstream artifact sinks.
+    pub(crate) processing_duration_ms: Option<f64>,
     /// Live request-memory charges for retained IR and assets.
     pub(crate) memory_lease: OutputMemoryLease,
 }
@@ -156,6 +158,8 @@ pub struct ConversionSummary {
     pub markdown_bytes: u64,
     /// Number of assets written.
     pub assets: u64,
+    /// Monotonic engine processing time, excluding artifact sink writes.
+    pub processing_duration_ms: Option<f64>,
     pub(crate) content: Option<crate::ResultContent>,
     pub(crate) payload_only_assets: u64,
     pub(crate) external_only_assets: u64,
@@ -322,6 +326,7 @@ impl ConversionResult {
             diagnostics,
             provenance,
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease,
         }
     }
@@ -360,6 +365,18 @@ impl ConversionResult {
     #[must_use]
     pub fn has_memory_lease(&self) -> bool {
         !self.memory_lease.leases.is_empty()
+    }
+
+    /// Engine processing time through rendering, excluding downstream sink work.
+    #[must_use]
+    pub const fn processing_duration_ms(&self) -> Option<f64> {
+        self.processing_duration_ms
+    }
+
+    /// Attach an engine-owned processing measurement before crossing the result boundary.
+    #[doc(hidden)]
+    pub fn set_processing_duration_ms(&mut self, value: f64) {
+        self.processing_duration_ms = Some(value);
     }
 
     /// Format selected after detection and converter probing.
@@ -679,6 +696,7 @@ impl ConverterOutput {
             diagnostics,
             markdown_bytes,
             assets: u64::try_from(assets.len()).unwrap_or(u64::MAX),
+            processing_duration_ms: None,
             content: Some(content),
             payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
             external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),

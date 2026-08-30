@@ -301,6 +301,8 @@ mod tests {
             limit: None,
             message: None,
             warnings: vec![],
+            duration_ms: None,
+            processing_duration_ms: None,
         }])
         .unwrap();
         write_report(&path, &report, &output_context()).unwrap();

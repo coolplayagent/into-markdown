@@ -353,6 +353,10 @@ pub struct BatchItemDto {
     pub message: Option<String>,
     /// Human-readable warnings produced by output handling.
     pub warnings: Vec<String>,
+    /// End-to-end time from worker admission through output commit or failure cleanup.
+    pub duration_ms: Option<f64>,
+    /// Engine processing time through rendering, excluding output sink and persistence work.
+    pub processing_duration_ms: Option<f64>,
 }
 
 /// Versioned machine-readable batch report.
@@ -366,6 +370,8 @@ pub struct BatchReportDto {
     pub failed: u64,
     /// Input-order report items.
     pub items: Vec<BatchItemDto>,
+    /// Independent batch wall-clock time; this is never derived by summing item durations.
+    pub wall_duration_ms: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -512,6 +518,10 @@ struct RawBatchItemDto {
     limit: Option<RawBatchLimitDto>,
     message: Option<String>,
     warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    processing_duration_ms: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -521,6 +531,8 @@ struct RawBatchReportDto {
     succeeded: u64,
     failed: u64,
     items: Vec<RawBatchItemDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wall_duration_ms: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -809,6 +821,7 @@ fn encode_batch_report(value: &BatchReportDto) -> RawBatchReportDto {
         schema_version: value.schema_version,
         succeeded: value.succeeded,
         failed: value.failed,
+        wall_duration_ms: value.wall_duration_ms,
         items: value
             .items
             .iter()
@@ -836,6 +849,8 @@ fn encode_batch_report(value: &BatchReportDto) -> RawBatchReportDto {
                 }),
                 message: item.message.clone(),
                 warnings: item.warnings.clone(),
+                duration_ms: item.duration_ms,
+                processing_duration_ms: item.processing_duration_ms,
             })
             .collect(),
     }
@@ -848,6 +863,19 @@ impl BatchReportDto {
     ///
     /// Returns [`DtoErrorCode::ResourceLimit`] if counts cannot be represented.
     pub fn try_new(items: Vec<BatchItemDto>) -> Result<Self, DtoError> {
+        Self::try_new_with_wall_duration(items, None)
+    }
+
+    /// Build a report with derived totals and an independently measured batch duration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DtoErrorCode::ResourceLimit`] if counts cannot be represented, or
+    /// [`DtoErrorCode::InvalidField`] for a non-finite or negative duration.
+    pub fn try_new_with_wall_duration(
+        items: Vec<BatchItemDto>,
+        wall_duration_ms: Option<f64>,
+    ) -> Result<Self, DtoError> {
         let succeeded = items.iter().filter(|item| item.status == BatchItemStatus::Success).count();
         let failed = items.len().saturating_sub(succeeded);
         let report = Self {
@@ -867,6 +895,7 @@ impl BatchReportDto {
                 )
             })?,
             items,
+            wall_duration_ms,
         };
         report.validate(&DtoLimits::default())?;
         Ok(report)
@@ -1010,6 +1039,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
                 .map(Provenance::try_from)
                 .collect::<Result<_, _>>()?,
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         })
     }
@@ -1461,6 +1491,7 @@ impl BundleManifestDto {
 impl BatchReportDto {
     fn validate(&self, limits: &DtoLimits) -> Result<(), DtoError> {
         validate_version(self.schema_version)?;
+        validate_duration(self.wall_duration_ms, "$.wallDurationMs")?;
         if self.items.len() > limits.max_batch_items {
             return limit("$.items", "batchItems", limits.max_batch_items);
         }
@@ -1489,6 +1520,11 @@ impl BatchReportDto {
             ));
         }
         for (index, item) in self.items.iter().enumerate() {
+            validate_duration(item.duration_ms, &format!("$.items[{index}].durationMs"))?;
+            validate_duration(
+                item.processing_duration_ms,
+                &format!("$.items[{index}].processingDurationMs"),
+            )?;
             validate_diagnostics(
                 &item.diagnostics,
                 limits,
@@ -1845,6 +1881,7 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
         schema_version: raw.schema_version,
         succeeded: raw.succeeded,
         failed: raw.failed,
+        wall_duration_ms: raw.wall_duration_ms,
         items: raw
             .items
             .into_iter()
@@ -1875,9 +1912,23 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
                     .map(|limit| BatchLimitDto { name: limit.name, detail: limit.detail }),
                 message: item.message,
                 warnings: item.warnings,
+                duration_ms: item.duration_ms,
+                processing_duration_ms: item.processing_duration_ms,
             })
             .collect(),
     })
+}
+
+fn validate_duration(value: Option<f64>, path: &str) -> Result<(), DtoError> {
+    if value.is_some_and(|duration| !duration.is_finite() || duration < 0.0) {
+        Err(DtoError::new(
+            DtoErrorCode::InvalidField,
+            path,
+            "duration must be finite and non-negative",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn validate_version(version: u32) -> Result<(), DtoError> {
@@ -2597,6 +2648,7 @@ mod tests {
                 confidence: Some(1.0),
             }],
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ResultDto::from_json(&ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap())
@@ -2660,6 +2712,7 @@ mod tests {
             diagnostics: Vec::new(),
             provenance: Vec::new(),
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
@@ -2800,6 +2853,7 @@ mod tests {
             diagnostics: vec![],
             provenance: vec![],
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2826,6 +2880,7 @@ mod tests {
             diagnostics: vec![],
             provenance: vec![],
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2899,6 +2954,7 @@ mod tests {
             diagnostics: vec![],
             provenance,
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let limits = DtoLimits::default();
@@ -2965,6 +3021,7 @@ mod tests {
             diagnostics: vec![],
             provenance: vec![],
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -2998,6 +3055,7 @@ mod tests {
             }],
             provenance: vec![],
             detected_format: None,
+            processing_duration_ms: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         for style in [DtoJsonStyle::Compact, DtoJsonStyle::Pretty] {
@@ -3060,6 +3118,8 @@ mod tests {
             limit: None,
             message: None,
             warnings: vec![],
+            duration_ms: None,
+            processing_duration_ms: None,
         }])
         .unwrap();
         assert_eq!(
@@ -3075,6 +3135,70 @@ mod tests {
         value["assets"][0].as_object_mut().unwrap().insert("futureAssetField".into(), true.into());
         let decoded = ResultDto::from_json(&value.to_string()).unwrap();
         assert_eq!(decoded.assets[0].id, "image-1");
+    }
+
+    #[test]
+    fn batch_timing_fields_round_trip_and_legacy_reports_remain_readable() {
+        let item = BatchItemDto {
+            input: r"C:\work\report.pdf".into(),
+            output: Some("C:/work/report.md".into()),
+            format: Some("pdf".into()),
+            status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Complete,
+            diagnostics: vec![],
+            error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
+            message: None,
+            warnings: vec![],
+            duration_ms: Some(12.34),
+            processing_duration_ms: Some(9.81),
+        };
+        let report = BatchReportDto::try_new_with_wall_duration(vec![item], Some(15.72)).unwrap();
+        let json = report.to_json().unwrap();
+        assert!(json.contains(r#""durationMs":12.34"#));
+        assert!(json.contains(r#""processingDurationMs":9.81"#));
+        assert!(json.contains(r#""wallDurationMs":15.72"#));
+        assert_eq!(BatchReportDto::from_json(&json).unwrap(), report);
+
+        let legacy = r#"{"schemaVersion":1,"succeeded":1,"failed":0,"items":[{"input":"old.txt","output":"old.md","format":"text","status":"success","diagnostics":[],"errorCode":null,"message":null,"warnings":[]}]}"#;
+        let decoded = BatchReportDto::from_json(legacy).unwrap();
+        assert_eq!(decoded.wall_duration_ms, None);
+        assert_eq!(decoded.items[0].duration_ms, None);
+        assert_eq!(decoded.items[0].processing_duration_ms, None);
+    }
+
+    #[test]
+    fn batch_timing_rejects_negative_and_non_finite_values() {
+        let item = BatchItemDto {
+            input: "input.txt".into(),
+            output: Some("output.md".into()),
+            format: Some("text".into()),
+            status: BatchItemStatus::Success,
+            outcome: BatchItemOutcome::Complete,
+            diagnostics: vec![],
+            error_code: None,
+            reason_code: None,
+            component: None,
+            part: None,
+            limit: None,
+            message: None,
+            warnings: vec![],
+            duration_ms: Some(-1.0),
+            processing_duration_ms: None,
+        };
+        let error = BatchReportDto::try_new(vec![item.clone()]).unwrap_err();
+        assert_eq!(error.code, DtoErrorCode::InvalidField);
+        assert_eq!(error.path, "$.items[0].durationMs");
+
+        let mut valid_item = item;
+        valid_item.duration_ms = Some(0.0);
+        let error = BatchReportDto::try_new_with_wall_duration(vec![valid_item], Some(f64::NAN))
+            .unwrap_err();
+        assert_eq!(error.code, DtoErrorCode::InvalidField);
+        assert_eq!(error.path, "$.wallDurationMs");
     }
 
     #[test]
@@ -3149,6 +3273,7 @@ mod tests {
                 diagnostics: vec![],
                 provenance: vec![],
                 detected_format: None,
+                processing_duration_ms: None,
                 memory_lease: crate::spi::OutputMemoryLease::default(),
             },
             DtoJsonStyle::Compact,
@@ -3429,6 +3554,8 @@ mod tests {
             limit: None,
             message: Some("failed".into()),
             warnings: vec![],
+            duration_ms: None,
+            processing_duration_ms: None,
         }])
         .unwrap_err();
         assert_eq!(error.code, DtoErrorCode::InvalidField);
@@ -3467,6 +3594,8 @@ mod tests {
             limit: None,
             message: None,
             warnings: vec![],
+            duration_ms: None,
+            processing_duration_ms: None,
         }])
         .unwrap();
         let json = report.to_json().unwrap();

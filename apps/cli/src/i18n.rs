@@ -61,6 +61,41 @@ impl Catalog {
             Language::ZhCn => "警告",
         }
     }
+
+    pub const fn timing_prefix(self) -> &'static str {
+        match self.language {
+            Language::En => "timing",
+            Language::ZhCn => "计时",
+        }
+    }
+
+    pub const fn total_duration_label(self) -> &'static str {
+        match self.language {
+            Language::En => "total",
+            Language::ZhCn => "总耗时",
+        }
+    }
+
+    pub const fn processing_duration_label(self) -> &'static str {
+        match self.language {
+            Language::En => "conversion",
+            Language::ZhCn => "转换",
+        }
+    }
+
+    pub const fn batch_wall_duration_label(self) -> &'static str {
+        match self.language {
+            Language::En => "batch wall",
+            Language::ZhCn => "整批墙钟",
+        }
+    }
+
+    pub const fn unavailable_label(self) -> &'static str {
+        match self.language {
+            Language::En => "unavailable",
+            Language::ZhCn => "不可用",
+        }
+    }
 }
 
 /// Return localized help when Chinese was explicitly selected.

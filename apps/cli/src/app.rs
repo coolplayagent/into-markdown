@@ -4237,6 +4237,7 @@ fn run_conversion(
     json_log: bool,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    let batch_timer = crate::timing::ItemTimer::start();
     apply_conversion_overrides(&arguments, &mut loaded)?;
     let includes = build_globset(&arguments.include)?;
     let excludes = build_globset(&arguments.exclude)?;
@@ -4308,45 +4309,91 @@ fn run_conversion(
         assets_dir: arguments.assets_dir,
         working_directory: context.cwd.clone(),
     };
-    let reports = if plans.len() == 1 && plans[0].output.is_none() {
-        vec![match process_stdout(&plans[0], &policy, catalog, json_log, context) {
-            Ok(report) => report,
-            Err(error) if arguments.report.is_some() => {
-                failed_item_report(&plans[0], &policy, &error)
+    let reports = execute_plans(
+        plans,
+        &policy,
+        arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get),
+        arguments.report.is_some(),
+        catalog,
+        json_log,
+        context,
+    )?;
+    finish_reports(
+        reports,
+        FinishReportsContext {
+            report_path: arguments.report.as_deref(),
+            global,
+            catalog,
+            json_log,
+            stderr: context.stderr,
+            output_context: &policy.output_context,
+            wall_duration_ms: batch_timer.elapsed_ms(),
+        },
+    )
+}
+
+fn execute_plans(
+    plans: Vec<WorkPlan>,
+    policy: &ExecutionPolicy,
+    jobs: usize,
+    report_requested: bool,
+    catalog: Catalog,
+    json_log: bool,
+    context: &mut RunContext<'_>,
+) -> Result<Vec<BatchItemReport>, CliError> {
+    if plans.len() == 1 && plans[0].output.is_none() {
+        let item_timer = crate::timing::ItemTimer::start();
+        Ok(vec![match process_stdout(&plans[0], policy, catalog, json_log, context) {
+            Ok(mut report) => {
+                report.duration_ms = Some(item_timer.elapsed_ms());
+                report
+            }
+            Err(error) if report_requested => {
+                failed_item_report(&plans[0], policy, &error, Some(item_timer.elapsed_ms()))
             }
             Err(error) => return Err(error),
-        }]
+        }])
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        vec![match process_file_task_inner(plan, &policy, &output_phase) {
-            Ok(completed) => completed_item_report(plan.item.display.clone(), completed),
-            Err(error) if arguments.report.is_some() => failed_item_report(plan, &policy, &error),
+        let item_timer = crate::timing::ItemTimer::start();
+        Ok(vec![match process_file_task_inner(plan, policy, &output_phase) {
+            Ok(completed) => {
+                completed_item_report(plan.item.display.clone(), completed, item_timer.elapsed_ms())
+            }
+            Err(error) if report_requested => {
+                failed_item_report(plan, policy, &error, Some(item_timer.elapsed_ms()))
+            }
             Err(error) => return Err(error),
-        }]
+        }])
     } else {
-        process_batch(plans, &policy, arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get))?
-    };
-    finish_reports(
-        reports,
-        arguments.report.as_deref(),
-        global,
-        catalog,
-        json_log,
-        context.stderr,
-        &policy.output_context,
-    )
+        process_batch(plans, policy, jobs)
+    }
+}
+
+struct FinishReportsContext<'a> {
+    report_path: Option<&'a Path>,
+    global: &'a crate::args::GlobalArgs,
+    catalog: Catalog,
+    json_log: bool,
+    stderr: &'a mut dyn Write,
+    output_context: &'a into_markdown::ExecutionContext,
+    wall_duration_ms: f64,
 }
 
 fn finish_reports(
     reports: Vec<BatchItemReport>,
-    report_path: Option<&Path>,
-    global: &crate::args::GlobalArgs,
-    catalog: Catalog,
-    json_log: bool,
-    stderr: &mut dyn Write,
-    output_context: &into_markdown::ExecutionContext,
+    context: FinishReportsContext<'_>,
 ) -> Result<(), CliError> {
+    let FinishReportsContext {
+        report_path,
+        global,
+        catalog,
+        json_log,
+        stderr,
+        output_context,
+        wall_duration_ms,
+    } = context;
     for report in &reports {
         for warning in &report.warnings {
             if !global.quiet {
@@ -4378,7 +4425,10 @@ fn finish_reports(
             )?;
         }
     }
-    let report = BatchReport::try_new(reports)
+    if !global.quiet {
+        crate::timing::write_summary(stderr, &reports, wall_duration_ms, catalog, json_log)?;
+    }
+    let report = BatchReport::try_new_with_wall_duration(reports, Some(wall_duration_ms))
         .map_err(|error| CliError::internal(format!("build batch report DTO: {error}")))?;
     if let Some(path) = report_path {
         output::write_report(path, &report, output_context)?;
@@ -4939,51 +4989,57 @@ fn process_stdout(
         &policy.working_directory,
     )?;
     let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
-    crate::result_policy::validate_for_emit(&summary, policy.emit, policy.asset_mode)?;
-    spool.finish()?;
-    let mut encoded =
-        policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
-    spool.serialize(policy.emit, &mut encoded)?;
-    encoded.sync_all().map_err(CliError::from)?;
-    let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
-        spool
-            .has_payloads()
-            .then(|| {
-                output::stage_spooled_assets(
-                    &spool,
-                    &assets_dir,
-                    policy.asset_mode,
-                    policy.conflict,
-                    &policy.output_context,
-                )
-            })
-            .transpose()?
-    } else if policy.asset_mode == AssetModeArg::Extract
-        && policy.emit != EmitKind::Bundle
-        && spool.has_payloads()
-    {
-        return Err(CliError::usage(
-            "stdin and URI inputs with extracted assets require --assets-dir",
-        ));
-    } else {
-        None
-    };
-    output::publish_stdout(&encoded, context.stdout, staged_assets, &policy.output_context)?;
-    Ok(BatchItemReport {
-        input: plan.item.display.clone(),
-        output: None,
-        format: summary.format.map(|format| format.as_str().into()),
-        status: BatchItemStatus::Success,
-        outcome: crate::result_policy::batch_outcome(summary.outcome),
-        diagnostics: summary.diagnostics.iter().map(Into::into).collect(),
-        error_code: None,
-        reason_code: summary.reason_code().map(str::to_owned),
-        component: None,
-        part: None,
-        limit: None,
-        message: None,
-        warnings: vec![],
-    })
+    let processing_duration_ms = summary.processing_duration_ms;
+    (|| -> Result<BatchItemReport, CliError> {
+        crate::result_policy::validate_for_emit(&summary, policy.emit, policy.asset_mode)?;
+        spool.finish()?;
+        let mut encoded =
+            policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
+        spool.serialize(policy.emit, &mut encoded)?;
+        encoded.sync_all().map_err(CliError::from)?;
+        let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
+            spool
+                .has_payloads()
+                .then(|| {
+                    output::stage_spooled_assets(
+                        &spool,
+                        &assets_dir,
+                        policy.asset_mode,
+                        policy.conflict,
+                        &policy.output_context,
+                    )
+                })
+                .transpose()?
+        } else if policy.asset_mode == AssetModeArg::Extract
+            && policy.emit != EmitKind::Bundle
+            && spool.has_payloads()
+        {
+            return Err(CliError::usage(
+                "stdin and URI inputs with extracted assets require --assets-dir",
+            ));
+        } else {
+            None
+        };
+        output::publish_stdout(&encoded, context.stdout, staged_assets, &policy.output_context)?;
+        Ok(BatchItemReport {
+            input: plan.item.display.clone(),
+            output: None,
+            format: summary.format.map(|format| format.as_str().into()),
+            status: BatchItemStatus::Success,
+            outcome: crate::result_policy::batch_outcome(summary.outcome),
+            diagnostics: summary.diagnostics.iter().map(Into::into).collect(),
+            error_code: None,
+            reason_code: summary.reason_code().map(str::to_owned),
+            component: None,
+            part: None,
+            limit: None,
+            message: None,
+            warnings: vec![],
+            duration_ms: None,
+            processing_duration_ms,
+        })
+    })()
+    .map_err(|error| error.with_processing_duration(processing_duration_ms))
 }
 
 fn process_batch(
@@ -5046,15 +5102,19 @@ fn process_file_task(
     memory_phase: &Mutex<()>,
 ) -> BatchItemReport {
     let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let item_timer = crate::timing::ItemTimer::start();
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok(completed) => completed_item_report(plan.item.display, completed),
-        Err(error) => failed_item_report(&plan, policy, &error),
+        Ok(completed) => {
+            completed_item_report(plan.item.display, completed, item_timer.elapsed_ms())
+        }
+        Err(error) => failed_item_report(&plan, policy, &error, Some(item_timer.elapsed_ms())),
     }
 }
 
 fn completed_item_report(
     input: String,
     completed: crate::result_policy::CommittedOutput,
+    duration_ms: f64,
 ) -> BatchItemReport {
     let reason_code = completed.summary.reason_code().map(str::to_owned);
     BatchItemReport {
@@ -5071,6 +5131,8 @@ fn completed_item_report(
         limit: None,
         message: None,
         warnings: completed.warnings,
+        duration_ms: Some(duration_ms),
+        processing_duration_ms: completed.summary.processing_duration_ms,
     }
 }
 
@@ -5078,6 +5140,7 @@ fn failed_item_report(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
     error: &CliError,
+    duration_ms: Option<f64>,
 ) -> BatchItemReport {
     BatchItemReport {
         input: plan.item.display.clone(),
@@ -5095,6 +5158,8 @@ fn failed_item_report(
             .map(|(name, detail)| BatchLimitDto { name: name.into(), detail: Some(detail.into()) }),
         message: Some(error.to_string()),
         warnings: vec![],
+        duration_ms,
+        processing_duration_ms: error.processing_duration_ms(),
     }
 }
 
@@ -5118,38 +5183,43 @@ fn process_file_task_inner(
         &policy.working_directory,
     )?;
     let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
-    crate::result_policy::validate_for_emit(&summary, policy.emit, policy.asset_mode)?;
-    spool.finish()?;
-    let output_parent = output_path
-        .parent()
-        .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
-    let mut encoded = policy
-        .output_context
-        .temporary_file_in(output_parent, "into-md-encoded")
-        .map_err(CliError::from)?;
-    spool.serialize(policy.emit, &mut encoded)?;
-    encoded.sync_all().map_err(CliError::from)?;
-    let write_outcome = {
-        let _guard =
-            output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
-        output::write_spooled_output_set_file(
-            &output_path,
-            encoded.as_file().map_err(CliError::from)?,
-            &spool,
-            asset_output.external_directory.as_deref(),
-            policy.asset_mode,
-            policy.conflict,
-            &policy.output_context,
-        )?
-    };
-    let mut warnings = Vec::new();
-    if write_outcome.renamed || output_path != requested {
-        warnings.push(format!(
-            "output renamed to {} because the requested path existed",
-            write_outcome.path.display()
-        ));
-    }
-    Ok(crate::result_policy::CommittedOutput { path: write_outcome.path, summary, warnings })
+    let processing_duration_ms = summary.processing_duration_ms;
+    (|| -> Result<crate::result_policy::CommittedOutput, CliError> {
+        crate::result_policy::validate_for_emit(&summary, policy.emit, policy.asset_mode)?;
+        spool.finish()?;
+        let output_parent = output_path
+            .parent()
+            .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
+        let mut encoded = policy
+            .output_context
+            .temporary_file_in(output_parent, "into-md-encoded")
+            .map_err(CliError::from)?;
+        spool.serialize(policy.emit, &mut encoded)?;
+        encoded.sync_all().map_err(CliError::from)?;
+        let write_outcome = {
+            let _guard = output_phase
+                .lock()
+                .map_err(|_| CliError::internal("batch output lock is poisoned"))?;
+            output::write_spooled_output_set_file(
+                &output_path,
+                encoded.as_file().map_err(CliError::from)?,
+                &spool,
+                asset_output.external_directory.as_deref(),
+                policy.asset_mode,
+                policy.conflict,
+                &policy.output_context,
+            )?
+        };
+        let mut warnings = Vec::new();
+        if write_outcome.renamed || output_path != requested {
+            warnings.push(format!(
+                "output renamed to {} because the requested path existed",
+                write_outcome.path.display()
+            ));
+        }
+        Ok(crate::result_policy::CommittedOutput { path: write_outcome.path, summary, warnings })
+    })()
+    .map_err(|error| error.with_processing_duration(processing_duration_ms))
 }
 
 fn report_path(path: &Path) -> String {
@@ -5780,6 +5850,10 @@ fn redact_parsed_url(mut parsed: url::Url) -> String {
     parsed.set_fragment(None);
     parsed.to_string()
 }
+
+#[cfg(test)]
+#[path = "app/timing_tests.rs"]
+mod timing_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7204,7 +7278,10 @@ mod tests {
         .unwrap();
         server.join().unwrap();
         assert_eq!(String::from_utf8(stdout).unwrap(), "hello\n");
-        assert!(stderr.is_empty());
+        let timing = String::from_utf8(stderr).unwrap();
+        assert!(timing.contains("timing: total "));
+        assert!(timing.contains("timing: batch wall "));
+        assert!(!timing.contains(&address.to_string()));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -7264,6 +7341,8 @@ mod tests {
             limit: None,
             message: None,
             warnings: Vec::new(),
+            duration_ms: Some(0.0),
+            processing_duration_ms: None,
         };
         let report_json = BatchReport::try_new(vec![report]).unwrap().to_pretty_json().unwrap();
         assert!(!report_json.contains(CANARY));

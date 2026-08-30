@@ -11,6 +11,7 @@ mod output;
 mod proxy_env;
 mod result_policy;
 mod services;
+mod timing;
 mod transaction;
 mod ui;
 mod ui_assets;

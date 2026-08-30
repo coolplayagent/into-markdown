@@ -50,6 +50,7 @@ pub struct CliError {
     broken_pipe: bool,
     language: Option<Language>,
     json_log: bool,
+    processing_duration_ms: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -71,6 +72,7 @@ impl CliError {
             broken_pipe: false,
             language: None,
             json_log: false,
+            processing_duration_ms: None,
         }
     }
 
@@ -128,6 +130,15 @@ impl CliError {
 
     pub fn detected_format(&self) -> Option<InputFormat> {
         self.metadata.as_ref().and_then(|metadata| metadata.detected_format)
+    }
+
+    pub const fn processing_duration_ms(&self) -> Option<f64> {
+        self.processing_duration_ms
+    }
+
+    pub fn with_processing_duration(mut self, duration_ms: Option<f64>) -> Self {
+        self.processing_duration_ms = duration_ms;
+        self
     }
 
     pub fn with_detected_format(mut self, format: Option<InputFormat>) -> Self {
@@ -194,6 +205,7 @@ impl From<std::io::Error> for CliError {
                 broken_pipe: true,
                 language: None,
                 json_log: false,
+                processing_duration_ms: None,
             }
         } else {
             Self::new(ExitClass::Io, "io", error.to_string())
