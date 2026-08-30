@@ -133,8 +133,9 @@ real parser evidence as well as common-enricher evidence:
   之后按文件和轮次奇偶交错执行；报告在固定共同成功集合上比较逐文件均值，并逐文件记录峰值
   RSS、输出邻接 staging/part/transaction 与 temp 的运行期峰值/退出残留、重复读取摘要，以及
   `documentNodes` 的结构化硬限制证据。55 个合法成功项必须全部通过内容 oracle，31 个共同成功项
-  必须保持字节 SHA 一致，普通共同成功平均回退达到 50% 时失败；最多且恰有一个合法输入可因
-  `documentNodes` 硬限制失败。共享 lease 聚合遥测由 #269 跟踪，本门禁同时执行真实
+  必须保持字节 SHA 一致，普通共同成功平均回退达到 50% 时失败；基线证据可记录一个合法输入因
+  `documentNodes` 硬限制失败，候选不得再以该固定节点限制拒绝任何合法成功项。共享 lease
+  聚合遥测由 #269 跟踪，本门禁同时执行真实
   `CompoundFile::open` 的 exact、minus-one、取消和 Drop 释放测试。私有 corpus 不进入发布物；
   需要复核时在明确配置的验收环境运行并保存原始报告，不作为 pull request GitHub Action。
 - RecoveryStore tests (Unix filesystem semantics) prove enriched converter

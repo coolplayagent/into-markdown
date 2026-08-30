@@ -614,6 +614,59 @@ fn xls_content_cell_order_display_values_and_merges_are_stable() {
 }
 
 #[test]
+fn tall_xls_pages_before_the_document_node_limit_without_loss() {
+    const ROWS: u16 = 60_000;
+    let mut bytes = raw_biff4_with_label(b"anchor");
+    let dimensions =
+        bytes.windows(4).position(|window| window == [0x00, 0x02, 0x0a, 0x00]).unwrap();
+    bytes[dimensions + 6..dimensions + 8].copy_from_slice(&ROWS.to_le_bytes());
+    let mut tail_label = vec![0; 6];
+    tail_label[..2].copy_from_slice(&(ROWS - 1).to_le_bytes());
+    tail_label.extend_from_slice(&4_u16.to_le_bytes());
+    tail_label.extend_from_slice(b"tail");
+    let mut tail_record = Vec::new();
+    push_biff_record(&mut tail_record, 0x0204, &tail_label).unwrap();
+    let eof = bytes.len() - 4;
+    bytes.splice(eof..eof, tail_record);
+
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut conversion_budget = LegacyBudget::new(bytes.len(), &options, &context).unwrap();
+    let output = convert_raw(&bytes, &mut conversion_budget, &options, &context).unwrap();
+
+    let Block::Sheet { blocks, .. } = &output.document.blocks[0].block else {
+        panic!("fixture did not emit a worksheet")
+    };
+    let mut next_row = 0_u32;
+    for (page_index, block) in blocks.iter().enumerate() {
+        let Block::Code { language, text } = &block.block else {
+            panic!("large fixture did not use bounded page blocks")
+        };
+        assert_eq!(language.as_deref(), Some("tsv"));
+        assert_eq!(block.id.0, format!("workbook-page-0-{page_index}"));
+        assert_eq!(block.provenance.locator.sheet.as_deref(), Some("Sheet 1"));
+        let rows = u32::try_from(text.lines().count()).unwrap();
+        assert!((1..=2_048).contains(&rows));
+        assert!(text.lines().all(|row| !row.contains('\t')));
+        next_row += rows;
+    }
+    assert_eq!(next_row, u32::from(ROWS));
+    assert_eq!(blocks.len(), usize::from(ROWS).div_ceil(2_048));
+    let Block::Code { text, .. } = &blocks[0].block else { unreachable!() };
+    assert_eq!(text.lines().next(), Some("anchor"));
+    let Block::Code { text, .. } = &blocks.last().unwrap().block else { unreachable!() };
+    assert_eq!(text.lines().last(), Some("tail"));
+    assert_eq!(
+        output.document.metadata.properties.get("spreadsheet.sheet.0.bounds").map(String::as_str),
+        Some("A1:A60000")
+    );
+    assert_eq!(
+        output.diagnostics.iter().filter(|item| item.code == "spreadsheet.largeTablePaged").count(),
+        1
+    );
+}
+
+#[test]
 fn biff4_formula_framing_preserves_value_options_and_tokens() {
     let mut body = (0u8..16).collect::<Vec<_>>();
     body.extend_from_slice(&3u16.to_le_bytes());

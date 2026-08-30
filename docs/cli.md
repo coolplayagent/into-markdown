@@ -236,7 +236,7 @@ markdown-postprocess
 - 本地 CLI 默认使用 `auto` 共享内存预算：物理内存小于 8 GiB、8–16 GiB、16–32 GiB、
   32 GiB 及以上分别取 1、2、4、8 GiB。预算覆盖整个批处理，不随 `--jobs` 倍增；显式
   数值覆盖自动值。
-- 超过统一 IR 节点阈值的大型 XLSX 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
+- 超过统一 IR 节点阈值的大型 XLS、XLSX 与 XLSB 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
   block，所有块仍写入同一个最终 Markdown，并报告 `spreadsheet.largeTablePaged`。普通
   工作簿继续输出 GFM table；分页不会放宽 `max_table_rows`、`max_table_cells` 或 ZIP
   解压边界，发布门禁可显式提高这些结构上限，同时继续由共享内存预算约束实际处理。
