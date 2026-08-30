@@ -1,5 +1,7 @@
 //! Deterministic registry and conversion pipeline orchestration.
 
+mod artifact_execution;
+mod artifact_output;
 mod collecting;
 mod fixed_alloc;
 mod nested;
@@ -13,7 +15,7 @@ pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
 use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
-    AiMode, ArtifactSink, Asset, AssetStreamInfo, Block, BlockNode, ConversionError,
+    AiMode, ArtifactSink, ArtifactSinkCapabilities, Asset, Block, BlockNode, ConversionError,
     ConversionOptions, ConversionRequest, ConversionResult, ConversionSummary, Converter,
     ConverterOutput, ConverterStreamMode, DetectionRequest, DetectionResult, Diagnostic,
     DiagnosticSeverity, Document, EnrichmentPlan, ErrorPolicy, ExecutionContext, ExecutionStage,
@@ -24,10 +26,17 @@ use into_markdown_core::{
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-#[cfg(test)]
-use into_markdown_core::ConversionOutcome;
+/// Opaque, one-shot artifact conversion prepared against frozen sink capabilities.
+#[doc(hidden)]
+pub struct PreparedArtifactConversion {
+    inner: preparation::PreparedConversion,
+    capabilities: ArtifactSinkCapabilities,
+}
+
 #[cfg(test)]
 use into_markdown_core::ProbeOutcome;
+#[cfg(test)]
+use into_markdown_core::{AssetStreamInfo, ConversionOutcome};
 
 /// Explicit registry used by built-ins and future process-isolated plugins.
 #[derive(Default)]
@@ -295,11 +304,48 @@ impl Engine {
         context: ExecutionContext,
         sink: &mut dyn ArtifactSink,
     ) -> Result<ConversionSummary, ConversionError> {
-        let result = self.execute_aggregate_with_context(request, context.clone()).await?;
-        emit_conversion_result(&result, sink, &context)?;
-        let summary = result.into_summary();
-        context.report(ExecutionStage::Completed, Some(1), Some(1), None::<String>)?;
-        Ok(summary)
+        let capabilities = sink.capabilities();
+        let prepared = self.prepare_into_with_context(request, context, capabilities).await?;
+        self.execute_prepared_into(prepared, sink).await
+    }
+
+    /// Resolve, detect, probe, and admit one artifact conversion without
+    /// running its converter or renderer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed preparation or policy failure. The returned value is
+    /// one-shot and bound to `capabilities`.
+    #[doc(hidden)]
+    pub async fn prepare_into_with_context(
+        &self,
+        request: ConversionRequest,
+        context: ExecutionContext,
+        capabilities: ArtifactSinkCapabilities,
+    ) -> Result<PreparedArtifactConversion, ConversionError> {
+        if !capabilities.has_output() {
+            return Err(ConversionError::Unsupported {
+                detail: "artifact sink accepts no conversion representation".into(),
+            });
+        }
+        let inner = preparation::prepare(self, request, context).await?;
+        Ok(PreparedArtifactConversion { inner, capabilities })
+    }
+
+    /// Execute one prepared artifact conversion and finalize its sink.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first converter, renderer, sink, cancellation, or
+    /// finalization failure. Completion is reported only after every sink call
+    /// succeeds.
+    #[doc(hidden)]
+    pub async fn execute_prepared_into(
+        &self,
+        prepared: PreparedArtifactConversion,
+        sink: &mut dyn ArtifactSink,
+    ) -> Result<ConversionSummary, ConversionError> {
+        artifact_execution::execute(self, prepared, sink).await
     }
 
     /// Convert using an independently controlled context backed by a caller-owned
@@ -418,41 +464,6 @@ impl Engine {
     ) -> Result<Vec<FormatCandidate>, ConversionError> {
         nested::detect_formats(&self.format_detectors, input, hint, context).await
     }
-}
-
-fn emit_conversion_result(
-    result: &ConversionResult,
-    sink: &mut dyn ArtifactSink,
-    context: &ExecutionContext,
-) -> Result<(), ConversionError> {
-    for chunk in result.markdown.as_bytes().chunks(64 * 1024) {
-        context.checkpoint()?;
-        sink.write_markdown(chunk)?;
-    }
-    for asset in &result.assets {
-        let size =
-            u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
-                limit: "max_asset_bytes",
-                detail: "asset byte length cannot be represented".into(),
-            })?;
-        context.checkpoint()?;
-        let info = AssetStreamInfo {
-            id: asset.id.clone(),
-            filename: asset.filename.clone(),
-            media_type: asset.media_type.clone(),
-            size,
-            external_uri: asset.external_uri.clone(),
-        };
-        context.checkpoint()?;
-        sink.begin_asset(&info)?;
-        for chunk in asset.bytes.chunks(64 * 1024) {
-            context.checkpoint()?;
-            sink.write_asset(chunk)?;
-        }
-        context.checkpoint()?;
-        sink.end_asset()?;
-    }
-    Ok(())
 }
 
 fn preserve_utf8_markdown(

@@ -16,10 +16,10 @@ use crate::output::{
 use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
-    AiMode, AssetMode, ConversionOptions, ConversionRequest, DetectionRequest, ErrorPolicy,
-    FormatHint, InputFormat, InputRef, OcrPolicy, OpenAiCompatibleClient,
-    ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy, RaggedRowsMode,
-    TableHeaderMode, TextDecodingMode,
+    AiMode, ArtifactSink, AssetMode, ConversionOptions, ConversionOutcome, ConversionRequest,
+    ConversionSummary, DetectionRequest, ErrorPolicy, FormatHint, InputFormat, InputRef, OcrPolicy,
+    OpenAiCompatibleClient, ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy,
+    RaggedRowsMode, TableHeaderMode, TextDecodingMode,
 };
 use into_markdown_http_transport::{NetworkPolicy, TransportError, TransportErrorKind};
 use into_markdown_plugin_manager::{ManagerError, ManagerErrorCode, PluginManager};
@@ -28,7 +28,7 @@ use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
@@ -4313,18 +4313,14 @@ fn run_conversion(
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        let (output_path, detected_format, diagnostics, warnings) =
+        let (output_path, detected_format, conversion_outcome, diagnostics, warnings) =
             process_file_task_inner(plan, &policy, &output_phase)?;
         vec![BatchItemReport {
             input: plan.item.display.clone(),
             output: Some(report_path(&output_path)),
             format: detected_format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
+            outcome: batch_outcome(conversion_outcome, !warnings.is_empty()),
             diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
             reason_code: None,
@@ -4948,18 +4944,18 @@ fn process_stdout(
         plan.item.local_path.as_deref(),
         &policy.working_directory,
     )?;
-    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
+    spool.finish()?;
     let mut encoded =
         policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
-    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    spool.serialize(policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
-    let mut reader = encoded.as_file().map_err(CliError::from)?.try_clone()?;
-    reader.rewind()?;
     let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
-        (!result.assets.is_empty())
+        spool
+            .has_payloads()
             .then(|| {
-                output::stage_assets(
-                    &result,
+                output::stage_spooled_assets(
+                    &spool,
                     &assets_dir,
                     policy.asset_mode,
                     policy.conflict,
@@ -4969,7 +4965,7 @@ fn process_stdout(
             .transpose()?
     } else if policy.asset_mode == AssetModeArg::Extract
         && policy.emit != EmitKind::Bundle
-        && !result.assets.is_empty()
+        && spool.has_payloads()
     {
         return Err(CliError::usage(
             "stdin and URI inputs with extracted assets require --assets-dir",
@@ -4977,51 +4973,14 @@ fn process_stdout(
     } else {
         None
     };
-    let mut buffer = [0_u8; 64 * 1024];
-    let write_result = (|| -> Result<(), std::io::Error> {
-        loop {
-            let read = reader.read(&mut buffer)?;
-            if read == 0 {
-                return Ok(());
-            }
-            context.stdout.write_all(&buffer[..read])?;
-        }
-    })();
-    if let Err(error) = write_result {
-        let error = CliError::from(error);
-        if let Some(staged) = staged_assets {
-            if error.is_broken_pipe() {
-                staged.commit()?;
-            } else if let Err(recovery) = staged.abort() {
-                return Err(CliError::new(
-                    crate::error::ExitClass::Io,
-                    "rollbackFailed",
-                    format!(
-                        "stdout failed ({}: {}); staged asset rollback failed ({}: {})",
-                        error.code(),
-                        error.message(),
-                        recovery.code(),
-                        recovery.message()
-                    ),
-                ));
-            }
-        }
-        return Err(error);
-    }
-    if let Some(staged) = staged_assets {
-        staged.commit()?;
-    }
+    output::publish_stdout(&encoded, context.stdout, staged_assets, &policy.output_context)?;
     Ok(BatchItemReport {
         input: plan.item.display.clone(),
         output: None,
-        format: result.detected_format().map(|format| format.as_str().into()),
+        format: summary.format.map(|format| format.as_str().into()),
         status: BatchItemStatus::Success,
-        outcome: if result.diagnostics.is_empty() {
-            BatchItemOutcome::Complete
-        } else {
-            BatchItemOutcome::Degraded
-        },
-        diagnostics: result.diagnostics.iter().map(Into::into).collect(),
+        outcome: batch_outcome(summary.outcome, false),
+        diagnostics: summary.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
         reason_code: None,
         component: None,
@@ -5093,25 +5052,23 @@ fn process_file_task(
 ) -> BatchItemReport {
     let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok((output_path, detected_format, diagnostics, warnings)) => BatchItemReport {
-            input: plan.item.display,
-            output: Some(report_path(&output_path)),
-            format: detected_format.map(|format| format.as_str().into()),
-            status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
-            diagnostics: diagnostics.iter().map(Into::into).collect(),
-            error_code: None,
-            reason_code: None,
-            component: None,
-            part: None,
-            limit: None,
-            message: None,
-            warnings,
-        },
+        Ok((output_path, detected_format, conversion_outcome, diagnostics, warnings)) => {
+            BatchItemReport {
+                input: plan.item.display,
+                output: Some(report_path(&output_path)),
+                format: detected_format.map(|format| format.as_str().into()),
+                status: BatchItemStatus::Success,
+                outcome: batch_outcome(conversion_outcome, !warnings.is_empty()),
+                diagnostics: diagnostics.iter().map(Into::into).collect(),
+                error_code: None,
+                reason_code: None,
+                component: None,
+                part: None,
+                limit: None,
+                message: None,
+                warnings,
+            }
+        }
         Err(error) => BatchItemReport {
             input: plan.item.display,
             output: plan.output.as_deref().map(report_path),
@@ -5136,11 +5093,14 @@ fn process_file_task(
     }
 }
 
+type FileTaskOutput =
+    (PathBuf, Option<InputFormat>, ConversionOutcome, Vec<into_markdown::Diagnostic>, Vec<String>);
+
 fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
     output_phase: &Mutex<()>,
-) -> Result<(PathBuf, Option<InputFormat>, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
+) -> Result<FileTaskOutput, CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
     let output_path = {
@@ -5155,7 +5115,8 @@ fn process_file_task_inner(
         &output_path,
         &policy.working_directory,
     )?;
-    let result = convert_item(&plan.item, policy, asset_output.uri_prefix)?;
+    let (mut spool, summary) = convert_item_into(&plan.item, policy, asset_output.uri_prefix)?;
+    spool.finish()?;
     let output_parent = output_path
         .parent()
         .ok_or_else(|| CliError::internal("batch output has no parent directory"))?;
@@ -5163,15 +5124,15 @@ fn process_file_task_inner(
         .output_context
         .temporary_file_in(output_parent, "into-md-encoded")
         .map_err(CliError::from)?;
-    output::encode_result_into(&result, policy.emit, &mut encoded)?;
+    spool.serialize(policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
-    let outcome = {
+    let write_outcome = {
         let _guard =
             output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
-        output::write_output_set_file(
+        output::write_spooled_output_set_file(
             &output_path,
             encoded.as_file().map_err(CliError::from)?,
-            &result,
+            &spool,
             asset_output.external_directory.as_deref(),
             policy.asset_mode,
             policy.conflict,
@@ -5179,24 +5140,32 @@ fn process_file_task_inner(
         )?
     };
     let mut warnings = Vec::new();
-    if outcome.renamed || output_path != requested {
+    if write_outcome.renamed || output_path != requested {
         warnings.push(format!(
             "output renamed to {} because the requested path existed",
-            outcome.path.display()
+            write_outcome.path.display()
         ));
     }
-    Ok((outcome.path, result.detected_format(), result.diagnostics, warnings))
+    Ok((write_outcome.path, summary.format, summary.outcome, summary.diagnostics, warnings))
+}
+
+fn batch_outcome(outcome: ConversionOutcome, has_cli_warnings: bool) -> BatchItemOutcome {
+    match (outcome, has_cli_warnings) {
+        (ConversionOutcome::Complete, false) => BatchItemOutcome::Complete,
+        (ConversionOutcome::Complete | ConversionOutcome::Degraded, true)
+        | (ConversionOutcome::Degraded, false) => BatchItemOutcome::Degraded,
+    }
 }
 
 fn report_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn convert_item(
+fn convert_item_into(
     item: &WorkItem,
     policy: &ExecutionPolicy,
     asset_uri_prefix: Option<String>,
-) -> Result<into_markdown::ConversionResult, CliError> {
+) -> Result<(output::StructuredSpool, ConversionSummary), CliError> {
     validate_input_network(&item.input, &policy.options)?;
     let mut request = ConversionRequest::new(item.input.clone());
     request.options = policy.options.clone();
@@ -5209,9 +5178,16 @@ fn convert_item(
         .map_err(CliError::from)?;
     let context = policy.output_context.fork_with_shared_resources(policy.execution.clone());
     let observed_context = context.clone();
-    futures::executor::block_on(engine.convert_with_context(request, context)).map_err(|error| {
-        CliError::from(error).with_detected_format(observed_context.detected_format())
+    let mut spool = output::StructuredSpool::new(context.clone(), policy.emit, policy.asset_mode)?;
+    let result = futures::executor::block_on(async {
+        let prepared =
+            engine.prepare_into_with_context(request, context, spool.capabilities()).await?;
+        engine.execute_prepared_into(prepared, &mut spool).await
     })
+    .map_err(|error| {
+        CliError::from(error).with_detected_format(observed_context.detected_format())
+    })?;
+    Ok((spool, result))
 }
 
 fn plan_stdout_asset_output(
@@ -5822,6 +5798,29 @@ mod tests {
     use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
     use std::io::Cursor;
+
+    #[test]
+    fn stdout_and_batch_outcomes_preserve_authoritative_conversion_semantics() {
+        let informational_diagnostics = [into_markdown::Diagnostic {
+            code: "informational".into(),
+            severity: into_markdown::DiagnosticSeverity::Info,
+            message: "lossless note".into(),
+            locator: None,
+        }];
+        assert!(!informational_diagnostics.is_empty());
+        assert_eq!(
+            batch_outcome(ConversionOutcome::Complete, false),
+            BatchItemOutcome::Complete,
+            "stdout and batch must not infer degradation from informational diagnostics"
+        );
+        assert_eq!(batch_outcome(ConversionOutcome::Degraded, false), BatchItemOutcome::Degraded);
+        assert_eq!(
+            batch_outcome(ConversionOutcome::Complete, true),
+            BatchItemOutcome::Degraded,
+            "a CLI output warning may only promote complete to degraded"
+        );
+        assert_eq!(batch_outcome(ConversionOutcome::Degraded, true), BatchItemOutcome::Degraded);
+    }
 
     fn controlled_test_secret_environment() -> &'static str {
         [

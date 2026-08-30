@@ -197,15 +197,11 @@ pub fn plan_assets(
 
     let mut entries = groups
         .into_iter()
-        .map(|(sha256, (source_index, media_type, extension, mut asset_ids))| {
+        .map(|(sha256, (source_index, media_type, _extension, mut asset_ids))| {
             asset_ids.sort();
-            let mut filename = format!("asset-{sha256}");
-            if let Some(extension) = extension {
-                filename.push('.');
-                filename.push_str(&extension);
-            }
+            let filename = asset_filename_from_sha256(&sha256, &media_type)?;
             let uri = join_uri_prefix(options.output.asset_uri_prefix.as_deref(), &filename);
-            PlannedAsset {
+            Ok(PlannedAsset {
                 asset_ids,
                 source_index,
                 filename,
@@ -213,9 +209,9 @@ pub fn plan_assets(
                 media_type,
                 size: u64::try_from(assets[source_index].bytes.len()).unwrap_or(u64::MAX),
                 sha256,
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, ConversionError>>()?;
     entries.sort_by(|left, right| left.filename.cmp(&right.filename));
     for (entry_index, entry) in entries.iter().enumerate() {
         for id in &entry.asset_ids {
@@ -247,6 +243,34 @@ pub fn plan_assets(
         }
     }
     Ok(plan)
+}
+
+/// Build the stable content-addressed filename for a validated SHA-256 digest
+/// and media type.
+///
+/// # Errors
+///
+/// Returns a rendering error when the digest is not 64 lowercase hexadecimal
+/// bytes or the media type is invalid.
+pub fn asset_filename_from_sha256(
+    sha256: &str,
+    media_type: &str,
+) -> Result<String, ConversionError> {
+    if sha256.len() != 64
+        || !sha256.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(render_error("asset SHA-256 digest is not canonical lowercase hexadecimal"));
+    }
+    let media_type = normalize_media_type(media_type)?;
+    let extension = media_type_extension(&media_type);
+    let mut filename = String::with_capacity(6 + sha256.len() + 17);
+    filename.push_str("asset-");
+    filename.push_str(sha256);
+    if let Some(extension) = extension {
+        filename.push('.');
+        filename.push_str(&extension);
+    }
+    Ok(filename)
 }
 
 impl MarkdownRenderer for GfmRenderer {
