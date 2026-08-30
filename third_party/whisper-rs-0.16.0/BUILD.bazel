@@ -13,7 +13,7 @@ rust_library(
     # version explicit and in sync with whisper.cpp/CMakeLists.txt.
     rustc_env = {"WHISPER_CPP_VERSION": "1.8.3"},
     deps = [
+        "//third_party/whisper-rs-0.16.0/sys:whisper_rs_sys",
         "@crates//:libc",
-        "@crates//:whisper-rs-sys",
     ],
 )

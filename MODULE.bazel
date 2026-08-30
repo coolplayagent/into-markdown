@@ -100,24 +100,6 @@ crate.annotation(
     override_target_proc_macro = "//third_party/wasmtime:versioned_exports",
     version = "39.0.1",
 )
-# The Visual Studio generator can orphan cl.exe while CMake probes the compiler
-# inside a Bazel action.  Ninja uses the same fixed MSVC compiler selected by
-# cc-rs without the nested MSBuild process tree.  Scope this only to Windows so
-# the existing Linux and macOS native build paths remain unchanged.
-crate.annotation_select(
-    build_script_env = {
-        "CMAKE_GENERATOR": "Ninja",
-        # rules_rust's MSVC LDFLAGS repeat the toolchain LIB directories as
-        # unquoted `-LIBPATH:C:\Program Files...` tokens. Ninja correctly
-        # treats the embedded space as an argument boundary. The fixed MSVC
-        # action already supplies the same directories through LIB, while
-        # CMake selects the x64 machine and runtime flags itself.
-        "LDFLAGS": "",
-    },
-    crate = "whisper-rs-sys",
-    triples = ["x86_64-pc-windows-msvc"],
-    version = "0.15.0",
-)
 use_repo(
     crate,
     "crates",
