@@ -937,11 +937,35 @@ fn auto_ocr_degrades_only_provider_component_unavailability() {
     let contribution =
         block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context)).unwrap();
     assert_eq!(contribution.diagnostics[0].code, "image.ocrUnavailable");
+    assert!(!contribution.diagnostics[0].message.contains("setup ocr"));
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 struct PreflightFailingOcr {
     unavailable: bool,
+}
+
+#[test]
+fn always_ocr_preserves_runtime_errors_without_installation_advice() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    for (failure, expected) in [
+        (ProviderExecutionFailure::ResourceLimit, into_markdown_core::ErrorCode::ResourceLimit),
+        (ProviderExecutionFailure::Ocr, into_markdown_core::ErrorCode::Ocr),
+        (
+            ProviderExecutionFailure::ComponentUnavailable,
+            into_markdown_core::ErrorCode::ComponentUnavailable,
+        ),
+    ] {
+        let context = context(&options);
+        let services =
+            Services { ocr: Some(Arc::new(FailingOcr { failure })), ..Services::default() };
+        let error = block_on(ocr::recognize(b"opaque-png", 1, 3, 2, &options, &services, &context))
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
+        assert!(!error.to_string().contains("setup ocr"));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
 }
 
 impl OcrEngine for PreflightFailingOcr {

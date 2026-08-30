@@ -208,12 +208,15 @@ impl PageDetection {
     }
 }
 
-/// Local safety bounds. Detection algorithm parameters come only from the
-/// embedded, commit-pinned authority and cannot be changed by callers.
+/// Local safety bounds. Detection algorithm parameters come from the embedded,
+/// commit-pinned authority; callers may additionally bound inference resolution.
 #[derive(Debug, Clone)]
 pub struct DetectionConfig {
     pub max_source_pixels: usize,
     pub max_model_pixels: usize,
+    /// Maximum stride-aligned inference side after the pinned resize. Detection
+    /// polygons still map to the original pixels used for recognition crops.
+    pub max_inference_side: usize,
     pub max_contour_events: usize,
     pub max_contour_points: usize,
     pub max_score_pixels: usize,
@@ -226,6 +229,7 @@ impl Default for DetectionConfig {
         Self {
             max_source_pixels: 100_000_000,
             max_model_pixels: 16_000_000,
+            max_inference_side: MAX_SIDE_LEN,
             max_contour_events: 16_000_000,
             max_contour_points: 16_000_000,
             max_score_pixels: 32_000_000,
@@ -369,6 +373,9 @@ struct Prepared {
 fn validate_config(c: &DetectionConfig) -> Result<(), ConversionError> {
     if c.max_source_pixels == 0
         || c.max_model_pixels == 0
+        || c.max_inference_side < STRIDE
+        || c.max_inference_side > MAX_SIDE_LEN
+        || !c.max_inference_side.is_multiple_of(STRIDE)
         || c.max_contour_events == 0
         || c.max_contour_points == 0
         || c.max_score_pixels == 0
@@ -442,6 +449,22 @@ fn official_resize_dimensions(
     Ok((round_stride(resized_w)?, round_stride(resized_h)?))
 }
 
+fn inference_dimensions(
+    width: usize,
+    height: usize,
+    maximum_side: usize,
+) -> Result<(usize, usize), ConversionError> {
+    let (width, height) = official_resize_dimensions(width, height)?;
+    if width.max(height) <= maximum_side {
+        return Ok((width, height));
+    }
+    let ratio = maximum_side as f64 / width.max(height) as f64;
+    Ok((
+        round_stride(((width as f64 * ratio) as usize).max(1))?,
+        round_stride(((height as f64 * ratio) as usize).max(1))?,
+    ))
+}
+
 fn preprocess(
     image: PixelView<'_>,
     c: &DetectionConfig,
@@ -456,7 +479,7 @@ fn preprocess(
     } else {
         (ow, oh)
     };
-    let (mw, mh) = official_resize_dimensions(padded_w, padded_h)?;
+    let (mw, mh) = inference_dimensions(padded_w, padded_h, c.max_inference_side)?;
     let count = mw.checked_mul(mh).ok_or_else(|| limit("modelPixels"))?;
     if count > c.max_model_pixels {
         return Err(limit("modelPixels"));
@@ -1489,6 +1512,7 @@ mod tests {
         DetectionConfig {
             max_source_pixels: 4096,
             max_model_pixels: 736 * 736,
+            max_inference_side: MAX_SIDE_LEN,
             max_contour_events: 4096,
             max_contour_points: 4096,
             max_score_pixels: 16_384,
@@ -1528,6 +1552,80 @@ mod tests {
         assert_eq!(round_stride(81).unwrap(), 96);
         assert_eq!(official_resize_dimensions(99, 32).unwrap(), (2272, 736));
         assert_eq!(official_resize_dimensions(99, 2).unwrap(), (4000, 64));
+    }
+
+    #[test]
+    fn inference_resolution_is_explicitly_bounded_without_changing_pinned_resize() {
+        assert_eq!(official_resize_dimensions(2609, 3512).unwrap(), (2624, 3520));
+        assert_eq!(inference_dimensions(2609, 3512, 1536).unwrap(), (1152, 1536));
+        assert_eq!(inference_dimensions(3512, 2609, 1536).unwrap(), (1536, 1152));
+        assert_eq!(inference_dimensions(800, 736, 1536).unwrap(), (800, 736));
+        assert_eq!(inference_dimensions(4000, 32, 32).unwrap(), (32, 32));
+        for side in [0, 31, 33, 4032] {
+            assert!(
+                validate_config(&DetectionConfig {
+                    max_inference_side: side,
+                    ..DetectionConfig::default()
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_preprocessing_keeps_original_geometry_and_releases_on_limits_and_cancel() {
+        let bytes = vec![255_u8; 99 * 67];
+        let config = DetectionConfig { max_inference_side: 64, ..DetectionConfig::default() };
+        for orientation in [
+            ImageOrientation::Normal,
+            ImageOrientation::MirrorHorizontal,
+            ImageOrientation::Rotate180,
+            ImageOrientation::MirrorVertical,
+            ImageOrientation::MirrorHorizontalRotate270,
+            ImageOrientation::Rotate90,
+            ImageOrientation::MirrorHorizontalRotate90,
+            ImageOrientation::Rotate270,
+        ] {
+            let image = PixelView { orientation, ..view(&bytes, 99, 67) };
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+            let prepared = preprocess(image, &config, &context).unwrap();
+            let transform = prepared.transform;
+            let (width, height) = oriented_size(image);
+            assert_eq!((transform.oriented_w, transform.oriented_h), (width, height));
+            assert_eq!(transform.model_w.max(transform.model_h), 64);
+            let far = model_to_source(
+                [
+                    (width - 1) as f64 * transform.model_w as f64 / width as f64,
+                    (height - 1) as f64 * transform.model_h as f64 / height as f64,
+                ],
+                image,
+                transform,
+            );
+            let expected = source_xy(image, width - 1, height - 1);
+            assert_eq!(far, (expected.0 as f32, expected.1 as f32));
+            drop(prepared);
+            assert_eq!(context.reserved_memory_bytes(), 0);
+        }
+        let limits =
+            ResourceLimits { max_memory_bytes: 64 * 32 * 3 * 4 - 1, ..ResourceLimits::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits);
+        assert!(matches!(
+            preprocess(view(&bytes, 99, 67), &config, &context),
+            Err(ConversionError::ResourceLimit { .. })
+        ));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        let cancellation = into_markdown_core::CancellationToken::new();
+        cancellation.cancel();
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions { cancellation, ..Default::default() },
+            ResourceLimits::default(),
+        );
+        assert!(matches!(
+            preprocess(view(&bytes, 99, 67), &config, &context),
+            Err(ConversionError::Cancelled)
+        ));
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]
@@ -1728,6 +1826,7 @@ mod tests {
                 max_source_pixels: width * height,
                 max_model_pixels: width * height,
                 max_contour_events: 16,
+                max_inference_side: MAX_SIDE_LEN,
                 max_contour_points: width * height,
                 max_score_pixels: width * height,
                 max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
@@ -1766,6 +1865,7 @@ mod tests {
                 max_source_pixels: width * height,
                 max_model_pixels: width * height,
                 max_contour_events: 16,
+                max_inference_side: MAX_SIDE_LEN,
                 max_contour_points: width * height,
                 max_score_pixels: width * height,
                 max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
@@ -1811,6 +1911,7 @@ mod tests {
                 max_source_pixels: width * height,
                 max_model_pixels: width * height,
                 max_contour_events: discovered.len() + 1,
+                max_inference_side: MAX_SIDE_LEN,
                 max_contour_points: discovered.len() + 1,
                 max_score_pixels: width * height,
                 max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
@@ -2352,6 +2453,7 @@ mod tests {
                 max_source_pixels: width * height,
                 max_model_pixels: width * height,
                 max_contour_events: width * height,
+                max_inference_side: MAX_SIDE_LEN,
                 max_contour_points: width * height,
                 max_score_pixels: width * height,
                 max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
@@ -2465,6 +2567,7 @@ mod tests {
                 max_source_pixels: width * height,
                 max_model_pixels: width * height,
                 max_contour_events: 128,
+                max_inference_side: MAX_SIDE_LEN,
                 max_contour_points: width * height,
                 max_score_pixels: width * height,
                 max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,
@@ -2492,6 +2595,7 @@ mod tests {
             max_source_pixels: width * height,
             max_model_pixels: width * height,
             max_contour_events: 1,
+            max_inference_side: MAX_SIDE_LEN,
             max_contour_points: width * height,
             max_score_pixels: width * height,
             max_score_work: width * height * SCORE_WORK_PER_PIXEL_UPPER_BOUND,

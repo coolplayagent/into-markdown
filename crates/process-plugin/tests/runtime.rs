@@ -52,6 +52,14 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let controlled = harness.execute(b"controlled-error", ExecutionOptions::default()).unwrap_err();
     assert_eq!(controlled.code, PluginErrorCode::Plugin);
     assert_eq!(controlled.detail, "plugin returned unknownFixture: unknown fixture command");
+    for (mode, expected) in [
+        (b"resource-error".as_slice(), PluginErrorCode::ResourceLimit),
+        (b"timeout-error".as_slice(), PluginErrorCode::Timeout),
+        (b"cancelled-error".as_slice(), PluginErrorCode::Cancelled),
+    ] {
+        let error = harness.execute(mode, ExecutionOptions::default()).unwrap_err();
+        assert_eq!(error.code, expected);
+    }
 
     for (mode, expected) in [
         (b"malformed".as_slice(), PluginErrorCode::Protocol),

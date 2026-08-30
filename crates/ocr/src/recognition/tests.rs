@@ -381,6 +381,7 @@ fn all_exif_orientations_flow_from_detection_to_raw_source_recognition() {
             max_score_pixels: 1_500_000,
             max_score_work: 100_000_000_000,
             max_offset_points: 1_000,
+            ..DetectionConfig::default()
         },
     )
     .unwrap();

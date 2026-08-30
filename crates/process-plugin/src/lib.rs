@@ -61,7 +61,7 @@ pub enum PluginErrorCode {
     InvalidResult,
     /// The plugin returned a controlled terminal error.
     Plugin,
-    /// A host resource budget was exceeded.
+    /// A host or provider resource budget was exceeded.
     ResourceLimit,
 }
 
@@ -927,7 +927,7 @@ impl ProcessPlugin {
                         reader,
                         stderr_reader,
                         PluginError::new(
-                            PluginErrorCode::Plugin,
+                            terminal_error_code(&code),
                             format!(
                                 "plugin returned {code}: {}",
                                 message
@@ -950,6 +950,15 @@ impl ProcessPlugin {
                 }
             }
         }
+    }
+}
+
+fn terminal_error_code(code: &str) -> PluginErrorCode {
+    match code {
+        "resourceLimit" => PluginErrorCode::ResourceLimit,
+        "cancelled" => PluginErrorCode::Cancelled,
+        "timeout" => PluginErrorCode::Timeout,
+        _ => PluginErrorCode::Plugin,
     }
 }
 

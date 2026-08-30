@@ -22,6 +22,9 @@ const MAX_REGIONS: u32 = 3000;
 const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 const OUTPUT_BYTES_PER_REGION: u64 = 2048;
 const OUTPUT_FIXED_BYTES: u64 = 16 * 1024;
+// Full scan-sized feature maps exceed the isolated detector's native envelope.
+// Only detection is resized; recognition samples the original-resolution image.
+const DETECTOR_INFERENCE_SIDE: usize = 1536;
 
 /// Installed, offline PP-OCRv6 image pipeline.
 pub struct PpOcrImageEngine {
@@ -90,6 +93,7 @@ impl PpOcrImageEngine {
             Arc::clone(&self.runtime),
             DetectionConfig {
                 max_source_pixels,
+                max_inference_side: DETECTOR_INFERENCE_SIDE,
                 max_contour_events: max_source_pixels.min(16_000_000),
                 max_contour_points: max_source_pixels.min(16_000_000),
                 max_score_pixels: max_source_pixels.min(32_000_000),
