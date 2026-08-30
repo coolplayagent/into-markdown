@@ -2,10 +2,26 @@ use super::*;
 
 impl StructuredSpool {
     pub(super) fn write_result_json<W: Write>(&self, destination: &mut W) -> Result<(), CliError> {
+        let markdown_json = self
+            .markdown_json
+            .as_ref()
+            .ok_or_else(|| CliError::internal("escaped Markdown representation is absent"))?;
+        let ir = self
+            .ir
+            .as_ref()
+            .ok_or_else(|| CliError::internal("document IR representation is absent"))?;
+        let diagnostics = self
+            .diagnostics
+            .as_ref()
+            .ok_or_else(|| CliError::internal("diagnostics representation is absent"))?;
+        let provenance = self
+            .provenance
+            .as_ref()
+            .ok_or_else(|| CliError::internal("provenance representation is absent"))?;
         destination.write_all(b"{\n  \"schemaVersion\": 1,\n  \"markdown\": ")?;
-        copy_spool(&self.context, &self.markdown_json.file, destination)?;
+        copy_spool(&self.context, &markdown_json.file, destination)?;
         destination.write_all(b",\n  \"document\": ")?;
-        copy_spool_indented(&self.context, &self.ir, destination, b"  ", true)?;
+        copy_spool_indented(&self.context, ir, destination, b"  ", true)?;
         destination.write_all(b"  \"assets\": [")?;
         for (index, asset) in self.asset_records.iter().enumerate() {
             if index == 0 {
@@ -32,9 +48,9 @@ impl StructuredSpool {
         } else {
             destination.write_all(b"\n  ],\n  \"diagnostics\": ")?;
         }
-        copy_spool_indented(&self.context, &self.diagnostics, destination, b"  ", true)?;
+        copy_spool_indented(&self.context, diagnostics, destination, b"  ", true)?;
         destination.write_all(b"  \"provenance\": ")?;
-        copy_spool_indented(&self.context, &self.provenance, destination, b"  ", false)?;
+        copy_spool_indented(&self.context, provenance, destination, b"  ", false)?;
         destination.write_all(b"}\n")?;
         Ok(())
     }

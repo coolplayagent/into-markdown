@@ -1,4 +1,4 @@
-use super::*;
+use super::{CliError, ExecutionContext, TemporaryFile};
 
 pub(super) struct JsonStringSpool {
     pub(super) file: TemporaryFile,

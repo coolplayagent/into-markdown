@@ -525,7 +525,13 @@ mod tests {
         let primary = root.join("document.md");
         let context = output_context();
         let result = empty_result();
-        let mut spool = StructuredSpool::from_result(&result, context.clone()).unwrap();
+        let mut spool = StructuredSpool::from_result(
+            &result,
+            context.clone(),
+            EmitKind::Markdown,
+            AssetModeArg::Extract,
+        )
+        .unwrap();
         let asset_name = spool.external_payloads().unwrap()[0].0.to_owned();
         let asset_target = assets.join(asset_name);
         fs::write(&asset_target, b"old-asset").unwrap();

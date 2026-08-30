@@ -10,6 +10,7 @@ before #273.
 ## Responsibilities
 
 - `output/stream.rs` owns the spool state machine and compact indexes;
+  `output/stream/plan.rs` freezes the emit and asset-mode representation set;
   `output/stream/document.rs` writes semantic IR, `output/stream/sink.rs`
   handles engine callbacks and asset payloads, and `output/stream/io.rs` owns
   accounted replay buffers.
@@ -35,11 +36,21 @@ budget before the underlying write. The only retained memory is a compact
 asset index and fixed-size copy buffers; index capacity and cloned metadata are
 reserved from the shared memory budget before allocation.
 
-The document spool is written in stable JSON order while semantic events
-arrive. Markdown and asset bytes have separate spools. Result JSON streams JSON
-escaping and Base64 directly to the final stage. Bundle output streams the
-same spools through `ZipWriter`. Neither path creates a second payload-sized
-buffer.
+Only representations selected by the frozen plan have temporary files:
+
+| Emit | Raw Markdown | Escaped Markdown | IR | Diagnostics/provenance | Asset payload |
+| --- | --- | --- | --- | --- | --- |
+| Markdown | yes | no | no | no | extract only |
+| IR JSON | no | no | yes | no | extract only |
+| Result JSON | no | yes | yes | yes | yes |
+| Bundle | yes | no | yes | yes | yes |
+
+`omit` and `embed` therefore do not stage companion payloads for Markdown or
+IR JSON. Result JSON and bundle retain asset payloads because their existing
+wire formats contain them. Result JSON streams JSON escaping and Base64 from
+its selected spools. Bundle streams its selected spools through `ZipWriter`.
+Construction, callbacks, finalization, and serialization reject a missing or
+mismatched representation rather than silently creating it later.
 
 For stdout, the complete primary artifact remains in an accounted temporary
 file until conversion and serialization succeed. Only then is it copied to the

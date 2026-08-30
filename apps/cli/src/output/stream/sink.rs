@@ -4,12 +4,26 @@ use super::*;
 
 impl StructuredSpool {
     pub(super) fn write_markdown(&mut self, chunk: &[u8]) -> Result<(), CliError> {
+        if self.markdown.is_none() && self.markdown_json.is_none() {
+            return Err(CliError::internal(
+                "Markdown chunk arrived without a Markdown representation",
+            ));
+        }
         self.context.checkpoint().map_err(CliError::from)?;
-        self.markdown.write_all_checked(chunk).map_err(CliError::from)?;
-        self.markdown_json.write(chunk)
+        if let Some(markdown) = self.markdown.as_mut() {
+            markdown.write_all_checked(chunk).map_err(CliError::from)?;
+        }
+        if let Some(markdown_json) = self.markdown_json.as_mut() {
+            markdown_json.write(chunk)?;
+        }
+        Ok(())
     }
 
     pub(super) fn begin_asset_inner(&mut self, asset: AssetStart<'_>) -> Result<(), CliError> {
+        if !self.plan.assets {
+            return Err(CliError::internal("asset stream arrived without an asset representation"));
+        }
+        self.context.checkpoint().map_err(CliError::from)?;
         if self.active_asset.is_some() {
             return Err(CliError::internal("nested asset stream"));
         }
@@ -138,7 +152,7 @@ impl ArtifactSink for StructuredSpool {
     }
 
     fn write_markdown(&mut self, chunk: &[u8]) -> Result<(), ConversionError> {
-        StructuredSpool::write_markdown(self, chunk).map_err(conversion_from_cli)
+        StructuredSpool::write_markdown(self, chunk).map_err(|error| conversion_from_cli(&error))
     }
 
     fn begin_asset(&mut self, asset: &AssetStreamInfo) -> Result<(), ConversionError> {
@@ -151,22 +165,22 @@ impl ArtifactSink for StructuredSpool {
             size: asset.size,
             content_sha256: asset.content_sha256,
         })
-        .map_err(conversion_from_cli)
+        .map_err(|error| conversion_from_cli(&error))
     }
 
     fn write_asset(&mut self, chunk: &[u8]) -> Result<(), ConversionError> {
-        self.write_asset_inner(chunk).map_err(conversion_from_cli)
+        self.write_asset_inner(chunk).map_err(|error| conversion_from_cli(&error))
     }
 
     fn end_asset(&mut self) -> Result<(), ConversionError> {
-        self.end_asset_inner().map_err(conversion_from_cli)
+        self.end_asset_inner().map_err(|error| conversion_from_cli(&error))
     }
 
     fn write_document_event(
         &mut self,
         event: &DocumentStreamEvent<'_>,
     ) -> Result<(), ConversionError> {
-        self.write_document_event_inner(event).map_err(conversion_from_cli)
+        self.write_document_event_inner(event).map_err(|error| conversion_from_cli(&error))
     }
 
     fn finish_document(
@@ -174,17 +188,18 @@ impl ArtifactSink for StructuredSpool {
         diagnostics: &[into_markdown::Diagnostic],
         provenance: &[into_markdown::Provenance],
     ) -> Result<(), ConversionError> {
-        self.finish_document_inner(diagnostics, provenance).map_err(conversion_from_cli)
+        self.finish_document_inner(diagnostics, provenance)
+            .map_err(|error| conversion_from_cli(&error))
     }
 }
 
-fn conversion_from_cli(error: CliError) -> ConversionError {
+fn conversion_from_cli(error: &CliError) -> ConversionError {
     match error.code() {
         "cancelled" => ConversionError::Cancelled,
+        "timeout" => ConversionError::Timeout,
         "resourceLimit" => {
             let (limit, detail) = error.limit().unwrap_or(("max_memory_bytes", error.message()));
             let limit = match limit {
-                "max_memory_bytes" => "max_memory_bytes",
                 "max_temporary_bytes" => "max_temporary_bytes",
                 "max_output_bytes" => "max_output_bytes",
                 "max_asset_bytes" => "max_asset_bytes",

@@ -16,8 +16,8 @@ use crate::output::{
 use clap::{CommandFactory, Parser};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use into_markdown::{
-    AiMode, ArtifactSink, AssetMode, ConversionOptions, ConversionRequest, ConversionSummary,
-    DetectionRequest, ErrorPolicy, FormatHint, InputFormat, InputRef, OcrPolicy,
+    AiMode, ArtifactSink, AssetMode, ConversionOptions, ConversionOutcome, ConversionRequest,
+    ConversionSummary, DetectionRequest, ErrorPolicy, FormatHint, InputFormat, InputRef, OcrPolicy,
     OpenAiCompatibleClient, ProviderConfig as TransportProviderConfig, ProviderNetworkPolicy,
     RaggedRowsMode, TableHeaderMode, TextDecodingMode,
 };
@@ -4313,18 +4313,14 @@ fn run_conversion(
     } else if plans.len() == 1 {
         let plan = &plans[0];
         let output_phase = Mutex::new(());
-        let (output_path, detected_format, diagnostics, warnings) =
+        let (output_path, detected_format, conversion_outcome, diagnostics, warnings) =
             process_file_task_inner(plan, &policy, &output_phase)?;
         vec![BatchItemReport {
             input: plan.item.display.clone(),
             output: Some(report_path(&output_path)),
             format: detected_format.map(|format| format.as_str().into()),
             status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
+            outcome: batch_outcome(conversion_outcome, !warnings.is_empty()),
             diagnostics: diagnostics.iter().map(Into::into).collect(),
             error_code: None,
             reason_code: None,
@@ -4983,11 +4979,7 @@ fn process_stdout(
         output: None,
         format: summary.format.map(|format| format.as_str().into()),
         status: BatchItemStatus::Success,
-        outcome: if summary.diagnostics.is_empty() {
-            BatchItemOutcome::Complete
-        } else {
-            BatchItemOutcome::Degraded
-        },
+        outcome: batch_outcome(summary.outcome, false),
         diagnostics: summary.diagnostics.iter().map(Into::into).collect(),
         error_code: None,
         reason_code: None,
@@ -5060,25 +5052,23 @@ fn process_file_task(
 ) -> BatchItemReport {
     let _memory_guard = memory_phase.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     match process_file_task_inner(&plan, policy, output_phase) {
-        Ok((output_path, detected_format, diagnostics, warnings)) => BatchItemReport {
-            input: plan.item.display,
-            output: Some(report_path(&output_path)),
-            format: detected_format.map(|format| format.as_str().into()),
-            status: BatchItemStatus::Success,
-            outcome: if diagnostics.is_empty() && warnings.is_empty() {
-                BatchItemOutcome::Complete
-            } else {
-                BatchItemOutcome::Degraded
-            },
-            diagnostics: diagnostics.iter().map(Into::into).collect(),
-            error_code: None,
-            reason_code: None,
-            component: None,
-            part: None,
-            limit: None,
-            message: None,
-            warnings,
-        },
+        Ok((output_path, detected_format, conversion_outcome, diagnostics, warnings)) => {
+            BatchItemReport {
+                input: plan.item.display,
+                output: Some(report_path(&output_path)),
+                format: detected_format.map(|format| format.as_str().into()),
+                status: BatchItemStatus::Success,
+                outcome: batch_outcome(conversion_outcome, !warnings.is_empty()),
+                diagnostics: diagnostics.iter().map(Into::into).collect(),
+                error_code: None,
+                reason_code: None,
+                component: None,
+                part: None,
+                limit: None,
+                message: None,
+                warnings,
+            }
+        }
         Err(error) => BatchItemReport {
             input: plan.item.display,
             output: plan.output.as_deref().map(report_path),
@@ -5103,11 +5093,14 @@ fn process_file_task(
     }
 }
 
+type FileTaskOutput =
+    (PathBuf, Option<InputFormat>, ConversionOutcome, Vec<into_markdown::Diagnostic>, Vec<String>);
+
 fn process_file_task_inner(
     plan: &WorkPlan,
     policy: &ExecutionPolicy,
     output_phase: &Mutex<()>,
-) -> Result<(PathBuf, Option<InputFormat>, Vec<into_markdown::Diagnostic>, Vec<String>), CliError> {
+) -> Result<FileTaskOutput, CliError> {
     let requested =
         plan.output.as_deref().ok_or_else(|| CliError::internal("batch output path is absent"))?;
     let output_path = {
@@ -5133,7 +5126,7 @@ fn process_file_task_inner(
         .map_err(CliError::from)?;
     spool.serialize(policy.emit, &mut encoded)?;
     encoded.sync_all().map_err(CliError::from)?;
-    let outcome = {
+    let write_outcome = {
         let _guard =
             output_phase.lock().map_err(|_| CliError::internal("batch output lock is poisoned"))?;
         output::write_spooled_output_set_file(
@@ -5147,13 +5140,21 @@ fn process_file_task_inner(
         )?
     };
     let mut warnings = Vec::new();
-    if outcome.renamed || output_path != requested {
+    if write_outcome.renamed || output_path != requested {
         warnings.push(format!(
             "output renamed to {} because the requested path existed",
-            outcome.path.display()
+            write_outcome.path.display()
         ));
     }
-    Ok((outcome.path, summary.format, summary.diagnostics, warnings))
+    Ok((write_outcome.path, summary.format, summary.outcome, summary.diagnostics, warnings))
+}
+
+fn batch_outcome(outcome: ConversionOutcome, has_cli_warnings: bool) -> BatchItemOutcome {
+    match (outcome, has_cli_warnings) {
+        (ConversionOutcome::Complete, false) => BatchItemOutcome::Complete,
+        (ConversionOutcome::Complete | ConversionOutcome::Degraded, true)
+        | (ConversionOutcome::Degraded, false) => BatchItemOutcome::Degraded,
+    }
 }
 
 fn report_path(path: &Path) -> String {
@@ -5177,7 +5178,7 @@ fn convert_item_into(
         .map_err(CliError::from)?;
     let context = policy.output_context.fork_with_shared_resources(policy.execution.clone());
     let observed_context = context.clone();
-    let mut spool = output::StructuredSpool::new(context.clone(), policy.emit)?;
+    let mut spool = output::StructuredSpool::new(context.clone(), policy.emit, policy.asset_mode)?;
     let result = futures::executor::block_on(async {
         let prepared =
             engine.prepare_into_with_context(request, context, spool.capabilities()).await?;
@@ -5797,6 +5798,29 @@ mod tests {
     use pulldown_cmark::{Event, Parser as MarkdownParser, Tag};
     use sha2::{Digest, Sha256};
     use std::io::Cursor;
+
+    #[test]
+    fn stdout_and_batch_outcomes_preserve_authoritative_conversion_semantics() {
+        let informational_diagnostics = [into_markdown::Diagnostic {
+            code: "informational".into(),
+            severity: into_markdown::DiagnosticSeverity::Info,
+            message: "lossless note".into(),
+            locator: None,
+        }];
+        assert!(!informational_diagnostics.is_empty());
+        assert_eq!(
+            batch_outcome(ConversionOutcome::Complete, false),
+            BatchItemOutcome::Complete,
+            "stdout and batch must not infer degradation from informational diagnostics"
+        );
+        assert_eq!(batch_outcome(ConversionOutcome::Degraded, false), BatchItemOutcome::Degraded);
+        assert_eq!(
+            batch_outcome(ConversionOutcome::Complete, true),
+            BatchItemOutcome::Degraded,
+            "a CLI output warning may only promote complete to degraded"
+        );
+        assert_eq!(batch_outcome(ConversionOutcome::Degraded, true), BatchItemOutcome::Degraded);
+    }
 
     fn controlled_test_secret_environment() -> &'static str {
         [

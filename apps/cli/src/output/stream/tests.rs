@@ -69,7 +69,8 @@ fn fixture() -> ConversionResult {
 fn small_outputs_match_legacy_encoder_byte_for_byte() {
     let result = fixture();
     for emit in [EmitKind::Markdown, EmitKind::IrJson, EmitKind::ResultJson, EmitKind::Bundle] {
-        let mut spool = StructuredSpool::from_result(&result, context()).unwrap();
+        let mut spool =
+            StructuredSpool::from_result(&result, context(), emit, AssetModeArg::Extract).unwrap();
         let mut streamed = Cursor::new(Vec::new());
         spool.serialize(emit, &mut streamed).unwrap();
         let legacy = super::super::serialization::encode_result(&result, emit).unwrap();
@@ -95,11 +96,188 @@ fn split_utf8_and_controls_use_the_same_json_string_wire() {
 fn duplicate_assets_share_one_payload_spool() {
     let result = fixture();
     let context = context();
-    let spool = StructuredSpool::from_result(&result, context.clone()).unwrap();
+    let spool = StructuredSpool::from_result(
+        &result,
+        context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     assert_eq!(spool.payload_records.len(), 1);
     assert_eq!(spool.asset_records.len(), 2);
     assert_eq!(spool.payload_records[0].file.as_file().unwrap().metadata().unwrap().len(), 5);
     assert!(context.reserved_temporary_bytes() < 16 * 1024);
+}
+
+fn spool_len(spool: Option<&TemporaryFile>) -> u64 {
+    spool.map_or(0, |file| file.as_file().unwrap().metadata().unwrap().len())
+}
+
+fn represented_temporary_bytes(spool: &StructuredSpool) -> u64 {
+    spool_len(spool.ir.as_ref())
+        + spool_len(spool.markdown.as_ref())
+        + spool.markdown_json.as_ref().map_or(0, |json| spool_len(Some(&json.file)))
+        + spool_len(spool.diagnostics.as_ref())
+        + spool_len(spool.provenance.as_ref())
+        + spool
+            .payload_records
+            .iter()
+            .map(|payload| payload.file.as_file().unwrap().metadata().unwrap().len())
+            .sum::<u64>()
+}
+
+#[test]
+fn emit_and_asset_mode_materialize_only_the_frozen_representations() {
+    let result = fixture();
+    for emit in [EmitKind::Markdown, EmitKind::IrJson, EmitKind::ResultJson, EmitKind::Bundle] {
+        for asset_mode in [AssetModeArg::Omit, AssetModeArg::Embed, AssetModeArg::Extract] {
+            let context = context();
+            let spool =
+                StructuredSpool::from_result(&result, context.clone(), emit, asset_mode).unwrap();
+            let raw_markdown = emit == EmitKind::Markdown || emit == EmitKind::Bundle;
+            let escaped_markdown = emit == EmitKind::ResultJson;
+            let semantic_ir = emit != EmitKind::Markdown;
+            let inventories = matches!(emit, EmitKind::ResultJson | EmitKind::Bundle);
+            let assets = inventories || asset_mode == AssetModeArg::Extract;
+
+            assert_eq!(spool.markdown.is_some(), raw_markdown, "{emit:?}/{asset_mode:?}");
+            assert_eq!(spool.markdown_json.is_some(), escaped_markdown, "{emit:?}/{asset_mode:?}");
+            assert_eq!(spool.ir.is_some(), semantic_ir, "{emit:?}/{asset_mode:?}");
+            assert_eq!(
+                spool.diagnostics.is_some() && spool.provenance.is_some(),
+                inventories,
+                "{emit:?}/{asset_mode:?}"
+            );
+            assert_eq!(spool.capabilities.markdown, raw_markdown || escaped_markdown);
+            assert_eq!(spool.capabilities.semantic_events, semantic_ir);
+            assert_eq!(spool.capabilities.assets, assets);
+            assert_eq!(!spool.payload_records.is_empty(), assets);
+            assert_eq!(
+                context.reserved_temporary_bytes(),
+                represented_temporary_bytes(&spool),
+                "unrepresented temporary bytes for {emit:?}/{asset_mode:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn absent_representations_and_emit_mismatch_fail_closed_without_writes() {
+    let markdown_context = context();
+    let mut markdown = StructuredSpool::from_result(
+        &fixture(),
+        markdown_context,
+        EmitKind::Markdown,
+        AssetModeArg::Omit,
+    )
+    .unwrap();
+    let semantic_error = ArtifactSink::write_document_event(
+        &mut markdown,
+        &DocumentStreamEvent::Metadata(&DocumentMetadata::default()),
+    )
+    .unwrap_err();
+    assert_eq!(semantic_error.code().as_str(), "internal");
+
+    let mut destination = Cursor::new(Vec::new());
+    let mismatch = markdown.serialize(EmitKind::ResultJson, &mut destination).unwrap_err();
+    assert_eq!(mismatch.code(), "internal");
+    assert!(destination.into_inner().is_empty());
+    assert_eq!(markdown.serialization_calls, 0);
+
+    let incomplete_context = context();
+    let mut incomplete = StructuredSpool::from_result(
+        &fixture(),
+        incomplete_context,
+        EmitKind::Markdown,
+        AssetModeArg::Omit,
+    )
+    .unwrap();
+    drop(incomplete.markdown.take());
+    let mut untouched = Cursor::new(Vec::new());
+    let missing = incomplete.serialize(EmitKind::Markdown, &mut untouched).unwrap_err();
+    assert_eq!(missing.code(), "internal");
+    assert!(untouched.into_inner().is_empty());
+    assert_eq!(incomplete.serialization_calls, 0);
+
+    let ir_context = context();
+    let mut ir =
+        StructuredSpool::from_result(&fixture(), ir_context, EmitKind::IrJson, AssetModeArg::Omit)
+            .unwrap();
+    let markdown_error = ArtifactSink::write_markdown(&mut ir, b"unrequested").unwrap_err();
+    assert_eq!(markdown_error.code().as_str(), "internal");
+    let asset = AssetStreamInfo {
+        id: AssetId("unrequested".into()),
+        filename: Some("unrequested.bin".into()),
+        media_type: "application/octet-stream".into(),
+        size: 0,
+        external_uri: None,
+        content_sha256: None,
+    };
+    let asset_error = ArtifactSink::begin_asset(&mut ir, &asset).unwrap_err();
+    assert_eq!(asset_error.code().as_str(), "internal");
+}
+
+fn deadline_context() -> ExecutionContext {
+    ExecutionContext::new(
+        into_markdown::ExecutionOptions {
+            timeout: Some(std::time::Duration::from_millis(20)),
+            ..into_markdown::ExecutionOptions::default()
+        },
+        into_markdown::ResourceLimits::default(),
+    )
+}
+
+fn assert_timeout_policy(error: ConversionError) {
+    assert_eq!(error.code().as_str(), "timeout");
+    let cli = CliError::from(error);
+    assert_eq!(cli.code(), "timeout");
+    assert_eq!(cli.exit_code(), ExitClass::Policy.code());
+}
+
+#[test]
+fn deadline_is_preserved_in_semantic_markdown_and_asset_callbacks() {
+    let semantic_context = deadline_context();
+    let mut semantic =
+        StructuredSpool::new(semantic_context.clone(), EmitKind::IrJson, AssetModeArg::Omit)
+            .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let error = ArtifactSink::write_document_event(
+        &mut semantic,
+        &DocumentStreamEvent::Metadata(&DocumentMetadata::default()),
+    )
+    .unwrap_err();
+    assert_timeout_policy(error);
+    drop(semantic);
+    assert_eq!(semantic_context.reserved_temporary_bytes(), 0);
+    assert_eq!(semantic_context.reserved_memory_bytes(), 0);
+
+    let markdown_context = deadline_context();
+    let mut markdown =
+        StructuredSpool::new(markdown_context.clone(), EmitKind::Markdown, AssetModeArg::Omit)
+            .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    assert_timeout_policy(ArtifactSink::write_markdown(&mut markdown, b"late").unwrap_err());
+    drop(markdown);
+    assert_eq!(markdown_context.reserved_temporary_bytes(), 0);
+    assert_eq!(markdown_context.reserved_memory_bytes(), 0);
+
+    let asset_context = deadline_context();
+    let mut assets =
+        StructuredSpool::new(asset_context.clone(), EmitKind::Markdown, AssetModeArg::Extract)
+            .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let asset = AssetStreamInfo {
+        id: AssetId("late".into()),
+        filename: Some("late.bin".into()),
+        media_type: "application/octet-stream".into(),
+        size: 0,
+        external_uri: None,
+        content_sha256: None,
+    };
+    assert_timeout_policy(ArtifactSink::begin_asset(&mut assets, &asset).unwrap_err());
+    drop(assets);
+    assert_eq!(asset_context.reserved_temporary_bytes(), 0);
+    assert_eq!(asset_context.reserved_memory_bytes(), 0);
 }
 
 struct BrokenPipeWriter {
@@ -228,7 +406,13 @@ impl Write for BrokenPipeWriter {
 #[test]
 fn stdout_pipe_close_is_typed_and_spools_are_released() {
     let context = context();
-    let mut spool = StructuredSpool::from_result(&fixture(), context.clone()).unwrap();
+    let mut spool = StructuredSpool::from_result(
+        &fixture(),
+        context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     let mut primary = context.temporary_file("primary").unwrap();
     spool.serialize(EmitKind::ResultJson, &mut primary).unwrap();
     let mut writer = BrokenPipeWriter { remaining: 7 };
@@ -243,8 +427,13 @@ fn stdout_pipe_close_is_typed_and_spools_are_released() {
 #[test]
 fn serialization_failure_and_mid_stream_cancellation_release_every_spool() {
     let failed_context = context();
-    let mut failed_spool =
-        StructuredSpool::from_result(&fixture(), failed_context.clone()).unwrap();
+    let mut failed_spool = StructuredSpool::from_result(
+        &fixture(),
+        failed_context.clone(),
+        EmitKind::Bundle,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     let mut failed =
         FailAfterWriter { destination: Cursor::new(Vec::new()), remaining: 31, injected: false };
     let error = failed_spool.serialize(EmitKind::Bundle, &mut failed).unwrap_err();
@@ -262,8 +451,13 @@ fn serialization_failure_and_mid_stream_cancellation_release_every_spool() {
         },
         into_markdown::ResourceLimits::default(),
     );
-    let mut cancelled_spool =
-        StructuredSpool::from_result(&fixture(), cancelled_context.clone()).unwrap();
+    let mut cancelled_spool = StructuredSpool::from_result(
+        &fixture(),
+        cancelled_context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     let mut destination = CancellingWriter {
         destination: Cursor::new(Vec::new()),
         cancellation,
@@ -289,11 +483,20 @@ fn multi_megabyte_ir_markdown_and_asset_stay_file_backed() {
     result.assets[0].bytes.clone_from(&asset_payload);
     result.assets[1].bytes = asset_payload;
 
-    for emit in [EmitKind::ResultJson, EmitKind::Bundle] {
+    for (emit, asset_mode, expects_payload) in [
+        (EmitKind::Markdown, AssetModeArg::Omit, false),
+        (EmitKind::Markdown, AssetModeArg::Embed, false),
+        (EmitKind::Markdown, AssetModeArg::Extract, true),
+        (EmitKind::IrJson, AssetModeArg::Omit, false),
+        (EmitKind::IrJson, AssetModeArg::Extract, true),
+        (EmitKind::ResultJson, AssetModeArg::Omit, true),
+        (EmitKind::Bundle, AssetModeArg::Omit, true),
+    ] {
         let context = context();
-        let mut spool = StructuredSpool::from_result(&result, context.clone()).unwrap();
-        assert_eq!(spool.payload_records.len(), 1);
-        assert!(context.reserved_temporary_bytes() > 10 * 1024 * 1024);
+        let mut spool =
+            StructuredSpool::from_result(&result, context.clone(), emit, asset_mode).unwrap();
+        assert_eq!(spool.payload_records.len(), usize::from(expects_payload));
+        assert_eq!(context.reserved_temporary_bytes(), represented_temporary_bytes(&spool));
         assert!(context.reserved_memory_bytes() < 2 * 1024 * 1024);
         let before_serialization = context.reserved_temporary_bytes();
         let mut primary = MeteredTemporary::new(&context, "large-primary");
@@ -313,7 +516,13 @@ fn multi_megabyte_ir_markdown_and_asset_stay_file_backed() {
 fn temporary_limit_failure_and_cancellation_release_every_spool() {
     let result = fixture();
     let measured_context = context();
-    let measured = StructuredSpool::from_result(&result, measured_context.clone()).unwrap();
+    let measured = StructuredSpool::from_result(
+        &result,
+        measured_context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     let exact = measured_context.reserved_temporary_bytes();
     let exact_memory = measured_context.reserved_memory_bytes();
     drop(measured);
@@ -325,7 +534,13 @@ fn temporary_limit_failure_and_cancellation_release_every_spool() {
     };
     let exact_context =
         ExecutionContext::new(into_markdown::ExecutionOptions::default(), exact_limits);
-    let exact_spool = StructuredSpool::from_result(&result, exact_context.clone()).unwrap();
+    let exact_spool = StructuredSpool::from_result(
+        &result,
+        exact_context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     assert_eq!(exact_context.reserved_temporary_bytes(), exact);
     drop(exact_spool);
     assert_eq!(exact_context.reserved_temporary_bytes(), 0);
@@ -335,7 +550,14 @@ fn temporary_limit_failure_and_cancellation_release_every_spool() {
         ..into_markdown::ResourceLimits::default()
     };
     let low = ExecutionContext::new(into_markdown::ExecutionOptions::default(), limits);
-    let error = StructuredSpool::from_result(&result, low.clone()).err().unwrap();
+    let error = StructuredSpool::from_result(
+        &result,
+        low.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.code(), "resourceLimit");
     assert_eq!(low.reserved_temporary_bytes(), 0);
     assert_eq!(low.reserved_memory_bytes(), 0);
@@ -346,8 +568,13 @@ fn temporary_limit_failure_and_cancellation_release_every_spool() {
     };
     let exact_memory_context =
         ExecutionContext::new(into_markdown::ExecutionOptions::default(), exact_memory_limits);
-    let exact_memory_spool =
-        StructuredSpool::from_result(&result, exact_memory_context.clone()).unwrap();
+    let exact_memory_spool = StructuredSpool::from_result(
+        &result,
+        exact_memory_context.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .unwrap();
     assert_eq!(exact_memory_context.reserved_memory_bytes(), exact_memory);
     drop(exact_memory_spool);
     assert_eq!(exact_memory_context.reserved_memory_bytes(), 0);
@@ -358,7 +585,14 @@ fn temporary_limit_failure_and_cancellation_release_every_spool() {
     };
     let low_memory =
         ExecutionContext::new(into_markdown::ExecutionOptions::default(), memory_limits);
-    let error = StructuredSpool::from_result(&result, low_memory.clone()).err().unwrap();
+    let error = StructuredSpool::from_result(
+        &result,
+        low_memory.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.code(), "resourceLimit");
     assert_eq!(low_memory.reserved_temporary_bytes(), 0);
     assert_eq!(low_memory.reserved_memory_bytes(), 0);
@@ -372,7 +606,14 @@ fn temporary_limit_failure_and_cancellation_release_every_spool() {
         into_markdown::ResourceLimits::default(),
     );
     cancellation.cancel();
-    let error = StructuredSpool::from_result(&result, cancelled.clone()).err().unwrap();
+    let error = StructuredSpool::from_result(
+        &result,
+        cancelled.clone(),
+        EmitKind::ResultJson,
+        AssetModeArg::Extract,
+    )
+    .err()
+    .unwrap();
     assert_eq!(error.code(), "cancelled");
     assert_eq!(cancelled.reserved_temporary_bytes(), 0);
     assert_eq!(cancelled.reserved_memory_bytes(), 0);

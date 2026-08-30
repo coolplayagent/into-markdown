@@ -65,6 +65,22 @@ impl StructuredSpool {
         &self,
         destination: &mut W,
     ) -> Result<(), CliError> {
+        let markdown = self
+            .markdown
+            .as_ref()
+            .ok_or_else(|| CliError::internal("raw Markdown representation is absent"))?;
+        let ir = self
+            .ir
+            .as_ref()
+            .ok_or_else(|| CliError::internal("document IR representation is absent"))?;
+        let diagnostics = self
+            .diagnostics
+            .as_ref()
+            .ok_or_else(|| CliError::internal("diagnostics representation is absent"))?;
+        let provenance = self
+            .provenance
+            .as_ref()
+            .ok_or_else(|| CliError::internal("provenance representation is absent"))?;
         let groups = self.bundle_groups()?;
         let manifest_assets = groups
             .iter()
@@ -103,15 +119,15 @@ impl StructuredSpool {
         archive
             .start_file("diagnostics.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, &self.diagnostics, &mut archive)?;
+        copy_spool(&self.context, diagnostics, &mut archive)?;
         archive
             .start_file("document.ir.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        replay_spool_chunks(&self.context, &self.ir, &self.ir_write_chunks, &mut archive)?;
+        replay_spool_chunks(&self.context, ir, &self.ir_write_chunks, &mut archive)?;
         archive
             .start_file("document.md", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, &self.markdown, &mut archive)?;
+        copy_spool(&self.context, markdown, &mut archive)?;
         archive
             .start_file("manifest.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
@@ -121,7 +137,7 @@ impl StructuredSpool {
         archive
             .start_file("provenance.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, &self.provenance, &mut archive)?;
+        copy_spool(&self.context, provenance, &mut archive)?;
         archive
             .add_directory("assets/", directory)
             .map_err(|error| map_zip_error(error, "create bundle assets directory"))?;
