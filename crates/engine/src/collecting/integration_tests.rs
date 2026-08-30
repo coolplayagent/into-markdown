@@ -356,6 +356,7 @@ fn native_admission_has_stable_exact_minus_one_and_releases_on_drop() {
             &candidate,
             &options,
             &Services::default(),
+            &[],
             &low,
         )),
         Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
@@ -374,6 +375,7 @@ fn native_admission_has_stable_exact_minus_one_and_releases_on_drop() {
         &candidate,
         &options,
         &Services::default(),
+        &[],
         &exact,
     ))
     .unwrap();

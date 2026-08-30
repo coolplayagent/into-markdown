@@ -6,6 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEMPORARY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
 
+#[path = "page_lifetime_tests.rs"]
+mod page_lifetime;
+
 #[test]
 fn direct_pdf_probe_accepts_only_the_header_or_one_utf8_bom() {
     let context = ExecutionContext::new(
@@ -675,7 +678,11 @@ fn scan_coverage_is_union_based_and_blank_or_overlapping_small_images_do_not_qua
 
 #[test]
 fn conversion_gate_wait_honors_cancellation() {
-    let held = PDF_CONVERSION_GATE.get_or_init(|| Mutex::new(())).lock().unwrap();
+    let admission = ExecutionContext::new(
+        into_markdown_core::ExecutionOptions::default(),
+        into_markdown_core::ResourceLimits::default(),
+    );
+    let held = lock_pdf_conversion(&admission).unwrap();
     let cancellation = into_markdown_core::CancellationToken::new();
     cancellation.cancel();
     let context = ExecutionContext::new(
