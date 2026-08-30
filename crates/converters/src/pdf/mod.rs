@@ -32,10 +32,11 @@ use geometry::normalize_point;
 use ir::character_ir_allocation_bytes;
 
 use into_markdown_core::{
-    Asset, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter,
-    ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext,
-    FormatCandidate, Inline, InputFormat, NodeId, OcrPolicy, ProbeOutcome, Provenance,
-    ProvenanceKind, Rect, ResolvedInput, ResourceReservation, Services, SourceLocator,
+    AiMode, Asset, AssetId, AssetMode, Block, BlockNode, BoxFuture, ConversionError,
+    ConversionOptions, Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document,
+    ErrorPolicy, ExecutionContext, FormatCandidate, Inline, InputFormat, NodeId, OcrPolicy,
+    ProbeOutcome, Provenance, ProvenanceKind, Rect, ResolvedInput, ResourceReservation, Services,
+    SourceLocator,
 };
 use into_markdown_pdfium::{
     Bitmap, Character, Error as PdfiumError, ImageBitmap, Limits, LinkTarget, PageInfo, PdfRect,
@@ -58,6 +59,29 @@ const MAX_PAGE_RENDER_DIMENSION: u32 = 4096;
 static PDF_CONVERSION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 type PdfiumRuntimeResolver = fn() -> Result<PathBuf, ConversionError>;
 static PDFIUM_RUNTIME_RESOLVER: OnceLock<PdfiumRuntimeResolver> = OnceLock::new();
+
+#[cfg(test)]
+thread_local! {
+    static IMAGE_BITMAP_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn has_pdf_header(bytes: &[u8]) -> bool {
+    bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes).starts_with(b"%PDF-")
+}
+
+fn image_pixels_required(options: &ConversionOptions) -> bool {
+    options.output.asset_mode != AssetMode::Omit
+        || options.ocr.policy != OcrPolicy::Off
+        || [
+            options.ai.vision_ocr,
+            options.ai.image_description,
+            options.ai.layout_repair,
+            options.ai.table_repair,
+            options.ai.formula_repair,
+        ]
+        .iter()
+        .any(|mode| *mode != AiMode::Off)
+}
 
 fn request_path_scan<T>(
     context: &ExecutionContext,
@@ -277,7 +301,7 @@ impl Converter for PdfConverter {
     ) -> BoxFuture<'a, Result<ProbeOutcome, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            Ok(if candidate.format == InputFormat::Pdf && input.bytes.starts_with(b"%PDF-") {
+            Ok(if candidate.format == InputFormat::Pdf && has_pdf_header(&input.bytes) {
                 ProbeOutcome::Match { confidence: 1.0 }
             } else {
                 ProbeOutcome::NotApplicable
@@ -357,6 +381,7 @@ fn convert_pdf(
     let mut total_inlines = 0_usize;
     let mut total_page_objects = 0_usize;
     let mut retained_memory = Vec::new();
+    let retain_image_pixels = image_pixels_required(options);
     let path_page_capacity =
         allocation_capacity_bound(usize::try_from(pdf.page_count()).unwrap_or(usize::MAX))?;
     let path_page_bytes = path_page_capacity
@@ -550,34 +575,43 @@ fn convert_pdf(
             context.checkpoint()?;
             let bounds = normalize_rect(image.bounds(), &info)?;
             coverage.add(bounds, &info);
-            let bitmap_plan = image.plan_bitmap().map_err(map_pdfium_error)?;
-            let bitmap_plan_bytes = bitmap_plan.allocation_bytes();
-            let (bitmap, bitmap_memory) =
-                materialize_after_reserve(context, bitmap_plan_bytes, || {
-                    bitmap_plan.materialize().map_err(map_pdfium_error)
-                })?;
-            let (encoded, encoded_memory) = image_bitmap_to_bmp(&bitmap, options, context)?;
-            drop(bitmap);
-            drop(bitmap_memory);
-            account_asset(&encoded, &mut total_asset_bytes, options)?;
-            retain_output_bytes(context, &mut retained_memory, asset_record_overhead()?)?;
-            let id = content_asset_id("pdf-image", &encoded)?;
-            asset_ids
-                .try_reserve(1)
-                .map_err(|_| resource("max_memory_bytes", "asset ID allocation failed"))?;
-            if asset_ids.insert(id.clone()) {
-                retain_existing_reservation(context, &mut retained_memory, encoded_memory)?;
-                assets.try_reserve(1).map_err(|_| {
-                    resource("max_memory_bytes", "asset inventory allocation failed")
-                })?;
-                assets.push(Asset {
-                    id: AssetId(id.clone()),
-                    filename: Some(format!("{id}.bmp")),
-                    media_type: "image/bmp".into(),
-                    bytes: encoded,
-                    external_uri: None,
-                });
-            }
+            let id = if retain_image_pixels {
+                #[cfg(test)]
+                IMAGE_BITMAP_MATERIALIZATIONS.set(IMAGE_BITMAP_MATERIALIZATIONS.get() + 1);
+                let bitmap_plan = image.plan_bitmap().map_err(map_pdfium_error)?;
+                let bitmap_plan_bytes = bitmap_plan.allocation_bytes();
+                let (bitmap, bitmap_memory) =
+                    materialize_after_reserve(context, bitmap_plan_bytes, || {
+                        bitmap_plan.materialize().map_err(map_pdfium_error)
+                    })?;
+                let (encoded, encoded_memory) = image_bitmap_to_bmp(&bitmap, options, context)?;
+                drop(bitmap);
+                drop(bitmap_memory);
+                account_asset(&encoded, &mut total_asset_bytes, options)?;
+                retain_output_bytes(context, &mut retained_memory, asset_record_overhead()?)?;
+                let id = content_asset_id("pdf-image", &encoded)?;
+                asset_ids
+                    .try_reserve(1)
+                    .map_err(|_| resource("max_memory_bytes", "asset ID allocation failed"))?;
+                if asset_ids.insert(id.clone()) {
+                    retain_existing_reservation(context, &mut retained_memory, encoded_memory)?;
+                    assets.try_reserve(1).map_err(|_| {
+                        resource("max_memory_bytes", "asset inventory allocation failed")
+                    })?;
+                    assets.push(Asset {
+                        id: AssetId(id.clone()),
+                        filename: Some(format!("{id}.bmp")),
+                        media_type: "image/bmp".into(),
+                        bytes: encoded,
+                        external_uri: None,
+                    });
+                }
+                id
+            } else {
+                // Preserve image geometry through reading-order reconstruction.
+                // This transient reference is removed before publishing the IR.
+                "pdf-omitted-image".into()
+            };
             total_nodes = checked_count(
                 total_nodes,
                 1,
@@ -707,6 +741,13 @@ fn convert_pdf(
     drop(path_evidence);
     drop(path_memory);
     document = rebuilt_document;
+    if !retain_image_pixels {
+        for page in &mut document.blocks {
+            if let Block::Page { blocks, .. } = &mut page.block {
+                blocks.retain(|node| !matches!(node.block, Block::Image { .. }));
+            }
+        }
+    }
     if let Some(reservation) = layout_reservation {
         retain_existing_reservation(context, &mut retained_memory, reservation)?;
     }
