@@ -275,8 +275,12 @@ class PlatformReleaseTests(unittest.TestCase):
         post_release = (
             ROOT / "tools/portable-release/post_release_e2e.py"
         ).read_text(encoding="utf-8")
-        self.assertIn('skill_runner.call("skill-version-empty-path"', post_release)
-        self.assertIn('"skill-pdf-empty-path"', post_release)
+        scenarios = (
+            ROOT / "tools/portable-release/post_release_scenarios.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("run_skill_packaged_runtime", post_release)
+        self.assertIn('runner.call("skill-version-empty-path"', scenarios)
+        self.assertIn('"skill-pdf-empty-path"', scenarios)
         self.assertIn("native-audit.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertIn("e2e.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertNotIn("portable-launcher", workflow)
