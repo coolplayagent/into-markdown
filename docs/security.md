@@ -123,8 +123,11 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   formula 和 merge 调用前后执行 checkpoint。因此取消/timeout 的最坏延迟是一段已经由前置
   扫描和资源上限约束的同步调用，而不是整本 workbook；高敌意部署仍应在具备 OS 内存与
   时间硬限制的隔离进程运行。
-- PDFium 仅从显式绝对路径加载 authority 中精确 hash/size/ABI 的当前平台制品；不搜索
-  system PDFium、`PATH` 或动态加载器 fallback，也不联网。所有 native count/length、页、字符、
+- PDFium 仅从认证路径加载 authority 中精确 hash/size/ABI 的当前平台制品。Windows CLI 的默认路径
+  由已经规范化的可执行文件位置推导为 `lib/pdfium/pdfium.dll`；显式 `PDFIUM_LIBRARY`、
+  `with_runtime_path()` 与 resolver 结果进入相同的 pinned loader。加载前逐一检查所有已存在路径
+  component，任何 symlink 或 Windows reparse point 都 fail closed；不搜索当前目录、system PDFium、
+  `PATH` 或动态加载器 fallback，也不联网。所有 native count/length、页、字符、
   object、link、图片 stride/format/pixel bytes 与 render 尺寸在 Rust 分配或 slice 前有界检查，
   文档打开使用消费式 preflight plan：输入 `Arc` 不复制，密码的 NUL 结尾临时副本按
   `password.len()+1` 的 exact boxed backing 在 materialize 前计入请求 memory credit，超过限制或

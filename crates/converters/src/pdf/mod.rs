@@ -55,7 +55,6 @@ const MAX_RENDER_DIMENSION: u32 = 16_384;
 const MAX_PAGE_RENDER_DIMENSION: u32 = 4096;
 static PDF_CONVERSION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 type PdfiumRuntimeResolver = fn() -> Result<PathBuf, ConversionError>;
-#[cfg(not(windows))]
 static PDFIUM_RUNTIME_RESOLVER: OnceLock<PdfiumRuntimeResolver> = OnceLock::new();
 
 fn request_path_scan<T>(
@@ -106,7 +105,6 @@ impl PdfConverter {
         {
             return Ok(path);
         }
-        #[cfg(not(windows))]
         if let Some(resolver) = PDFIUM_RUNTIME_RESOLVER.get() {
             return resolver();
         }
@@ -118,18 +116,10 @@ impl PdfConverter {
 }
 
 /// Install a process-local lazy resolver for a `PDFium` runtime embedded by the
-/// final application binary. Windows intentionally rejects resolver
-/// registration and requires the packaged manifest-pinned DLL beside the
-/// executable. Registering on other platforms performs no filesystem work;
-/// the resolver is called only when a PDF conversion actually begins.
+/// final application binary. Registering performs no filesystem work; the
+/// resolver is called only when a PDF conversion actually begins.
 #[must_use]
 pub fn install_pdfium_runtime_resolver(resolver: PdfiumRuntimeResolver) -> bool {
-    #[cfg(windows)]
-    {
-        let _ = resolver;
-        false
-    }
-    #[cfg(not(windows))]
     PDFIUM_RUNTIME_RESOLVER.set(resolver).is_ok()
 }
 
@@ -143,10 +133,7 @@ pub fn default_pdfium_runtime_path() -> Option<PathBuf> {
     if let Some(path) = packaged_pdfium_runtime_path() {
         return Some(path);
     }
-    #[cfg(not(windows))]
-    return PDFIUM_RUNTIME_RESOLVER.get().and_then(|resolver| resolver().ok());
-    #[cfg(windows)]
-    None
+    PDFIUM_RUNTIME_RESOLVER.get().and_then(|resolver| resolver().ok())
 }
 
 fn packaged_pdfium_runtime_path() -> Option<PathBuf> {

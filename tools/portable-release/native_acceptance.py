@@ -402,6 +402,44 @@ def run_e2e(
                 os.rmdir(runtime.parent)
             runtime.parent.mkdir()
             runtime.write_bytes(pinned)
+
+            explicit_file_root = root / "explicit-file"
+            explicit_file_root.mkdir()
+            explicit_file = explicit_file_root / "pdfium.dll"
+            os.symlink(runtime, explicit_file, target_is_directory=False)
+            explicit_environment = dict(environment)
+            explicit_environment["PDFIUM_LIBRARY"] = str(explicit_file)
+            try:
+                negative_cases.append(
+                    run_failure_case(
+                        "explicit-linked-pdfium",
+                        binary,
+                        failure_arguments,
+                        work,
+                        explicit_environment,
+                    )
+                )
+            finally:
+                explicit_file.unlink()
+
+            explicit_outside = root / "explicit-outside"
+            explicit_outside.mkdir()
+            (explicit_outside / "pdfium.dll").write_bytes(pinned)
+            explicit_parent = root / "explicit-reparse"
+            os.symlink(explicit_outside, explicit_parent, target_is_directory=True)
+            explicit_environment["PDFIUM_LIBRARY"] = str(explicit_parent / "pdfium.dll")
+            try:
+                negative_cases.append(
+                    run_failure_case(
+                        "explicit-reparse-point-pdfium",
+                        binary,
+                        failure_arguments,
+                        work,
+                        explicit_environment,
+                    )
+                )
+            finally:
+                os.rmdir(explicit_parent)
             authority = PDFIUM_MANIFEST["targets"][target]
             pdfium_runtime = {
                 "version": PDFIUM_MANIFEST["version"],

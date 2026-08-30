@@ -27,6 +27,12 @@ from typing import Any
 
 
 REPOSITORY = "coolplayagent/into-markdown"
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
+WINDOWS_SKILL_PDFIUM = f"into-markdown/assets/windows-x86_64/{WINDOWS_PDFIUM_MEMBER}"
+WINDOWS_PDFIUM_AUTHORITY = json.loads(
+    (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
+)["targets"]["x86_64-pc-windows-msvc"]
 TARGETS = {
     "windows": {
         "target": "x86_64-pc-windows-msvc",
@@ -140,24 +146,49 @@ def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathl
     expected = TARGETS[platform]["member"]
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
-        if len(infos) != 1 or infos[0].filename != expected or infos[0].is_dir():
-            raise E2EError(f"{archive_path.name} must contain only {expected}")
+        wanted = [expected, *([WINDOWS_PDFIUM_MEMBER] if platform == "windows" else [])]
+        if [info.filename for info in infos] != wanted or any(info.is_dir() for info in infos):
+            raise E2EError(f"{archive_path.name} must contain exactly {', '.join(wanted)}")
         info = infos[0]
         mode = (info.external_attr >> 16) & 0o177777
         wanted = stat.S_IFREG | (0o644 if platform == "windows" else 0o755)
         if mode != wanted:
             raise E2EError(f"{archive_path.name} has an invalid member mode")
         data = archive.read(info)
+        runtime_data = None
+        if platform == "windows":
+            runtime = infos[1]
+            if (runtime.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise E2EError(f"{archive_path.name} has an invalid PDFium member mode")
+            runtime_data = archive.read(runtime)
+            if (
+                len(runtime_data) != WINDOWS_PDFIUM_AUTHORITY["library_size"]
+                or hashlib.sha256(runtime_data).hexdigest()
+                != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
+            ):
+                raise E2EError(f"{archive_path.name} PDFium differs from the pinned manifest")
     identity = inspect_core(data, platform)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(data)
     output.chmod(0o700)
+    runtime_report = None
+    if runtime_data is not None:
+        runtime_output = output.parent / WINDOWS_PDFIUM_MEMBER
+        runtime_output.parent.mkdir(parents=True, exist_ok=True)
+        runtime_output.write_bytes(runtime_data)
+        runtime_output.chmod(0o600)
+        runtime_report = {
+            "asset": WINDOWS_PDFIUM_MEMBER,
+            "bytes": len(runtime_data),
+            "sha256": hashlib.sha256(runtime_data).hexdigest(),
+        }
     return {
         "archive": archive_path.name,
         "archiveSha256": sha256_file(archive_path),
         "binarySha256": hashlib.sha256(data).hexdigest(),
         "binaryBytes": len(data),
-        "memberCount": 1,
+        "memberCount": len(infos),
+        "pdfium": runtime_report,
         **identity,
     }
 
@@ -172,10 +203,32 @@ def extract_skill_binary(archive_path: pathlib.Path, platform: str, output: path
         if info.is_dir():
             raise E2EError("Skill Core asset is a directory")
         data = archive.read(info)
+        runtime_data = None
+        if platform == "windows":
+            if WINDOWS_SKILL_PDFIUM not in names:
+                raise E2EError(f"Skill does not contain {WINDOWS_SKILL_PDFIUM} exactly once")
+            runtime = archive.getinfo(WINDOWS_SKILL_PDFIUM)
+            if (
+                runtime.is_dir()
+                or (runtime.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644
+            ):
+                raise E2EError("Skill PDFium asset is not a regular 0644 file")
+            runtime_data = archive.read(runtime)
+            if (
+                len(runtime_data) != WINDOWS_PDFIUM_AUTHORITY["library_size"]
+                or hashlib.sha256(runtime_data).hexdigest()
+                != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
+            ):
+                raise E2EError("Skill PDFium differs from the pinned manifest")
     identity = inspect_core(data, platform)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(data)
     output.chmod(0o700)
+    if runtime_data is not None:
+        runtime_output = output.parent / WINDOWS_PDFIUM_MEMBER
+        runtime_output.parent.mkdir(parents=True, exist_ok=True)
+        runtime_output.write_bytes(runtime_data)
+        runtime_output.chmod(0o600)
     return {
         "archiveSha256": sha256_file(archive_path),
         "binarySha256": hashlib.sha256(data).hexdigest(),
@@ -610,11 +663,12 @@ def run_platform(
         invariant_errors: list[str] = []
         dispatch_residuals: list[dict[str, Any]] = []
         fallback_residuals: list[dict[str, Any]] = []
-        binaries = protect_directory(root / "bin", platform)
+        core_root = protect_directory(root / "core", platform)
+        skill_asset_root = protect_directory(root / "skill", platform)
         work = protect_directory(root / "work", platform)
-        core = binaries / config["member"]
+        core = core_root / config["member"]
         report["core"] = extract_single_core(assets / config["core"], platform, core)
-        skill = binaries / ("skill.exe" if platform == "windows" else "skill")
+        skill = skill_asset_root / ("skill.exe" if platform == "windows" else "skill")
         report["skill"] = extract_skill_binary(assets / SKILL_ARCHIVE, platform, skill)
         package_source = assets / config["speech"]
         package = work / config["speech"]
@@ -660,8 +714,11 @@ def run_platform(
         )
         assert_output(pdf_output, "PDF")
         pdf_runtimes = runtime_directories(environment, platform)
-        if len(pdf_runtimes) != 1:
-            raise E2EError("first PDF did not materialize exactly one runtime")
+        expected_pdf_runtimes = 0 if platform == "windows" else 1
+        if len(pdf_runtimes) != expected_pdf_runtimes:
+            raise E2EError(
+                "first PDF did not use the expected packaged or embedded PDFium runtime"
+            )
         report["timingsMs"]["pdfFirstMaterialization"] = pdf_case.elapsed_ms
 
         ocr = _copy_fixture(
@@ -680,7 +737,8 @@ def run_platform(
         ).lower():
             raise E2EError("OCR output does not contain the fixture authority text")
         all_runtimes = runtime_directories(environment, platform)
-        if len(all_runtimes) != 2:
+        expected_all_runtimes = expected_pdf_runtimes + 1
+        if len(all_runtimes) != expected_all_runtimes:
             raise E2EError("first OCR did not add exactly one runtime")
         ocr_runtime = next(path for path in all_runtimes if path not in pdf_runtimes)
         hot_output = work / "ocr-hot.md"
@@ -688,7 +746,7 @@ def run_platform(
             "ocr-hot-cache-reuse",
             conversion_arguments(ocr, hot_output, ["--ocr", "always", "--no-config"]),
         )
-        if len(runtime_directories(environment, platform)) != 2:
+        if len(runtime_directories(environment, platform)) != expected_all_runtimes:
             raise E2EError("hot OCR created a redundant runtime")
         corrupted, expected_hash = corrupt_runtime(ocr_runtime)
         repaired_output = work / "ocr-repaired.md"
@@ -833,8 +891,10 @@ def run_platform(
             "skill-ocr-empty-path",
             conversion_arguments(skill_ocr, skill_work / "ocr.md", ["--ocr", "always", "--no-config"]),
         )
-        if len(runtime_directories(skill_environment, platform)) != 2:
-            raise E2EError("Skill empty-PATH PDF/OCR did not materialize its two runtimes")
+        if len(runtime_directories(skill_environment, platform)) != expected_all_runtimes:
+            raise E2EError(
+                "Skill empty-PATH PDF/OCR did not use the expected packaged/embedded runtimes"
+            )
         report["skillCases"] = skill_runner.cases
         report["cases"] = runner.cases
         if invariant_errors:

@@ -72,9 +72,13 @@ const fn ocr_payload() -> Payload {
 }
 
 pub(super) fn register_pdfium_resolver() {
-    if EMBEDDED_RUNTIME_ENABLED {
+    if should_register_pdfium_resolver() {
         let _ = into_markdown::install_pdfium_runtime_resolver(resolve_pdfium_library);
     }
+}
+
+const fn should_register_pdfium_resolver() -> bool {
+    EMBEDDED_RUNTIME_ENABLED && !cfg!(windows)
 }
 
 /// Remove process-private runtime fallbacks after all conversions and Web tasks have stopped.
@@ -1071,5 +1075,16 @@ mod tests {
         symlink(temporary.path().join("outside"), marker).unwrap();
 
         assert!(matches!(verify_tree(&published, payload), Err(TreeState::Unsafe(_))));
+    }
+
+    #[cfg(all(windows, feature = "embedded-runtime"))]
+    #[test]
+    fn windows_embeds_ocr_but_not_packaged_pdfium() {
+        assert!(!should_register_pdfium_resolver());
+        assert_eq!(PDFIUM_ARCHIVE.len(), 0);
+        assert!(PDFIUM_ARCHIVE_SHA256.is_empty());
+        assert!(PDFIUM_FILES.is_empty());
+        assert!(!OCR_ARCHIVE.is_empty());
+        assert!(!OCR_FILES.is_empty());
     }
 }

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from unittest import mock
 
 
 PATH = pathlib.Path(__file__).with_name("post_release_e2e.py")
@@ -24,6 +25,22 @@ def elf(machine: int = 62) -> bytes:
     value[:7] = b"\x7fELF\x02\x01\x01"
     struct.pack_into("<H", value, 18, machine)
     return bytes(value)
+
+
+def pe_x86_64() -> bytes:
+    value = bytearray(128)
+    value[:2] = b"MZ"
+    struct.pack_into("<I", value, 0x3C, 64)
+    value[64:68] = b"PE\0\0"
+    struct.pack_into("<H", value, 68, 0x8664)
+    return bytes(value)
+
+
+def member(name: str, mode: int = 0o644) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | mode) << 16
+    return info
 
 
 class PostReleaseE2ETests(unittest.TestCase):
@@ -49,8 +66,68 @@ class PostReleaseE2ETests(unittest.TestCase):
             self.assertEqual((report["format"], report["architecture"]), ("ELF", "x86_64"))
             with zipfile.ZipFile(archive_path, "a") as archive:
                 archive.writestr("NOTICE", "unexpected")
-            with self.assertRaisesRegex(e2e.E2EError, "only into-md"):
+            with self.assertRaisesRegex(e2e.E2EError, "exactly into-md"):
                 e2e.extract_single_core(archive_path, "linux", root / "other")
+
+    def test_windows_core_archive_retains_only_authenticated_pdfium(self) -> None:
+        runtime = b"pinned-pdfium"
+        authority = {
+            "library_size": len(runtime),
+            "library_sha256": __import__("hashlib").sha256(runtime).hexdigest(),
+        }
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(
+            e2e, "WINDOWS_PDFIUM_AUTHORITY", authority
+        ):
+            root = pathlib.Path(name)
+            archive_path = root / "into-md-windows-x86_64.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member("into-md.exe"), pe_x86_64())
+                archive.writestr(member(e2e.WINDOWS_PDFIUM_MEMBER), runtime)
+            output = root / "core" / "into-md.exe"
+            report = e2e.extract_single_core(archive_path, "windows", output)
+            self.assertEqual(report["memberCount"], 2)
+            self.assertEqual(
+                (output.parent / e2e.WINDOWS_PDFIUM_MEMBER).read_bytes(), runtime
+            )
+
+            for bad_runtime, extra in ((b"tampered-pdfium", None), (runtime, "NOTICE")):
+                with zipfile.ZipFile(archive_path, "w") as archive:
+                    archive.writestr(member("into-md.exe"), pe_x86_64())
+                    archive.writestr(member(e2e.WINDOWS_PDFIUM_MEMBER), bad_runtime)
+                    if extra:
+                        archive.writestr(member(extra), b"unexpected")
+                with self.subTest(runtime=bad_runtime, extra=extra), self.assertRaises(e2e.E2EError):
+                    e2e.extract_single_core(archive_path, "windows", root / "rejected.exe")
+
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member("into-md.exe"), pe_x86_64())
+            with self.assertRaisesRegex(e2e.E2EError, "pdfium.dll"):
+                e2e.extract_single_core(archive_path, "windows", root / "missing.exe")
+
+    def test_windows_skill_retains_authenticated_pdfium_beside_core(self) -> None:
+        runtime = b"pinned-pdfium"
+        authority = {
+            "library_size": len(runtime),
+            "library_sha256": __import__("hashlib").sha256(runtime).hexdigest(),
+        }
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(
+            e2e, "WINDOWS_PDFIUM_AUTHORITY", authority
+        ):
+            root = pathlib.Path(name)
+            archive_path = root / e2e.SKILL_ARCHIVE
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member(e2e.TARGETS["windows"]["skill"]), pe_x86_64())
+                archive.writestr(member(e2e.WINDOWS_SKILL_PDFIUM), runtime)
+            output = root / "skill" / "skill.exe"
+            e2e.extract_skill_binary(archive_path, "windows", output)
+            self.assertEqual(
+                (output.parent / e2e.WINDOWS_PDFIUM_MEMBER).read_bytes(), runtime
+            )
+
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                archive.writestr(member(e2e.TARGETS["windows"]["skill"]), pe_x86_64())
+            with self.assertRaisesRegex(e2e.E2EError, "pdfium.dll"):
+                e2e.extract_skill_binary(archive_path, "windows", root / "missing.exe")
 
     def test_speech_identity_and_audit_only_rejection(self) -> None:
         with tempfile.TemporaryDirectory() as name:

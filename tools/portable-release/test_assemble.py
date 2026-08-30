@@ -12,6 +12,7 @@ import threading
 import unittest
 import warnings
 import zipfile
+from unittest import mock
 
 
 PATH = pathlib.Path(__file__).with_name("assemble.py")
@@ -159,6 +160,8 @@ class PortableReleaseTests(unittest.TestCase):
             "validate_pdfium",
             "validate_ocr",
             "runtime payload contains link",
+            'target_os == "windows"',
+            '("&[]".to_owned(), String::new(), String::new())',
         ]:
             self.assertIn(required, build_script)
         for authority in [platform_release, macos_release]:
@@ -260,6 +263,36 @@ class PortableReleaseTests(unittest.TestCase):
                 value.writestr(binary, pe_x86_64())
                 value.writestr(runtime, b"outside/pdfium.dll")
             with self.assertRaisesRegex(assemble.PortableReleaseError, "regular file"):
+                assemble.verify_core_archive(archive, target)
+
+    def test_windows_core_archive_rejects_pdfium_authority_embedded_in_binary(self) -> None:
+        target = "x86_64-pc-windows-msvc"
+        runtime = b"pinned-runtime"
+        authority = {
+            "library_size": len(runtime),
+            "library_sha256": hashlib.sha256(runtime).hexdigest(),
+        }
+        with tempfile.TemporaryDirectory() as name, mock.patch.object(
+            assemble, "windows_pdfium_authority", return_value=authority
+        ):
+            root = pathlib.Path(name)
+            binary = root / "into-md.exe"
+            binary.write_bytes(
+                pe_x86_64()
+                + b"PK\x03\x04"
+                + bytes(26)
+                + assemble.WINDOWS_PDFIUM_MEMBER.encode("ascii")
+            )
+            runtime_path = root / "pdfium.dll"
+            runtime_path.write_bytes(runtime)
+            archive = root / "core.zip"
+            assemble.create_core_archive(
+                binary,
+                archive,
+                "into-md.exe",
+                (runtime_path, assemble.WINDOWS_PDFIUM_MEMBER),
+            )
+            with self.assertRaisesRegex(assemble.PortableReleaseError, "embedded PDFium"):
                 assemble.verify_core_archive(archive, target)
 
     def test_forbidden_speech_evidence_contract_is_complete(self) -> None:

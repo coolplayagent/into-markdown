@@ -122,9 +122,11 @@ runtime dependency 是 `num-traits`。任何版本升级都必须重新审计源
 runtime 角色。schema 1 只兼容 planned source-only bundle；available/runtime 语义会由产品
 validator 与 release audit 双向拒绝。
 
-PDFium `153.0.7999.0` 已按四个平台固定并审查，但仍是 `manual` 输入且不进入
-普通构建或当前发布物。分发时必须保留归档内的 `LICENSE` 和完整 `licenses/`
-第三方声明目录；显式联网制品审计见 `tools/pdfium-audit.sh`。
+PDFium `153.0.7999.0` 已按四个平台固定并审查，仍是不会进入普通构建的 `manual` 输入。
+Windows portable Core 与 Agent Skill 将固定的 `pdfium.dll` 作为独立归档 member 分发；Windows
+可执行文件只嵌入 OCR，不再重复嵌入 PDFium。release evidence 保留取得的原始 PDFium 归档并将
+PDFium 投影为分发组件，以覆盖其中的 `LICENSE` 与完整 `licenses/` 第三方声明；显式联网制品
+审计见 `tools/pdfium-audit.sh`。
 
 Office 97–2003 解析器为仓库自有 Rust 实现并内置 Core，不下载、链接或分发外部办公套件，
 因此没有单独的 runtime、许可组件或发布投影。其仓库原创 corpus 的来源、许可和 SHA-256

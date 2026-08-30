@@ -87,7 +87,12 @@ fn packaged_pdfium_rejects_linked_runtime_directories() {
     fs::create_dir_all(&outside).unwrap();
     let name = if cfg!(target_os = "macos") { "libpdfium.dylib" } else { "libpdfium.so" };
     fs::write(outside.join(name), b"runtime").unwrap();
-    fs::create_dir(root.join("lib")).unwrap();
+    fs::create_dir_all(root.join("lib/pdfium")).unwrap();
+    let linked_file = root.join("lib/pdfium").join(name);
+    symlink(outside.join(name), &linked_file).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+    fs::remove_file(linked_file).unwrap();
+    fs::remove_dir(root.join("lib/pdfium")).unwrap();
     symlink(&outside, root.join("lib/pdfium")).unwrap();
     assert_eq!(packaged_pdfium_path(&executable), None);
 }
@@ -95,7 +100,7 @@ fn packaged_pdfium_rejects_linked_runtime_directories() {
 #[cfg(windows)]
 #[test]
 fn packaged_pdfium_rejects_reparse_point_runtime_directories() {
-    use std::os::windows::fs::symlink_dir;
+    use std::os::windows::fs::{symlink_dir, symlink_file};
 
     let temporary = TemporaryDirectory::new();
     let root = temporary.path();
@@ -105,7 +110,12 @@ fn packaged_pdfium_rejects_reparse_point_runtime_directories() {
     fs::write(&executable, b"binary").unwrap();
     fs::create_dir_all(&outside).unwrap();
     fs::write(outside.join("pdfium.dll"), b"runtime").unwrap();
-    fs::create_dir(root.join("lib")).unwrap();
+    fs::create_dir_all(&linked).unwrap();
+    let linked_file = linked.join("pdfium.dll");
+    symlink_file(outside.join("pdfium.dll"), &linked_file).unwrap();
+    assert_eq!(packaged_pdfium_path(&executable), None);
+    fs::remove_file(linked_file).unwrap();
+    fs::remove_dir(&linked).unwrap();
     symlink_dir(&outside, &linked).unwrap();
     assert_eq!(packaged_pdfium_path(&executable), None);
 }
@@ -122,14 +132,37 @@ fn corrupt_pdfium_runtime_reports_component_unavailable() {
     ));
 }
 
-#[cfg(windows)]
 #[test]
-fn windows_rejects_embedded_runtime_fallback_registration() {
+fn embedded_runtime_resolver_registration_is_cross_platform() {
+    const CHILD: &str = "INTO_MD_TEST_PDFIUM_RESOLVER_REGISTRATION_CHILD";
     fn resolver() -> Result<PathBuf, ConversionError> {
-        panic!("Windows must not invoke an embedded PDFium resolver")
+        std::env::var_os(CHILD).map(|_| PathBuf::from("application-owned-pdfium-runtime")).ok_or(
+            ConversionError::ComponentUnavailable {
+                component: "pdfium".into(),
+                detail: "test resolver was not authorized".into(),
+            },
+        )
     }
 
-    assert!(!install_pdfium_runtime_resolver(resolver));
+    if std::env::var_os(CHILD).is_none() {
+        let current_test = std::thread::current().name().unwrap().to_owned();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg(current_test)
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env_remove("PDFIUM_LIBRARY")
+            .status()
+            .unwrap();
+        assert!(status.success(), "resolver registration subprocess failed");
+        return;
+    }
+
+    assert!(install_pdfium_runtime_resolver(resolver));
+    assert_eq!(
+        default_pdfium_runtime_path(),
+        Some(PathBuf::from("application-owned-pdfium-runtime"))
+    );
 }
 
 #[test]

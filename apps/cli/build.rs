@@ -39,27 +39,35 @@ fn main() {
         return;
     }
 
-    let pdfium_root = required_root(PDFIUM_ENV);
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS is available");
     let ocr_root = required_root(OCR_ENV);
-    let pdfium_files = collect_files(&pdfium_root);
     let ocr_files = collect_files(&ocr_root);
-    validate_pdfium(&pdfium_files);
     validate_ocr(&ocr_files);
-    let pdfium_zip = out.join("embedded-pdfium.zip");
     let ocr_zip = out.join("embedded-ocr.zip");
-    let pdfium_sha = write_archive(&pdfium_zip, &pdfium_files);
     let ocr_sha = write_archive(&ocr_zip, &ocr_files);
+    let (pdfium_archive, pdfium_sha, pdfium_files) = if target_os == "windows" {
+        ("&[]".to_owned(), String::new(), String::new())
+    } else {
+        let pdfium_root = required_root(PDFIUM_ENV);
+        let pdfium_files = collect_files(&pdfium_root);
+        validate_pdfium(&pdfium_files);
+        let pdfium_zip = out.join("embedded-pdfium.zip");
+        let pdfium_sha = write_archive(&pdfium_zip, &pdfium_files);
+        (
+            format!("include_bytes!({:?})", pdfium_zip.display().to_string()),
+            pdfium_sha,
+            render_files(&pdfium_files),
+        )
+    };
     let source = format!(
         "pub(super) const EMBEDDED_RUNTIME_ENABLED: bool = true;\n\
-         pub(super) static PDFIUM_ARCHIVE: &[u8] = include_bytes!({pdfium_zip:?});\n\
+         pub(super) static PDFIUM_ARCHIVE: &[u8] = {pdfium_archive};\n\
          pub(super) const PDFIUM_ARCHIVE_SHA256: &str = {pdfium_sha:?};\n\
          pub(super) static PDFIUM_FILES: &[EmbeddedFile] = &[{pdfium_files}];\n\
          pub(super) static OCR_ARCHIVE: &[u8] = include_bytes!({ocr_zip:?});\n\
          pub(super) const OCR_ARCHIVE_SHA256: &str = {ocr_sha:?};\n\
          pub(super) static OCR_FILES: &[EmbeddedFile] = &[{ocr_files}];\n",
-        pdfium_zip = pdfium_zip.display().to_string(),
         ocr_zip = ocr_zip.display().to_string(),
-        pdfium_files = render_files(&pdfium_files),
         ocr_files = render_files(&ocr_files),
     );
     fs::write(generated, source).expect("write embedded-runtime constants");
@@ -140,9 +148,7 @@ fn is_executable_path(relative: &str) -> bool {
 
 fn validate_pdfium(files: &[InputFile]) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS is available");
-    let expected = if target_os == "windows" {
-        "lib/pdfium/pdfium.dll"
-    } else if target_os == "macos" {
+    let expected = if target_os == "macos" {
         "lib/pdfium/libpdfium.dylib"
     } else if target_os == "linux" {
         "lib/pdfium/libpdfium.so"

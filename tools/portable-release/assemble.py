@@ -655,6 +655,16 @@ def windows_pdfium_authority() -> dict:
     return manifest
 
 
+def contains_embedded_zip_member(binary: bytes, member: str) -> bool:
+    name = member.encode("ascii")
+    offset = 0
+    while (found := binary.find(name, offset)) >= 0:
+        if b"PK\x03\x04" in binary[max(0, found - 64) : found]:
+            return True
+        offset = found + len(name)
+    return False
+
+
 def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
     archive_name, member = CORE_ARCHIVES[target]
     with zipfile.ZipFile(archive_path) as archive:
@@ -668,7 +678,8 @@ def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
             raise PortableReleaseError("Core ZIP timestamp is not deterministic")
         mode = (infos[0].external_attr >> 16) & 0o177777
         expected_mode = stat.S_IFREG | (0o755 if member == "into-md" else 0o644)
-        if mode != expected_mode or not binary_architecture(archive.read(infos[0]), target):
+        binary_data = archive.read(infos[0])
+        if mode != expected_mode or not binary_architecture(binary_data, target):
             raise PortableReleaseError("Core binary architecture or mode is invalid")
         if target == "x86_64-pc-windows-msvc":
             runtime = infos[1]
@@ -682,6 +693,10 @@ def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
             ):
                 raise PortableReleaseError(
                     "Windows PDFium archive member differs from the pinned manifest"
+                )
+            if contains_embedded_zip_member(binary_data, WINDOWS_PDFIUM_MEMBER):
+                raise PortableReleaseError(
+                    "Windows Core still contains an embedded PDFium payload"
                 )
 
 
