@@ -1,0 +1,63 @@
+load("@crates//:defs.bzl", "all_crate_deps")
+load("@rules_rust//cargo:defs.bzl", "cargo_build_script", "cargo_toml_env_vars")
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+package(default_visibility = ["//third_party/whisper-rs-0.16.0:__pkg__"])
+
+cargo_toml_env_vars(
+    name = "cargo_toml_env_vars",
+    src = "Cargo.toml",
+)
+
+# This workspace member owns its native build. crate_universe deliberately does
+# not generate an external whisper-rs-sys repository for a vendored package.
+cargo_build_script(
+    name = "build_script_build",
+    build_script_env = select({
+        "@rules_rust//rust/platform:x86_64-pc-windows-msvc": {
+            # Ninja avoids the orphaned cl.exe processes produced by nested
+            # Visual Studio builds while retaining the selected MSVC toolchain.
+            "CMAKE_GENERATOR": "Ninja",
+            # The fixed MSVC action already supplies these paths through LIB;
+            # rules_rust's unquoted LDFLAGS cannot preserve their spaces.
+            "LDFLAGS": "",
+        },
+        "//conditions:default": {},
+    }),
+    build_script_env_files = [":cargo_toml_env_vars"],
+    compile_data = glob(
+        ["**"],
+        exclude = [
+            "**/*.rs",
+            "BUILD.bazel",
+        ],
+    ),
+    crate_name = "build_script_build",
+    crate_root = "build.rs",
+    data = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    deps = all_crate_deps(build = True),
+    edition = "2021",
+    links = "whisper",
+    pkg_name = "whisper-rs-sys",
+    rustc_env_files = [":cargo_toml_env_vars"],
+    srcs = glob(["**/*.rs"]),
+    version = "0.15.0",
+    visibility = ["//visibility:private"],
+)
+
+rust_library(
+    name = "whisper_rs_sys",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = glob(
+        ["**"],
+        exclude = ["BUILD.bazel"],
+    ),
+    crate_name = "whisper_rs_sys",
+    crate_root = "src/lib.rs",
+    deps = [":build_script_build"],
+    edition = "2021",
+    rustc_env_files = [":cargo_toml_env_vars"],
+)
