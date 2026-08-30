@@ -1,5 +1,8 @@
 use crate::workbook::LegacyXlsHints;
-use crate::workbook::budget::{checked_field_bytes, enforce_grid, requires_paged_grid};
+use crate::workbook::budget::{
+    checked_field_bytes, enforce_grid, extras_node_count, requires_paged_grid,
+    requires_paged_workbook,
+};
 use crate::workbook::cell::{cell_name, within};
 use crate::workbook::error::{limit, malformed, map_calamine};
 use crate::workbook::extras::metadata::display_ranges;
@@ -109,10 +112,11 @@ where
     let mut document = Document::default();
     let mut diagnostics = Vec::new();
     let mut sheet_blocks = Vec::<(String, Vec<BlockNode>)>::new();
-    let authenticated_cells = authenticated_bounds.values().fold(0_u64, |total, (row, column)| {
-        total.saturating_add((u64::from(*row) + 1).saturating_mul(u64::from(*column) + 1))
-    });
-    let paged_workbook = requires_paged_grid(authenticated_cells, 1);
+    let paged_workbook = requires_paged_workbook(
+        authenticated_bounds.values().copied(),
+        u64::try_from(sheets.len()).unwrap_or(u64::MAX),
+        extras_node_count(extras),
+    );
     let mut legacy = LegacyHintCursor::new(legacy_hints);
     for (sheet_index, sheet) in sheets.iter().enumerate() {
         context.checkpoint()?;

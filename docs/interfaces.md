@@ -222,7 +222,7 @@ source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
 `convert()` 仍返回聚合的 `ConversionResult`，适合小文件或需要完整 IR 的调用方。CLI 的
 Markdown、IR JSON、result JSON 与 bundle 均先流式写入受 `max_temporary_bytes` 约束的
 同文件系统临时文件，再由输出事务分块哈希、同步并原子提交。
-大型 SpreadsheetML 在完整表格 IR 会超过统一节点上限时，转换器改用有界的 2048 行
+大型 XLS、XLSX 与 XLSB 工作簿在完整表格 IR 会超过统一节点上限时，转换器改用有界的 2048 行
 TSV page blocks；页块保持工作表、行和列顺序，Tab、换行、反斜杠和反引号采用可逆转义，
 渲染器对该受约束块使用专用内存计划。最终 artifact 仍是一个 Markdown 文件，结果以
 `spreadsheet.largeTablePaged` 标记为 degraded，避免把表格语义简化误报为 complete。
