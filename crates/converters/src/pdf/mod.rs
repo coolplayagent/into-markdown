@@ -141,18 +141,15 @@ fn packaged_pdfium_runtime_path() -> Option<PathBuf> {
 }
 
 fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
+    if !path_is_physical(executable) {
+        return None;
+    }
     let executable = executable.canonicalize().ok()?;
     let executable_metadata = std::fs::symlink_metadata(&executable).ok()?;
     if !executable_metadata.is_file() || is_reparse_or_link(&executable_metadata) {
         return None;
     }
     let executable_directory = executable.parent()?;
-    let root =
-        if executable_directory.file_name().is_some_and(|name| name.eq_ignore_ascii_case("bin")) {
-            executable_directory.parent()?
-        } else {
-            executable_directory
-        };
     #[cfg(target_os = "macos")]
     let relative = Path::new("lib/pdfium/libpdfium.dylib");
     #[cfg(target_os = "linux")]
@@ -161,34 +158,80 @@ fn packaged_pdfium_path(executable: &Path) -> Option<PathBuf> {
     let relative = Path::new("lib/pdfium/pdfium.dll");
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     return None;
-    let path = root.join(relative);
-    packaged_runtime_is_physical(root, &path).then_some(path)
+    let portable = executable_directory.join(relative);
+    match packaged_runtime_state(executable_directory, &portable) {
+        PackagedRuntimeState::Physical => return Some(portable),
+        PackagedRuntimeState::Unsafe => return None,
+        PackagedRuntimeState::Missing => {}
+    }
+    if !executable_directory.file_name().is_some_and(|name| name.eq_ignore_ascii_case("bin")) {
+        return None;
+    }
+    let installed_root = executable_directory.parent()?;
+    let installed = installed_root.join(relative);
+    matches!(packaged_runtime_state(installed_root, &installed), PackagedRuntimeState::Physical)
+        .then_some(installed)
 }
 
-fn packaged_runtime_is_physical(root: &Path, runtime: &Path) -> bool {
-    let Ok(relative) = runtime.strip_prefix(root) else {
+fn path_is_physical(path: &Path) -> bool {
+    if !path.is_absolute() {
         return false;
+    }
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        if matches!(component, std::path::Component::Prefix(_)) {
+            continue;
+        }
+        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
+            return false;
+        };
+        if is_reparse_or_link(&metadata) {
+            return false;
+        }
+    }
+    true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackagedRuntimeState {
+    Missing,
+    Physical,
+    Unsafe,
+}
+
+fn packaged_runtime_state(root: &Path, runtime: &Path) -> PackagedRuntimeState {
+    let Ok(relative) = runtime.strip_prefix(root) else {
+        return PackagedRuntimeState::Unsafe;
     };
     let components = relative.components().collect::<Vec<_>>();
     if components.is_empty() {
-        return false;
+        return PackagedRuntimeState::Unsafe;
     }
     let mut current = root.to_owned();
     for (index, component) in components.iter().enumerate() {
         if !matches!(component, std::path::Component::Normal(_)) {
-            return false;
+            return PackagedRuntimeState::Unsafe;
         }
         current.push(component.as_os_str());
-        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
-            return false;
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return PackagedRuntimeState::Missing;
+            }
+            Err(_) => return PackagedRuntimeState::Unsafe,
         };
         if is_reparse_or_link(&metadata)
             || if index + 1 == components.len() { !metadata.is_file() } else { !metadata.is_dir() }
         {
-            return false;
+            return PackagedRuntimeState::Unsafe;
         }
     }
-    std::fs::canonicalize(runtime).is_ok_and(|canonical| canonical == runtime)
+    if std::fs::canonicalize(runtime).is_ok_and(|canonical| canonical == runtime) {
+        PackagedRuntimeState::Physical
+    } else {
+        PackagedRuntimeState::Unsafe
+    }
 }
 
 fn is_reparse_or_link(metadata: &std::fs::Metadata) -> bool {

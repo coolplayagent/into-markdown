@@ -15,8 +15,10 @@ import shutil
 import stat
 import struct
 import sys
+import tarfile
 import time
 import zipfile
+import zlib
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -29,6 +31,36 @@ CORE_ARCHIVES = {
     "aarch64-apple-darwin": ("into-md-macos-arm64.zip", "into-md"),
 }
 WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
+CORE_ARCHIVE_MANIFEST = "archive-manifest.json"
+PDFIUM_LICENSE_FILES = (
+    "LICENSE",
+    "licenses/abseil.txt",
+    "licenses/agg23.txt",
+    "licenses/fast_float.txt",
+    "licenses/freetype.txt",
+    "licenses/icu.txt",
+    "licenses/lcms.txt",
+    "licenses/libjpeg_turbo.ijg",
+    "licenses/libjpeg_turbo.md",
+    "licenses/libopenjpeg.txt",
+    "licenses/libpng.txt",
+    "licenses/libtiff.txt",
+    "licenses/llvm-libc.txt",
+    "licenses/pdfium.txt",
+    "licenses/simdutf.txt",
+    "licenses/zlib.txt",
+)
+CORE_MATERIAL_MEMBERS = (
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SBOM.spdx.json",
+    "SOURCES.json",
+    "licenses/npm/npm-release.spdx.json",
+    "licenses/npm/lucide-ISC-MIT.txt",
+    "licenses/npm/react-MIT.txt",
+    *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
+)
 SPEECH_NAMES = {
     target: f"official.media.whisper-{target}.imp" for target in CORE_ARCHIVES
 }
@@ -116,6 +148,8 @@ def create_core_archive(
     destination: pathlib.Path,
     member: str,
     runtime: tuple[pathlib.Path, str] | None = None,
+    materials: dict[str, pathlib.Path] | None = None,
+    target: str | None = None,
 ) -> None:
     if not binary.is_file() or binary.is_symlink():
         raise PortableReleaseError("final Core binary is unavailable")
@@ -127,13 +161,57 @@ def create_core_archive(
         raise PortableReleaseError("final Core runtime is unavailable")
     if destination.exists() or destination.is_symlink():
         raise PortableReleaseError("Core archive destination already exists")
+    materials = materials or {}
+    if materials and tuple(materials) != CORE_MATERIAL_MEMBERS:
+        raise PortableReleaseError("Core archive material inventory is invalid")
+    target = target or (
+        "x86_64-pc-windows-msvc" if member.endswith(".exe") else "x86_64-unknown-linux-gnu"
+    )
+    entries = [(member, binary, 0o755 if member == "into-md" else 0o644)]
+    if runtime is not None:
+        entries.append((runtime[1], runtime[0], 0o644))
+    entries.extend((name, materials[name], 0o644) for name in CORE_MATERIAL_MEMBERS if name in materials)
+    for name, source, _mode in entries:
+        if not source.is_file() or source.is_symlink():
+            raise PortableReleaseError(f"Core archive member is unavailable: {name}")
+    records = [
+        {
+            "path": name,
+            "bytes": source.stat().st_size,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "mode": f"{mode:04o}",
+            "kind": (
+                "component"
+                if name == WINDOWS_PDFIUM_MEMBER
+                else "license-material"
+                if name.startswith("licenses/")
+                else "declaration"
+                if name in {"LICENSE", "NOTICE"}
+                else "generated"
+                if name in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                else "project"
+            ),
+            **(
+                {"componentId": "pdfium"}
+                if name == WINDOWS_PDFIUM_MEMBER or name.startswith("licenses/pdfium/")
+                else {}
+            ),
+        }
+        for name, source, mode in entries
+    ]
+    manifest = (
+        json.dumps(
+            {"schemaVersion": 1, "target": target, "files": records},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(
         destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9
     ) as archive:
-        entries = [(member, binary, 0o755 if member == "into-md" else 0o644)]
-        if runtime is not None:
-            entries.append((runtime[1], runtime[0], 0o644))
         for name, source, mode in entries:
             info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
             info.create_system = 3
@@ -144,6 +222,78 @@ def create_core_archive(
                 compress_type=zipfile.ZIP_DEFLATED,
                 compresslevel=9,
             )
+        info = zipfile.ZipInfo(CORE_ARCHIVE_MANIFEST, (2026, 1, 1, 0, 0, 0))
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o644) << 16
+        archive.writestr(
+            info,
+            manifest,
+            compress_type=zipfile.ZIP_DEFLATED,
+            compresslevel=9,
+        )
+
+
+def stage_core_archive_materials(
+    pdfium_archive: pathlib.Path,
+    evidence: pathlib.Path,
+    destination: pathlib.Path,
+) -> dict[str, pathlib.Path]:
+    if destination.exists() or destination.is_symlink():
+        raise PortableReleaseError("Core archive material staging already exists")
+    destination.mkdir(parents=True)
+    pdfium_root = destination / "licenses/pdfium"
+    pdfium_root.mkdir(parents=True)
+    try:
+        with tarfile.open(pdfium_archive, "r:gz") as archive:
+            regular_members = [member for member in archive.getmembers() if member.isfile()]
+            members = {member.name: member for member in regular_members}
+            if len(members) != len(regular_members):
+                raise PortableReleaseError("PDFium license archive contains duplicate files")
+            selected = {
+                name: member
+                for name, member in members.items()
+                if name == "LICENSE" or name.startswith("licenses/")
+            }
+            if tuple(sorted(selected)) != tuple(sorted(PDFIUM_LICENSE_FILES)):
+                raise PortableReleaseError("PDFium license inventory is incomplete or unexpected")
+            for name in PDFIUM_LICENSE_FILES:
+                member = selected[name]
+                if member.issym() or member.islnk() or member.size <= 0 or member.size > 1024 * 1024:
+                    raise PortableReleaseError("PDFium license member is unsafe")
+                source = archive.extractfile(member)
+                if source is None:
+                    raise PortableReleaseError("PDFium license member is unreadable")
+                data = source.read(1024 * 1024 + 1)
+                if len(data) != member.size:
+                    raise PortableReleaseError("PDFium license member length changed")
+                output = pdfium_root / pathlib.PurePosixPath(name)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(data)
+    except PortableReleaseError:
+        raise
+    except (OSError, tarfile.TarError) as error:
+        raise PortableReleaseError("PDFium license archive is unreadable") from error
+    materials = {
+        "LICENSE": ROOT / "LICENSE",
+        "NOTICE": evidence / "NOTICE",
+        "THIRD_PARTY_NOTICES.md": evidence / "THIRD_PARTY_NOTICES.md",
+        "SBOM.spdx.json": evidence / "SBOM.spdx.json",
+        "SOURCES.json": evidence / "SOURCES.json",
+        "licenses/npm/npm-release.spdx.json": ROOT
+        / "third_party/licenses/npm-release.spdx.json",
+        "licenses/npm/lucide-ISC-MIT.txt": ROOT
+        / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+        "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+        **{
+            f"licenses/pdfium/{name}": pdfium_root / pathlib.PurePosixPath(name)
+            for name in PDFIUM_LICENSE_FILES
+        },
+    }
+    if tuple(materials) != CORE_MATERIAL_MEMBERS or any(
+        not path.is_file() or path.is_symlink() for path in materials.values()
+    ):
+        raise PortableReleaseError("Core archive materials are incomplete")
+    return materials
 
 
 def stage_catalog(
@@ -254,20 +404,25 @@ def build_platform(arguments: argparse.Namespace) -> None:
                 (time.monotonic_ns() - started) // 1_000_000,
             )
     release.authenticode_files([core], arguments.windows_signing_thumbprint)
-    archive_name, member = CORE_ARCHIVES[target]
-    archive = arguments.output / "release" / archive_name
-    runtime = None
-    if target == "x86_64-pc-windows-msvc":
-        runtime = (pdfium / config["pdfium"]["destination"], WINDOWS_PDFIUM_MEMBER)
-    create_core_archive(core, archive, member, runtime)
-    speech = arguments.output / "release" / SPEECH_NAMES[target]
-    speech.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     projection = release_bin / release.executable_name("release-projection", target)
     core_evidence = evidence / "core"
     core_evidence.mkdir(parents=True, exist_ok=True)
     release.write_release_inputs(core_evidence, projection, target)
     release.write_core_license_materials(core_evidence, cache, target, config)
+    materials = stage_core_archive_materials(
+        cache / "pdfium",
+        core_evidence,
+        arguments.work_root / "portable-core-materials",
+    )
+    archive_name, member = CORE_ARCHIVES[target]
+    archive = arguments.output / "release" / archive_name
+    runtime = None
+    if target == "x86_64-pc-windows-msvc":
+        runtime = (pdfium / config["pdfium"]["destination"], WINDOWS_PDFIUM_MEMBER)
+    create_core_archive(core, archive, member, runtime, materials, target)
+    speech = arguments.output / "release" / SPEECH_NAMES[target]
+    speech.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     write_target_manifest(arguments.output, target, archive, speech, release.sha256)
     verify_target(arguments.output, target)
 
@@ -336,17 +491,22 @@ def build_macos(arguments: argparse.Namespace) -> None:
                 (time.monotonic_ns() - started) // 1_000_000,
             )
     release.codesign_files([core], arguments.codesign_identity)
-    archive_name, member = CORE_ARCHIVES[target]
-    archive = arguments.output / "release" / archive_name
-    create_core_archive(core, archive, member)
-    speech = arguments.output / "release" / SPEECH_NAMES[target]
-    speech.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     core_evidence = evidence / "core"
     core_evidence.mkdir(parents=True, exist_ok=True)
     projection = build_root / "release/release-projection"
     release.write_release_inputs(core_evidence, projection)
     release.write_core_license_materials(core_evidence, cache)
+    materials = stage_core_archive_materials(
+        cache / "pdfium",
+        core_evidence,
+        arguments.work_root / "portable-core-materials",
+    )
+    archive_name, member = CORE_ARCHIVES[target]
+    archive = arguments.output / "release" / archive_name
+    create_core_archive(core, archive, member, materials=materials, target=target)
+    speech = arguments.output / "release" / SPEECH_NAMES[target]
+    speech.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(packages / "official.media.whisper.imp", speech)
     write_target_manifest(arguments.output, target, archive, speech, release.sha256)
     verify_target(arguments.output, target)
 
@@ -655,13 +815,48 @@ def windows_pdfium_authority() -> dict:
     return manifest
 
 
-def contains_embedded_zip_member(binary: bytes, member: str) -> bool:
-    name = member.encode("ascii")
+def contains_embedded_pdfium(binary: bytes, member: str, authority: dict) -> bool:
+    signature = b"PK\x03\x04"
+    wanted = member.encode("ascii")
     offset = 0
-    while (found := binary.find(name, offset)) >= 0:
-        if b"PK\x03\x04" in binary[max(0, found - 64) : found]:
+    while (found := binary.find(signature, offset)) >= 0:
+        offset = found + len(signature)
+        if found + 30 > len(binary):
+            continue
+        (
+            _signature,
+            _version,
+            flags,
+            method,
+            _time,
+            _date,
+            crc32,
+            compressed_size,
+            uncompressed_size,
+            name_size,
+            extra_size,
+        ) = struct.unpack_from("<IHHHHHIIIHH", binary, found)
+        name_start = found + 30
+        data_start = name_start + name_size + extra_size
+        data_end = data_start + compressed_size
+        if (
+            flags != 0
+            or method != zipfile.ZIP_DEFLATED
+            or binary[name_start : name_start + name_size] != wanted
+            or uncompressed_size != authority["library_size"]
+            or data_end > len(binary)
+        ):
+            continue
+        try:
+            payload = zlib.decompress(binary[data_start:data_end], -zlib.MAX_WBITS)
+        except zlib.error:
+            continue
+        if (
+            len(payload) == authority["library_size"]
+            and zlib.crc32(payload) == crc32
+            and hashlib.sha256(payload).hexdigest() == authority["library_sha256"]
+        ):
             return True
-        offset = found + len(name)
     return False
 
 
@@ -672,10 +867,19 @@ def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
         expected = [member]
         if target == "x86_64-pc-windows-msvc":
             expected.append(WINDOWS_PDFIUM_MEMBER)
+        expected.extend((*CORE_MATERIAL_MEMBERS, CORE_ARCHIVE_MANIFEST))
         if [info.filename for info in infos] != expected or any(info.is_dir() for info in infos):
             raise PortableReleaseError("Core ZIP member inventory is invalid")
-        if any(info.date_time != (2026, 1, 1, 0, 0, 0) for info in infos):
-            raise PortableReleaseError("Core ZIP timestamp is not deterministic")
+        if any(
+            info.date_time != (2026, 1, 1, 0, 0, 0)
+            or info.create_system != 3
+            or info.flag_bits & 0x1
+            or info.comment
+            or info.extra
+            or info.compress_type != zipfile.ZIP_DEFLATED
+            for info in infos
+        ):
+            raise PortableReleaseError("Core ZIP metadata is not deterministic")
         mode = (infos[0].external_attr >> 16) & 0o177777
         expected_mode = stat.S_IFREG | (0o755 if member == "into-md" else 0o644)
         binary_data = archive.read(infos[0])
@@ -694,10 +898,70 @@ def verify_core_archive(archive_path: pathlib.Path, target: str) -> None:
                 raise PortableReleaseError(
                     "Windows PDFium archive member differs from the pinned manifest"
                 )
-            if contains_embedded_zip_member(binary_data, WINDOWS_PDFIUM_MEMBER):
+            if contains_embedded_pdfium(binary_data, WINDOWS_PDFIUM_MEMBER, authority):
                 raise PortableReleaseError(
                     "Windows Core still contains an embedded PDFium payload"
                 )
+        for info in infos[2 if target == "x86_64-pc-windows-msvc" else 1 :]:
+            if (info.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise PortableReleaseError("Core declaration or license member mode is invalid")
+        static_materials = {
+            "LICENSE": ROOT / "LICENSE",
+            "licenses/npm/npm-release.spdx.json": ROOT
+            / "third_party/licenses/npm-release.spdx.json",
+            "licenses/npm/lucide-ISC-MIT.txt": ROOT
+            / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+            "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+        }
+        for name, source in static_materials.items():
+            if archive.read(name) != source.read_bytes():
+                raise PortableReleaseError(f"Core archive static license differs: {name}")
+        if any(not archive.read(f"licenses/pdfium/{name}") for name in PDFIUM_LICENSE_FILES):
+            raise PortableReleaseError("Core archive contains an empty PDFium license member")
+        try:
+            manifest = json.loads(archive.read(CORE_ARCHIVE_MANIFEST))
+        except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise PortableReleaseError("Core archive manifest is invalid") from error
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"schemaVersion", "target", "files"}
+            or manifest["schemaVersion"] != 1
+            or manifest["target"] != target
+            or not isinstance(manifest["files"], list)
+        ):
+            raise PortableReleaseError("Core archive manifest authority is invalid")
+        observed = []
+        for info in infos[:-1]:
+            data = archive.read(info)
+            name = info.filename
+            mode = (info.external_attr >> 16) & 0o777
+            observed.append(
+                {
+                    "path": name,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "mode": f"{mode:04o}",
+                    "kind": (
+                        "component"
+                        if name == WINDOWS_PDFIUM_MEMBER
+                        else "license-material"
+                        if name.startswith("licenses/")
+                        else "declaration"
+                        if name in {"LICENSE", "NOTICE"}
+                        else "generated"
+                        if name
+                        in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                        else "project"
+                    ),
+                    **(
+                        {"componentId": "pdfium"}
+                        if name == WINDOWS_PDFIUM_MEMBER or name.startswith("licenses/pdfium/")
+                        else {}
+                    ),
+                }
+            )
+        if manifest["files"] != observed:
+            raise PortableReleaseError("Core archive differs from its bidirectional manifest")
 
 
 def verify_target(output: pathlib.Path, target: str) -> None:

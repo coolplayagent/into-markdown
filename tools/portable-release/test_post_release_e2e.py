@@ -43,6 +43,147 @@ def member(name: str, mode: int = 0o644) -> zipfile.ZipInfo:
     return info
 
 
+def directory(name: str) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, (2026, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    info.external_attr = ((stat.S_IFDIR | 0o755) << 16) | 0x10
+    return info
+
+
+def write_core_archive(
+    path: pathlib.Path,
+    platform: str,
+    runtime: bytes | None = None,
+    extra: str | None = None,
+) -> None:
+    executable = e2e.TARGETS[platform]["member"]
+    entries = [(executable, pe_x86_64() if platform == "windows" else elf(), 0o644 if platform == "windows" else 0o755)]
+    if runtime is not None:
+        entries.append((e2e.WINDOWS_PDFIUM_MEMBER, runtime, 0o644))
+    entries.extend((name, f"material:{name}".encode(), 0o644) for name in e2e.CORE_MATERIAL_MEMBERS)
+    records = [
+        {
+            "path": name,
+            "bytes": len(data),
+            "sha256": __import__("hashlib").sha256(data).hexdigest(),
+            "mode": f"{mode:04o}",
+            "kind": (
+                "component"
+                if name == e2e.WINDOWS_PDFIUM_MEMBER
+                else "license-material"
+                if name.startswith("licenses/")
+                else "declaration"
+                if name in {"LICENSE", "NOTICE"}
+                else "generated"
+                if name in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                else "project"
+            ),
+            **(
+                {"componentId": "pdfium"}
+                if name == e2e.WINDOWS_PDFIUM_MEMBER or name.startswith("licenses/pdfium/")
+                else {}
+            ),
+        }
+        for name, data, mode in entries
+    ]
+    manifest = json.dumps(
+        {
+            "schemaVersion": 1,
+            "target": e2e.TARGETS[platform]["target"],
+            "files": records,
+        }
+    ).encode()
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, data, mode in entries:
+            archive.writestr(member(name, mode), data)
+        archive.writestr(member(e2e.CORE_ARCHIVE_MANIFEST), manifest)
+        if extra:
+            archive.writestr(member(extra), b"unexpected")
+
+
+def write_skill_archive(path: pathlib.Path, runtime: bytes | None = None) -> None:
+    files = {
+        "into-markdown/LICENSE": (e2e.ROOT / "LICENSE").read_bytes(),
+        "into-markdown/NOTICE": b"notice",
+        "into-markdown/SBOM.spdx.json": b"{}",
+        "into-markdown/SKILL.md": b"skill",
+        "into-markdown/SOURCES.json": b"{}",
+        "into-markdown/THIRD_PARTY_NOTICES.md": b"notices",
+        "into-markdown/agents/openai.yaml": b"interface: {}",
+        "into-markdown/assets/linux-arm64/into-md": elf(183),
+        "into-markdown/assets/linux-x86_64/into-md": elf(),
+        "into-markdown/assets/windows-x86_64/into-md.exe": pe_x86_64(),
+        "into-markdown/references/cli-workflows.md": b"reference",
+    }
+    if runtime is not None:
+        files[e2e.WINDOWS_SKILL_PDFIUM] = runtime
+    for relative in e2e.CORE_MATERIAL_MEMBERS:
+        if relative == "LICENSE":
+            continue
+        authority = {
+            "licenses/npm/npm-release.spdx.json": e2e.ROOT
+            / "third_party/licenses/npm-release.spdx.json",
+            "licenses/npm/lucide-ISC-MIT.txt": e2e.ROOT
+            / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+            "licenses/npm/react-MIT.txt": e2e.ROOT
+            / "third_party/licenses/npm/react-MIT.txt",
+        }.get(relative)
+        files[f"into-markdown/{relative}"] = (
+            authority.read_bytes() if authority else f"material:{relative}".encode()
+        )
+    ordered_names = ["into-markdown/", *sorted(set(e2e.SKILL_DIRECTORIES[1:]) | set(e2e.SKILL_FILES))]
+    records = []
+    for name in ordered_names:
+        if name.endswith("/") or name == e2e.SKILL_MANIFEST or name not in files:
+            continue
+        data = files[name]
+        relative = name.removeprefix("into-markdown/")
+        mode = 0o755 if name in {
+            "into-markdown/assets/linux-arm64/into-md",
+            "into-markdown/assets/linux-x86_64/into-md",
+        } else 0o644
+        record = {
+            "path": relative,
+            "bytes": len(data),
+            "sha256": __import__("hashlib").sha256(data).hexdigest(),
+            "mode": f"{mode:04o}",
+            "kind": (
+                "component"
+                if name == e2e.WINDOWS_SKILL_PDFIUM
+                else "license-material"
+                if relative.startswith("licenses/")
+                else "generated"
+                if relative in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                else "declaration"
+                if relative in {"LICENSE", "NOTICE"}
+                else "executable"
+                if relative.startswith("assets/")
+                else "skill-source"
+            ),
+            **(
+                {"componentId": "pdfium"}
+                if name == e2e.WINDOWS_SKILL_PDFIUM or relative.startswith("licenses/pdfium/")
+                else {}
+            ),
+        }
+        records.append(record)
+    files[e2e.SKILL_MANIFEST] = json.dumps(
+        {"schemaVersion": 1, "files": records}
+    ).encode()
+    with zipfile.ZipFile(path, "w") as archive:
+        for name in ordered_names:
+            if name.endswith("/"):
+                archive.writestr(directory(name), b"")
+            elif name not in files:
+                continue
+            else:
+                mode = 0o755 if name in {
+                    "into-markdown/assets/linux-arm64/into-md",
+                    "into-markdown/assets/linux-x86_64/into-md",
+                } else 0o644
+                archive.writestr(member(name, mode), files[name])
+
+
 class PostReleaseE2ETests(unittest.TestCase):
     def test_release_url_is_stable_and_rejects_unsafe_identity(self) -> None:
         self.assertEqual(
@@ -57,15 +198,11 @@ class PostReleaseE2ETests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
             archive_path = root / "into-md-linux-x86_64.zip"
-            info = zipfile.ZipInfo("into-md", (2026, 1, 1, 0, 0, 0))
-            info.create_system = 3
-            info.external_attr = (stat.S_IFREG | 0o755) << 16
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(info, elf())
+            write_core_archive(archive_path, "linux")
             report = e2e.extract_single_core(archive_path, "linux", root / "into-md")
             self.assertEqual((report["format"], report["architecture"]), ("ELF", "x86_64"))
             with zipfile.ZipFile(archive_path, "a") as archive:
-                archive.writestr("NOTICE", "unexpected")
+                archive.writestr("unexpected", "unexpected")
             with self.assertRaisesRegex(e2e.E2EError, "exactly into-md"):
                 e2e.extract_single_core(archive_path, "linux", root / "other")
 
@@ -80,27 +217,22 @@ class PostReleaseE2ETests(unittest.TestCase):
         ):
             root = pathlib.Path(name)
             archive_path = root / "into-md-windows-x86_64.zip"
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member("into-md.exe"), pe_x86_64())
-                archive.writestr(member(e2e.WINDOWS_PDFIUM_MEMBER), runtime)
+            write_core_archive(archive_path, "windows", runtime)
             output = root / "core" / "into-md.exe"
             report = e2e.extract_single_core(archive_path, "windows", output)
-            self.assertEqual(report["memberCount"], 2)
+            self.assertEqual(
+                report["memberCount"], len(e2e.CORE_MATERIAL_MEMBERS) + 3
+            )
             self.assertEqual(
                 (output.parent / e2e.WINDOWS_PDFIUM_MEMBER).read_bytes(), runtime
             )
 
-            for bad_runtime, extra in ((b"tampered-pdfium", None), (runtime, "NOTICE")):
-                with zipfile.ZipFile(archive_path, "w") as archive:
-                    archive.writestr(member("into-md.exe"), pe_x86_64())
-                    archive.writestr(member(e2e.WINDOWS_PDFIUM_MEMBER), bad_runtime)
-                    if extra:
-                        archive.writestr(member(extra), b"unexpected")
+            for bad_runtime, extra in ((b"tampered-pdfium", None), (runtime, "unexpected")):
+                write_core_archive(archive_path, "windows", bad_runtime, extra)
                 with self.subTest(runtime=bad_runtime, extra=extra), self.assertRaises(e2e.E2EError):
                     e2e.extract_single_core(archive_path, "windows", root / "rejected.exe")
 
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member("into-md.exe"), pe_x86_64())
+            write_core_archive(archive_path, "windows")
             with self.assertRaisesRegex(e2e.E2EError, "pdfium.dll"):
                 e2e.extract_single_core(archive_path, "windows", root / "missing.exe")
 
@@ -115,18 +247,15 @@ class PostReleaseE2ETests(unittest.TestCase):
         ):
             root = pathlib.Path(name)
             archive_path = root / e2e.SKILL_ARCHIVE
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member(e2e.TARGETS["windows"]["skill"]), pe_x86_64())
-                archive.writestr(member(e2e.WINDOWS_SKILL_PDFIUM), runtime)
+            write_skill_archive(archive_path, runtime)
             output = root / "skill" / "skill.exe"
             e2e.extract_skill_binary(archive_path, "windows", output)
             self.assertEqual(
                 (output.parent / e2e.WINDOWS_PDFIUM_MEMBER).read_bytes(), runtime
             )
 
-            with zipfile.ZipFile(archive_path, "w") as archive:
-                archive.writestr(member(e2e.TARGETS["windows"]["skill"]), pe_x86_64())
-            with self.assertRaisesRegex(e2e.E2EError, "pdfium.dll"):
+            write_skill_archive(archive_path)
+            with self.assertRaisesRegex(e2e.E2EError, "exact reviewed archive inventory"):
                 e2e.extract_skill_binary(archive_path, "windows", root / "missing.exe")
 
     def test_speech_identity_and_audit_only_rejection(self) -> None:

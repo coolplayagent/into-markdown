@@ -3,10 +3,12 @@ from __future__ import annotations
 import importlib.util
 import base64
 import hashlib
+import io
 import json
 import pathlib
 import stat
 import struct
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -31,8 +33,70 @@ def pe_x86_64() -> bytes:
     return bytes(value)
 
 
+def core_materials(root: pathlib.Path) -> dict[str, pathlib.Path]:
+    static = {
+        "LICENSE": assemble.ROOT / "LICENSE",
+        "licenses/npm/npm-release.spdx.json": assemble.ROOT
+        / "third_party/licenses/npm-release.spdx.json",
+        "licenses/npm/lucide-ISC-MIT.txt": assemble.ROOT
+        / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+        "licenses/npm/react-MIT.txt": assemble.ROOT
+        / "third_party/licenses/npm/react-MIT.txt",
+    }
+    result = {}
+    for name in assemble.CORE_MATERIAL_MEMBERS:
+        if name in static:
+            result[name] = static[name]
+            continue
+        path = root / "materials" / pathlib.PurePosixPath(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"reviewed material: {name}\n".encode())
+        result[name] = path
+    return result
+
+
 class PortableReleaseTests(unittest.TestCase):
     TARGET = "x86_64-unknown-linux-gnu"
+
+    def test_core_materials_preserve_the_exact_pdfium_license_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            pdfium = root / "pdfium.tar.gz"
+            with tarfile.open(pdfium, "w:gz") as archive:
+                for member_name in assemble.PDFIUM_LICENSE_FILES:
+                    data = f"upstream:{member_name}".encode()
+                    info = tarfile.TarInfo(member_name)
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+            evidence = root / "evidence"
+            evidence.mkdir()
+            for evidence_name in (
+                "NOTICE",
+                "THIRD_PARTY_NOTICES.md",
+                "SBOM.spdx.json",
+                "SOURCES.json",
+            ):
+                (evidence / evidence_name).write_text(evidence_name, encoding="utf-8")
+            materials = assemble.stage_core_archive_materials(
+                pdfium, evidence, root / "materials"
+            )
+            self.assertEqual(tuple(materials), assemble.CORE_MATERIAL_MEMBERS)
+            for member_name in assemble.PDFIUM_LICENSE_FILES:
+                self.assertEqual(
+                    materials[f"licenses/pdfium/{member_name}"].read_bytes(),
+                    f"upstream:{member_name}".encode(),
+                )
+
+            incomplete = root / "incomplete.tar.gz"
+            with tarfile.open(incomplete, "w:gz") as archive:
+                data = b"license"
+                info = tarfile.TarInfo("LICENSE")
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+            with self.assertRaisesRegex(assemble.PortableReleaseError, "incomplete"):
+                assemble.stage_core_archive_materials(
+                    incomplete, evidence, root / "incomplete-materials"
+                )
 
     class ConcurrentRelease:
         def __init__(self, fail_build: bool = False, fail_acquire: bool = False):
@@ -215,9 +279,22 @@ class PortableReleaseTests(unittest.TestCase):
             struct.pack_into("<H", elf, 18, 62)
             binary.write_bytes(elf)
             archive = root / "into-md-linux-x86_64.zip"
-            assemble.create_core_archive(binary, archive, "into-md")
+            assemble.create_core_archive(
+                binary,
+                archive,
+                "into-md",
+                materials=core_materials(root),
+                target=self.TARGET,
+            )
             with zipfile.ZipFile(archive) as value:
-                self.assertEqual(value.namelist(), ["into-md"])
+                self.assertEqual(
+                    value.namelist(),
+                    [
+                        "into-md",
+                        *assemble.CORE_MATERIAL_MEMBERS,
+                        assemble.CORE_ARCHIVE_MANIFEST,
+                    ],
+                )
                 info = value.infolist()[0]
                 self.assertEqual(
                     (info.external_attr >> 16) & 0o177777,
@@ -243,6 +320,8 @@ class PortableReleaseTests(unittest.TestCase):
                 archive,
                 "into-md.exe",
                 (runtime, assemble.WINDOWS_PDFIUM_MEMBER),
+                core_materials(root),
+                target,
             )
             with self.assertRaisesRegex(assemble.PortableReleaseError, "pinned manifest"):
                 assemble.verify_core_archive(archive, target)
@@ -250,18 +329,28 @@ class PortableReleaseTests(unittest.TestCase):
     def test_windows_core_archive_rejects_link_typed_pdfium_member(self) -> None:
         target = "x86_64-pc-windows-msvc"
         with tempfile.TemporaryDirectory() as name:
-            archive = pathlib.Path(name) / "core.zip"
-            binary = zipfile.ZipInfo("into-md.exe", (2026, 1, 1, 0, 0, 0))
-            binary.create_system = 3
-            binary.external_attr = (stat.S_IFREG | 0o644) << 16
-            runtime = zipfile.ZipInfo(
-                assemble.WINDOWS_PDFIUM_MEMBER, (2026, 1, 1, 0, 0, 0)
+            root = pathlib.Path(name)
+            archive = root / "core.zip"
+            binary = root / "into-md.exe"
+            runtime = root / "pdfium.dll"
+            binary.write_bytes(pe_x86_64())
+            runtime.write_bytes(b"outside/pdfium.dll")
+            assemble.create_core_archive(
+                binary,
+                archive,
+                "into-md.exe",
+                (runtime, assemble.WINDOWS_PDFIUM_MEMBER),
+                core_materials(root),
+                target,
             )
-            runtime.create_system = 3
-            runtime.external_attr = (stat.S_IFLNK | 0o777) << 16
+            with zipfile.ZipFile(archive) as source:
+                entries = [(info, source.read(info)) for info in source.infolist()]
+            archive.unlink()
             with zipfile.ZipFile(archive, "w") as value:
-                value.writestr(binary, pe_x86_64())
-                value.writestr(runtime, b"outside/pdfium.dll")
+                for info, data in entries:
+                    if info.filename == assemble.WINDOWS_PDFIUM_MEMBER:
+                        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+                    value.writestr(info, data)
             with self.assertRaisesRegex(assemble.PortableReleaseError, "regular file"):
                 assemble.verify_core_archive(archive, target)
 
@@ -277,12 +366,12 @@ class PortableReleaseTests(unittest.TestCase):
         ):
             root = pathlib.Path(name)
             binary = root / "into-md.exe"
-            binary.write_bytes(
-                pe_x86_64()
-                + b"PK\x03\x04"
-                + bytes(26)
-                + assemble.WINDOWS_PDFIUM_MEMBER.encode("ascii")
-            )
+            embedded = io.BytesIO()
+            with zipfile.ZipFile(
+                embedded, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+            ) as payload:
+                payload.writestr(assemble.WINDOWS_PDFIUM_MEMBER, runtime)
+            binary.write_bytes(pe_x86_64() + embedded.getvalue())
             runtime_path = root / "pdfium.dll"
             runtime_path.write_bytes(runtime)
             archive = root / "core.zip"
@@ -291,9 +380,28 @@ class PortableReleaseTests(unittest.TestCase):
                 archive,
                 "into-md.exe",
                 (runtime_path, assemble.WINDOWS_PDFIUM_MEMBER),
+                core_materials(root),
+                target,
             )
             with self.assertRaisesRegex(assemble.PortableReleaseError, "embedded PDFium"):
                 assemble.verify_core_archive(archive, target)
+
+            archive.unlink()
+            binary.write_bytes(
+                pe_x86_64()
+                + b"PK\x03\x04"
+                + bytes(80)
+                + assemble.WINDOWS_PDFIUM_MEMBER.encode("ascii")
+            )
+            assemble.create_core_archive(
+                binary,
+                archive,
+                "into-md.exe",
+                (runtime_path, assemble.WINDOWS_PDFIUM_MEMBER),
+                core_materials(root),
+                target,
+            )
+            assemble.verify_core_archive(archive, target)
 
     def test_forbidden_speech_evidence_contract_is_complete(self) -> None:
         self.assertIn("SBOM.spdx.json", assemble.FORBIDDEN_PLUGIN_FILES)

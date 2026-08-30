@@ -33,6 +33,36 @@ PDFIUM_MANIFEST = json.loads(
     (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
 )
 WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
+CORE_ARCHIVE_MANIFEST = "archive-manifest.json"
+PDFIUM_LICENSE_FILES = (
+    "LICENSE",
+    "licenses/abseil.txt",
+    "licenses/agg23.txt",
+    "licenses/fast_float.txt",
+    "licenses/freetype.txt",
+    "licenses/icu.txt",
+    "licenses/lcms.txt",
+    "licenses/libjpeg_turbo.ijg",
+    "licenses/libjpeg_turbo.md",
+    "licenses/libopenjpeg.txt",
+    "licenses/libpng.txt",
+    "licenses/libtiff.txt",
+    "licenses/llvm-libc.txt",
+    "licenses/pdfium.txt",
+    "licenses/simdutf.txt",
+    "licenses/zlib.txt",
+)
+CORE_MATERIAL_MEMBERS = (
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SBOM.spdx.json",
+    "SOURCES.json",
+    "licenses/npm/npm-release.spdx.json",
+    "licenses/npm/lucide-ISC-MIT.txt",
+    "licenses/npm/react-MIT.txt",
+    *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
+)
 
 
 class AcceptanceError(RuntimeError):
@@ -86,6 +116,7 @@ def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, dict[str, by
         expected = [member]
         if target == "x86_64-pc-windows-msvc":
             expected.append(WINDOWS_PDFIUM_MEMBER)
+        expected.extend((*CORE_MATERIAL_MEMBERS, CORE_ARCHIVE_MANIFEST))
         if [info.filename for info in infos] != expected or any(info.is_dir() for info in infos):
             raise AcceptanceError("Core ZIP member inventory is invalid")
         info = infos[0]
@@ -107,6 +138,51 @@ def audit_archive(output: pathlib.Path, target: str) -> tuple[dict, dict[str, by
                 or sha256_bytes(runtime_data) != authority["library_sha256"]
             ):
                 raise AcceptanceError("Windows PDFium differs from the pinned manifest")
+        for material in infos[2 if target == "x86_64-pc-windows-msvc" else 1 :]:
+            if (material.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise AcceptanceError("Core license or manifest member mode is invalid")
+        if any(not contents[f"licenses/pdfium/{name}"] for name in PDFIUM_LICENSE_FILES):
+            raise AcceptanceError("Core contains an empty PDFium license member")
+        try:
+            manifest = json.loads(contents[CORE_ARCHIVE_MANIFEST])
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise AcceptanceError("Core archive manifest is invalid") from error
+        projected = manifest.get("files") if isinstance(manifest, dict) else None
+        observed = [
+            {
+                "path": item.filename,
+                "bytes": len(contents[item.filename]),
+                "sha256": sha256_bytes(contents[item.filename]),
+                "mode": f"{((item.external_attr >> 16) & 0o777):04o}",
+                "kind": (
+                    "component"
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    else "license-material"
+                    if item.filename.startswith("licenses/")
+                    else "declaration"
+                    if item.filename in {"LICENSE", "NOTICE"}
+                    else "generated"
+                    if item.filename
+                    in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                    else "project"
+                ),
+                **(
+                    {"componentId": "pdfium"}
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    or item.filename.startswith("licenses/pdfium/")
+                    else {}
+                ),
+            }
+            for item in infos[:-1]
+        ]
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"schemaVersion", "target", "files"}
+            or manifest.get("schemaVersion") != 1
+            or manifest.get("target") != target
+            or projected != observed
+        ):
+            raise AcceptanceError("Core archive differs from its bidirectional manifest")
     format_name, architecture = inspect_binary(data, target)
     if (format_name, architecture) != (expected_format, expected_arch):
         raise AcceptanceError("Core binary identity does not match the release target")
@@ -226,18 +302,23 @@ def run_e2e(
     artifact_sha: str,
     expected_version: str,
 ) -> dict:
-    with tempfile.TemporaryDirectory(prefix="into-md-native-e2e-") as name:
-        root = pathlib.Path(name)
+    temporary_parent = "/var/tmp" if target == "aarch64-apple-darwin" else None
+    with tempfile.TemporaryDirectory(
+        prefix="into-md-native-e2e-", dir=temporary_parent
+    ) as name:
+        outer = pathlib.Path(name)
+        root = outer / ("bin" if target == "x86_64-pc-windows-msvc" else "core")
+        root.mkdir()
         for relative, data in contents.items():
             path = root / pathlib.PurePosixPath(relative)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         binary = root / member
         binary.chmod(0o700)
-        home = root / "home"
-        cache = root / "cache"
-        temporary = root / "tmp"
-        work = root / "work"
+        home = outer / "home"
+        cache = outer / "cache"
+        temporary = outer / "tmp"
+        work = outer / "work"
         for directory in (home, cache, temporary, work):
             directory.mkdir(mode=0o700)
         environment = os.environ.copy()
@@ -251,6 +332,7 @@ def run_e2e(
                 "XDG_CONFIG_HOME": str(root / "config"),
                 "TMP": str(temporary),
                 "TEMP": str(temporary),
+                "TMPDIR": str(temporary),
                 "NO_PROXY": "*",
             }
         )
@@ -451,6 +533,43 @@ def run_e2e(
                 or pdfium_runtime["bytes"] != authority["library_size"]
             ):
                 raise AcceptanceError("executed PDFium runtime differs from the pinned manifest")
+        elif target == "aarch64-apple-darwin":
+            resolved_outer = outer.resolve(strict=True)
+            if not outer.as_posix().startswith("/var/") or not resolved_outer.as_posix().startswith(
+                "/private/var/"
+            ):
+                raise AcceptanceError("macOS acceptance did not traverse the trusted /var alias")
+            unsafe_cache = outer / "unsafe-cache"
+            unsafe_cache.mkdir()
+            os.symlink(unsafe_cache, home / "Library", target_is_directory=True)
+            pdf_result = work / "structures.md"
+            pdf_case, _ = run_case(
+                "real-pdf-macos-var-fallback",
+                binary,
+                [
+                    str(PDF_FIXTURE),
+                    "-o",
+                    str(pdf_result),
+                    "--conflict",
+                    "error",
+                    "--no-config",
+                    "--progress",
+                    "never",
+                ],
+                work,
+                environment,
+            )
+            cases.append(pdf_case)
+            if not pdf_result.is_file() or not pdf_result.read_bytes():
+                raise AcceptanceError("macOS /var fallback PDF output is missing or empty")
+            assert_runtime_absent(cache, home, temporary, "macOS /var fallback cleanup")
+            authority = PDFIUM_MANIFEST["targets"][target]
+            pdfium_runtime = {
+                "version": PDFIUM_MANIFEST["version"],
+                "sha256": authority["library_sha256"],
+                "bytes": authority["library_size"],
+                "materialization": "canonical-var-fallback",
+            }
         return {
             "schemaVersion": 1,
             "target": target,

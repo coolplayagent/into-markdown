@@ -30,6 +30,36 @@ REPOSITORY = "coolplayagent/into-markdown"
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WINDOWS_PDFIUM_MEMBER = "lib/pdfium/pdfium.dll"
 WINDOWS_SKILL_PDFIUM = f"into-markdown/assets/windows-x86_64/{WINDOWS_PDFIUM_MEMBER}"
+CORE_ARCHIVE_MANIFEST = "archive-manifest.json"
+PDFIUM_LICENSE_FILES = (
+    "LICENSE",
+    "licenses/abseil.txt",
+    "licenses/agg23.txt",
+    "licenses/fast_float.txt",
+    "licenses/freetype.txt",
+    "licenses/icu.txt",
+    "licenses/lcms.txt",
+    "licenses/libjpeg_turbo.ijg",
+    "licenses/libjpeg_turbo.md",
+    "licenses/libopenjpeg.txt",
+    "licenses/libpng.txt",
+    "licenses/libtiff.txt",
+    "licenses/llvm-libc.txt",
+    "licenses/pdfium.txt",
+    "licenses/simdutf.txt",
+    "licenses/zlib.txt",
+)
+CORE_MATERIAL_MEMBERS = (
+    "LICENSE",
+    "NOTICE",
+    "THIRD_PARTY_NOTICES.md",
+    "SBOM.spdx.json",
+    "SOURCES.json",
+    "licenses/npm/npm-release.spdx.json",
+    "licenses/npm/lucide-ISC-MIT.txt",
+    "licenses/npm/react-MIT.txt",
+    *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
+)
 WINDOWS_PDFIUM_AUTHORITY = json.loads(
     (ROOT / "third_party/pdfium/manifest.json").read_text(encoding="utf-8")
 )["targets"]["x86_64-pc-windows-msvc"]
@@ -50,6 +80,49 @@ TARGETS = {
     },
 }
 SKILL_ARCHIVE = "into-markdown-skill.zip"
+SKILL_MANIFEST = "into-markdown/archive-manifest.json"
+SKILL_DIRECTORIES = (
+    "into-markdown/",
+    "into-markdown/agents/",
+    "into-markdown/assets/",
+    "into-markdown/assets/linux-arm64/",
+    "into-markdown/assets/linux-x86_64/",
+    "into-markdown/assets/windows-x86_64/",
+    "into-markdown/assets/windows-x86_64/lib/",
+    "into-markdown/assets/windows-x86_64/lib/pdfium/",
+    "into-markdown/licenses/",
+    "into-markdown/licenses/npm/",
+    "into-markdown/licenses/pdfium/",
+    "into-markdown/licenses/pdfium/licenses/",
+    "into-markdown/references/",
+)
+SKILL_FILES = (
+    "into-markdown/LICENSE",
+    "into-markdown/NOTICE",
+    "into-markdown/SBOM.spdx.json",
+    "into-markdown/SKILL.md",
+    "into-markdown/SOURCES.json",
+    "into-markdown/THIRD_PARTY_NOTICES.md",
+    "into-markdown/agents/openai.yaml",
+    "into-markdown/assets/linux-arm64/into-md",
+    "into-markdown/assets/linux-x86_64/into-md",
+    "into-markdown/assets/windows-x86_64/into-md.exe",
+    WINDOWS_SKILL_PDFIUM,
+    *(
+        f"into-markdown/{member}"
+        for member in CORE_MATERIAL_MEMBERS
+        if member
+        not in {
+            "LICENSE",
+            "NOTICE",
+            "THIRD_PARTY_NOTICES.md",
+            "SBOM.spdx.json",
+            "SOURCES.json",
+        }
+    ),
+    "into-markdown/references/cli-workflows.md",
+    SKILL_MANIFEST,
+)
 MAX_CAPTURE_BYTES = 64 * 1024
 
 
@@ -147,6 +220,7 @@ def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathl
     with zipfile.ZipFile(archive_path) as archive:
         infos = archive.infolist()
         wanted = [expected, *([WINDOWS_PDFIUM_MEMBER] if platform == "windows" else [])]
+        wanted.extend((*CORE_MATERIAL_MEMBERS, CORE_ARCHIVE_MANIFEST))
         if [info.filename for info in infos] != wanted or any(info.is_dir() for info in infos):
             raise E2EError(f"{archive_path.name} must contain exactly {', '.join(wanted)}")
         info = infos[0]
@@ -155,18 +229,63 @@ def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathl
         if mode != wanted:
             raise E2EError(f"{archive_path.name} has an invalid member mode")
         data = archive.read(info)
+        contents = {item.filename: archive.read(item) for item in infos}
         runtime_data = None
         if platform == "windows":
             runtime = infos[1]
             if (runtime.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
                 raise E2EError(f"{archive_path.name} has an invalid PDFium member mode")
-            runtime_data = archive.read(runtime)
+            runtime_data = contents[WINDOWS_PDFIUM_MEMBER]
             if (
                 len(runtime_data) != WINDOWS_PDFIUM_AUTHORITY["library_size"]
                 or hashlib.sha256(runtime_data).hexdigest()
                 != WINDOWS_PDFIUM_AUTHORITY["library_sha256"]
             ):
                 raise E2EError(f"{archive_path.name} PDFium differs from the pinned manifest")
+        for material in infos[2 if platform == "windows" else 1 :]:
+            if (material.external_attr >> 16) & 0o177777 != stat.S_IFREG | 0o644:
+                raise E2EError(f"{archive_path.name} has an invalid license member mode")
+        if any(not contents[f"licenses/pdfium/{name}"] for name in PDFIUM_LICENSE_FILES):
+            raise E2EError(f"{archive_path.name} has an empty PDFium license member")
+        try:
+            manifest = json.loads(contents[CORE_ARCHIVE_MANIFEST])
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise E2EError(f"{archive_path.name} manifest is invalid") from error
+        observed = [
+            {
+                "path": item.filename,
+                "bytes": len(contents[item.filename]),
+                "sha256": hashlib.sha256(contents[item.filename]).hexdigest(),
+                "mode": f"{((item.external_attr >> 16) & 0o777):04o}",
+                "kind": (
+                    "component"
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    else "license-material"
+                    if item.filename.startswith("licenses/")
+                    else "declaration"
+                    if item.filename in {"LICENSE", "NOTICE"}
+                    else "generated"
+                    if item.filename
+                    in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                    else "project"
+                ),
+                **(
+                    {"componentId": "pdfium"}
+                    if item.filename == WINDOWS_PDFIUM_MEMBER
+                    or item.filename.startswith("licenses/pdfium/")
+                    else {}
+                ),
+            }
+            for item in infos[:-1]
+        ]
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest) != {"schemaVersion", "target", "files"}
+            or manifest.get("schemaVersion") != 1
+            or manifest.get("target") != TARGETS[platform]["target"]
+            or manifest.get("files") != observed
+        ):
+            raise E2EError(f"{archive_path.name} differs from its bidirectional manifest")
     identity = inspect_core(data, platform)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(data)
@@ -196,17 +315,90 @@ def extract_single_core(archive_path: pathlib.Path, platform: str, output: pathl
 def extract_skill_binary(archive_path: pathlib.Path, platform: str, output: pathlib.Path) -> dict:
     wanted = TARGETS[platform]["skill"]
     with zipfile.ZipFile(archive_path) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)) or wanted not in names:
-            raise E2EError(f"Skill does not contain {wanted} exactly once")
+        infos = archive.infolist()
+        names = [info.filename for info in infos]
+        expected_names = ["into-markdown/", *sorted(set(SKILL_DIRECTORIES[1:]) | set(SKILL_FILES))]
+        if names != expected_names or len(names) != len(set(names)):
+            raise E2EError("Skill does not contain the exact reviewed archive inventory")
+        contents = {info.filename: archive.read(info) for info in infos if not info.is_dir()}
+        for info in infos:
+            mode = (info.external_attr >> 16) & 0o177777
+            if info.is_dir():
+                if mode != stat.S_IFDIR | 0o755 or archive.read(info):
+                    raise E2EError("Skill contains invalid directory metadata")
+            elif mode != stat.S_IFREG | (
+                0o755
+                if info.filename
+                in {
+                    "into-markdown/assets/linux-arm64/into-md",
+                    "into-markdown/assets/linux-x86_64/into-md",
+                }
+                else 0o644
+            ):
+                raise E2EError("Skill contains invalid file metadata")
+        if contents["into-markdown/LICENSE"] != (ROOT / "LICENSE").read_bytes():
+            raise E2EError("Skill project LICENSE differs from the repository authority")
+        for relative, authority in (
+            (
+                "licenses/npm/npm-release.spdx.json",
+                ROOT / "third_party/licenses/npm-release.spdx.json",
+            ),
+            (
+                "licenses/npm/lucide-ISC-MIT.txt",
+                ROOT / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+            ),
+            (
+                "licenses/npm/react-MIT.txt",
+                ROOT / "third_party/licenses/npm/react-MIT.txt",
+            ),
+        ):
+            if contents[f"into-markdown/{relative}"] != authority.read_bytes():
+                raise E2EError(f"Skill {relative} differs from the repository authority")
+        if any(
+            not contents[f"into-markdown/licenses/pdfium/{name}"]
+            for name in PDFIUM_LICENSE_FILES
+        ):
+            raise E2EError("Skill has an empty PDFium license member")
+        observed = []
+        for info in infos:
+            if info.is_dir() or info.filename == SKILL_MANIFEST:
+                continue
+            relative = info.filename.removeprefix("into-markdown/")
+            member_data = contents[info.filename]
+            record = {
+                "path": relative,
+                "bytes": len(member_data),
+                "sha256": hashlib.sha256(member_data).hexdigest(),
+                "mode": f"{((info.external_attr >> 16) & 0o7777):04o}",
+                "kind": (
+                    "component"
+                    if info.filename == WINDOWS_SKILL_PDFIUM
+                    else "license-material"
+                    if relative.startswith("licenses/")
+                    else "generated"
+                    if relative in {"THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json"}
+                    else "declaration"
+                    if relative in {"LICENSE", "NOTICE"}
+                    else "executable"
+                    if relative.startswith("assets/")
+                    else "skill-source"
+                ),
+            }
+            if info.filename == WINDOWS_SKILL_PDFIUM or relative.startswith("licenses/pdfium/"):
+                record["componentId"] = "pdfium"
+            observed.append(record)
+        try:
+            manifest = json.loads(contents[SKILL_MANIFEST])
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise E2EError("Skill archive manifest is invalid") from error
+        if manifest != {"schemaVersion": 1, "files": observed}:
+            raise E2EError("Skill differs from its bidirectional manifest")
         info = archive.getinfo(wanted)
         if info.is_dir():
             raise E2EError("Skill Core asset is a directory")
         data = archive.read(info)
         runtime_data = None
         if platform == "windows":
-            if WINDOWS_SKILL_PDFIUM not in names:
-                raise E2EError(f"Skill does not contain {WINDOWS_SKILL_PDFIUM} exactly once")
             runtime = archive.getinfo(WINDOWS_SKILL_PDFIUM)
             if (
                 runtime.is_dir()

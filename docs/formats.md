@@ -107,7 +107,9 @@ PDF 使用审核并固定版本的 PDFium 动态库。Windows portable Core 与 
 旁的 `lib/pdfium/pdfium.dll` 携带 manifest 固定运行时，CLI 默认只从该发布布局发现它；不会从
 当前目录、系统库、`PATH` 或动态加载器环境回退，也不下载运行时。库调用方仍可通过跨平台
 runtime resolver，或以 `PDFIUM_LIBRARY` / `PdfConverter::with_runtime_path` 给出精确绝对路径；
-缺失或认证失败稳定返回 `componentUnavailable`。
+缺失或认证失败稳定返回 `componentUnavailable`。即使解压目录恰名 `bin`/`BIN`，也先认证可执行文件
+同级的 portable 布局；只有该候选不存在时才检查上一级安装布局，两个候选同时存在时 portable
+候选确定性优先。
 
 每页先产生一个 `Block::Page`。字符按 PDFium 原生 character index 忠实进入
 `Inline::SourceText`，携带 index、Unicode scalar（不可映射、surrogate、NUL 与禁用控制字符

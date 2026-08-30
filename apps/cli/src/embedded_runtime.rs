@@ -352,7 +352,7 @@ fn materialize_at(base: &Path, payload: Payload) -> Result<PathBuf, String> {
         lock.write().map_err(|error| format!("lock {} runtime: {error}", payload.label))?;
     let destination = base.join(payload.archive_sha256);
     match verify_tree(&destination, payload) {
-        Ok(()) => return Ok(destination),
+        Ok(()) => return authenticated_canonical_runtime(&destination, payload),
         Err(TreeState::Unsafe(detail)) => return Err(detail),
         Err(TreeState::MissingOrCorrupt) => {}
     }
@@ -400,7 +400,21 @@ fn materialize_at(base: &Path, payload: Payload) -> Result<PathBuf, String> {
         }
         TreeState::Unsafe(detail) => detail,
     })?;
-    Ok(destination)
+    authenticated_canonical_runtime(&destination, payload)
+}
+
+fn authenticated_canonical_runtime(path: &Path, payload: Payload) -> Result<PathBuf, String> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!("canonicalize authenticated {} runtime: {error}", payload.label)
+    })?;
+    reject_existing_ancestor_links(&canonical)?;
+    verify_tree(&canonical, payload).map_err(|state| match state {
+        TreeState::MissingOrCorrupt => {
+            format!("canonical {} runtime failed verification", payload.label)
+        }
+        TreeState::Unsafe(detail) => detail,
+    })?;
+    Ok(canonical)
 }
 
 fn remove_stale_staging_directories(base: &Path, archive_sha256: &str) -> Result<(), String> {
@@ -902,6 +916,7 @@ mod tests {
         let first = materialize_at(&base, payload).unwrap();
         let second = materialize_at(&base, payload).unwrap();
         assert_eq!(first, second);
+        assert_eq!(first, fs::canonicalize(&first).unwrap());
         fs::write(first.join("models/model"), b"bad").unwrap();
         let repaired = materialize_at(&base, payload).unwrap();
         assert_eq!(fs::read(repaired.join("models/model")).unwrap(), b"model");

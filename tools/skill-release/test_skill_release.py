@@ -17,8 +17,11 @@ import skill_release_main
 
 from skill_release import (
     ALLOWED_FILES,
+    ARCHIVE_MANIFEST,
     ASSET_SPECS,
+    CORE_MATERIAL_RELATIVES,
     FIXED_TIMESTAMP,
+    ROOT,
     SKILL_NAME,
     SKILL_SOURCE,
     WINDOWS_PDFIUM_RELATIVE,
@@ -59,6 +62,20 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
     pdfium.write_bytes(b"test-pdfium")
     linux_x86_64.write_bytes(elf(62, b"linux-x86_64"))
     linux_arm64.write_bytes(elf(183, b"linux-arm64"))
+    (root / "LICENSE").write_bytes((ROOT / "LICENSE").read_bytes())
+    static_materials = {
+        pathlib.PurePosixPath("licenses/npm/npm-release.spdx.json"): ROOT
+        / "third_party/licenses/npm-release.spdx.json",
+        pathlib.PurePosixPath("licenses/npm/lucide-ISC-MIT.txt"): ROOT
+        / "third_party/licenses/npm/lucide-ISC-MIT.txt",
+        pathlib.PurePosixPath("licenses/npm/react-MIT.txt"): ROOT
+        / "third_party/licenses/npm/react-MIT.txt",
+    }
+    for relative in CORE_MATERIAL_RELATIVES:
+        path = root / pathlib.Path(relative.as_posix())
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = static_materials.get(relative)
+        path.write_bytes(source.read_bytes() if source else f"material:{relative}".encode())
     return core_inputs(windows, pdfium, linux_x86_64, linux_arm64)
 
 
@@ -139,6 +156,13 @@ class SkillReleaseTests(unittest.TestCase):
                 self.assertEqual(
                     archive.read(runtime), cores[WINDOWS_PDFIUM_RELATIVE].read_bytes()
                 )
+                manifest = archive.getinfo(f"{SKILL_NAME}/{ARCHIVE_MANIFEST.as_posix()}")
+                self.assertIn(b'"schemaVersion": 1', archive.read(manifest))
+                for relative in CORE_MATERIAL_RELATIVES:
+                    self.assertEqual(
+                        archive.read(f"{SKILL_NAME}/{relative.as_posix()}"),
+                        cores[relative].read_bytes(),
+                    )
 
     def test_verify_is_standalone_and_rejects_sidecars_or_extra_entries(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -181,6 +205,20 @@ class SkillReleaseTests(unittest.TestCase):
             rewrite_entry(valid, root / "wrong-mode.zip", x86_name, mode=0o644)
             with self.assertRaisesRegex(SkillReleaseError, "permissions are invalid"):
                 verify_release(root / "wrong-mode.zip")
+
+    def test_release_materials_are_exact_and_manifest_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            valid = create_archive(root / "valid.zip", write_cores(root))
+            notice = f"{SKILL_NAME}/NOTICE"
+            rewrite_entry(valid, root / "tampered.zip", notice, contents=b"tampered")
+            with self.assertRaisesRegex(SkillReleaseError, "bidirectional projection"):
+                verify_release(root / "tampered.zip")
+
+            cores = write_cores(root)
+            cores.pop(pathlib.PurePosixPath("licenses/pdfium/licenses/zlib.txt"))
+            with self.assertRaisesRegex(SkillReleaseError, "exact release materials"):
+                create_archive(root / "missing.zip", cores)
 
     def test_materialized_canonical_copy_remains_instruction_only(self) -> None:
         with tempfile.TemporaryDirectory() as name:

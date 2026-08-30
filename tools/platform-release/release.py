@@ -340,16 +340,17 @@ def build_embedded_core(
     pdfium_root: pathlib.Path,
     ocr_root: pathlib.Path,
 ) -> pathlib.Path:
-    """Build the final CLI once with target-native PDF and OCR payloads embedded."""
+    """Build the final CLI with OCR embedded and non-Windows PDFium embedded."""
     environment = os.environ.copy()
     environment.update(
         {
             "CARGO_INCREMENTAL": "0",
             "CARGO_TARGET_DIR": str(output),
-            "INTO_MD_EMBEDDED_PDFIUM_ROOT": str(pdfium_root.resolve()),
             "INTO_MD_EMBEDDED_OCR_ROOT": str(ocr_root.resolve()),
         }
     )
+    if target != "x86_64-pc-windows-msvc":
+        environment["INTO_MD_EMBEDDED_PDFIUM_ROOT"] = str(pdfium_root.resolve())
     # Keep every Cargo/CMake invocation in the release authority on the same
     # portable CPU policy, including clean rebuilds.
     environment.update(portable_cpu_environment(target))

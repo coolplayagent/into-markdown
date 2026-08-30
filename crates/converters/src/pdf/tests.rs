@@ -74,6 +74,37 @@ fn direct_run_archive_resolves_only_its_own_physical_pdfium() {
     fs::remove_file(unrelated).unwrap();
 }
 
+#[test]
+fn portable_bin_directory_precedes_the_installed_layout_without_case_sensitivity() {
+    for directory_name in ["bin", "BIN"] {
+        let temporary = TemporaryDirectory::new();
+        let root = temporary.path();
+        let executable_directory = root.join(directory_name);
+        let executable =
+            executable_directory.join(if cfg!(windows) { "into-md.exe" } else { "into-md" });
+        fs::create_dir(&executable_directory).unwrap();
+        fs::write(&executable, b"binary").unwrap();
+        #[cfg(target_os = "macos")]
+        let relative = Path::new("lib/pdfium/libpdfium.dylib");
+        #[cfg(target_os = "linux")]
+        let relative = Path::new("lib/pdfium/libpdfium.so");
+        #[cfg(target_os = "windows")]
+        let relative = Path::new("lib/pdfium/pdfium.dll");
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        return;
+        let portable = executable_directory.join(relative);
+        let installed = root.join(relative);
+        fs::create_dir_all(portable.parent().unwrap()).unwrap();
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&portable, b"portable").unwrap();
+        fs::write(&installed, b"installed").unwrap();
+        assert_eq!(packaged_pdfium_path(&executable), Some(portable.canonicalize().unwrap()));
+
+        fs::remove_file(&portable).unwrap();
+        assert_eq!(packaged_pdfium_path(&executable), Some(installed.canonicalize().unwrap()));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn packaged_pdfium_rejects_linked_runtime_directories() {
@@ -95,6 +126,10 @@ fn packaged_pdfium_rejects_linked_runtime_directories() {
     fs::remove_dir(root.join("lib/pdfium")).unwrap();
     symlink(&outside, root.join("lib/pdfium")).unwrap();
     assert_eq!(packaged_pdfium_path(&executable), None);
+
+    let linked_root = root.join("linked-root");
+    symlink(root, &linked_root).unwrap();
+    assert_eq!(packaged_pdfium_path(&linked_root.join("into-md")), None);
 }
 
 #[cfg(windows)]
@@ -118,6 +153,10 @@ fn packaged_pdfium_rejects_reparse_point_runtime_directories() {
     fs::remove_dir(&linked).unwrap();
     symlink_dir(&outside, &linked).unwrap();
     assert_eq!(packaged_pdfium_path(&executable), None);
+
+    let linked_root = root.join("linked-root");
+    symlink_dir(root, &linked_root).unwrap();
+    assert_eq!(packaged_pdfium_path(&linked_root.join("into-md.exe")), None);
 }
 
 #[test]

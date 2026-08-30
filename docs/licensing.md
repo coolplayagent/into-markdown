@@ -124,9 +124,12 @@ validator 与 release audit 双向拒绝。
 
 PDFium `153.0.7999.0` 已按四个平台固定并审查，仍是不会进入普通构建的 `manual` 输入。
 Windows portable Core 与 Agent Skill 将固定的 `pdfium.dll` 作为独立归档 member 分发；Windows
-可执行文件只嵌入 OCR，不再重复嵌入 PDFium。release evidence 保留取得的原始 PDFium 归档并将
-PDFium 投影为分发组件，以覆盖其中的 `LICENSE` 与完整 `licenses/` 第三方声明；显式联网制品
-审计见 `tools/pdfium-audit.sh`。
+可执行文件只嵌入 OCR，不再重复嵌入 PDFium。每个 Core ZIP 和 Agent Skill ZIP 都直接携带项目
+`LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`、目标 SBOM、`SOURCES.json`、根
+`//:release_license_files` 中的 npm 许可材料，以及对应 PDFium 原始包的 `LICENSE` 与完整
+`licenses/`。归档内 manifest 对这些真实成员的路径、大小、模式和 SHA-256 做精确双向投影；独立
+复制 Core 或 Skill 时不依赖 audit 下载才能履行声明义务。显式联网制品审计见
+`tools/pdfium-audit.sh`。
 
 Office 97–2003 解析器为仓库自有 Rust 实现并内置 Core，不下载、链接或分发外部办公套件，
 因此没有单独的 runtime、许可组件或发布投影。其仓库原创 corpus 的来源、许可和 SHA-256
@@ -142,7 +145,8 @@ FFmpeg 还必须由可复现配置检查证明只启用 LGPL-compatible 组件�
 控制台进入归档时，还必须从 `//:release_license_files` 复制 React 系列完整 MIT 文本与
 `npm-release.spdx.json`；SBOM 是发布物的一部分，不是仅供 CI 使用的中间文件。
 统一 `release-projection` 对 Core 与两个能力插件分别生成 SPDX 2.3、`SOURCES.json` 和第三方
-声明，并对 Core 归档清单、最终解包成员以及插件签名/runtime inventory 做双向逐文件检查。
+声明，并对 Core、Agent Skill 的归档清单、最终解包成员以及插件签名/runtime inventory 做双向
+逐文件检查。
 最终构件（signed 模式在签名、公证或 stapling 后，unsigned 模式在可安装归档完成后）再生成
 artifact sidecar；四个平台的聚合 release set
 明确区分仅 Core 与 Core 加两个插件的完整离线集合。

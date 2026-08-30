@@ -340,7 +340,7 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     environment: release
-    timeout-minutes: 5
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -372,6 +372,16 @@ jobs:
           test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f -name 'into-md-*.zip' | wc -l)" -eq 4
           test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f -name 'official.media.whisper-*.imp' | wc -l)" -eq 4
           test -f "$RUNNER_TEMP/publish/into-markdown-skill.zip"
+      - name: Run published Linux Core and Skill black-box E2E
+        run: |
+          python tools/portable-release/post_release_e2e.py \
+            --platform linux \
+            --assets-dir "$RUNNER_TEMP/publish" \
+            --fixtures fixtures \
+            --work-root "$RUNNER_TEMP/post-release-e2e" \
+            --report "$RUNNER_TEMP/post-release-e2e.json" \
+            --version "${{ inputs.release_tag }}" \
+            --tag "${{ inputs.release_tag }}"
       - name: Build one audit download
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}

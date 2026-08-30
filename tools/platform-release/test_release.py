@@ -201,7 +201,7 @@ class PlatformReleaseTests(unittest.TestCase):
             self.assertNotIn(forbidden, workflow)
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", workflow)
         self.assertEqual(workflow.count("timeout_minutes: 30"), 4)
-        self.assertEqual(workflow.count("    timeout-minutes: 5"), 1)
+        self.assertEqual(workflow.count("    timeout-minutes: 20"), 1)
         windows = workflow.index("target: x86_64-pc-windows-msvc")
         self.assertIn("timeout_minutes: 30", workflow[windows : windows + 100])
         self.assertIn("INTO_MD_RELEASE_STREAM_LOGS: '1'", workflow)
@@ -270,6 +270,13 @@ class PlatformReleaseTests(unittest.TestCase):
         )
         self.assertIn("tools/portable-release/assemble.py verify", workflow)
         self.assertIn("tools/portable-release/native_acceptance.py", workflow)
+        self.assertIn("tools/portable-release/post_release_e2e.py", workflow)
+        self.assertIn("--assets-dir \"$RUNNER_TEMP/publish\"", workflow)
+        post_release = (
+            ROOT / "tools/portable-release/post_release_e2e.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('skill_runner.call("skill-version-empty-path"', post_release)
+        self.assertIn('"skill-pdf-empty-path"', post_release)
         self.assertIn("native-audit.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertIn("e2e.json", (ROOT / "tools/portable-release/native_acceptance.py").read_text(encoding="utf-8"))
         self.assertNotIn("portable-launcher", workflow)
