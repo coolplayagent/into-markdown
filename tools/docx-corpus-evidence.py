@@ -82,6 +82,11 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--manifest", type=pathlib.Path, required=True)
     parser.add_argument("--write-manifest", action="store_true")
     parser.add_argument("--baseline-probe", type=pathlib.Path)
+    parser.add_argument(
+        "--baseline-report",
+        type=pathlib.Path,
+        help="reuse the baseline section from a verified earlier paired report",
+    )
     parser.add_argument("--candidate-probe", type=pathlib.Path)
     parser.add_argument("--report", type=pathlib.Path)
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
@@ -558,28 +563,36 @@ def run_probe(
     for item in manifest["items"]:
         source = root / item["path"]
         measured = [observe(probe, source, timeout) for _ in range(iterations)]
-        exit_codes = {run.returncode for run in measured}
-        payload_signatures = {
-            json.dumps(run.payload, sort_keys=True, separators=(",", ":")) for run in measured
-        }
-        if len(exit_codes) != 1 or len(payload_signatures) != 1:
-            raise RuntimeError(f"probe is not deterministic: {item['path']}")
-        elapsed = [run.elapsed_ms for run in measured]
-        peaks = [run.peak_rss_bytes for run in measured if run.peak_rss_bytes is not None]
-        selected = measured[0]
-        observations.append(
-            {
-                "path": item["path"],
-                "classification": item["classification"]["category"],
-                "runs": iterations,
-                "elapsedMillis": round(statistics.median(elapsed), 3),
-                "runElapsedMillis": [round(value, 3) for value in elapsed],
-                "peakRssBytes": max(peaks) if peaks else None,
-                "exitCode": selected.returncode,
-                "probe": selected.payload,
-                "stderrSha256": sorted({run.stderr_sha256 for run in measured}),
-            }
-        )
+        observations.append(observation_item(item, measured, iterations))
+    return summarize_probe(probe, observations)
+
+
+def observation_item(
+    item: dict[str, Any], measured: list[Observation], iterations: int
+) -> dict[str, Any]:
+    exit_codes = {run.returncode for run in measured}
+    payload_signatures = {
+        json.dumps(run.payload, sort_keys=True, separators=(",", ":")) for run in measured
+    }
+    if len(exit_codes) != 1 or len(payload_signatures) != 1:
+        raise RuntimeError(f"probe is not deterministic: {item['path']}")
+    elapsed = [run.elapsed_ms for run in measured]
+    peaks = [run.peak_rss_bytes for run in measured if run.peak_rss_bytes is not None]
+    selected = measured[0]
+    return {
+        "path": item["path"],
+        "classification": item["classification"]["category"],
+        "runs": iterations,
+        "elapsedMillis": round(statistics.median(elapsed), 3),
+        "runElapsedMillis": [round(value, 3) for value in elapsed],
+        "peakRssBytes": max(peaks) if peaks else None,
+        "exitCode": selected.returncode,
+        "probe": selected.payload,
+        "stderrSha256": sorted({run.stderr_sha256 for run in measured}),
+    }
+
+
+def summarize_probe(probe: pathlib.Path, observations: list[dict[str, Any]]) -> dict[str, Any]:
     successes = [item for item in observations if item["exitCode"] == 0]
     elapsed = [item["elapsedMillis"] for item in successes]
     return {
@@ -598,6 +611,35 @@ def run_probe(
             ),
         },
     }
+
+
+def run_paired_probes(
+    baseline_probe: pathlib.Path,
+    candidate_probe: pathlib.Path,
+    root: pathlib.Path,
+    manifest: dict[str, Any],
+    timeout: float,
+    iterations: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    baseline_items = []
+    candidate_items = []
+    for item in manifest["items"]:
+        source = root / item["path"]
+        baseline_runs = []
+        candidate_runs = []
+        for iteration in range(iterations):
+            if iteration % 2 == 0:
+                baseline_runs.append(observe(baseline_probe, source, timeout))
+                candidate_runs.append(observe(candidate_probe, source, timeout))
+            else:
+                candidate_runs.append(observe(candidate_probe, source, timeout))
+                baseline_runs.append(observe(baseline_probe, source, timeout))
+        baseline_items.append(observation_item(item, baseline_runs, iterations))
+        candidate_items.append(observation_item(item, candidate_runs, iterations))
+    return (
+        summarize_probe(baseline_probe, baseline_items),
+        summarize_probe(candidate_probe, candidate_items),
+    )
 
 
 def comparison(baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
@@ -637,20 +679,40 @@ def main() -> int:
     if args.write_manifest:
         write_manifest(root, manifest_path)
     manifest = load_manifest(root, manifest_path)
-    if not args.baseline_probe:
+    if args.baseline_probe and args.baseline_report:
+        raise SystemExit("--baseline-probe and --baseline-report are mutually exclusive")
+    if not args.baseline_probe and not args.baseline_report:
         return 0
     if not args.report:
         raise SystemExit("--report is required when a probe is supplied")
-    baseline = run_probe(
-        args.baseline_probe.resolve(strict=True),
-        root,
-        manifest,
-        args.timeout_seconds,
-        args.iterations,
-    )
-    candidate = None
+    paired_candidate = None
+    if args.baseline_probe and args.candidate_probe:
+        baseline, paired_candidate = run_paired_probes(
+            args.baseline_probe.resolve(strict=True),
+            args.candidate_probe.resolve(strict=True),
+            root,
+            manifest,
+            args.timeout_seconds,
+            args.iterations,
+        )
+    elif args.baseline_report:
+        previous = json.loads(args.baseline_report.resolve(strict=True).read_text(encoding="utf-8"))
+        if previous.get("manifestSha256") != sha256(manifest_path):
+            raise SystemExit("baseline report manifest authority differs")
+        baseline = previous.get("baseline")
+        if not isinstance(baseline, dict) or len(baseline.get("items", [])) != CORPUS_SIZE:
+            raise SystemExit("baseline report does not contain a complete baseline")
+    else:
+        baseline = run_probe(
+            args.baseline_probe.resolve(strict=True),
+            root,
+            manifest,
+            args.timeout_seconds,
+            args.iterations,
+        )
+    candidate = paired_candidate
     compared = None
-    if args.candidate_probe:
+    if args.candidate_probe and candidate is None:
         candidate = run_probe(
             args.candidate_probe.resolve(strict=True),
             root,
@@ -658,6 +720,7 @@ def main() -> int:
             args.timeout_seconds,
             args.iterations,
         )
+    if candidate is not None:
         compared = comparison(baseline, candidate)
     report = {
         "schemaVersion": SCHEMA_VERSION,

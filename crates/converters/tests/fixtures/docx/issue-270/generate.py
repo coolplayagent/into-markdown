@@ -87,7 +87,7 @@ def alt_fixture(name: str, target: str, media_type: str, payload: bytes) -> None
 
 
 def main() -> None:
-    alt_fixture("html.docx", "word/chunk.html", "text/html", b"<html><body><h2>HTML heading</h2><p>HTML visible</p></body></html>")
+    alt_fixture("html.docx", "word/chunk.html", "text/html", b"<html><body><script>script-hidden</script><h2>HTML heading</h2><p>HTML visible</p></body></html>")
     alt_fixture("xhtml.docx", "word/chunk.xhtml", "application/xhtml+xml", b'<html xmlns="http://www.w3.org/1999/xhtml"><body><p>XHTML visible</p></body></html>')
     alt_fixture("rtf.docx", "word/chunk.rtf", "application/rtf", br"{\rtf1\ansi RTF visible}")
     mhtml = b'MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="safe"\r\n\r\n--safe\r\nContent-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: quoted-printable\r\n\r\n<html><body><p>MHTML=20visible</p></body></html>\r\n--safe--\r\n'
@@ -119,6 +119,44 @@ def main() -> None:
     package("depth-limit.docx", document(deep), {}, stored=True)
     empty = document("")
     package("empty.docx", empty, {})
+    wrappers_body = (
+        paragraph("wrapper-before")
+        + f'<w:sdt><w:sdtContent>{paragraph("content-control")}</w:sdtContent></w:sdt>'
+        + f'<w:customXml>{paragraph("custom-xml-wrapper")}</w:customXml>'
+        + '<mc:AlternateContent><mc:Choice Requires="unsupported">'
+        + paragraph("choice-hidden")
+        + '</mc:Choice><mc:Fallback>'
+        + paragraph("compatibility-fallback")
+        + '</mc:Fallback></mc:AlternateContent>'
+        + '<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>field-result</w:t></w:r></w:fldSimple></w:p>'
+        + '<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>'
+        + paragraph("textbox-visible")
+        + '</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
+        + '<w:sectPr><w:headerReference r:id="header"/><w:footerReference r:id="footer"/></w:sectPr>'
+        + paragraph("wrapper-after")
+    )
+    wrappers_rels = (
+        f'<Relationship Id="header" Type="{REL}/header" Target="header1.xml"/>'
+        f'<Relationship Id="footer" Type="{REL}/footer" Target="footer1.xml"/>'
+    )
+    package(
+        "wrappers.docx",
+        document(
+            wrappers_body,
+            f'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:unsupported="urn:unsupported" xmlns:v="urn:schemas-microsoft-com:vml"',
+        ),
+        {
+            "word/header1.xml": (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+                f'<w:hdr xmlns:w="{WORD}">{paragraph("header-visible")}</w:hdr>'.encode(),
+            ),
+            "word/footer1.xml": (
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+                f'<w:ftr xmlns:w="{WORD}">{paragraph("footer-visible")}</w:ftr>'.encode(),
+            ),
+        },
+        wrappers_rels,
+    )
     table = (
         "<w:tbl><w:tr><w:tc><w:tcPr><w:vMerge w:val=\"restart\"/></w:tcPr>"
         + paragraph("outer-a")
@@ -201,6 +239,7 @@ def main() -> None:
         "entity.docx": "DTD and external entity must fail closed",
         "depth-limit.docx": "default XML nesting hard limit",
         "empty.docx": "verifiably empty Word body",
+        "wrappers.docx": "content controls, compatibility fallback, fields, text boxes, headers and footers",
         "ordered-nested-merged.docx": "body/table/nested-table/merge/altChunk order",
         "duplicate-content-assets.docx": "repeated text and equal nested payloads remain ordered",
     }

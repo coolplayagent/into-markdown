@@ -37,10 +37,10 @@
       "sha256": "652c0ced898db53491a1f83cb00d76531ad1ded828a677e4cabba7a1f945de43"
     },
     {
-      "bytes": 1259,
+      "bytes": 1280,
       "path": "html.docx",
       "scenario": "internal HTML altChunk in body order",
-      "sha256": "804f94c34b7e9375c31545e486188f70bb6a1bde38ec511f3f357cbd62e09611"
+      "sha256": "60bbaca4d6205acdaa72fc04a21f365dee29f0aa64d584868e6befe33245449d"
     },
     {
       "bytes": 1378,
@@ -65,6 +65,12 @@
       "path": "strict.docx",
       "scenario": "Strict WordprocessingML and relationship QNames",
       "sha256": "926acdddda16b66ed394f239c2bd5ee940d581256c81e04e7bff2111a74d9390"
+    },
+    {
+      "bytes": 1819,
+      "path": "wrappers.docx",
+      "scenario": "content controls, compatibility fallback, fields, text boxes, headers and footers",
+      "sha256": "1066925aae700f801e5500aca1d40f9ad6642eefe4d85971be991815d8b12828"
     },
     {
       "bytes": 1282,

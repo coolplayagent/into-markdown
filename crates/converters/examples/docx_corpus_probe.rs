@@ -79,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({
                     "status": "failed",
                     "errorCode": error.code().as_str(),
+                    "errorDetail": error.to_string(),
                     "memoryLeaseBeforeBytes": before_memory,
                     "memoryLeaseAfterBytes": context.reserved_memory_bytes(),
                     "temporaryLeaseBeforeBytes": before_temporary_lease,
@@ -100,6 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let held_temporary = context.reserved_temporary_bytes();
     let diagnostic_codes =
         output.diagnostics.iter().map(|diagnostic| diagnostic.code.clone()).collect::<Vec<_>>();
+    let source_content_evidence = match output.source_content_evidence() {
+        into_markdown_core::SourceContentEvidence::Unknown => "unknown",
+        into_markdown_core::SourceContentEvidence::Empty => "empty",
+        into_markdown_core::SourceContentEvidence::AssetsOnly => "assetsOnly",
+    };
     let blocks = output.document.blocks.len();
     let assets = output.assets.len();
     drop(markdown);
@@ -112,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "blocks": blocks,
             "assets": assets,
             "diagnosticCodes": diagnostic_codes,
+            "sourceContentEvidence": source_content_evidence,
             "markdownBytes": markdown_bytes,
             "markdownSha256": markdown_sha256,
             "memoryLeaseBeforeBytes": before_memory,
