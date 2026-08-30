@@ -189,13 +189,18 @@ pub(super) fn apply_journal_record(
             let valid_digest = |value: &str| {
                 value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
             };
-            if !valid_digest(&resume.content_sha256) || !valid_digest(&resume.config_fingerprint) {
+            if !valid_digest(&resume.content_sha256)
+                || !valid_digest(&resume.config_fingerprint)
+                || (!resume.source_fingerprint.is_empty()
+                    && !valid_digest(&resume.source_fingerprint))
+            {
                 return Err(recovery_error("stage chunk resume metadata is malformed"));
             }
             if let Some(previous) = resumable_stages.get(&index) {
                 if resume.chunk_sequence != previous.chunk_sequence.saturating_add(1)
                     || resume.durable_len != previous.durable_len.saturating_add(1024 * 1024)
                     || resume.config_fingerprint != previous.config_fingerprint
+                    || resume.source_fingerprint != previous.source_fingerprint
                 {
                     return Err(recovery_error("stage chunk resume sequence is not contiguous"));
                 }

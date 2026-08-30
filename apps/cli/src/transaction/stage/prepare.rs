@@ -1,8 +1,8 @@
 use super::{
     BTreeSet, CliError, Component, CreatedDirectory, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest,
     EXTERNAL_LOCK_PREFIX, EntryState, ExecutionContext, ExitClass, FILE_ENTRY_TEMPORARY_BYTES,
-    File, FileIdentity, FileTarget, HookDecision, JOURNAL_SIGNATURE, JOURNAL_VERSION, Journal,
-    JournalEntry, JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES, MixedContent,
+    File, FileIdentity, FileTarget, HashSet, HookDecision, JOURNAL_SIGNATURE, JOURNAL_VERSION,
+    Journal, JournalEntry, JournalPhase, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES, MixedContent,
     MixedTarget, OsString, PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction,
     PreparingTransactionRoot, Read, SafeDir, TRANSACTION_METADATA_TEMPORARY_BYTES, Target,
     TransactionHandles, TransactionSource, absolute_lexical, active_transactions, call_hook,
@@ -242,11 +242,8 @@ fn bind_static_resources(inputs: &mut StaticBindInputs<'_>) -> Result<(), Static
         inputs.root_handle,
     )
     .map_err(active)?;
-    let intent_parents = inputs
-        .intent_leases
-        .iter()
-        .map(|lease| lease.parent.identity.clone())
-        .collect::<BTreeSet<_>>();
+    let intent_parents =
+        inputs.intent_leases.iter().map(|lease| lease.identity.clone()).collect::<BTreeSet<_>>();
     create_parent_leases_windowed(
         inputs.parent_paths,
         &intent_parents,
@@ -261,13 +258,14 @@ fn bind_static_resources(inputs: &mut StaticBindInputs<'_>) -> Result<(), Static
         inputs.journal_slot_bytes,
     )
     .map_err(active)?;
-    let final_parents = inputs.journal.parent_identities.iter().cloned().collect::<BTreeSet<_>>();
+    let final_parents = inputs.journal.parent_identities.iter().cloned().collect::<HashSet<_>>();
     remove_intent_leases(
         inputs.intent_leases,
         inputs.initial_handle,
         inputs.journal,
         &final_parents,
     )
+    .map(|_| ())
     .map_err(|error| StaticBindError { error, intent_leases_active: false })
 }
 
@@ -489,7 +487,7 @@ fn finish_with_intent_leases(
     lock: File,
 ) -> CliError {
     if let Err(error) =
-        remove_intent_leases(intent_leases, &initial_handle, journal, &BTreeSet::new())
+        remove_intent_leases(intent_leases, &initial_handle, journal, &HashSet::new())
     {
         drop(lock);
         return CliError::new(

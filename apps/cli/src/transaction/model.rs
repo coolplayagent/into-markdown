@@ -62,6 +62,8 @@ pub(super) struct CreatedDirectory {
 #[serde(rename_all = "camelCase")]
 pub(super) struct StageResume {
     pub(super) config_fingerprint: String,
+    #[serde(default)]
+    pub(super) source_fingerprint: String,
     pub(super) chunk_sequence: u64,
     pub(super) durable_len: u64,
     pub(super) content_sha256: String,

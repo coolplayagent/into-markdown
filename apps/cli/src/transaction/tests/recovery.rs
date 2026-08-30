@@ -101,13 +101,30 @@ fn matching_stream_configuration_resumes_the_last_durable_chunk() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let output = root.join("resumed.bin");
+    let source = root.join("source.bin");
+    fs::write(&source, b"stable source").unwrap();
+    let source_handle = File::open(&source).unwrap();
     let chunk = vec![b'a'; 1024 * 1024];
-    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    let mut stream = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     stream.write_all_checked(&chunk).unwrap();
     assert_eq!(stream.resumable_bytes(), chunk.len() as u64);
     stream.abandon_for_test();
 
-    let mut resumed = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    let mut resumed = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     assert_eq!(resumed.resumable_bytes(), chunk.len() as u64);
     resumed.write_all_checked(b"tail").unwrap();
     resumed.seal().unwrap().commit().unwrap();
@@ -123,20 +140,35 @@ fn multi_asset_stream_resumes_its_unique_last_unsealed_stage() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let primary = root.join("document.md");
+    let source = root.join("source.bin");
+    fs::write(&source, b"stable source").unwrap();
+    let source_handle = File::open(&source).unwrap();
     let assets = root.join("assets");
     let asset = assets.join("image.bin");
     let chunk = vec![b'i'; 1024 * 1024];
-    let mut stream =
-        StreamingFileTransaction::begin_with_root_hint(&primary, Some(&assets), false, &context())
-            .unwrap();
+    let mut stream = StreamingFileTransaction::begin_resumable_local_with_root_hint(
+        &primary,
+        Some(&assets),
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     stream.write_all_checked(b"document").unwrap();
     stream.begin_target(&asset, false).unwrap();
     stream.write_all_checked(&chunk).unwrap();
     stream.abandon_for_test();
 
-    let mut resumed =
-        StreamingFileTransaction::begin_with_root_hint(&primary, Some(&assets), false, &context())
-            .unwrap();
+    let mut resumed = StreamingFileTransaction::begin_resumable_local_with_root_hint(
+        &primary,
+        Some(&assets),
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     assert_eq!(resumed.resumable_target(), asset);
     assert_eq!(resumed.resumable_bytes(), chunk.len() as u64);
     resumed.write_all_checked(b"tail").unwrap();
@@ -154,12 +186,29 @@ fn mismatched_stream_configuration_rolls_back_instead_of_resuming() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let output = root.join("replacement.bin");
+    let source = root.join("source.bin");
+    fs::write(&source, b"stable source").unwrap();
+    let source_handle = File::open(&source).unwrap();
     let chunk = vec![b'a'; 1024 * 1024];
-    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    let mut stream = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     stream.write_all_checked(&chunk).unwrap();
     stream.abandon_for_test();
 
-    let mut replacement = StreamingFileTransaction::begin(&output, true, &context()).unwrap();
+    let mut replacement = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        true,
+        &context(),
+    )
+    .unwrap();
     assert_eq!(replacement.resumable_bytes(), 0);
     replacement.write_all_checked(b"replacement").unwrap();
     replacement.seal().unwrap().commit().unwrap();
@@ -169,11 +218,80 @@ fn mismatched_stream_configuration_rolls_back_instead_of_resuming() {
 }
 
 #[test]
+fn changed_local_source_never_resumes_an_authenticated_prefix() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("changed-source.bin");
+    let source = root.join("source.bin");
+    fs::write(&source, b"source A").unwrap();
+    let source_a = File::open(&source).unwrap();
+    let prefix_a = vec![b'a'; 1024 * 1024];
+    let mut stream = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_a,
+        false,
+        &context(),
+    )
+    .unwrap();
+    stream.write_all_checked(&prefix_a).unwrap();
+    assert_eq!(stream.resumable_bytes(), prefix_a.len() as u64);
+    stream.abandon_for_test();
+    drop(source_a);
+    fs::write(&source, b"source B").unwrap();
+    let source_b = File::open(&source).unwrap();
+
+    let mut replacement = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_b,
+        false,
+        &context(),
+    )
+    .unwrap();
+    assert_eq!(replacement.resumable_bytes(), 0);
+    replacement.write_all_checked(b"source B output").unwrap();
+    replacement.seal().unwrap().commit().unwrap();
+
+    assert_eq!(fs::read(&output).unwrap(), b"source B output");
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
+fn unauthenticated_stream_source_is_restarted_instead_of_resumed() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let output = root.join("stdin-or-remote.bin");
+    let prefix = vec![b'x'; 1024 * 1024];
+    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    stream.write_all_checked(&prefix).unwrap();
+    assert_eq!(stream.resumable_bytes(), 0);
+    stream.abandon_for_test();
+
+    let mut replacement = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    assert_eq!(replacement.resumable_bytes(), 0);
+    replacement.write_all_checked(b"fresh").unwrap();
+    replacement.seal().unwrap().commit().unwrap();
+    assert_eq!(fs::read(&output).unwrap(), b"fresh");
+    assert!(manager_artifacts(&root).is_empty());
+}
+
+#[test]
 fn recovery_temporary_budget_includes_the_authenticated_stage_tree() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
     let output = root.join("large-stage.bin");
-    let mut stream = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    let source = root.join("source.bin");
+    fs::write(&source, b"stable source").unwrap();
+    let source_handle = File::open(&source).unwrap();
+    let mut stream = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     stream.write_all_checked(&vec![b'x'; 1024 * 1024]).unwrap();
     stream.abandon_for_test();
     let limited = ExecutionContext::new(
@@ -186,7 +304,14 @@ fn recovery_temporary_budget_includes_the_authenticated_stage_tree() {
     assert_eq!(limited.reserved_memory_bytes(), 0);
     assert_eq!(limited.reserved_temporary_bytes(), 0);
 
-    let resumed = StreamingFileTransaction::begin(&output, false, &context()).unwrap();
+    let resumed = StreamingFileTransaction::begin_resumable_local(
+        &output,
+        &source,
+        &source_handle,
+        false,
+        &context(),
+    )
+    .unwrap();
     assert_eq!(resumed.resumable_bytes(), 1024 * 1024);
     resumed.abort().unwrap();
     assert!(manager_artifacts(&root).is_empty());

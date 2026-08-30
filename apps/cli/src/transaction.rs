@@ -83,8 +83,6 @@ use identity::{
 use journal::{
     JOURNAL_LOG_NAME, load_journal, load_journal_handle, persist_journal_handle, validate_journal,
 };
-#[cfg(test)]
-use lease::ParentLeaseRemovalIndex;
 use lease::{
     ensure_transaction_platform, for_each_journal_parent, inspect_transaction_lease_member,
     load_parent_lease, parent_marker_name, remove_journal_parent_leases,

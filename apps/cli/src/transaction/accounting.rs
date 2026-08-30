@@ -156,6 +156,14 @@ pub(super) fn stage_resume_retained_bytes(resume: &StageResume) -> Result<u64, C
             "stage resume fingerprint overflowed",
         )?)
         .and_then(|bytes| {
+            checked_usize_bytes(
+                resume.source_fingerprint.capacity(),
+                "stage resume source fingerprint overflowed",
+            )
+            .ok()
+            .and_then(|source| bytes.checked_add(source))
+        })
+        .and_then(|bytes| {
             checked_usize_bytes(resume.content_sha256.capacity(), "stage resume digest overflowed")
                 .ok()
                 .and_then(|digest| bytes.checked_add(digest))

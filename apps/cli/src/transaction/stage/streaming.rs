@@ -2,7 +2,7 @@ use super::{
     CliError, CreatedDirectory, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest, EntryState,
     ExecutionContext, ExitClass, FILE_ENTRY_TEMPORARY_BYTES, File, FileIdentity, HookDecision,
     JournalEntry, JournalPhase, JournalRecord, MAX_JOURNAL_ENTRIES, MAX_RECOVERY_RETRIES,
-    PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction, Read, SafeDir, Sha256,
+    PARENT_LEASE_TEMPORARY_BYTES, Path, PathBuf, PreparedTransaction, Read, SafeDir, Seek, Sha256,
     StreamingTargetIndex, Target, TransactionSource, Write, absolute_lexical, checked_usize_bytes,
     crash_point, create_missing_output_directory, encode_path, file_identity, fs, io,
     journal_entry_retained_bytes, journal_identity_retained_bytes, journal_path_retained_bytes,
@@ -28,6 +28,7 @@ pub struct StreamingFileTransaction {
     pub(in crate::transaction) current_index: usize,
     pub(in crate::transaction) target_index: Option<StreamingTargetIndex>,
     pub(in crate::transaction) config_fingerprint: String,
+    pub(in crate::transaction) source_fingerprint: Option<String>,
     pub(in crate::transaction) chunk_sequence: u64,
     pub(in crate::transaction) durable_len: u64,
     pub(in crate::transaction) current_target: PathBuf,
@@ -40,7 +41,26 @@ impl StreamingFileTransaction {
         overwrite: bool,
         context: &ExecutionContext,
     ) -> Result<Self, CliError> {
-        Self::begin_with_root_hint(path, None, overwrite, context)
+        Self::begin_with_root_hint_internal(path, None, overwrite, None, context)
+    }
+
+    /// Create a streaming transaction which may resume only when the exact
+    /// authenticated local source file is unchanged.
+    pub fn begin_resumable_local(
+        path: &Path,
+        source_path: &Path,
+        source: &File,
+        overwrite: bool,
+        context: &ExecutionContext,
+    ) -> Result<Self, CliError> {
+        Self::begin_resumable_local_with_root_hint(
+            path,
+            None,
+            source_path,
+            source,
+            overwrite,
+            context,
+        )
     }
 
     /// Create a streaming transaction whose authenticated root also contains
@@ -54,12 +74,49 @@ impl StreamingFileTransaction {
         overwrite: bool,
         context: &ExecutionContext,
     ) -> Result<Self, CliError> {
+        Self::begin_with_root_hint_internal(path, additional_directory, overwrite, None, context)
+    }
+
+    /// Create a multi-artifact stream resumable only for the exact unchanged
+    /// authenticated local source file. Streams without such a file identity,
+    /// including standard input and remote inputs, use [`Self::begin_with_root_hint`]
+    /// and are deliberately restarted after recovery.
+    pub fn begin_resumable_local_with_root_hint(
+        path: &Path,
+        additional_directory: Option<&Path>,
+        source_path: &Path,
+        source: &File,
+        overwrite: bool,
+        context: &ExecutionContext,
+    ) -> Result<Self, CliError> {
+        let source_fingerprint = local_source_fingerprint(source_path, source, context)?;
+        Self::begin_with_root_hint_internal(
+            path,
+            additional_directory,
+            overwrite,
+            Some(source_fingerprint),
+            context,
+        )
+    }
+
+    fn begin_with_root_hint_internal(
+        path: &Path,
+        additional_directory: Option<&Path>,
+        overwrite: bool,
+        source_fingerprint: Option<String>,
+        context: &ExecutionContext,
+    ) -> Result<Self, CliError> {
         let root_hint = additional_directory.map(|directory| directory.join(".into-md-authority"));
         let resume_target = absolute_lexical(path)?;
         let config_fingerprint =
             streaming_config_fingerprint(path, additional_directory, overwrite)?;
-        if let Some(resumed) =
-            try_resume_streaming_transaction(&resume_target, &config_fingerprint, context)?
+        if let Some(source_fingerprint) = source_fingerprint.as_deref()
+            && let Some(resumed) = try_resume_streaming_transaction(
+                &resume_target,
+                &config_fingerprint,
+                source_fingerprint,
+                context,
+            )?
         {
             return Ok(resumed);
         }
@@ -107,6 +164,7 @@ impl StreamingFileTransaction {
                         current_index: 0,
                         target_index: Some(target_index),
                         config_fingerprint,
+                        source_fingerprint,
                         chunk_sequence: 0,
                         durable_len: 0,
                         current_target: absolute_lexical(path)?,
@@ -337,6 +395,9 @@ impl StreamingFileTransaction {
     }
 
     fn checkpoint_current_chunk(&mut self) -> Result<(), CliError> {
+        let Some(source_fingerprint) = self.source_fingerprint.as_ref() else {
+            return Ok(());
+        };
         let transaction = self
             .transaction
             .as_mut()
@@ -352,6 +413,7 @@ impl StreamingFileTransaction {
             .ok_or_else(|| transaction_index_limit("stage chunk sequence overflowed"))?;
         let resume = StageResume {
             config_fingerprint: self.config_fingerprint.clone(),
+            source_fingerprint: source_fingerprint.clone(),
             chunk_sequence: next_sequence,
             durable_len: self.size,
             content_sha256: format!("{:x}", self.digest.clone().finalize()),
@@ -488,7 +550,7 @@ fn streaming_config_fingerprint(
     let target = absolute_lexical(path)?;
     let root_hint = additional_directory.map(absolute_lexical).transpose()?;
     let mut digest = Sha256::new();
-    digest.update(b"into-md-stream-resume-v1\0");
+    digest.update(b"into-md-stream-resume-v2\0");
     digest.update([u8::from(overwrite)]);
     for value in [Some(target.as_path()), root_hint.as_deref()] {
         match value {
@@ -501,6 +563,74 @@ fn streaming_config_fingerprint(
         }
     }
     Ok(format!("{:x}", digest.finalize()))
+}
+
+fn local_source_fingerprint(
+    source_path: &Path,
+    source: &File,
+    context: &ExecutionContext,
+) -> Result<String, CliError> {
+    let absolute = absolute_lexical(source_path)?;
+    let path_metadata = fs::symlink_metadata(&absolute)?;
+    if !path_metadata.file_type().is_file() || path_metadata.file_type().is_symlink() {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "unsafeInput",
+            "resumable streaming requires a regular local source file",
+        ));
+    }
+    let canonical = fs::canonicalize(&absolute)?;
+    let mut file = source.try_clone()?;
+    file.rewind()?;
+    let before = file_identity(&file)?;
+    if file_identity(&File::open(&canonical)?)? != before {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "inputIdentityChanged",
+            "local source path does not name the authenticated source handle",
+        ));
+    }
+    let first_digest = hash_local_source(&mut file, context)?;
+    file.rewind()?;
+    let second_digest = hash_local_source(&mut file, context)?;
+    let after = file_identity(&file)?;
+    if before != after
+        || file_identity(&File::open(&canonical)?)? != before
+        || first_digest != second_digest
+    {
+        return Err(CliError::new(
+            ExitClass::Io,
+            "inputIdentityChanged",
+            "local source changed while its resume identity was authenticated",
+        ));
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"into-md-local-stream-source-v1\0");
+    let path_bytes = canonical.as_os_str().as_encoded_bytes();
+    digest.update(u64::try_from(path_bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(path_bytes);
+    digest.update(u64::try_from(before.platform.len()).unwrap_or(u64::MAX).to_le_bytes());
+    digest.update(before.platform.as_bytes());
+    digest.update(before.first.to_le_bytes());
+    digest.update(before.second.to_le_bytes());
+    digest.update(before.size.to_le_bytes());
+    digest.update(first_digest);
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn hash_local_source(file: &mut File, context: &ExecutionContext) -> Result<[u8; 32], CliError> {
+    const BUFFER_BYTES: usize = 64 * 1024;
+    let _memory = context.reserve_memory(BUFFER_BYTES as u64).map_err(CliError::from)?;
+    let mut digest = Sha256::new();
+    let mut buffer = vec![0_u8; BUFFER_BYTES].into_boxed_slice();
+    loop {
+        context.checkpoint().map_err(CliError::from)?;
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            return Ok(digest.finalize().into());
+        }
+        digest.update(&buffer[..count]);
+    }
 }
 
 struct DynamicTargetPlan {

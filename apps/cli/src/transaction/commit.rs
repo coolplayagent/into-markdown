@@ -236,7 +236,6 @@ impl PreparedTransaction {
     }
 
     #[cfg(test)]
-
     pub(super) fn preserve_staged_files(&mut self) {
         // A simulated process crash cannot keep in-process resource leases alive.
 
@@ -246,7 +245,6 @@ impl PreparedTransaction {
     }
 
     #[cfg(test)]
-
     pub(super) fn abandon_for_test(mut self) {
         self.preserve_staged_files();
 

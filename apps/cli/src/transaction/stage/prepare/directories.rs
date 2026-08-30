@@ -1,13 +1,27 @@
 use super::{
-    BTreeSet, CliError, CreatedDirectory, ExecutionContext, ExitClass, File, FileIdentity,
+    BTreeSet, CliError, CreatedDirectory, ExecutionContext, ExitClass, File, FileIdentity, HashSet,
     HookDecision, Journal, PARENT_HANDLE_BATCH, ParentLeaseRemovalIndex, Path, PathBuf, SafeDir,
     create_parent_lease, encode_path, fs, io, recover_parent_transactions, recovery_error,
     remove_created_output_directories, remove_initial_transaction_with_external_lock,
     remove_parent_lease,
 };
+use crate::transaction::lease::remove_parent_lease_binding;
 
 pub(super) struct IntentLease {
-    pub(super) parent: SafeDir,
+    pub(super) path: PathBuf,
+    pub(super) identity: FileIdentity,
+}
+
+#[derive(Default)]
+pub(super) struct IntentLeaseRemovalMetrics {
+    #[cfg(test)]
+    pub(super) keep_membership_probes: u64,
+    #[cfg(test)]
+    pub(super) removal_index_build_insertions: u64,
+    #[cfg(test)]
+    pub(super) removal_index_membership_probes: u64,
+    #[cfg(test)]
+    pub(super) removal_calls: u64,
 }
 
 pub(super) fn plan_intent_parent_paths(
@@ -40,10 +54,10 @@ pub(super) fn create_intent_leases(
     for path in paths {
         let parent = SafeDir::open_absolute(path)?;
         if let Err(error) = create_parent_lease(&parent, transaction, journal) {
-            let _ = remove_intent_leases(&leases, transaction, journal, &BTreeSet::new());
+            let _ = remove_intent_leases(&leases, transaction, journal, &HashSet::new());
             return Err(error);
         }
-        leases.push(IntentLease { parent });
+        leases.push(IntentLease { path: path.clone(), identity: parent.identity });
     }
     Ok(leases)
 }
@@ -52,29 +66,62 @@ pub(super) fn remove_intent_leases(
     leases: &[IntentLease],
     transaction: &SafeDir,
     journal: &mut Journal,
-    keep: &BTreeSet<FileIdentity>,
-) -> Result<(), CliError> {
-    let removal_identities = leases
-        .iter()
-        .filter(|lease| !keep.contains(&lease.parent.identity))
-        .map(|lease| lease.parent.identity.clone())
-        .collect::<Vec<_>>();
-    let mut removal_index = ParentLeaseRemovalIndex::new(&removal_identities)?;
+    keep: &HashSet<FileIdentity>,
+) -> Result<IntentLeaseRemovalMetrics, CliError> {
+    remove_intent_leases_indexed(leases, keep, |lease| {
+        let parent = SafeDir::open_absolute(&lease.path)?;
+        if parent.identity != lease.identity {
+            return Err(recovery_error("intent lease parent identity changed before cleanup"));
+        }
+        remove_parent_lease_binding(&parent, transaction, journal)
+    })
+}
+
+fn remove_intent_leases_indexed(
+    leases: &[IntentLease],
+    keep: &HashSet<FileIdentity>,
+    mut remove: impl FnMut(&IntentLease) -> Result<(), CliError>,
+) -> Result<IntentLeaseRemovalMetrics, CliError> {
+    #[cfg(test)]
+    let mut metrics = IntentLeaseRemovalMetrics::default();
+    #[cfg(not(test))]
+    let metrics = IntentLeaseRemovalMetrics::default();
+    let mut removal_identities = Vec::with_capacity(leases.len());
     for lease in leases {
-        if keep.contains(&lease.parent.identity) {
+        #[cfg(test)]
+        {
+            metrics.keep_membership_probes = metrics.keep_membership_probes.saturating_add(1);
+        }
+        if !keep.contains(&lease.identity) {
+            removal_identities.push(lease.identity.clone());
+        }
+    }
+    let mut removal_index = ParentLeaseRemovalIndex::new(&removal_identities)?;
+    #[cfg(test)]
+    {
+        metrics.removal_index_build_insertions = removal_index.build_insertions();
+    }
+    for lease in leases {
+        #[cfg(test)]
+        {
+            metrics.keep_membership_probes = metrics.keep_membership_probes.saturating_add(1);
+        }
+        if keep.contains(&lease.identity) {
             continue;
         }
-        let inserted = !journal.parent_identities.contains(&lease.parent.identity);
-        if inserted {
-            journal.parent_identities.push(lease.parent.identity.clone());
+        removal_index.consume(&lease.identity)?;
+        remove(lease)?;
+        #[cfg(test)]
+        {
+            metrics.removal_calls = metrics.removal_calls.saturating_add(1);
         }
-        let result = remove_parent_lease(&lease.parent, transaction, journal, &mut removal_index);
-        if inserted {
-            journal.parent_identities.pop();
-        }
-        result?;
     }
-    removal_index.finish()
+    #[cfg(test)]
+    {
+        metrics.removal_index_membership_probes = removal_index.membership_probes();
+    }
+    removal_index.finish()?;
+    Ok(metrics)
 }
 
 #[cfg(any(unix, windows))]
@@ -362,5 +409,50 @@ impl UnpublishedPrepareCleanup<'_> {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn actual_remove_intent_leases_indexes_one_hundred_thousand_distinct_parents_linearly() {
+        const PARENT_COUNT: usize = 100_000;
+        let leases = (0..PARENT_COUNT)
+            .map(|index| IntentLease {
+                path: PathBuf::from(format!("parent-{index}")),
+                identity: FileIdentity {
+                    platform: "test".into(),
+                    first: index as u64,
+                    second: 1,
+                    size: 0,
+                },
+            })
+            .collect::<Vec<_>>();
+        let keep = HashSet::new();
+        let mut removal_calls = 0_u64;
+        let started = Instant::now();
+        let metrics = remove_intent_leases_indexed(&leases, &keep, |_| {
+            removal_calls = removal_calls.saturating_add(1);
+            Ok(())
+        })
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(metrics.keep_membership_probes, (PARENT_COUNT as u64) * 2);
+        assert_eq!(metrics.removal_index_build_insertions, PARENT_COUNT as u64);
+        assert_eq!(metrics.removal_index_membership_probes, PARENT_COUNT as u64);
+        assert_eq!(metrics.removal_calls, PARENT_COUNT as u64);
+        assert_eq!(removal_calls, PARENT_COUNT as u64);
+        eprintln!(
+            "transaction_metrics case=actual_remove_intent_leases_100k elapsed_ms={} keep_membership_probes={} removal_index_build_insertions={} removal_index_membership_probes={} removal_calls={}",
+            elapsed.as_millis(),
+            metrics.keep_membership_probes,
+            metrics.removal_index_build_insertions,
+            metrics.removal_index_membership_probes,
+            metrics.removal_calls
+        );
     }
 }

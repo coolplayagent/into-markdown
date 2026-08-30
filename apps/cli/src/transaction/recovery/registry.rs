@@ -58,11 +58,12 @@ pub(in crate::transaction) fn recover_parent_transactions(
 pub(in crate::transaction) fn try_resume_streaming_transaction(
     target: &Path,
     config_fingerprint: &str,
+    source_fingerprint: &str,
     context: &ExecutionContext,
 ) -> Result<Option<StreamingFileTransaction>, CliError> {
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (target, config_fingerprint, context);
+        let _ = (target, config_fingerprint, source_fingerprint, context);
         return Ok(None);
     }
     #[cfg(any(unix, windows))]
@@ -96,6 +97,7 @@ pub(in crate::transaction) fn try_resume_streaming_transaction(
             loaded,
             target,
             config_fingerprint,
+            source_fingerprint,
             context,
         )
     }
@@ -116,6 +118,7 @@ fn select_resume_stage(
     target: &Path,
     root: &Path,
     fingerprint: &str,
+    source_fingerprint: &str,
 ) -> Result<Option<(usize, StageResume)>, CliError> {
     let mut candidates = loaded.resumable_stages.iter();
     let Some((&index, resume)) = candidates.next() else { return Ok(None) };
@@ -131,6 +134,7 @@ fn select_resume_stage(
         && loaded.entries[index].staged_identity.is_none()
         && loaded.entries[index].content_sha256.is_empty()
         && resume.config_fingerprint == fingerprint
+        && resume.source_fingerprint == source_fingerprint
         && decode_path(&loaded.entries[0].target)? == expected;
     Ok(matches.then(|| (index, resume.clone())))
 }
@@ -210,10 +214,11 @@ fn resume_validated_transaction(
     loaded: LoadedJournal,
     target: &Path,
     fingerprint: &str,
+    source_fingerprint: &str,
     context: &ExecutionContext,
 ) -> Result<Option<StreamingFileTransaction>, CliError> {
     let Some((current_index, resume)) =
-        select_resume_stage(&loaded, target, &state.root_path, fingerprint)?
+        select_resume_stage(&loaded, target, &state.root_path, fingerprint, source_fingerprint)?
     else {
         return Ok(None);
     };
@@ -337,6 +342,7 @@ fn assemble_resumed_transaction(
         current_index,
         target_index: Some(target_index),
         config_fingerprint: resume.config_fingerprint,
+        source_fingerprint: Some(resume.source_fingerprint),
         chunk_sequence: resume.chunk_sequence,
         durable_len: resume.durable_len,
         current_target,
@@ -542,7 +548,10 @@ fn recover_reference(
 /// Recover every exact manager transaction directory directly under `root`.
 #[cfg(all(test, any(unix, windows)))]
 pub fn recover_pending(root: &Path) -> Result<(), CliError> {
-    let context = ExecutionContext::new(Default::default(), Default::default());
+    let context = ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        into_markdown::ResourceLimits::default(),
+    );
     recover_root_transactions(root, &context)
 }
 

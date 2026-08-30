@@ -35,13 +35,16 @@ pub(crate) fn atomic_replace_config(
     )
 }
 
-#[cfg(test)]
 pub(in crate::transaction) mod windows_config_tests {
+    #[cfg(test)]
     use super::*;
+    #[cfg(test)]
     use std::process::Command;
 
+    #[cfg(test)]
     const NONCE: &str = "0123456789abcdef0123456789abcdef";
 
+    #[cfg(test)]
     fn names() -> (String, String, String) {
         (
             format!(".into-md-config-{NONCE}.next"),
@@ -50,10 +53,12 @@ pub(in crate::transaction) mod windows_config_tests {
         )
     }
 
+    #[cfg(test)]
     fn open(root: &Path) -> cap_std::fs::Dir {
         cap_std::fs::Dir::open_ambient_dir(root, cap_std::ambient_authority()).unwrap()
     }
 
+    #[cfg(test)]
     fn seed_journal(
         directory: &cap_std::fs::Dir,
         original: Option<(u64, u64)>,
