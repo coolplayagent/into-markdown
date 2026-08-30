@@ -1,11 +1,13 @@
-//! Bounded, offline `OpenDocument` 1.3 text, spreadsheet, and presentation conversion.
+//! Bounded, offline `OpenDocument` text, spreadsheet, and presentation conversion.
 //!
 //! The accepted profile is intentionally smaller than the complete ODF grammar. It accepts
 //! package-based ODT/ODS/ODP documents with the standard content, styles, metadata, settings,
-//! list, table, drawing, annotation, and image vocabulary. It rejects encryption, signatures,
-//! scripts/macros, embedded documents, DTDs, processing instructions, undeclared/foreign
-//! namespaces, external images, and unsafe package paths. Hyperlinks are retained as inert data
-//! only when they are absolute HTTP(S), mailto, or same-document fragment references.
+//! list, table, drawing, annotation, and image vocabulary. Encryption, signatures, DTDs,
+//! processing instructions, unknown namespaces, external images, unsafe paths and CRC failures
+//! remain errors. Best-effort conversion diagnoses omitted optional scripts, embedded objects,
+//! animation and unsupported graphics while retaining current text, cached fields and tables;
+//! strict conversion rejects these lossy projections. No scripts or formulas are executed.
+//! Hyperlinks remain inert HTTP(S), mailto or same-document fragment references.
 
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput, ExecutionContext,
@@ -13,6 +15,7 @@ use into_markdown_core::{
 };
 
 mod annotations;
+mod compatibility;
 mod content;
 mod geometry;
 mod image_validation;
@@ -21,12 +24,15 @@ mod manifest;
 mod metadata;
 mod model;
 mod package;
+mod paragraphs;
 mod paths;
 mod presentation;
 mod profile;
 mod raw_zip;
+mod recovery;
 mod semantic;
 mod sheets;
+mod sparse;
 mod styles;
 mod tables;
 mod text;
@@ -35,7 +41,7 @@ mod xml;
 use annotations::{collect_image_anchors, validate_ranged_annotations};
 use content::parse_content;
 use metadata::parse_metadata;
-use model::{FORMATS, OFFICE_NS, PROVIDER_ID, ParseState, limit, malformed};
+use model::{FORMATS, OFFICE_NS, PROVIDER_ID, ParseState, limit, malformed, part_locator};
 use package::Package;
 use profile::{OdfXmlPart, validate_tree_profile};
 use styles::{collect_styles, validate_document_versions};
@@ -131,8 +137,8 @@ fn convert_odf(
             .parts
             .get("content.xml")
             .ok_or_else(|| malformed(Some("content.xml"), "content part is missing"))?;
-        let content_root = parse_xml(content_bytes, "content.xml", options, context)?;
-        let styles_root = package
+        let mut content_root = parse_xml(content_bytes, "content.xml", options, context)?;
+        let mut styles_root = package
             .parts
             .get("styles.xml")
             .map(|bytes| parse_xml(bytes, "styles.xml", options, context))
@@ -150,15 +156,47 @@ fn convert_odf(
             .get("settings.xml")
             .map(|bytes| parse_xml(bytes, "settings.xml", options, context))
             .transpose()?;
-        validate_tree_profile(&content_root, OdfXmlPart::Content, "content.xml")?;
-        if let Some(root) = styles_root.as_ref() {
-            validate_tree_profile(root, OdfXmlPart::Styles, "styles.xml")?;
+        let mut state = ParseState::default();
+        if package.noncanonical_mimetype {
+            state.warning("odf.noncanonicalMimetype", "Noncanonical mimetype order/compression/descriptor accepted after complete ZIP integrity and exact media-type validation", part_locator("mimetype"));
         }
-        if let Some(root) = metadata_root.as_ref() {
-            validate_tree_profile(root, OdfXmlPart::Meta, "meta.xml")?;
+        for part in &package.missing_optional_parts {
+            state.warning(
+                "odf.optionalPartMissing",
+                "Missing optional metadata, UI configuration or unreferenced image; referenced images and document body remain required",
+                part_locator(part),
+            );
         }
-        if let Some(root) = settings_root.as_ref() {
-            validate_tree_profile(root, OdfXmlPart::Settings, "settings.xml")?;
+        recovery::project_static_content(
+            &mut content_root,
+            "content.xml",
+            &mut state,
+            options,
+            context,
+            &package.manifest,
+        )?;
+        if let Some(root) = &mut styles_root {
+            recovery::project_static_content(
+                root,
+                "styles.xml",
+                &mut state,
+                options,
+                context,
+                &package.manifest,
+            )?;
+        }
+        for (root, profile, part) in [
+            (Some(&content_root), OdfXmlPart::Content, "content.xml"),
+            (styles_root.as_ref(), OdfXmlPart::Styles, "styles.xml"),
+            (metadata_root.as_ref(), OdfXmlPart::Meta, "meta.xml"),
+            (settings_root.as_ref(), OdfXmlPart::Settings, "settings.xml"),
+        ] {
+            if let Some(root) = root {
+                let count = validate_tree_profile(root, profile, part)?;
+                if count > 0 {
+                    state.warning("odf.layoutMetadata", format!("{count} layout definitions/producer hints are not represented in Markdown; text and table semantics are parsed separately"), part_locator(part));
+                }
+            }
         }
         validate_document_versions(
             &package.odf_version,
@@ -170,11 +208,15 @@ fn convert_odf(
         validate_ranged_annotations(&content_root, options, context)?;
         let image_anchors = collect_image_anchors(&content_root, &package.manifest)?;
         package.load_reachable_images(bytes, &image_anchors, options, context)?;
-        let styles = collect_styles(styles_root.as_ref(), &content_root)?;
-        let mut state = ParseState { list_styles: styles.lists, ..ParseState::default() };
+        let mut styles = collect_styles(styles_root.as_ref(), &content_root)?;
+        if styles.identical_duplicates > 0 {
+            state.warning("odf.identicalStyle", format!("{} identical duplicate style definitions reused; conflicting definitions remain errors", styles.identical_duplicates), part_locator("styles.xml"));
+        }
+        state.list_styles = std::mem::take(&mut styles.lists);
         parse_metadata(metadata_root.as_ref(), settings_root.as_ref(), &mut state, options)?;
-        parse_content(&content_root, format, &styles.text, &package, &mut state, options, context)?;
+        parse_content(&content_root, format, &styles, &package, &mut state, options, context)?;
         state.document.blocks.append(&mut state.deferred);
+        recovery::ensure_static_body(&state)?;
         (state.document, state.assets, state.diagnostics)
     };
     ConverterOutput::new_with_memory_reservation(document, assets, diagnostics, context, memory)

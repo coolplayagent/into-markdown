@@ -163,7 +163,7 @@ fn versions_and_style_family_origin_are_bound() {
         "{markdown}"
     );
 
-    let bad_styles = common_styles.replace("office:version='1.3'", "office:version='1.2'");
+    let bad_styles = common_styles.replace("office:version='1.3'", "office:version='9.9'");
     let mismatched =
         package(InputFormat::Odt, &content, &[("styles.xml", "text/xml", bad_styles.as_bytes())]);
     assert!(matches!(
@@ -172,7 +172,7 @@ fn versions_and_style_family_origin_are_bound() {
     ));
     let bad_content = package(
         InputFormat::Odt,
-        &content.replace("office:version='1.3'", "office:version='1.2'"),
+        &content.replace("office:version='1.3'", "office:version='9.9'"),
         &[],
     );
     assert!(matches!(

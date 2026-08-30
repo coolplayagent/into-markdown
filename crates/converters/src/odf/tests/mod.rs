@@ -1,7 +1,10 @@
 mod document;
 mod images;
 mod package_security;
+mod producer_compatibility;
 mod profile;
+mod recovery;
 mod resources;
 mod support;
 mod tables;
+mod zip_compatibility;

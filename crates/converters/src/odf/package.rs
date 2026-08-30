@@ -4,8 +4,8 @@ use crate::odf::model::{ZIP_STREAM_CHUNK, limit, malformed};
 use crate::odf::paths::canonical_part_name;
 use crate::odf::raw_zip::{
     bind_mimetype_central, conservative_vec_capacity, package_index_peak, package_logical_peak,
-    reachable_image_peak, validate_first_mimetype_local_header, validate_raw_mimetype_central,
-    validate_zip_directory_layout, validated_local_zip_name,
+    reachable_image_peak, validate_raw_mimetype_central, validate_zip_directory_layout,
+    validated_local_zip_name,
 };
 use crate::odf::xml::parse_xml;
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, InputFormat};
@@ -24,7 +24,6 @@ std::thread_local! {
 struct ZipPart {
     index: usize,
     size: u64,
-    compressed_size: u64,
     directory: bool,
 }
 
@@ -36,6 +35,8 @@ pub(super) struct Package {
     pub(super) logical_peak: u64,
     preflight: u64,
     pub(super) odf_version: String,
+    pub(super) missing_optional_parts: Vec<String>,
+    pub(super) noncanonical_mimetype: bool,
 }
 
 impl Package {
@@ -56,8 +57,10 @@ impl Package {
             ));
         }
         let expected = media_type_for(format)?;
-        let local_mimetype = validate_first_mimetype_local_header(bytes, expected)?;
-        validate_raw_mimetype_central(bytes, &local_mimetype)?;
+        let local_mimetype = super::raw_zip::mimetype_header_for_policy(bytes, expected, options)?;
+        if let Some(local) = &local_mimetype {
+            validate_raw_mimetype_central(bytes, local)?;
+        }
         validate_zip_directory_layout(bytes, options.limits.max_archive_entries, planned, context)?;
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
             .map_err(|error| malformed(None, format!("invalid ODF ZIP container: {error}")))?;
@@ -100,12 +103,7 @@ impl Package {
                 ));
             }
             let name = canonical_part_name(raw_name, entry.is_dir())?;
-            let part = ZipPart {
-                index,
-                size: entry.size(),
-                compressed_size: entry.compressed_size(),
-                directory: entry.is_dir(),
-            };
+            let part = ZipPart { index, size: entry.size(), directory: entry.is_dir() };
             if indexes.insert(name.clone(), part).is_some() {
                 return Err(malformed(Some(&name), "duplicate ZIP part name"));
             }
@@ -122,7 +120,7 @@ impl Package {
         let mime_part = indexes.get("mimetype").copied().ok_or_else(|| {
             malformed(Some("mimetype"), "required uncompressed mimetype part is missing")
         })?;
-        if mime_part.index != 0 || mime_part.directory {
+        if (local_mimetype.is_some() && mime_part.index != 0) || mime_part.directory {
             return Err(malformed(
                 Some("mimetype"),
                 "mimetype must be the first non-directory package entry",
@@ -131,7 +129,11 @@ impl Package {
         let mime_entry = archive.by_index_raw(mime_part.index).map_err(|error| {
             malformed(Some("mimetype"), format!("cannot inspect mimetype: {error}"))
         })?;
-        bind_mimetype_central(bytes, &mime_entry, &local_mimetype)?;
+        if let Some(local) = &local_mimetype {
+            bind_mimetype_central(bytes, &mime_entry, local)?;
+        } else {
+            super::raw_zip::validate_relaxed_mimetype_extras(bytes, &mime_entry)?;
+        }
         drop(mime_entry);
         if mime_part.size > 256 {
             return Err(malformed(Some("mimetype"), "mimetype entry is too large"));
@@ -187,8 +189,32 @@ impl Package {
                 return Err(malformed(Some(name), "ZIP part is not declared in ODF manifest"));
             }
         }
+        let mut missing_optional_parts = Vec::new();
         for name in manifest.keys().filter(|name| name.as_str() != "/") {
-            if name != "META-INF/manifest.xml" && !indexes.contains_key(name) {
+            // Manifest directories describe subdocuments/configuration trees; ZIP does not
+            // require a physical directory record, including for an empty directory.
+            if name != "META-INF/manifest.xml"
+                && !name.ends_with('/')
+                && !indexes.contains_key(name)
+            {
+                if name == "meta.xml"
+                    || manifest
+                        .get(name)
+                        .is_some_and(|entry| entry.media_type.starts_with("image/"))
+                    || manifest.iter().any(|(parent, entry)| {
+                        parent.ends_with('/')
+                            && entry.media_type == "application/vnd.sun.xml.ui.configuration"
+                            && name.starts_with(parent)
+                    })
+                {
+                    super::recovery::require_best_effort(
+                        options,
+                        name,
+                        "missing optional metadata, unreferenced image or UI configuration member",
+                    )?;
+                    missing_optional_parts.push(name.clone());
+                    continue;
+                }
                 return Err(malformed(Some(name), "manifest-declared ODF part is missing"));
             }
         }
@@ -227,22 +253,29 @@ impl Package {
         // unreferenced images. Validation streams into a fixed buffer and does not add the part's
         // expanded size to the retained/working-set plan.
         for (name, part) in &indexes {
-            if part.directory
-                || matches!(
-                    name.as_str(),
-                    "mimetype"
-                        | "META-INF/manifest.xml"
-                        | "content.xml"
-                        | "styles.xml"
-                        | "meta.xml"
-                        | "settings.xml"
-                )
-            {
+            if matches!(
+                name.as_str(),
+                "mimetype"
+                    | "META-INF/manifest.xml"
+                    | "content.xml"
+                    | "styles.xml"
+                    | "meta.xml"
+                    | "settings.xml"
+            ) {
                 continue;
             }
             validate_entry_stream(&mut archive, part.index, name, part.size, context)?;
         }
-        Ok(Self { parts, manifest, indexes, logical_peak, preflight: planned, odf_version })
+        Ok(Self {
+            parts,
+            manifest,
+            indexes,
+            logical_peak,
+            preflight: planned,
+            odf_version,
+            missing_optional_parts,
+            noncanonical_mimetype: local_mimetype.is_none(),
+        })
     }
 
     pub(super) fn load_reachable_images(
@@ -264,6 +297,9 @@ impl Package {
                 .get(path)
                 .copied()
                 .ok_or_else(|| malformed(Some(path), "referenced image has no ZIP part"))?;
+            if self.skip_unsupported_image(path, options)? {
+                continue;
+            }
             if part.directory {
                 return Err(malformed(Some(path), "referenced image is a directory"));
             }
@@ -349,6 +385,27 @@ impl Package {
     }
 }
 
+impl Package {
+    fn skip_unsupported_image(
+        &self,
+        path: &str,
+        options: &ConversionOptions,
+    ) -> Result<bool, ConversionError> {
+        let unsupported = self
+            .manifest
+            .get(path)
+            .is_some_and(|entry| super::image_validation::unsupported_media(&entry.media_type));
+        if unsupported {
+            super::recovery::require_best_effort(
+                options,
+                path,
+                "unsupported image media requires a static placeholder",
+            )?;
+        }
+        Ok(unsupported)
+    }
+}
+
 fn validate_package_graph(
     indexes: &BTreeMap<String, ZipPart>,
     manifest: &BTreeMap<String, ManifestEntry>,
@@ -357,44 +414,38 @@ fn validate_package_graph(
         if matches!(name.as_str(), "mimetype" | "META-INF/manifest.xml") {
             continue;
         }
-        let declared = manifest
-            .get(name)
-            .ok_or_else(|| malformed(Some(name), "ZIP part is not declared in manifest"))?;
         if part.directory != name.ends_with('/') {
             return Err(malformed(Some(name), "ZIP directory naming is inconsistent"));
         }
         if part.directory {
-            if !declared.media_type.is_empty() || part.size != 0 || part.compressed_size != 0 {
-                return Err(malformed(
-                    Some(name),
-                    "ODF directories must be empty and use an empty manifest media type",
-                ));
+            if part.size != 0 {
+                return Err(malformed(Some(name), "ODF ZIP directories must be empty"));
             }
             continue;
         }
+        let declared = manifest
+            .get(name)
+            .ok_or_else(|| malformed(Some(name), "ZIP part is not declared in manifest"))?;
         if matches!(name.as_str(), "content.xml" | "styles.xml" | "meta.xml" | "settings.xml") {
             if declared.media_type != "text/xml" {
                 return Err(malformed(Some(name), "core ODF parts require text/xml media type"));
             }
             continue;
         }
-        image_profile(name, &declared.media_type)?;
-    }
-    for (name, entry) in manifest.iter().filter(|(name, _)| name.as_str() != "/") {
-        if name == "META-INF/manifest.xml" {
-            if !entry.media_type.is_empty() && entry.media_type != "text/xml" {
-                return Err(malformed(Some(name), "manifest self-entry has an invalid media type"));
-            }
-            continue;
-        }
-        let part = indexes
-            .get(name)
-            .ok_or_else(|| malformed(Some(name), "manifest-declared part is missing"))?;
-        if !part.directory
-            && !matches!(name.as_str(), "content.xml" | "styles.xml" | "meta.xml" | "settings.xml")
+        if declared.media_type.starts_with("image/")
+            && !super::image_validation::unsupported_media(&declared.media_type)
         {
-            image_profile(name, &entry.media_type)?;
+            image_profile(name, &declared.media_type)?;
         }
+    }
+    if let Some(entry) = manifest.get("META-INF/manifest.xml")
+        && !entry.media_type.is_empty()
+        && entry.media_type != "text/xml"
+    {
+        return Err(malformed(
+            Some("META-INF/manifest.xml"),
+            "manifest self-entry has an invalid media type",
+        ));
     }
     Ok(())
 }

@@ -79,22 +79,18 @@ pub(super) fn drawing_bounds(node: &XmlNode) -> Result<Option<Rect>, ConversionE
         node.attr(SVG_NS, "width"),
         node.attr(SVG_NS, "height"),
     ];
-    if values.iter().all(Option::is_none) {
-        return Ok(None);
+    let mut parsed = [None; 4];
+    for (index, value) in values.into_iter().enumerate() {
+        parsed[index] = value.map(parse_length).transpose()?;
     }
-    let [Some(x), Some(y), Some(width), Some(height)] = values else {
-        return Err(malformed(Some("content.xml"), "drawing bounds are incomplete"));
-    };
-    let result = Rect {
-        x: parse_length(x)?,
-        y: parse_length(y)?,
-        width: parse_length(width)?,
-        height: parse_length(height)?,
-    };
-    if result.width < 0.0 || result.height < 0.0 {
+    if parsed[2].is_some_and(|value| value < 0.0) || parsed[3].is_some_and(|value| value < 0.0) {
         return Err(malformed(Some("content.xml"), "drawing dimensions are negative"));
     }
-    Ok(Some(result))
+    let [Some(x), Some(y), Some(width), Some(height)] = parsed else {
+        // Inline/paragraph anchors need not have an absolute origin. Do not fabricate one.
+        return Ok(None);
+    };
+    Ok(Some(Rect { x, y, width, height }))
 }
 
 fn parse_length(value: &str) -> Result<f32, ConversionError> {
@@ -137,7 +133,7 @@ pub(super) fn parse_transform(value: Option<&str>) -> Result<Transform, Conversi
             .find(')')
             .map(|offset| open + 1 + offset)
             .ok_or_else(|| malformed(Some("content.xml"), "unterminated draw:transform"))?;
-        let name = &rest[..open];
+        let name = rest[..open].trim_end();
         let args: Vec<_> = rest[open + 1..close]
             .split(|character: char| character == ',' || character.is_whitespace())
             .filter(|value| !value.is_empty())

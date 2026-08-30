@@ -189,8 +189,8 @@ pub(super) fn collect_image_anchors(
             .attr(XLINK_NS, "href")
             .ok_or_else(|| malformed(Some("content.xml"), "draw:image lacks xlink:href"))?;
         if node.attr(XLINK_NS, "type").is_some_and(|value| value != "simple")
-            || node.attr(XLINK_NS, "show").is_some()
-            || node.attr(XLINK_NS, "actuate").is_some()
+            || node.attr(XLINK_NS, "show").is_some_and(|value| value != "embed")
+            || node.attr(XLINK_NS, "actuate").is_some_and(|value| value != "onLoad")
         {
             return Err(malformed(
                 Some("content.xml"),
@@ -208,7 +208,9 @@ pub(super) fn collect_image_anchors(
             .get(&path)
             .ok_or_else(|| malformed(Some(&path), "image anchor is not manifest-bound"))?
             .media_type;
-        image_profile(&path, media_type)?;
+        if !super::image_validation::unsupported_media(media_type) {
+            image_profile(&path, media_type)?;
+        }
         anchors.insert(path);
     }
     Ok(anchors)

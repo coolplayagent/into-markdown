@@ -18,9 +18,11 @@ pub(super) struct StyleSpec {
 }
 
 #[derive(Default)]
-pub(super) struct StyleCatalog {
+pub(super) struct StyleCatalog<'a> {
     pub(super) text: StyleMap,
     pub(super) lists: BTreeMap<String, BTreeMap<u8, ListLevelSpec>>,
+    pub(super) identical_duplicates: usize,
+    pub(super) masters: BTreeMap<String, &'a XmlNode>,
 }
 
 pub(super) fn validate_document_versions(
@@ -30,33 +32,32 @@ pub(super) fn validate_document_versions(
     metadata: Option<&XmlNode>,
     settings: Option<&XmlNode>,
 ) -> Result<(), ConversionError> {
-    let content_version = content.attr(OFFICE_NS, "version").unwrap_or(manifest_version);
-    if content_version != manifest_version {
-        return Err(malformed(
-            Some("content.xml"),
-            "office:version disagrees with META-INF/manifest.xml",
-        ));
-    }
-    for (part, root) in [("styles.xml", styles), ("meta.xml", metadata), ("settings.xml", settings)]
-    {
+    // Package and individual XML parts describe their own format version. In particular,
+    // legacy metadata may survive a save by a newer producer; absence is not a mismatch.
+    for (part, root) in [
+        ("content.xml", Some(content)),
+        ("styles.xml", styles),
+        ("meta.xml", metadata),
+        ("settings.xml", settings),
+    ] {
         if root
             .and_then(|root| root.attr(OFFICE_NS, "version"))
-            .is_some_and(|version| version != content_version)
+            .is_some_and(|version| !matches!(version, "1.0" | "1.1" | "1.2" | "1.3"))
         {
-            return Err(malformed(
-                Some(part),
-                "office:version disagrees with content.xml and the manifest",
-            ));
+            return Err(malformed(Some(part), "unsupported ODF XML part version"));
         }
+    }
+    if !matches!(manifest_version, "1.0" | "1.1" | "1.2" | "1.3") {
+        return Err(malformed(Some("META-INF/manifest.xml"), "unsupported ODF package version"));
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_lines)]
-pub(super) fn collect_styles(
-    styles_root: Option<&XmlNode>,
-    content: &XmlNode,
-) -> Result<StyleCatalog, ConversionError> {
+pub(super) fn collect_styles<'a>(
+    styles_root: Option<&'a XmlNode>,
+    content: &'a XmlNode,
+) -> Result<StyleCatalog<'a>, ConversionError> {
     let mut sources = Vec::new();
     if let Some(root) = styles_root {
         for container in root.children() {
@@ -71,7 +72,8 @@ pub(super) fn collect_styles(
         sources.push((container, 2_u8, "content.xml"));
     }
 
-    let mut ranked_styles: BTreeMap<StyleKey, (u8, StyleSpec)> = BTreeMap::new();
+    let mut ranked_styles: BTreeMap<StyleKey, (u8, StyleSpec, &XmlNode)> = BTreeMap::new();
+    let mut identical_duplicates = 0;
     let mut ranked_lists: BTreeMap<String, (u8, BTreeMap<u8, ListLevelSpec>)> = BTreeMap::new();
     for (container, rank, part) in sources {
         for node in container.children() {
@@ -200,20 +202,26 @@ pub(super) fn collect_styles(
             spec.marks.sort();
             spec.marks.dedup();
             match ranked_styles.get(&key) {
-                Some((existing_rank, _)) if *existing_rank == rank => {
+                Some((existing_rank, _, existing))
+                    if *existing_rank == rank && *existing == node =>
+                {
+                    identical_duplicates += 1;
+                }
+                Some((existing_rank, _, _)) if *existing_rank == rank => {
                     return Err(malformed(
                         Some(part),
                         format!("duplicate style family/name {family}/{name}"),
                     ));
                 }
-                Some((existing_rank, _)) if *existing_rank > rank => {}
+                Some((existing_rank, _, _)) if *existing_rank > rank => {}
                 _ => {
-                    ranked_styles.insert(key, (rank, spec));
+                    ranked_styles.insert(key, (rank, spec, node));
                 }
             }
         }
     }
-    let styles: StyleMap = ranked_styles.into_iter().map(|(key, (_, spec))| (key, spec)).collect();
+    let styles: StyleMap =
+        ranked_styles.into_iter().map(|(key, (_, spec, _))| (key, spec)).collect();
     let lists = ranked_lists.into_iter().map(|(name, (_, levels))| (name, levels)).collect();
     // Resolve cycles now so a hostile style graph cannot recurse during content parsing.
     for key in styles.keys() {
@@ -226,7 +234,19 @@ pub(super) fn collect_styles(
             current = styles.get(&value).and_then(|style| style.parent.clone());
         }
     }
-    Ok(StyleCatalog { text: styles, lists })
+    let mut masters = BTreeMap::new();
+    if let Some(root) = styles_root {
+        for container in root.children().filter(|node| node.is(OFFICE_NS, "master-styles")) {
+            for master in container.children().filter(|node| node.is(STYLE_NS, "master-page")) {
+                if let Some(name) = master.attr(STYLE_NS, "name")
+                    && masters.insert(name.to_owned(), master).is_some_and(|old| old != master)
+                {
+                    return Err(malformed(Some("styles.xml"), "conflicting master-page name"));
+                }
+            }
+        }
+    }
+    Ok(StyleCatalog { text: styles, lists, identical_duplicates, masters })
 }
 
 pub(super) fn style_marks(

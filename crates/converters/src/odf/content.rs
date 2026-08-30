@@ -3,7 +3,7 @@ use crate::odf::package::Package;
 use crate::odf::presentation::parse_presentation;
 use crate::odf::semantic::parse_blocks;
 use crate::odf::sheets::parse_spreadsheet;
-use crate::odf::styles::StyleMap;
+use crate::odf::styles::StyleCatalog;
 use crate::odf::text::ParseMode;
 use crate::odf::xml::{XmlNode, only_child};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, InputFormat};
@@ -11,7 +11,7 @@ use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext, I
 pub(super) fn parse_content(
     root: &XmlNode,
     format: InputFormat,
-    styles: &StyleMap,
+    styles: &StyleCatalog<'_>,
     package: &Package,
     state: &mut ParseState,
     options: &ConversionOptions,
@@ -21,13 +21,16 @@ pub(super) fn parse_content(
         return Err(malformed(Some("content.xml"), "unexpected content root"));
     }
     let version = root.attr(OFFICE_NS, "version").unwrap_or(&package.odf_version);
-    if !matches!(version, "1.2" | "1.3") {
+    if !matches!(version, "1.0" | "1.1" | "1.2" | "1.3") {
         return Err(malformed(Some("content.xml"), "unsupported ODF content version"));
     }
     state.document.metadata.properties.insert("odf.version".into(), version.into());
     for child in root.children() {
-        if child.is(OFFICE_NS, "scripts") {
-            return Err(malformed(Some("content.xml"), "office:scripts is forbidden"));
+        if child.is(OFFICE_NS, "scripts")
+            && child.children().next().is_none()
+            && child.text().trim().is_empty()
+        {
+            continue;
         }
         if !(child.is(OFFICE_NS, "font-face-decls")
             || child.is(OFFICE_NS, "automatic-styles")
@@ -65,7 +68,7 @@ pub(super) fn parse_content(
             let locator = part_locator("content.xml");
             state.document.blocks = parse_blocks(
                 payload,
-                styles,
+                &styles.text,
                 package,
                 state,
                 options,
@@ -75,7 +78,9 @@ pub(super) fn parse_content(
                 1,
             )?;
         }
-        InputFormat::Ods => parse_spreadsheet(payload, styles, package, state, options, context)?,
+        InputFormat::Ods => {
+            parse_spreadsheet(payload, &styles.text, package, state, options, context)?;
+        }
         InputFormat::Odp => parse_presentation(payload, styles, package, state, options, context)?,
         _ => unreachable!(),
     }

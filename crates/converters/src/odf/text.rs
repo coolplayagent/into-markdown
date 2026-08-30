@@ -1,10 +1,14 @@
 use crate::odf::annotations::annotation_text;
-use crate::odf::model::{DRAW_NS, OFFICE_NS, ParseState, TEXT_NS, XLINK_NS, limit, malformed};
+use crate::odf::model::{
+    DRAW_NS, OFFICE_NS, ParseState, SVG_NS, TEXT_NS, XLINK_NS, limit, malformed,
+};
+use crate::odf::package::Package;
+use crate::odf::semantic::parse_blocks;
 use crate::odf::styles::{StyleMap, style_marks};
 use crate::odf::tables::parse_repeat;
-use crate::odf::xml::{XmlContent, XmlNode, bounded_text};
+use crate::odf::xml::{XmlContent, XmlNode};
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, Inline, InlineMark, SourceLocator,
+    Block, ConversionError, ConversionOptions, ExecutionContext, Inline, InlineMark, SourceLocator,
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -19,8 +23,10 @@ pub(super) enum ParseMode {
 pub(super) fn parse_inlines(
     node: &XmlNode,
     styles: &StyleMap,
+    package: &Package,
     state: &mut ParseState,
     options: &ConversionOptions,
+    context: &ExecutionContext,
     locator: &SourceLocator,
     marks: &[InlineMark],
 ) -> Result<Vec<Inline>, ConversionError> {
@@ -28,18 +34,25 @@ pub(super) fn parse_inlines(
     for value in &node.content {
         match value {
             XmlContent::Text(text) => push_text(&mut output, text, marks, state, options)?,
-            XmlContent::Node(child) if child.is(TEXT_NS, "span") => {
+            XmlContent::Node(child)
+                if child.is(TEXT_NS, "span")
+                    || child.is(SVG_NS, "title")
+                    || child.is(SVG_NS, "desc") =>
+            {
                 let marks = style_marks(styles, "text", child.attr(TEXT_NS, "style-name"), marks);
-                output.extend(parse_inlines(child, styles, state, options, locator, &marks)?);
+                output.extend(parse_inlines(
+                    child, styles, package, state, options, context, locator, &marks,
+                )?);
             }
             XmlContent::Node(child) if child.is(TEXT_NS, "a") => {
                 let href = child
                     .attr(XLINK_NS, "href")
                     .ok_or_else(|| malformed(Some("content.xml"), "text:a lacks xlink:href"))?;
                 validate_link(href)?;
-                let content = parse_inlines(child, styles, state, options, locator, marks)?;
+                let inlines =
+                    parse_inlines(child, styles, package, state, options, context, locator, marks)?;
                 state.add_inlines(1)?;
-                output.push(Inline::Link { target: href.to_owned(), content });
+                output.push(Inline::Link { target: href.to_owned(), content: inlines });
             }
             XmlContent::Node(child) if child.is(TEXT_NS, "s") => {
                 let repeat = parse_repeat(
@@ -59,23 +72,7 @@ pub(super) fn parse_inlines(
                 output.push(Inline::LineBreak);
             }
             XmlContent::Node(child) if child.is(TEXT_NS, "note") => {
-                let id = child.attr(TEXT_NS, "id").unwrap_or("note");
-                let body = child
-                    .children()
-                    .find(|value| value.is(TEXT_NS, "note-body"))
-                    .ok_or_else(|| malformed(Some("content.xml"), "text:note lacks note-body"))?;
-                let note_text = bounded_text(body, options, "content.xml")?;
-                state.add_inlines(1)?;
-                let paragraph = state.node(
-                    Block::Paragraph(vec![Inline::Text { value: note_text, marks: vec![] }]),
-                    locator.clone(),
-                )?;
-                let blocks = vec![paragraph];
-                let deferred = state
-                    .node(Block::Footnote { label: id.to_owned(), blocks }, locator.clone())?;
-                state.deferred.push(deferred);
-                state.add_inlines(1)?;
-                output.push(Inline::FootnoteReference(id.to_owned()));
+                output.push(parse_note(child, styles, package, state, options, context, locator)?);
             }
             XmlContent::Node(child) if child.is(OFFICE_NS, "annotation") => {
                 let text = annotation_text(child, options)?;
@@ -95,7 +92,12 @@ pub(super) fn parse_inlines(
                     || child.is(TEXT_NS, "reference-mark-start")
                     || child.is(TEXT_NS, "reference-mark-end") => {}
             XmlContent::Node(child) if child.name.ns == TEXT_NS || child.name.ns == OFFICE_NS => {
-                output.extend(parse_inlines(child, styles, state, options, locator, marks)?);
+                if child.is(TEXT_NS, "conditional-text") {
+                    state.warning("odf.cachedField", "Conditional field retains its stored display text; expression was not evaluated", locator.clone());
+                }
+                output.extend(parse_inlines(
+                    child, styles, package, state, options, context, locator, marks,
+                )?);
             }
             XmlContent::Node(child) if child.name.ns == DRAW_NS => {
                 // Block images are handled by parse_drawing. Inline frames have no exact IR shape;
@@ -116,6 +118,28 @@ pub(super) fn parse_inlines(
     Ok(output)
 }
 
+fn parse_note(
+    node: &XmlNode,
+    styles: &StyleMap,
+    package: &Package,
+    state: &mut ParseState,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    locator: &SourceLocator,
+) -> Result<Inline, ConversionError> {
+    let id = node.attr(TEXT_NS, "id").unwrap_or("note");
+    let body = node
+        .children()
+        .find(|value| value.is(TEXT_NS, "note-body"))
+        .ok_or_else(|| malformed(Some("content.xml"), "text:note lacks note-body"))?;
+    let blocks =
+        parse_blocks(body, styles, package, state, options, context, locator, ParseMode::Text, 1)?;
+    let deferred = state.node(Block::Footnote { label: id.to_owned(), blocks }, locator.clone())?;
+    state.deferred.push(deferred);
+    state.add_inlines(1)?;
+    Ok(Inline::FootnoteReference(id.to_owned()))
+}
+
 fn push_text(
     output: &mut Vec<Inline>,
     value: &str,
@@ -134,7 +158,7 @@ fn push_text(
     Ok(())
 }
 
-fn validate_link(value: &str) -> Result<(), ConversionError> {
+pub(super) fn validate_link(value: &str) -> Result<(), ConversionError> {
     if value.starts_with('#') && value.len() > 1 {
         return Ok(());
     }

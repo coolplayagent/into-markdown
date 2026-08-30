@@ -5,6 +5,13 @@ use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 use std::io::Cursor;
 use std::path::Path;
 
+pub(super) fn unsupported_media(media_type: &str) -> bool {
+    matches!(
+        media_type,
+        "image/svg+xml" | "application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\""
+    )
+}
+
 pub(super) fn image_profile(path: &str, media_type: &str) -> Result<ImageFormat, ConversionError> {
     let extension = Path::new(path)
         .extension()

@@ -42,6 +42,18 @@ pub(super) fn image_block(
         .manifest
         .get(&path)
         .ok_or_else(|| malformed(Some(&path), "image is not declared in manifest"))?;
+    if super::image_validation::unsupported_media(&manifest.media_type) {
+        super::recovery::require_best_effort(options, &path, "unsupported image media")?;
+        state.warning("odf.imageOmitted", format!("Unsupported {} image omitted: {path}; placeholder retained, original bytes not exported", manifest.media_type), image_locator.clone());
+        state.add_inlines(1)?;
+        return Ok(Some(state.node(
+            Block::Paragraph(vec![into_markdown_core::Inline::Text {
+                value: format!("[Image omitted: {path} ({})]", manifest.media_type),
+                marks: vec![],
+            }]),
+            image_locator,
+        )?));
+    }
     image_profile(&path, &manifest.media_type)?;
     let bytes =
         package.parts.get(&path).ok_or_else(|| malformed(Some(&path), "image part is missing"))?;

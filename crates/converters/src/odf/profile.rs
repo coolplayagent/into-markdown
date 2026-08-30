@@ -1,3 +1,7 @@
+use super::compatibility::{
+    layout_definition, layout_metadata_element, producer_attribute, standard_attribute,
+    style_attribute,
+};
 use crate::odf::model::{
     CONFIG_NS, DC_NS, DRAW_NS, FO_NS, META_NS, NUMBER_NS, OFFICE_NS, PRESENTATION_NS, STYLE_NS,
     SVG_NS, TABLE_NS, TEXT_NS, XLINK_NS, XML_NS, malformed,
@@ -17,7 +21,7 @@ pub(super) fn validate_tree_profile(
     root: &XmlNode,
     profile: OdfXmlPart,
     part: &str,
-) -> Result<(), ConversionError> {
+) -> Result<usize, ConversionError> {
     let root_ok = match profile {
         OdfXmlPart::Content => root.is(OFFICE_NS, "document-content"),
         OdfXmlPart::Styles => root.is(OFFICE_NS, "document-styles"),
@@ -27,7 +31,7 @@ pub(super) fn validate_tree_profile(
     if !root_ok {
         return Err(malformed(Some(part), "XML root is outside the selected ODF part profile"));
     }
-    validate_profile_node(root, None, profile, part)
+    validate_profile_node(root, None, profile, part, false)
 }
 
 fn validate_profile_node(
@@ -35,7 +39,30 @@ fn validate_profile_node(
     parent: Option<&XmlNode>,
     profile: OdfXmlPart,
     part: &str,
-) -> Result<(), ConversionError> {
+    layout: bool,
+) -> Result<usize, ConversionError> {
+    let empty_container = node.children().next().is_none() && node.text().trim().is_empty();
+    let empty_scripts = empty_container
+        && node.is(OFFICE_NS, "scripts")
+        && parent.is_some_and(|parent| parent.is(OFFICE_NS, "document-content"));
+    let empty_forms = empty_container
+        && node.is(OFFICE_NS, "forms")
+        && parent.is_some_and(|parent| {
+            parent.name.ns == OFFICE_NS
+                && matches!(parent.name.local.as_str(), "text" | "spreadsheet" | "presentation")
+                || parent.is(TABLE_NS, "table")
+                || parent.is(DRAW_NS, "page")
+                || parent.is(PRESENTATION_NS, "notes")
+                || parent.is(STYLE_NS, "master-page")
+        });
+    let layout_root = parent.is_some_and(|parent| layout_definition(node, parent));
+    if node.is(DRAW_NS, "a") {
+        super::text::validate_link(
+            node.attr(XLINK_NS, "href")
+                .ok_or_else(|| malformed(Some(part), "draw:a lacks xlink:href"))?,
+        )?;
+    }
+    let layout = layout || layout_root;
     let forbidden = matches!(
         node.name.local.as_str(),
         "scripts"
@@ -52,7 +79,13 @@ fn validate_profile_node(
             | "document-signatures"
             | "dde-link"
     );
-    if forbidden || !allowed_profile_element(node, profile) {
+    if forbidden && !empty_scripts && !empty_forms
+        || !layout && !empty_scripts && !empty_forms && !allowed_profile_element(node, profile)
+        || layout
+            && !empty_forms
+            && (node.name.ns == OFFICE_NS
+                || (!allowed_profile_element(node, profile) && !layout_metadata_element(node)))
+    {
         return Err(malformed(
             Some(part),
             format!(
@@ -61,11 +94,22 @@ fn validate_profile_node(
             ),
         ));
     }
-    if let Some(parent) = parent {
+    if let Some(parent) = parent
+        && !layout
+        && !empty_scripts
+        && !empty_forms
+    {
         validate_profile_parent(parent, node, profile, part)?;
     }
+    let mut recovered = usize::from(layout_root);
     for attr in &node.attrs {
-        if !allowed_profile_attribute(node, attr) {
+        if producer_attribute(node, attr) {
+            recovered += 1;
+        } else if !layout
+            && !style_attribute(node, attr)
+            && !standard_attribute(node, attr)
+            && !allowed_profile_attribute(node, attr)
+        {
             return Err(malformed(
                 Some(part),
                 format!(
@@ -76,9 +120,9 @@ fn validate_profile_node(
         }
     }
     for child in node.children() {
-        validate_profile_node(child, Some(node), profile, part)?;
+        recovered += validate_profile_node(child, Some(node), profile, part, layout)?;
     }
-    Ok(())
+    Ok(recovered)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -128,10 +172,26 @@ fn allowed_profile_element(node: &XmlNode, profile: OdfXmlPart) -> bool {
                     | "list-level-style-bullet"
                     | "list-level-properties"
                     | "list-level-label-alignment"
+                    | "user-field-get"
+                    | "conditional-text"
+                    | "user-field-input"
+                    | "page-number"
+                    | "page-count"
+                    | "date"
+                    | "time"
+                    | "title"
+                    | "sheet-name"
+                    | "file-name"
+                    | "reference-ref"
+                    | "bookmark-ref"
+                    | "sequence-ref"
+                    | "sequence"
+                    | "variable-set"
             ),
             TABLE_NS => matches!(
                 local,
                 "table"
+                    | "shapes"
                     | "table-column"
                     | "table-columns"
                     | "table-header-columns"
@@ -144,6 +204,7 @@ fn allowed_profile_element(node: &XmlNode, profile: OdfXmlPart) -> bool {
             DRAW_NS => matches!(
                 local,
                 "page"
+                    | "a"
                     | "frame"
                     | "text-box"
                     | "image"
@@ -209,6 +270,8 @@ fn allowed_profile_element(node: &XmlNode, profile: OdfXmlPart) -> bool {
                     | "keyword"
                     | "user-defined"
                     | "document-statistic"
+                    | "print-date"
+                    | "printed-by"
             ),
             _ => false,
         },
@@ -242,7 +305,12 @@ fn validate_profile_parent(
         || parent.is(TABLE_NS, "table-cell")
         || parent.is(DRAW_NS, "text-box")
         || parent.is(PRESENTATION_NS, "notes")
-        || parent.is(OFFICE_NS, "annotation");
+        || parent.is(OFFICE_NS, "annotation")
+        || (parent.name.ns == DRAW_NS
+            && matches!(
+                parent.name.local.as_str(),
+                "custom-shape" | "rect" | "ellipse" | "line" | "connector"
+            ));
     let inline_parent = parent.is(TEXT_NS, "p")
         || parent.is(TEXT_NS, "h")
         || parent.is(TEXT_NS, "span")
@@ -264,7 +332,9 @@ fn validate_profile_parent(
         (OFFICE_NS, "settings") => parent.is(OFFICE_NS, "document-settings"),
         (OFFICE_NS, "annotation") => text_block_parent || inline_parent,
         (OFFICE_NS, "annotation-end") => text_block_parent || inline_parent,
-        (TEXT_NS, "p" | "h") => text_block_parent,
+        (TEXT_NS, "p" | "h") => {
+            text_block_parent || (parent.is(DRAW_NS, "image") && child.content.is_empty())
+        }
         (
             TEXT_NS,
             "span"
@@ -280,7 +350,16 @@ fn validate_profile_parent(
             | "reference-mark-start"
             | "reference-mark-end",
         ) => inline_parent,
-        (TEXT_NS, "list" | "section" | "soft-page-break") => text_block_parent,
+        (TEXT_NS, "list" | "section") => text_block_parent,
+        (
+            TEXT_NS,
+            "user-field-get" | "user-field-input" | "page-number" | "page-count" | "date" | "time"
+            | "title" | "sheet-name" | "file-name" | "reference-ref" | "bookmark-ref"
+            | "sequence-ref" | "sequence" | "variable-set" | "conditional-text",
+        ) => inline_parent,
+        (TEXT_NS, "soft-page-break") => {
+            text_block_parent || inline_parent || parent.is(TABLE_NS, "table")
+        }
         (TEXT_NS, "list-item" | "list-header") => parent.is(TEXT_NS, "list"),
         (TEXT_NS, "note-citation" | "note-body") => parent.is(TEXT_NS, "note"),
         (TEXT_NS, "list-style") => style_container,
@@ -299,6 +378,7 @@ fn validate_profile_parent(
                 || parent.is(DRAW_NS, "frame")
         }
         (TABLE_NS, "table-columns" | "table-header-columns") => parent.is(TABLE_NS, "table"),
+        (TABLE_NS, "shapes") => parent.is(TABLE_NS, "table"),
         (TABLE_NS, "table-column") => {
             parent.is(TABLE_NS, "table")
                 || parent.is(TABLE_NS, "table-columns")
@@ -312,8 +392,14 @@ fn validate_profile_parent(
         }
         (TABLE_NS, "table-cell" | "covered-table-cell") => parent.is(TABLE_NS, "table-row"),
         (DRAW_NS, "page") => parent.is(OFFICE_NS, "presentation"),
+        (DRAW_NS, "a") => inline_parent || text_block_parent || parent.is(DRAW_NS, "page"),
         (DRAW_NS, "frame" | "g" | "custom-shape" | "rect" | "ellipse" | "line" | "connector") => {
-            parent.is(DRAW_NS, "page") || parent.is(DRAW_NS, "g") || text_block_parent
+            parent.is(DRAW_NS, "page")
+                || parent.is(DRAW_NS, "g")
+                || text_block_parent
+                || inline_parent
+                || parent.is(DRAW_NS, "a")
+                || parent.is(TABLE_NS, "shapes")
         }
         (DRAW_NS, "text-box") => {
             parent.name.ns == DRAW_NS
@@ -334,7 +420,11 @@ fn validate_profile_parent(
             | "table-column-properties"
             | "table-cell-properties"
             | "graphic-properties",
-        ) => parent.is(STYLE_NS, "style") || parent.is(STYLE_NS, "default-style"),
+        ) => {
+            parent.is(STYLE_NS, "style")
+                || parent.is(STYLE_NS, "default-style")
+                || (parent.name.ns == TEXT_NS && parent.name.local.starts_with("list-level-style-"))
+        }
         (STYLE_NS, "page-layout-properties") => parent.is(STYLE_NS, "page-layout"),
         (STYLE_NS, "master-page") => parent.is(OFFICE_NS, "master-styles"),
         (STYLE_NS, "font-face") => parent.is(OFFICE_NS, "font-face-decls"),
@@ -348,7 +438,7 @@ fn validate_profile_parent(
             "number" | "currency-symbol" | "day" | "month" | "year" | "hours" | "minutes"
             | "seconds" | "text",
         ) => parent.name.ns == NUMBER_NS && parent.name.local.ends_with("style"),
-        (SVG_NS, "title" | "desc") => parent.name.ns == DRAW_NS,
+        (SVG_NS, "title" | "desc") => parent.name.ns == DRAW_NS || parent.is(TEXT_NS, "span"),
         (DC_NS, "creator" | "date") => {
             parent.is(OFFICE_NS, "meta") || parent.is(OFFICE_NS, "annotation")
         }
@@ -492,7 +582,7 @@ fn allowed_profile_attribute(node: &XmlNode, attr: &Attr) -> bool {
             node.name.ns == DRAW_NS && matches!(local, "x" | "y" | "width" | "height" | "viewBox")
         }
         XLINK_NS => {
-            (node.is(TEXT_NS, "a") || node.is(DRAW_NS, "image"))
+            (node.is(TEXT_NS, "a") || node.is(DRAW_NS, "image") || node.is(DRAW_NS, "a"))
                 && matches!(local, "href" | "type" | "show" | "actuate")
         }
         META_NS => node.is(META_NS, "user-defined") && matches!(local, "name" | "value-type"),
