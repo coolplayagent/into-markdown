@@ -310,7 +310,7 @@ fn materialize_nodes(
         {
             diagnostics.push(Diagnostic {
                 code: "ocr.lowConfidence".into(),
-                severity: DiagnosticSeverity::Info,
+                severity: DiagnosticSeverity::Warning,
                 message: format!("OCR region {index} was omitted below the configured confidence"),
                 locator: Some(page_locator(
                     materialize.page,

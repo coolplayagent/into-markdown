@@ -4,7 +4,8 @@ use crate::workbook::model::WorkbookKind;
 use crate::workbook::preflight::preflight_package;
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput, ExecutionContext,
-    estimate_retained_output, estimate_validation_working_set,
+    SourceContentEvidence, document_is_empty, estimate_retained_output,
+    estimate_validation_working_set,
 };
 
 pub(super) fn convert_workbook(
@@ -87,6 +88,12 @@ pub(super) fn convert_workbook(
             .metadata
             .properties
             .insert(format!("spreadsheet.preflight.{name}"), value.to_string());
+    }
+    if document_is_empty(&output.document)
+        && output.assets.is_empty()
+        && output.diagnostics.is_empty()
+    {
+        output = output.with_source_content_evidence(SourceContentEvidence::Empty);
     }
     output.document.validate().map_err(|error| ConversionError::Internal {
         detail: format!("workbook converter produced invalid IR: {error}"),

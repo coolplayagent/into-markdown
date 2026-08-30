@@ -7,7 +7,8 @@ use into_markdown_core::{
     Block, BlockNode, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterOutput,
     Diagnostic, DiagnosticSeverity, Document, ExecutionContext, FormatCandidate, Inline,
     InputFormat, MAX_DOCUMENT_INLINES, MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance,
-    ProvenanceKind, ResolvedInput, ResourceReservation, Services, SourceLocator, TextDecodingMode,
+    ProvenanceKind, ResolvedInput, ResourceReservation, Services, SourceContentEvidence,
+    SourceLocator, TextDecodingMode,
 };
 use std::mem::size_of;
 
@@ -805,6 +806,11 @@ fn convert_text(
         options.text.decoding_mode,
         context,
     )?;
+    let source_is_empty = diagnostics.is_empty() && decoded.text.chars().all(char::is_whitespace);
+    if source_is_empty {
+        return Ok(ConverterOutput::new(Document::default(), Vec::new(), diagnostics)
+            .with_source_content_evidence(SourceContentEvidence::Empty));
+    }
     let max_decoded_text_bytes =
         size.checked_mul(3).ok_or_else(|| ConversionError::ResourceLimit {
             limit: "max_text_decoded_bytes",

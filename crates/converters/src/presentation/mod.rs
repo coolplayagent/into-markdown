@@ -34,8 +34,9 @@ use into_markdown_core::{
     Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink,
     ConverterOutput, ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
     DiagnosticSeverity, ExecutionContext, FormatCandidate, Inline, InputFormat, LocalBoxFuture,
-    ProbeOutcome, ResolvedInput, Services, SourceLocator, StreamConsumerKind,
-    estimate_retained_output, estimate_validation_working_set, stream_converter_output,
+    ProbeOutcome, ResolvedInput, Services, SourceContentEvidence, SourceLocator,
+    StreamConsumerKind, document_is_empty, estimate_retained_output,
+    estimate_validation_working_set, stream_converter_output,
 };
 use model::{Package, ParseState};
 use output::shapes_to_blocks;
@@ -278,7 +279,7 @@ fn convert_presentation(
             })?;
             state.diagnostics.push(Diagnostic {
                 code: "presentation.hiddenSlideSkipped".into(),
-                severity: DiagnosticSeverity::Info,
+                severity: DiagnosticSeverity::Warning,
                 message: format!("hidden slide {slide_number} was deterministically omitted"),
                 locator: Some(SourceLocator {
                     slide: Some(slide_number),
@@ -464,7 +465,16 @@ fn convert_presentation(
     if package.memory_bytes < retained {
         package.grow_memory(retained - package.memory_bytes)?;
     }
-    let output = ConverterOutput::new(state.document, state.assets, state.diagnostics);
+    let evidence = if document_is_empty(&state.document)
+        && state.assets.is_empty()
+        && state.diagnostics.is_empty()
+    {
+        SourceContentEvidence::Empty
+    } else {
+        SourceContentEvidence::Unknown
+    };
+    let output = ConverterOutput::new(state.document, state.assets, state.diagnostics)
+        .with_source_content_evidence(evidence);
     let Package { memory, .. } = package;
     output.certify_preflight_reservation(context, memory)
 }

@@ -18,6 +18,12 @@ pub(crate) fn emit(
 ) -> Result<ConversionSummary, ConversionError> {
     let RenderedArtifacts { output, markdown, provenance, markdown_memory, provenance_memory } =
         rendered;
+    let result_content = into_markdown_core::classify_result(
+        &output.document,
+        &markdown,
+        &output.assets,
+        &output.diagnostics,
+    )?;
     if capabilities.semantic_events {
         emit_document(&output, &provenance, sink, context)?;
     }
@@ -38,7 +44,7 @@ pub(crate) fn emit(
     drop(provenance_memory);
     drop(markdown_memory);
     drop(markdown);
-    Ok(output.into_conversion_summary(format, markdown_bytes))
+    Ok(output.into_conversion_summary(format, markdown_bytes, result_content))
 }
 
 fn emit_document(

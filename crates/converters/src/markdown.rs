@@ -6,7 +6,7 @@ use into_markdown_core::{
     Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
     FormatCandidate, Inline, InlineMark, InputFormat, ListItem, ListKind, MAX_DOCUMENT_INLINES,
     MAX_DOCUMENT_NODES, NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput, Services,
-    SourceLocator, TableAlignment, TableRow, canonical_external_asset_uri,
+    SourceContentEvidence, SourceLocator, TableAlignment, TableRow, canonical_external_asset_uri,
 };
 use pulldown_cmark::{
     Alignment, CodeBlockKind, CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
@@ -169,6 +169,10 @@ pub(crate) fn convert_markdown(
     }
     let (mut decoded, mut diagnostics) =
         text::decode_source(&input.bytes, Some("utf-8"), options.text.decoding_mode, context)?;
+    if diagnostics.is_empty() && decoded.text.chars().all(char::is_whitespace) {
+        return Ok(ConverterOutput::new(Document::default(), Vec::new(), diagnostics)
+            .with_source_content_evidence(SourceContentEvidence::Empty));
+    }
     scan_duplicate_definitions(&mut decoded, &mut diagnostics, context)?;
     let mut builder = Builder::new(&decoded, options, context, diagnostics)?;
     builder.parse()?;

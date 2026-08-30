@@ -69,20 +69,12 @@ pub(super) fn assemble(
         ));
     }
     if spine.skipped_non_linear > 0 {
-        output.diagnostics.push(diagnostic(
-            "epub.spine.nonLinearSkipped",
-            DiagnosticSeverity::Info,
-            format!("skipped {} non-linear spine item(s)", spine.skipped_non_linear),
-            Some(&package.path),
-        ));
+        output
+            .diagnostics
+            .push(non_linear_spine_diagnostic(spine.skipped_non_linear, &package.path));
     }
     if rights_metadata {
-        output.diagnostics.push(diagnostic(
-            "epub.rightsMetadataIgnored",
-            DiagnosticSeverity::Info,
-            "META-INF/rights.xml was retained as inert metadata and not interpreted".into(),
-            Some("META-INF/rights.xml"),
-        ));
+        output.diagnostics.push(rights_metadata_diagnostic());
     }
     for path in encryption.unavailable_fonts {
         output.diagnostics.push(diagnostic(
@@ -177,6 +169,28 @@ pub(super) fn assemble(
     })?;
     output.account_retained(context)
 }
+
+fn non_linear_spine_diagnostic(skipped: usize, package_path: &str) -> Diagnostic {
+    diagnostic(
+        "epub.spine.nonLinearSkipped",
+        DiagnosticSeverity::Warning,
+        format!("skipped {skipped} non-linear spine item(s)"),
+        Some(package_path),
+    )
+}
+
+fn rights_metadata_diagnostic() -> Diagnostic {
+    diagnostic(
+        "epub.rightsMetadataIgnored",
+        DiagnosticSeverity::Info,
+        "META-INF/rights.xml was retained as inert metadata and not interpreted".into(),
+        Some("META-INF/rights.xml"),
+    )
+}
+
+#[cfg(test)]
+#[path = "merge_tests.rs"]
+mod tests;
 
 fn append_navigation(
     blocks: &mut Vec<BlockNode>,
@@ -420,15 +434,24 @@ fn append_omitted_resource_diagnostic(output: &mut ConverterOutput, package: &Pa
         }
     }
     if css + fonts + media > 0 {
-        output.diagnostics.push(diagnostic(
-            "epub.unreferencedResourcesOmitted",
-            DiagnosticSeverity::Info,
-            format!(
-                "omitted {css} CSS, {fonts} font, and {media} audio/video manifest resource(s) without an IR reference contract"
-            ),
-            Some(&package.path),
-        ));
+        output.diagnostics.push(omitted_resources_diagnostic(css, fonts, media, &package.path));
     }
+}
+
+fn omitted_resources_diagnostic(
+    css: usize,
+    fonts: usize,
+    media: usize,
+    package_path: &str,
+) -> Diagnostic {
+    diagnostic(
+        "epub.unreferencedResourcesOmitted",
+        DiagnosticSeverity::Warning,
+        format!(
+            "omitted {css} CSS, {fonts} font, and {media} audio/video manifest resource(s) without a proven lossless IR mapping"
+        ),
+        Some(package_path),
+    )
 }
 
 fn node(id: String, block: Block, part: &str, kind: ProvenanceKind) -> BlockNode {

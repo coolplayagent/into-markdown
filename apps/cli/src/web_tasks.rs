@@ -77,7 +77,7 @@ pub enum WebTaskError {
     #[error("backend I/O failed: {0}")]
     Io(String),
     #[error("conversion failed during {stage}: {code}")]
-    Conversion { code: String, stage: String },
+    Conversion { code: String, reason_code: Option<String>, stage: String },
 }
 
 /// One-time grants accompanying a Web upload. Grants are checked before task
@@ -348,6 +348,8 @@ pub(crate) struct WebTaskRecord {
 pub(crate) struct WebTaskFailure {
     schema_version: u32,
     pub(crate) code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reason_code: Option<String>,
     pub(crate) stage: String,
     pub(crate) retryable: bool,
 }
@@ -2727,12 +2729,14 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             let services = shared.media_services.assemble(&persisted.options).map_err(|error| {
                 WebTaskError::Conversion {
                     code: error.code().into(),
+                    reason_code: Some(error.reason_code().into()),
                     stage: "capabilityRouting".into(),
                 }
             })?;
             Some(into_markdown::default_engine_with_services(services).map_err(|error| {
                 WebTaskError::Conversion {
                     code: error.code().as_str().into(),
+                    reason_code: Some(error.reason_code().into()),
                     stage: "conversionSetup".into(),
                 }
             })?)
@@ -2742,12 +2746,14 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 .assemble_conversion(&persisted.options, web_invocation_capabilities(&persisted))
                 .map_err(|error| WebTaskError::Conversion {
                     code: error.code().into(),
+                    reason_code: Some(error.reason_code().into()),
                     stage: "capabilityRouting".into(),
                 })?
                 .map(into_markdown::default_engine_with_services)
                 .transpose()
                 .map_err(|error| WebTaskError::Conversion {
                     code: error.code().as_str().into(),
+                    reason_code: Some(error.reason_code().into()),
                     stage: "conversionSetup".into(),
                 })?
         };
@@ -2770,6 +2776,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             } else {
                 WebTaskError::Conversion {
                     code: error.code().as_str().into(),
+                    reason_code: Some(error.reason_code().into()),
                     stage: "conversion".into(),
                 }
             }
@@ -4162,23 +4169,25 @@ fn load_persisted_request(task: &SafeDir) -> Result<Option<PersistedRequest>, We
 }
 
 fn failure_from_error(error: &WebTaskError) -> WebTaskFailure {
-    let (code, stage, retryable) = match error {
-        WebTaskError::Conversion { code, stage } => {
+    let (code, reason_code, stage, retryable) = match error {
+        WebTaskError::Conversion { code, reason_code, stage } => {
             let retryable = matches!(
                 code.as_str(),
                 "network" | "networkDenied" | "timeout" | "componentUnavailable" | "ai"
             );
-            (code.clone(), stage.clone(), retryable)
+            (code.clone(), reason_code.clone(), stage.clone(), retryable)
         }
-        WebTaskError::Limit(_) => ("resourceLimit".into(), "storage".into(), false),
-        WebTaskError::Unsafe(_) => ("unsafeStorage".into(), "storage".into(), false),
-        WebTaskError::Cancelled => ("cancelled".into(), "conversion".into(), true),
-        WebTaskError::NotFound => ("notFound".into(), "storage".into(), false),
-        WebTaskError::Conflict(_) => ("taskConflict".into(), "storage".into(), true),
-        WebTaskError::Invalid(_) => ("invalidTaskOptions".into(), "conversionSetup".into(), false),
-        WebTaskError::Io(_) => ("backendIo".into(), "storage".into(), true),
+        WebTaskError::Limit(_) => ("resourceLimit".into(), None, "storage".into(), false),
+        WebTaskError::Unsafe(_) => ("unsafeStorage".into(), None, "storage".into(), false),
+        WebTaskError::Cancelled => ("cancelled".into(), None, "conversion".into(), true),
+        WebTaskError::NotFound => ("notFound".into(), None, "storage".into(), false),
+        WebTaskError::Conflict(_) => ("taskConflict".into(), None, "storage".into(), true),
+        WebTaskError::Invalid(_) => {
+            ("invalidTaskOptions".into(), None, "conversionSetup".into(), false)
+        }
+        WebTaskError::Io(_) => ("backendIo".into(), None, "storage".into(), true),
     };
-    WebTaskFailure { schema_version: 1, code, stage, retryable }
+    WebTaskFailure { schema_version: 1, code, reason_code, stage, retryable }
 }
 
 fn persist_task_failure(
@@ -4212,8 +4221,13 @@ fn load_task_failure(shared: &Shared, id: &TaskId) -> Result<Option<WebTaskFailu
         .map_err(|_| WebTaskError::Unsafe("task failure record is invalid".into()))?;
     if failure.schema_version != 1
         || failure.code.len() > 64
+        || failure.reason_code.as_ref().is_some_and(|value| value.len() > 64)
         || failure.stage.len() > 64
         || !failure.code.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || failure
+            .reason_code
+            .as_ref()
+            .is_some_and(|value| !value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
         || !failure.stage.bytes().all(|byte| byte.is_ascii_alphanumeric())
     {
         return Err(WebTaskError::Unsafe("task failure record is incompatible".into()));
@@ -5204,6 +5218,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[path = "empty_result_tests.rs"]
+    mod empty_result_tests;
 
     #[test]
     fn durable_web_requests_assemble_capabilities_from_options_and_filename() {

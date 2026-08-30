@@ -1,6 +1,7 @@
 use crate::{
-    Block, BlockNode, CancellationToken, ConversionError, ConversionOptions, ConversionRequest,
-    ErrorCode, ExecutionOptions, FormatHint, Inline, InputFormat, InputRef, default_engine,
+    Block, BlockNode, CancellationToken, ConversionError, ConversionOptions, ConversionOutcome,
+    ConversionRequest, ErrorCode, ExecutionOptions, FormatHint, Inline, InputFormat, InputRef,
+    ResultContent, default_engine,
 };
 use std::future::Future;
 use std::io::{Cursor, Write as _};
@@ -153,7 +154,11 @@ fn empty_is_valid_but_all_failed_members_are_not_pseudo_success() {
     let empty = archive(&[], false);
     let result = convert(empty, ConversionOptions::default(), ExecutionOptions::default()).unwrap();
     assert!(result.document.blocks.is_empty());
-    assert!(result.diagnostics.is_empty());
+    assert_eq!(result.content().unwrap(), ResultContent::EmptySource);
+    assert_eq!(result.outcome(), ConversionOutcome::Complete);
+    assert_eq!(result.reason_code(), Some("emptySource"));
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(result.diagnostics[0].code, "emptySource");
 
     let unsupported = archive(&[("unknown.bin", b"\0\x01\x02")], false);
     assert!(matches!(

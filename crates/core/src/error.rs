@@ -83,6 +83,10 @@ pub enum ConversionError {
         /// Human-readable structural failure.
         detail: String,
     },
+    /// Conversion completed structurally but produced no usable content and
+    /// the converter did not certify that the source itself was empty.
+    #[error("conversion produced no usable content")]
+    EmptyContent,
     /// The input cannot be opened without a password.
     #[error("input is encrypted or password protected")]
     Encrypted,
@@ -159,7 +163,7 @@ impl ConversionError {
         match self {
             Self::Unsupported { .. } => ErrorCode::Unsupported,
             Self::NoConverter { .. } => ErrorCode::NoConverter,
-            Self::Malformed { .. } => ErrorCode::Malformed,
+            Self::Malformed { .. } | Self::EmptyContent => ErrorCode::Malformed,
             Self::Encrypted => ErrorCode::Encrypted,
             Self::ResourceLimit { .. } => ErrorCode::ResourceLimit,
             Self::Ocr { .. } => ErrorCode::Ocr,
@@ -178,6 +182,7 @@ impl ConversionError {
     #[must_use]
     pub const fn reason_code(&self) -> &'static str {
         match self {
+            Self::EmptyContent => "emptyContent",
             Self::Recovery { reason, .. } => reason,
             Self::ResourceLimit { limit, .. } => limit,
             _ => self.code().as_str(),
@@ -229,6 +234,7 @@ mod tests {
             (ConversionError::Unsupported { detail: String::new() }, "unsupported"),
             (ConversionError::NoConverter { format: "pdf".into() }, "noConverter"),
             (ConversionError::Malformed { part: None, detail: String::new() }, "malformed"),
+            (ConversionError::EmptyContent, "malformed"),
             (ConversionError::Encrypted, "encrypted"),
             (
                 ConversionError::ResourceLimit { limit: "bytes", detail: String::new() },

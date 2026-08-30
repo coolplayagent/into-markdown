@@ -78,6 +78,23 @@ HTTP(S) URI，并拒绝非法 percent escape。它只验证并保留审计引用
 SPI 不允许渲染器写资源、追加诊断或改写 provenance。转换器诊断和引擎按深度优先
 阅读顺序收集的 provenance 原样保留在 `ConversionResult` 中。
 
+Engine 在渲染后、任何 sink 写入或成功 checkpoint 提交前执行统一结果策略。Markdown
+含可见非空白字符时是普通成功；只有转换器完整扫描其可见内容域并附带私有
+`SourceContentEvidence::Empty`，空 Markdown 才能以 `complete` / `emptySource` 成功。
+未被证明为空、但最终 Markdown 为空且没有可用的 asset-only 结构时返回
+`ConversionError::EmptyContent`；为保持既有错误分类兼容，它的 `ErrorCode` 仍是
+`malformed`，细分 `reasonCode` 是 `emptyContent`。只含受 IR 引用资源的结果使用
+`assetOnly`：结构化 Result/IR、bundle 或资源抽取目标可以成功，不能承载该结果的纯
+Markdown 目标失败。普通执行、`convert_into`、可恢复 checkpoint fresh/resume、CLI
+stdout、文件事务和 Web 发布共用这项判定，判空不会再次调用 converter。
+
+`ConversionOutcome` 的诊断严重度契约可审计且不使用诊断码白名单：`Info` 只能描述无
+正文内容损失的审计事实，全部诊断均为 `Info` 时仍是 `complete`；任何省略、替代或净化
+必须由生产端发出 `Warning` 或 `Error`，结果为 `degraded`。例如 OCR 低置信区域、隐藏
+slide、未知 RTF 控制、非线性 EPUB spine 章节，以及未证明无损映射的 EPUB manifest
+资源省略均为 `Warning`；feed 源顺序、PDF 扫描页识别、MediaWiki 标题重定向以及 EPUB
+inert rights 元数据保留 `Info`。
+
 资源模式只决定 Markdown 表示：统一规划器在渲染前生成并冻结与资源写出层共享的
 `asset-<完整 SHA-256(bytes)>.<MIME 权威扩展名>` 有界 ASCII 文件名，
 `embed` 生成 base64 data URI，`omit` 保留 alt 而不生成悬空链接。资源写出层必须

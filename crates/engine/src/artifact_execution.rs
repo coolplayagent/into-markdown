@@ -62,6 +62,12 @@ pub(crate) async fn execute(
         &context,
     )
     .await?;
+    let output = crate::result_policy::attach_evidence(
+        output,
+        source.input(),
+        attempt.candidate.format,
+        &context,
+    )?;
     let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
         detail: "no Markdown renderer is registered".into(),
     })?;

@@ -6,7 +6,7 @@ use into_markdown_core::{
     Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
     FormatCandidate, Inline, InlineMark, InputFormat, ListItem, ListKind, MAX_DOCUMENT_INLINES,
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, ProbeOutcome, Provenance, ProvenanceKind,
-    ResolvedInput, Services, SourceLocator, TableAlignment, TableRow,
+    ResolvedInput, Services, SourceContentEvidence, SourceLocator, TableAlignment, TableRow,
 };
 use quick_xml::events::{BytesCData, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;
@@ -721,7 +721,16 @@ fn convert_docx(
             error.detail
         ),
     })?;
-    Ok(ConverterOutput::new(state.document, state.assets, state.diagnostics))
+    let evidence = if state.document.blocks.is_empty()
+        && state.assets.is_empty()
+        && state.diagnostics.is_empty()
+    {
+        SourceContentEvidence::Empty
+    } else {
+        SourceContentEvidence::Unknown
+    };
+    Ok(ConverterOutput::new(state.document, state.assets, state.diagnostics)
+        .with_source_content_evidence(evidence))
 }
 
 fn relationship_target(
