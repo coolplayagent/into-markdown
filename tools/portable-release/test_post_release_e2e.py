@@ -455,6 +455,14 @@ class PostReleaseE2ETests(unittest.TestCase):
                 )
 
     def test_skill_black_box_rejects_no_output_wrong_version_and_wrong_content(self) -> None:
+        text_authority = e2e.fixture_semantic_sha256(
+            e2e.ROOT / "fixtures", "text-normal", "small/text/normal.txt"
+        )
+        self.assertEqual(
+            text_authority,
+            "7409dc576cbe54a382d7253c5019f173812fb18391f200500af467444d084c55",
+        )
+
         class Result:
             def __init__(self, stdout=b""):
                 self.stdout = stdout
@@ -470,9 +478,10 @@ class PostReleaseE2ETests(unittest.TestCase):
             return {"PATH": "", "XDG_CACHE_HOME": str(path / "cache")}, path
 
         for scenario, expected in (
+            ("valid", None),
             ("no-output", "missing or empty"),
             ("wrong-version", "version does not match"),
-            ("wrong-text", "fixture authority text"),
+            ("wrong-text", "differs from the fixture authority"),
             ("wrong-pdf", "differs from the authenticated Core"),
             ("wrong-ocr", "fixture authority text"),
         ):
@@ -491,7 +500,12 @@ class PostReleaseE2ETests(unittest.TestCase):
                         if scenario != "no-output":
                             output = pathlib.Path(arguments[arguments.index("-o") + 1])
                             if case == "skill-text-empty-path":
-                                output.write_text("wrong" if scenario == "wrong-text" else "Alpha 中文 line\nSecond line", encoding="utf-8")
+                                contents = (
+                                    "wrong"
+                                    if scenario == "wrong-text"
+                                    else "Alpha 中文 line  \nSecond line\n"
+                                )
+                                output.write_bytes(contents.encode("utf-8"))
                             elif case == "skill-pdf-empty-path":
                                 output.write_bytes(b"wrong" if scenario == "wrong-pdf" else b"core-pdf")
                             else:
@@ -501,23 +515,28 @@ class PostReleaseE2ETests(unittest.TestCase):
                                 )
                         return Result()
 
-                with self.assertRaisesRegex(e2e.E2EError, expected):
-                    e2e.run_skill_packaged_runtime(
-                        root / "skill",
-                        "linux",
-                        e2e.ROOT / "fixtures",
-                        root / "run",
-                        0,
-                        "0.0.3",
-                        b"core-pdf",
-                        protect,
-                        isolated,
-                        FakeRunner,
-                        e2e._copy_fixture,
-                        e2e.conversion_arguments,
-                        e2e.assert_output,
-                        lambda _environment, _platform: [],
-                    )
+                arguments = (
+                    root / "skill",
+                    "linux",
+                    e2e.ROOT / "fixtures",
+                    root / "run",
+                    0,
+                    "0.0.3",
+                    text_authority,
+                    b"core-pdf",
+                    protect,
+                    isolated,
+                    FakeRunner,
+                    e2e._copy_fixture,
+                    e2e.conversion_arguments,
+                    e2e.assert_output,
+                    lambda _environment, _platform: [],
+                )
+                if expected is None:
+                    self.assertEqual(len(e2e.run_skill_packaged_runtime(*arguments)), 4)
+                else:
+                    with self.assertRaisesRegex(e2e.E2EError, expected):
+                        e2e.run_skill_packaged_runtime(*arguments)
 
     def test_dispatch_snapshot_detection_is_scoped_to_the_isolated_temp(self) -> None:
         with tempfile.TemporaryDirectory() as name:

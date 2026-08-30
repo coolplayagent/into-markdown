@@ -276,6 +276,23 @@ def conversion_arguments(source: pathlib.Path, output: pathlib.Path, extra: list
     ]
 
 
+def fixture_semantic_sha256(fixtures: pathlib.Path, fixture_id: str, relative: str) -> str:
+    """Read the canonical Markdown digest from the checked-in fixture authority."""
+    manifest = json.loads((fixtures / "manifest.json").read_text(encoding="utf-8"))
+    matches = [
+        fixture
+        for fixture in manifest.get("fixtures", [])
+        if fixture.get("id") == fixture_id and fixture.get("path") == relative
+    ]
+    if len(matches) != 1:
+        raise E2EError(f"fixture authority does not contain exactly one {fixture_id}")
+    expected = matches[0].get("expected", {})
+    digest = expected.get("semantic_sha256", "")
+    if expected.get("outcome") != "success" or len(digest) != 64:
+        raise E2EError(f"fixture authority for {fixture_id} lacks a success digest")
+    return digest
+
+
 def assert_output(path: pathlib.Path, label: str) -> None:
     if not path.is_file() or not path.read_bytes():
         raise E2EError(f"{label} output is missing or empty")
@@ -674,6 +691,9 @@ def run_platform(
             root,
             expected_all_runtimes,
             version,
+            fixture_semantic_sha256(
+                fixtures, "text-normal", "small/text/normal.txt"
+            ),
             core_pdf_output,
             protect_directory,
             _isolated_environment,

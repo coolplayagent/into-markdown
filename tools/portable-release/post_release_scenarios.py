@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -270,6 +271,7 @@ def run_skill_packaged_runtime(
     root: pathlib.Path,
     expected_all_runtimes: int,
     expected_version: str,
+    expected_text_sha256: str,
     expected_pdf_output: bytes,
     protect_directory: Callable[[pathlib.Path, str], pathlib.Path],
     isolated_environment: Callable[
@@ -301,9 +303,8 @@ def run_skill_packaged_runtime(
         conversion_arguments(text, text_output, ["--no-config"]),
     )
     assert_output(text_output, "Skill plain text")
-    source_text = text.read_text(encoding="utf-8").strip()
-    if source_text and source_text not in text_output.read_text(encoding="utf-8"):
-        raise E2EError("Skill text output does not contain the fixture authority text")
+    if hashlib.sha256(text_output.read_bytes()).hexdigest() != expected_text_sha256:
+        raise E2EError("Skill text output differs from the fixture authority")
     pdf = copy_fixture(
         fixtures, "small/pdf/structures.pdf", skill_work / "structures.pdf"
     )
