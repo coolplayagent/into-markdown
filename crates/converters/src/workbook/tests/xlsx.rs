@@ -51,6 +51,52 @@ fn native_xlsx_reuses_one_prepared_layout_and_one_data_pass_per_sheet() {
     assert_eq!(properties["spreadsheet.native.sharedStringPasses"], "1");
     assert_eq!(properties["spreadsheet.native.stagingReads"], "2");
     assert_eq!(properties["spreadsheet.native.stagingSeeks"], "2");
+    assert!(output.diagnostics.is_empty(), "normal native XLSX must remain complete");
+}
+
+#[test]
+fn ordinary_tables_keep_table_semantics_and_sparse_substitution_is_explicit() {
+    let mut rows = String::new();
+    for row in 1..=100 {
+        rows.push_str(&format!("<row r=\"{row}\">"));
+        for column in 0..10 {
+            let cell = crate::workbook::cell::cell_name(row - 1, column);
+            rows.push_str(&format!("<c r=\"{cell}\"><v>{row}</v></c>"));
+        }
+        rows.push_str("</row>");
+    }
+    let worksheet = format!(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:J100"/><sheetData>{rows}</sheetData></worksheet>"#
+    );
+    let output = convert(&xlsx(&worksheet), &ConversionOptions::default()).unwrap();
+    let Block::Sheet { blocks, .. } = &output.document.blocks[0].block else { panic!() };
+    assert!(matches!(&blocks[0].block, Block::Table { .. }));
+    assert!(output.diagnostics.is_empty());
+
+    let sparse = xlsx(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>first</v></c></row><row r="1048576"><c r="XFD1048576"><v>last</v></c></row></sheetData></worksheet>"#,
+    );
+    let output = convert(&sparse, &ConversionOptions::default()).unwrap();
+    assert!(output.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "spreadsheet.largeTablePaged"
+            && diagnostic.severity == into_markdown_core::DiagnosticSeverity::Warning
+    }));
+}
+
+#[test]
+fn populated_non_owner_merge_cells_use_exact_paged_representation() {
+    let bytes = xlsx(
+        r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>owner</t></is></c><c r="B1" t="inlineStr"><is><t>subordinate</t></is></c></row></sheetData><mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells></worksheet>"#,
+    );
+    let output = convert(&bytes, &ConversionOptions::default()).unwrap();
+    assert!(output.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "spreadsheet.mergeCellsPaged"
+            && diagnostic.severity == into_markdown_core::DiagnosticSeverity::Warning
+    }));
+    let Block::Sheet { blocks, .. } = &output.document.blocks[0].block else { panic!() };
+    let Block::Code { text, .. } = &blocks[0].block else { panic!() };
+    assert!(text.contains("# merges=A1:B1"));
+    assert!(text.contains("owner\tsubordinate"));
 }
 use std::io::Cursor;
 

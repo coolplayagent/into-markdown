@@ -54,8 +54,17 @@ pub(super) fn build_sparse_regions(
     let mut regions = regions_from_runs(runs)?;
     append_merge_regions(&mut regions, merges)?;
     let (regions, empty_cells_used) = coalesce_regions(regions, empty_cell_budget)?;
-    let regions = consolidate_merge_owners(regions, merges)?;
-    validate_merge_ownership(&regions, merges)?;
+    // Every merge is itself an input region, and coalescing unconditionally unions
+    // intersecting merge owners. A non-overlap sweep therefore proves that each
+    // merge is retained by exactly one output region without an O(merges * regions)
+    // ownership rescan.
+    let regions = if validate_non_overlapping_regions(&regions).is_ok() {
+        regions
+    } else {
+        let regions = consolidate_merge_owners(regions, merges)?;
+        validate_merge_ownership(&regions, merges)?;
+        regions
+    };
     Ok(RegionPlan { regions, empty_cells_used })
 }
 
@@ -411,6 +420,39 @@ fn validate_non_overlapping_merges(merges: &[MergeRange]) -> Result<(), Conversi
             return Err(malformed(None, "overlapping sparse merged ranges"));
         }
         expirations.push(Reverse((merge_range.last_row, merge_range.first_column)));
+    }
+    Ok(())
+}
+
+fn validate_non_overlapping_regions(regions: &[SparseRegion]) -> Result<(), ConversionError> {
+    let mut ordered = regions.to_vec();
+    ordered.sort_unstable_by_key(|region| {
+        (region.first_row, region.first_column, region.last_row, region.last_column)
+    });
+    let mut active = BTreeMap::<u32, SparseRegion>::new();
+    let mut expirations = BinaryHeap::<Reverse<(u32, u32)>>::new();
+    for region in ordered {
+        validate_region(region)?;
+        while let Some(Reverse((end_row, first_column))) = expirations.peek().copied() {
+            if end_row >= region.first_row {
+                break;
+            }
+            expirations.pop();
+            if active.get(&first_column).is_some_and(|value| value.last_row == end_row) {
+                active.remove(&first_column);
+            }
+        }
+        if active
+            .range(..=region.last_column)
+            .next_back()
+            .is_some_and(|(_, prior)| prior.last_column >= region.first_column)
+        {
+            return Err(malformed(None, "sparse worksheet regions overlap"));
+        }
+        if active.insert(region.first_column, region).is_some() {
+            return Err(malformed(None, "sparse worksheet regions overlap"));
+        }
+        expirations.push(Reverse((region.last_row, region.first_column)));
     }
     Ok(())
 }

@@ -48,6 +48,7 @@ struct LayoutPlan {
     layout: crate::workbook::xlsx::sheet_index::SheetLayout,
     regions: Vec<SparseRegion>,
     merges: Vec<MergeRange>,
+    populated_merge_subordinates: bool,
 }
 
 fn prepare_layouts(
@@ -88,6 +89,7 @@ fn prepare_layouts(
                 last_column: end.1,
             })
             .collect::<Vec<_>>();
+        let populated_merge_subordinates = has_populated_merge_subordinates(&layout.runs, &merges);
         let regions = preflight.xml_regions.get(name).cloned().ok_or_else(|| {
             malformed(Some(part), format!("worksheet {name} region plan was not prepared"))
         })?;
@@ -97,6 +99,7 @@ fn prepare_layouts(
             layout,
             regions,
             merges,
+            populated_merge_subordinates,
         });
     }
     Ok((layouts, required_shared))
@@ -156,13 +159,9 @@ fn stage_sheets(
 > {
     let mut prepared = Vec::new();
     let mut telemetry = StagingTelemetry::default();
-    let mut diagnostics = vec![warning(
-        "spreadsheet.dataPlaneFallback",
-        "worksheet data was read through the bounded native SpreadsheetML adapter".into(),
-        None,
-    )];
+    let mut diagnostics = Vec::new();
     for plan in layouts {
-        let LayoutPlan { name, part, layout, regions, merges } = plan;
+        let LayoutPlan { name, part, layout, regions, merges, populated_merge_subordinates } = plan;
         context.checkpoint()?;
         let entry = archive.by_name(&part).map_err(|error| {
             malformed(Some(&part), format!("worksheet part is missing: {error}"))
@@ -222,12 +221,44 @@ fn stage_sheets(
                 .reduce(|left, right| (left.0.max(right.0), left.1.max(right.1))),
             regions,
             merges,
+            populated_merge_subordinates,
             cells: Some(cells),
             physical_cells: layout.physical_cells,
             extras: preflight.extras.get(&name).cloned().unwrap_or_default(),
         });
     }
     Ok((prepared, telemetry, diagnostics))
+}
+
+fn has_populated_merge_subordinates(
+    runs: &[crate::workbook::xlsx::sheet_index::SheetRun],
+    merges: &[MergeRange],
+) -> bool {
+    let mut ordered = merges.to_vec();
+    ordered.sort_unstable_by_key(|range| {
+        (range.first_row, range.first_column, range.last_row, range.last_column)
+    });
+    let mut active = Vec::<MergeRange>::new();
+    let mut next = 0;
+    for run in runs {
+        active.retain(|range| range.last_row >= run.row);
+        while ordered.get(next).is_some_and(|range| range.first_row <= run.row) {
+            active.push(ordered[next]);
+            next += 1;
+        }
+        for range in &active {
+            let first = run.first_column.max(range.first_column);
+            let last = run.last_column.min(range.last_column);
+            if first <= last
+                && (run.row != range.first_row
+                    || first != range.first_column
+                    || last != range.first_column)
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn attach_telemetry(
