@@ -171,6 +171,7 @@ impl fmt::Debug for ExecutionOptions {
 pub struct ExecutionContext {
     shared: Arc<ExecutionShared>,
     memory_credit: Option<Arc<MemoryCredit>>,
+    ignore_request_controls: bool,
 }
 
 impl Clone for ExecutionContext {
@@ -181,7 +182,11 @@ impl Clone for ExecutionContext {
         // from its borrow. Reservations created through the scoped context use
         // `clone_with_memory_account` below so their RAII drops still debit the
         // exact child counter they charged.
-        Self { shared: Arc::clone(&self.shared), memory_credit: None }
+        Self {
+            shared: Arc::clone(&self.shared),
+            memory_credit: None,
+            ignore_request_controls: self.ignore_request_controls,
+        }
     }
 }
 
@@ -362,7 +367,7 @@ impl ExecutionContext {
                 shared.deadline_timer_available.store(true, Ordering::Release);
             }
         }
-        Self { shared, memory_credit: None }
+        Self { shared, memory_credit: None, ignore_request_controls: false }
     }
 
     /// Create an independently cancellable request which leases from this
@@ -405,6 +410,9 @@ impl ExecutionContext {
     /// stable [`ConversionError::ComponentUnavailable`] when the process could
     /// not start the deadline timer.
     pub fn checkpoint(&self) -> Result<(), ConversionError> {
+        if self.ignore_request_controls {
+            return Ok(());
+        }
         if !self.shared.deadline_timer_available.load(Ordering::Acquire) {
             return Err(ConversionError::ComponentUnavailable {
                 component: "deadline-timer".into(),
@@ -421,6 +429,19 @@ impl ExecutionContext {
             return Err(ConversionError::Timeout);
         }
         Ok(())
+    }
+
+    /// Create a cleanup-only view which shares this request's exact resource
+    /// counters and limits while allowing mandatory rollback after cancellation
+    /// or timeout has already won.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn cleanup_scope(&self) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+            memory_credit: None,
+            ignore_request_controls: true,
+        }
     }
 
     /// Install the durable media checkpoint seam for one recoverable request.
@@ -663,7 +684,11 @@ impl ExecutionContext {
             Arc::new(MemoryCredit { backing: Arc::clone(backing), bytes: AtomicU64::new(0) });
         reservation.active_memory_credit = Some(Arc::downgrade(&memory_credit));
         Ok(PreflightMemoryCredit {
-            context: Self { shared: Arc::clone(&self.shared), memory_credit: Some(memory_credit) },
+            context: Self {
+                shared: Arc::clone(&self.shared),
+                memory_credit: Some(memory_credit),
+                ignore_request_controls: self.ignore_request_controls,
+            },
             _reservation: reservation,
         })
     }
@@ -812,6 +837,7 @@ impl ExecutionContext {
         Self {
             shared: Arc::clone(&self.shared),
             memory_credit: self.memory_credit.as_ref().map(Arc::clone),
+            ignore_request_controls: self.ignore_request_controls,
         }
     }
 
@@ -2070,6 +2096,37 @@ mod tests {
             ResourceLimits::default(),
         );
         assert!(matches!(context.checkpoint(), Err(ConversionError::Timeout)));
+    }
+
+    #[test]
+    fn cleanup_scope_bypasses_terminal_controls_but_shares_exact_budgets() {
+        let cancellation = CancellationToken::new();
+        let context = ExecutionContext::new(
+            ExecutionOptions {
+                cancellation: cancellation.clone(),
+                timeout: Some(Duration::ZERO),
+                ..ExecutionOptions::default()
+            },
+            ResourceLimits {
+                max_memory_bytes: 8,
+                max_temporary_bytes: 8,
+                ..ResourceLimits::default()
+            },
+        );
+        cancellation.cancel();
+        assert!(matches!(context.checkpoint(), Err(ConversionError::Cancelled)));
+
+        let cleanup = context.cleanup_scope();
+        assert!(cleanup.checkpoint().is_ok());
+        let memory = cleanup.reserve_memory(8).unwrap();
+        let temporary = cleanup.reserve_temporary(8).unwrap();
+        assert_eq!(context.reserved_memory_bytes(), 8);
+        assert_eq!(context.reserved_temporary_bytes(), 8);
+        assert!(cleanup.reserve_memory(1).is_err());
+        assert!(cleanup.reserve_temporary(1).is_err());
+        drop((memory, temporary));
+        assert_eq!(context.reserved_memory_bytes(), 0);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
     }
 
     #[test]
