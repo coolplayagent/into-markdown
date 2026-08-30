@@ -826,6 +826,23 @@ fn run_capability_verify(
     loaded: &LoadedConfig,
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
+    if uses_embedded_ocr_verification(id, crate::embedded_runtime::enabled()) {
+        let started = std::time::Instant::now();
+        verify_capability_runtime(id, loaded, &context.cwd)?;
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if json {
+            return write_json(context.stdout, &core_ocr_verification_json(elapsed_ms));
+        }
+        writeln!(
+            context.stdout,
+            "{}: verified {} {} in {} ms",
+            capability_name(id),
+            capability_source_name(CORE_OCR_SOURCE),
+            env!("CARGO_PKG_VERSION"),
+            elapsed_ms
+        )?;
+        return Ok(());
+    }
     let (plugin_id, shared) = capability_plugin(id)?;
     let started = std::time::Instant::now();
     let installed = verify_admin_effective_plugin_from_loaded(loaded, &context.cwd, plugin_id)?;
@@ -867,6 +884,23 @@ fn run_capability_verify(
         )?;
     }
     Ok(())
+}
+
+fn uses_embedded_ocr_verification(id: &str, embedded_ocr: bool) -> bool {
+    embedded_ocr && id == "ocr"
+}
+
+fn core_ocr_verification_json(elapsed_ms: u64) -> serde_json::Value {
+    serde_json::json!({
+        "schemaVersion": 1,
+        "capability": "ocr",
+        "source": CORE_OCR_SOURCE,
+        "sourceName": capability_source_name(CORE_OCR_SOURCE),
+        "status": "ready",
+        "version": env!("CARGO_PKG_VERSION"),
+        "elapsedMs": elapsed_ms,
+        "sharedCapabilities": ["ocr"],
+    })
 }
 
 pub(crate) fn capability_views(
@@ -7948,6 +7982,29 @@ api_key_env = "MISSING_LOCAL_ASR_TEST_KEY"
         assert!(ocr.sources.iter().all(|source| !source.starts_with("plugin:")));
         assert_eq!(ocr.version.as_deref(), Some(env!("CARGO_PKG_VERSION")));
         assert_eq!(ocr.local_version, ocr.version);
+    }
+
+    #[test]
+    fn capability_verification_targets_core_only_for_embedded_ocr() {
+        assert!(uses_embedded_ocr_verification("ocr", true));
+        assert!(!uses_embedded_ocr_verification("ocr", false));
+        assert!(!uses_embedded_ocr_verification("transcription", true));
+        assert!(!uses_embedded_ocr_verification("missing", true));
+    }
+
+    #[test]
+    fn embedded_ocr_verification_json_uses_public_core_identity_and_version() {
+        let verification = core_ocr_verification_json(17);
+        assert_eq!(verification["schemaVersion"], 1);
+        assert_eq!(verification["capability"], "ocr");
+        assert_eq!(verification["source"], CORE_OCR_SOURCE);
+        assert_eq!(verification["sourceName"], "内置 OCR");
+        assert_eq!(verification["status"], "ready");
+        assert_eq!(verification["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(verification["elapsedMs"], 17);
+        assert_eq!(verification["sharedCapabilities"], serde_json::json!(["ocr"]));
+        assert!(verification.get("plugin").is_none());
+        assert!(verification.get("pluginName").is_none());
     }
 
     #[test]
