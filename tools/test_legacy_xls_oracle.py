@@ -87,11 +87,15 @@ def oracle() -> dict[str, object]:
 
 
 class OracleAdversarialTests(unittest.TestCase):
-    def verify(self, document: dict[str, object]) -> dict[str, object]:
+    def verify(
+        self,
+        document: dict[str, object],
+        expected: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         with tempfile.TemporaryDirectory() as temporary:
             path = pathlib.Path(temporary) / "candidate.json"
             path.write_text(json.dumps(document), encoding="utf-8")
-            return verify_xls_oracle(path, oracle())
+            return verify_xls_oracle(path, expected or oracle())
 
     def test_exact_candidate_passes(self) -> None:
         self.assertTrue(self.verify(candidate())["verified"])
@@ -130,6 +134,20 @@ class OracleAdversarialTests(unittest.TestCase):
         formula = missing_formula["blocks"][0]["block"]["data"]["blocks"][0]["block"]["data"]["rows"][0]["cells"][1]
         formula["blocks"][0]["block"]["data"][0]["data"] = "50%"
         self.assertFalse(self.verify(missing_formula)["verified"])
+
+    def test_formula_token_fingerprint_rejects_unrelated_body(self) -> None:
+        digest = "a" * 64
+        expected = oracle()
+        expected["sheets"][0]["cells"][1]["formulaSha256"] = digest
+        exact = candidate()
+        formula = exact["blocks"][0]["block"]["data"]["blocks"][0]["block"]["data"]["rows"][0]["cells"][1]
+        formula["blocks"][0]["block"]["data"][0]["data"] = (
+            f"=A1 [biff-sha256:{digest}] [cached: 50%]"
+        )
+        self.assertTrue(self.verify(exact, expected)["verified"])
+
+        formula["blocks"][0]["block"]["data"][0]["data"] = "=TOTALLY_WRONG()"
+        self.assertFalse(self.verify(exact, expected)["verified"])
 
 
 if __name__ == "__main__":

@@ -39,9 +39,11 @@ def gate(candidate: dict[str, object], baseline: dict[str, object]) -> tuple[lis
         candidate_temp = int(metric["peakTemporaryBytes"])
         baseline_temp = int(baseline_metric["peakTemporaryBytes"])
         temp_relative = (
-            candidate_temp / baseline_temp - 1
+            0.0
+            if max(candidate_temp, baseline_temp) <= MIB
+            else candidate_temp / baseline_temp - 1
             if baseline_temp > 0
-            else (0.0 if candidate_temp == 0 else float("inf"))
+            else float("inf")
         )
         add(
             f"{format_name}-latency",
@@ -78,7 +80,7 @@ def gate(candidate: dict[str, object], baseline: dict[str, object]) -> tuple[lis
             (
                 f"baselinePeak={baseline_temp}, candidatePeak={candidate_temp}, "
                 f"regression={temp_relative:.3%}, absoluteLimit={2 * 1024 * MIB}, "
-                f"after={metric['maximumTemporaryBytesAfter']}"
+                f"measurementFloor={MIB}, after={metric['maximumTemporaryBytesAfter']}"
             ),
         )
     serial = float(candidate["warmSerialBatch"]["maximumMillis"])

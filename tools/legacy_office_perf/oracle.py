@@ -97,13 +97,23 @@ def load_xls_oracle(
     if len(classification_index) != len(classifications):
         raise SystemExit("legacy XLS oracle returned duplicate safety classifications")
     items = decoded.get("items")
-    effective_valid = sum(item.get("effectiveValid") is True for item in classifications)
-    if not isinstance(items, list) or len(items) != effective_valid:
-        raise SystemExit("legacy XLS oracle item count disagrees with effective classification")
+    authority = json.loads(authority_path.read_text(encoding="utf-8"))
+    authority_items = authority.get("items")
+    authority_valid = (
+        sum(item.get("valid") is True for item in authority_items)
+        if isinstance(authority_items, list)
+        else -1
+    )
+    require_authority_oracle_count(items, authority_valid)
     indexed = {str(item.get("file")): item for item in items}
     if len(indexed) != len(items):
         raise SystemExit("legacy XLS oracle returned duplicate files")
     return indexed, classification_index
+
+
+def require_authority_oracle_count(items: object, authority_valid: int) -> None:
+    if not isinstance(items, list) or len(items) != authority_valid:
+        raise SystemExit("legacy XLS oracle must account for every authority-valid file")
 
 
 def inline_text(inline: dict[str, object]) -> str:
@@ -253,7 +263,24 @@ def formula_expression(value: str) -> str | None:
     expression = value[1:]
     if marker in expression and expression.endswith("]"):
         expression = expression.rsplit(marker, 1)[0]
+    fingerprint_marker = " [biff-sha256:"
+    if fingerprint_marker in expression and expression.endswith("]"):
+        expression = expression.rsplit(fingerprint_marker, 1)[0]
     return expression
+
+
+def formula_fingerprint(value: str) -> str | None:
+    if not value.startswith("="):
+        return None
+    without_cache = value
+    cached_marker = " [cached: "
+    if cached_marker in without_cache and without_cache.endswith("]"):
+        without_cache = without_cache.rsplit(cached_marker, 1)[0]
+    marker = " [biff-sha256:"
+    if marker not in without_cache or not without_cache.endswith("]"):
+        return None
+    fingerprint = without_cache.rsplit(marker, 1)[1][:-1]
+    return fingerprint if re.fullmatch(r"[0-9a-f]{64}", fingerprint) else None
 
 
 def canonical_formula(value: str) -> str:
@@ -263,11 +290,15 @@ def canonical_formula(value: str) -> str:
 
 def value_matches(expected: dict[str, object], actual: str) -> bool:
     expected_formula = expected.get("formula")
+    expected_fingerprint = expected.get("formulaSha256")
     if expected.get("formulaRequired") is True:
         actual_formula = formula_expression(actual)
         if actual_formula is None or not actual_formula.strip():
             return False
-    if expected_formula is not None:
+    if expected_fingerprint is not None:
+        if formula_fingerprint(actual) != str(expected_fingerprint):
+            return False
+    elif expected_formula is not None:
         actual_formula = formula_expression(actual)
         if actual_formula is None or canonical_formula(actual_formula) != canonical_formula(
             str(expected_formula)

@@ -8,6 +8,7 @@ use crate::workbook::{
     LegacyCellFormat, LegacyFormulaCache, LegacyFormulaExpression, LegacyXlsHints,
 };
 use into_markdown_core::{ConversionError, ExecutionContext};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 const BOUND_SHEET: u16 = 0x0085;
@@ -290,14 +291,14 @@ fn collect_formula(
             value,
         });
     }
-    if let Some(value) = table_formula_expression(record.body, record.biff_version, part)? {
-        output.formula_expressions.push(LegacyFormulaExpression {
-            sheet_index: record.sheet_index,
-            row,
-            column,
-            value,
-        });
-    }
+    let (value, tokens) = formula_expression(record.body, record.biff_version, part)?;
+    output.formula_expressions.push(LegacyFormulaExpression {
+        sheet_index: record.sheet_index,
+        row,
+        column,
+        value,
+        token_sha256: Sha256::digest(tokens).into(),
+    });
     Ok(())
 }
 
@@ -344,6 +345,7 @@ fn finalize_inventory(
         authenticated_empty_sheets,
         formula_caches: inventory.formula_caches,
         cell_formats: inventory.cell_formats,
+        format_codes: global.formats,
         formula_expressions: inventory.formula_expressions,
         recovered_format_records: global.recovered_format_records,
         _memory: Some(memory),
@@ -352,31 +354,40 @@ fn finalize_inventory(
 
 pub(super) fn inventory_memory_plan(bytes: usize) -> Result<u64, ConversionError> {
     let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+    let indexed_format_multiplier =
+        u64::try_from(std::mem::size_of::<LegacyCellFormat>()).unwrap_or(u64::MAX).div_ceil(2);
+    // MULBLANK can encode one formatted coordinate in two bytes. The indexed
+    // coordinate inventory therefore dominates the retained working set; three
+    // additional input-sized units cover formula hashes/caches, bounds, maps,
+    // and sorting scratch without cloning format strings per cell.
+    let multiplier = indexed_format_multiplier
+        .checked_add(3)
+        .ok_or_else(|| super::limit("max_memory_bytes", "legacy XLS inventory plan overflowed"))?;
     bytes
-        .checked_mul(2)
+        .checked_mul(multiplier)
         .and_then(|value| value.checked_add(4_096))
         .ok_or_else(|| super::limit("max_memory_bytes", "legacy XLS inventory plan overflowed"))
 }
 
-fn table_formula_expression(
-    body: &[u8],
-    biff_version: u16,
+fn formula_expression<'a>(
+    body: &'a [u8],
+    _biff_version: u16,
     part: &str,
-) -> Result<Option<String>, ConversionError> {
-    if matches!(biff_version, BIFF4) {
-        return Ok(None);
-    }
-    let token_bytes = usize::from(read_u16(body, 20, part)?);
+) -> Result<(Option<String>, &'a [u8]), ConversionError> {
+    // Raw BIFF4 Formula records are normalized to the shared four-byte-reserved
+    // framing before inventory; container BIFF5/8 records already use it.
+    let length_offset = 20;
+    let token_bytes = usize::from(read_u16(body, length_offset, part)?);
     let tokens = body
-        .get(22..22 + token_bytes)
+        .get(length_offset + 2..length_offset + 2 + token_bytes)
         .ok_or_else(|| malformed(part, "truncated Formula token stream"))?;
     if tokens.len() != 5 || !matches!(tokens[0], 0x01 | 0x02) {
-        return Ok(None);
+        return Ok((None, tokens));
     }
     let row = u32::from(u16::from_le_bytes([tokens[1], tokens[2]])) + 1;
     let column = u32::from(u16::from_le_bytes([tokens[3], tokens[4]])) + 1;
     let function = if tokens[0] == 0x01 { "SHARED" } else { "TABLE" };
-    Ok(Some(format!("{function}(R{row}C{column})")))
+    Ok((Some(format!("{function}(R{row}C{column})")), tokens))
 }
 
 fn collect_globals(
@@ -544,10 +555,10 @@ fn push_cell_format(
         .xfs
         .get(xf)
         .ok_or_else(|| malformed(part, "cell references an out-of-range XF record"))?;
-    let Some(format_code) = display_format_code(format_index, &global.formats) else {
+    if display_format_code(format_index, &global.formats).is_none() {
         return Ok(());
-    };
-    output.push(LegacyCellFormat { sheet_index, row, column, format_code: format_code.to_owned() });
+    }
+    output.push(LegacyCellFormat { sheet_index, row, column, format_index });
     Ok(())
 }
 

@@ -4,7 +4,8 @@ use crate::workbook::cell::{cell_name, within};
 use crate::workbook::error::{limit, malformed, map_calamine};
 use crate::workbook::extras::metadata::display_ranges;
 use crate::workbook::legacy_xls_emit::{
-    LegacyHintCursor, PagedSheet, formatted_numeric, paged_tsv_blocks, serialized_merges,
+    LegacyHintCursor, PagedSheet, append_digest, formatted_numeric, paged_tsv_blocks,
+    serialized_merges,
 };
 use crate::workbook::model::{CellCoordinate, Hyperlink, SheetExtras};
 use crate::workbook::output::{data_text, provenance, stable_id};
@@ -336,8 +337,9 @@ where
                         let value = values.get_value((row, column)).unwrap_or(&Data::Empty);
                         let parsed_formula =
                             formulas.get_value((row, column)).map_or("", String::as_str);
-                        let formula = legacy
-                            .formula_expression_at(sheet_index, row, column)
+                        let formula_hint = legacy.formula_hint_at(sheet_index, row, column);
+                        let formula = formula_hint
+                            .and_then(|hint| hint.value.as_deref())
                             .unwrap_or(parsed_formula);
                         let recovered_cache = legacy.formula_cache_at(sheet_index, row, column);
                         let parsed_cache = data_text(value);
@@ -371,7 +373,11 @@ where
                                 checked_field_bytes(
                                     options,
                                     "formula rendering",
-                                    &[1, u64::try_from(raw.len()).unwrap_or(u64::MAX)],
+                                    &[
+                                        1,
+                                        u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                                        formula_hint.map_or(0, |_| 82),
+                                    ],
                                 )?
                             } else {
                                 checked_field_bytes(
@@ -380,17 +386,33 @@ where
                                     &[
                                         1,
                                         u64::try_from(raw.len()).unwrap_or(u64::MAX),
+                                        formula_hint.map_or(0, |_| 82),
                                         11,
                                         cached_bytes,
                                     ],
                                 )?
                             };
                             debug_assert!(rendered_bytes <= options.limits.max_field_bytes);
-                            let rendered = if cached.is_empty() {
-                                format!("={raw}")
-                            } else {
-                                format!("={raw} [cached: {cached}]")
-                            };
+                            let rendered_capacity =
+                                usize::try_from(rendered_bytes).map_err(|_| {
+                                    limit(
+                                        "max_memory_bytes",
+                                        "formula rendering is not representable",
+                                    )
+                                })?;
+                            let mut rendered = String::with_capacity(rendered_capacity);
+                            rendered.push('=');
+                            rendered.push_str(raw);
+                            if let Some(hint) = formula_hint {
+                                rendered.push_str(" [biff-sha256:");
+                                append_digest(&mut rendered, &hint.token_sha256);
+                                rendered.push(']');
+                            }
+                            if !cached.is_empty() {
+                                rendered.push_str(" [cached: ");
+                                rendered.push_str(cached);
+                                rendered.push(']');
+                            }
                             let code = Inline::Code(rendered);
                             if let Some(link) = hyperlink {
                                 checked_field_bytes(

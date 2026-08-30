@@ -8,6 +8,7 @@ use calamine::{Data, Dimensions, Range};
 use into_markdown_core::{
     Block, BlockNode, ConversionError, ConversionOptions, ExecutionContext, NodeId,
 };
+use std::collections::BTreeMap;
 
 const PAGED_TSV_ROWS: u32 = 2_048;
 
@@ -15,6 +16,7 @@ pub(super) struct LegacyHintCursor<'a> {
     formula_caches: &'a [LegacyFormulaCache],
     formula_cache_cursor: usize,
     cell_formats: &'a [LegacyCellFormat],
+    format_codes: Option<&'a BTreeMap<u16, String>>,
     cell_format_cursor: usize,
     formula_expressions: &'a [LegacyFormulaExpression],
     formula_expression_cursor: usize,
@@ -26,6 +28,7 @@ impl<'a> LegacyHintCursor<'a> {
             formula_caches: hints.map_or(&[], |value| value.formula_caches.as_slice()),
             formula_cache_cursor: 0,
             cell_formats: hints.map_or(&[], |value| value.cell_formats.as_slice()),
+            format_codes: hints.map(|value| &value.format_codes),
             cell_format_cursor: 0,
             formula_expressions: hints.map_or(&[], |value| value.formula_expressions.as_slice()),
             formula_expression_cursor: 0,
@@ -59,23 +62,32 @@ impl<'a> LegacyHintCursor<'a> {
             (sheet, row, column),
             |value| (value.sheet_index, value.row, value.column),
         )
-        .map(|value| value.format_code.as_str())
+        .and_then(|value| {
+            self.format_codes.and_then(|codes| display_format_code(value.format_index, codes))
+        })
     }
 
-    pub(super) fn formula_expression_at(
+    pub(super) fn formula_hint_at(
         &mut self,
         sheet: usize,
         row: u32,
         column: u32,
-    ) -> Option<&'a str> {
+    ) -> Option<&'a LegacyFormulaExpression> {
         ordered_hint_at(
             self.formula_expressions,
             &mut self.formula_expression_cursor,
             (sheet, row, column),
             |value| (value.sheet_index, value.row, value.column),
         )
-        .map(|value| value.value.as_str())
     }
+}
+
+fn display_format_code(index: u16, custom: &BTreeMap<u16, String>) -> Option<&str> {
+    custom.get(&index).map(String::as_str).or(match index {
+        9 => Some("0%"),
+        10 => Some("0.00%"),
+        _ => None,
+    })
 }
 
 fn ordered_hint_at<'a, T>(
@@ -154,9 +166,10 @@ fn append_tsv_row(
             .or(formatted_cache.as_deref())
             .unwrap_or(parsed_cache.as_ref());
         let parsed_formula = sheet.formulas.get_value((row, column)).map_or("", String::as_str);
-        let formula =
-            legacy.formula_expression_at(sheet.index, row, column).unwrap_or(parsed_formula);
-        if u64::try_from(cached.len().max(formula.len())).unwrap_or(u64::MAX)
+        let formula_hint = legacy.formula_hint_at(sheet.index, row, column);
+        let formula = formula_hint.and_then(|hint| hint.value.as_deref()).unwrap_or(parsed_formula);
+        let formula_bytes = formula.len().saturating_add(formula_hint.map_or(0, |_| 82));
+        if u64::try_from(cached.len().max(formula_bytes)).unwrap_or(u64::MAX)
             > options.limits.max_field_bytes
         {
             return Err(limit(
@@ -164,24 +177,42 @@ fn append_tsv_row(
                 format!("{}!{} exceeds field limit", sheet.name, cell_name(row, column)),
             ));
         }
-        append_tsv_cell(page, formula, cached)?;
+        append_tsv_cell(page, formula, formula_hint.map(|hint| &hint.token_sha256), cached)?;
     }
     page.push('\n');
     Ok(())
 }
 
-fn append_tsv_cell(page: &mut String, formula: &str, cached: &str) -> Result<(), ConversionError> {
+fn append_tsv_cell(
+    page: &mut String,
+    formula: &str,
+    token_sha256: Option<&[u8; 32]>,
+    cached: &str,
+) -> Result<(), ConversionError> {
     if formula.is_empty() {
         return append_tsv_value(page, cached);
     }
     append_tsv_value(page, "=")?;
     append_tsv_value(page, formula.strip_prefix('=').unwrap_or(formula))?;
+    if let Some(digest) = token_sha256 {
+        append_tsv_value(page, " [biff-sha256:")?;
+        append_digest(page, digest);
+        append_tsv_value(page, "]")?;
+    }
     if !cached.is_empty() {
         append_tsv_value(page, " [cached: ")?;
         append_tsv_value(page, cached)?;
         append_tsv_value(page, "]")?;
     }
     Ok(())
+}
+
+pub(super) fn append_digest(output: &mut String, digest: &[u8; 32]) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in digest {
+        output.push(char::from(HEX[usize::from(*byte >> 4)]));
+        output.push(char::from(HEX[usize::from(*byte & 0x0f)]));
+    }
 }
 
 pub(super) fn formatted_numeric(value: &Data, code: &str) -> Option<String> {

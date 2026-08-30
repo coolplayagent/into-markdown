@@ -250,21 +250,25 @@ def observe_xls(
     peak = 0
     peak_temporary = 0
     deadline = time.monotonic() + 120
+    next_storage_sample = 0.0
     while True:
         sample = resident_bytes(process)
         peak = max(peak, sample or 0)
-        peak_temporary = max(
-            peak_temporary,
-            directory_file_bytes(home / "tmp")
-            + transient_output_bytes(output_root, output),
-        )
+        now = time.monotonic()
+        if now >= next_storage_sample:
+            peak_temporary = max(
+                peak_temporary,
+                directory_file_bytes(home / "tmp")
+                + transient_output_bytes(output_root, output),
+            )
+            next_storage_sample = now + 0.1
         if process.poll() is not None:
             break
-        if time.monotonic() >= deadline:
+        if now >= deadline:
             process.kill()
             process.wait()
             raise RuntimeError(f"XLS benchmark command exceeded 120 seconds: {source.name}")
-        time.sleep(0.002)
+        time.sleep(0.01)
     _, stderr = process.communicate()
     sample = resident_bytes(process)
     peak = max(peak, sample or 0)

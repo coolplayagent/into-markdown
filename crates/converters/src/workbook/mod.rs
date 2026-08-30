@@ -54,7 +54,7 @@ pub(crate) struct LegacyCellFormat {
     pub(crate) sheet_index: usize,
     pub(crate) row: u32,
     pub(crate) column: u32,
-    pub(crate) format_code: String,
+    pub(crate) format_index: u16,
 }
 
 #[derive(Debug)]
@@ -62,7 +62,8 @@ pub(crate) struct LegacyFormulaExpression {
     pub(crate) sheet_index: usize,
     pub(crate) row: u32,
     pub(crate) column: u32,
-    pub(crate) value: String,
+    pub(crate) value: Option<String>,
+    pub(crate) token_sha256: [u8; 32],
 }
 
 #[derive(Debug, Default)]
@@ -71,6 +72,7 @@ pub(crate) struct LegacyXlsHints {
     pub(crate) authenticated_empty_sheets: BTreeSet<String>,
     pub(crate) formula_caches: Vec<LegacyFormulaCache>,
     pub(crate) cell_formats: Vec<LegacyCellFormat>,
+    pub(crate) format_codes: BTreeMap<u16, String>,
     pub(crate) formula_expressions: Vec<LegacyFormulaExpression>,
     pub(crate) recovered_format_records: usize,
     pub(crate) _memory: Option<ResourceReservation>,

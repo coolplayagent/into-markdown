@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import pathlib
@@ -74,6 +75,7 @@ def cell_value(
     datemode: int,
     workbook: xlrd.book.Book,
     formula: str | None,
+    formula_sha256: str | None,
     formula_required: bool,
 ) -> dict[str, object]:
     if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
@@ -82,6 +84,8 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     if cell.ctype == xlrd.XL_CELL_TEXT:
         output = {"kind": "text", "value": str(cell.value)}
@@ -89,6 +93,8 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     if cell.ctype == xlrd.XL_CELL_NUMBER:
         output = {"kind": "number", "value": float(cell.value)}
@@ -99,6 +105,8 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     if cell.ctype == xlrd.XL_CELL_DATE:
         output = {"kind": "date", "value": date_display(float(cell.value), datemode)}
@@ -106,6 +114,8 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     if cell.ctype == xlrd.XL_CELL_BOOLEAN:
         output = {"kind": "boolean", "value": bool(cell.value)}
@@ -113,6 +123,8 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     if cell.ctype == xlrd.XL_CELL_ERROR:
         output = {
@@ -123,18 +135,20 @@ def cell_value(
             output["formulaRequired"] = True
         if formula is not None:
             output["formula"] = formula
+        if formula_sha256 is not None:
+            output["formulaSha256"] = formula_sha256
         return output
     raise RuntimeError(f"unsupported xlrd cell type {cell.ctype}")
 
 
 def sheet_formulas(
     workbook: xlrd.book.Book, sheet_index: int, raw_fallback: bytes
-) -> dict[tuple[int, int], str | None]:
+) -> dict[tuple[int, int], dict[str, str]]:
     memory = workbook.mem
     if memory is None:
         memory = raw_fallback
     position = workbook._sh_abs_posn[sheet_index]
-    output: dict[tuple[int, int], str | None] = {}
+    output: dict[tuple[int, int], dict[str, str]] = {}
     formulas: list[tuple[int, int, bytes]] = []
     shared: list[tuple[int, int, int, int, bytes]] = []
     while position + 4 <= len(memory):
@@ -174,10 +188,13 @@ def sheet_formulas(
                 raise RuntimeError(
                     f"duplicate formula coordinate at {sheet_index}:{row}:{column}"
                 )
-            output[coordinate] = expression
+            output[coordinate] = {
+                "formula": expression,
+                "formulaSha256": hashlib.sha256(tokens).hexdigest(),
+            }
             continue
         try:
-            decompile_formula(
+            expression = decompile_formula(
                 workbook,
                 tokens,
                 len(tokens),
@@ -196,9 +213,9 @@ def sheet_formulas(
                 None,
             )
             if definition is None:
-                pass
+                expression = ""
             else:
-                decompile_formula(
+                expression = decompile_formula(
                     workbook,
                     definition[4],
                     len(definition[4]),
@@ -209,12 +226,10 @@ def sheet_formulas(
         coordinate = (row, column)
         if coordinate in output:
             raise RuntimeError(f"duplicate formula coordinate at {sheet_index}:{row}:{column}")
-        # Independent parsers legitimately render ordinary BIFF token streams with
-        # different parentheses, external-reference labels, and unknown-token text.
-        # The oracle therefore pins exact text only for the explicit SHARED/TABLE
-        # compatibility contract above; every other coordinate still requires an
-        # inert formula expression and an exact cached display value.
-        output[coordinate] = None
+        output[coordinate] = {
+            "formula": expression,
+            "formulaSha256": hashlib.sha256(tokens).hexdigest(),
+        }
     return output
 
 
@@ -246,12 +261,15 @@ def workbook_oracle(path: pathlib.Path) -> dict[str, object]:
                     continue
                 coordinate = (row, column)
                 formula_required = coordinate in formulas
-                formula = formulas.get(coordinate)
+                formula_details = formulas.get(coordinate, {})
+                formula = formula_details.get("formula")
+                formula_sha256 = formula_details.get("formulaSha256")
                 value = cell_value(
                     sheet.cell(row, column),
                     workbook.datemode,
                     workbook,
                     formula,
+                    formula_sha256,
                     formula_required,
                 )
                 if formula_required or (value["kind"] != "empty" and value["value"] != ""):
@@ -299,23 +317,34 @@ def main() -> int:
             source = corpus / name
             if source.is_symlink() or not source.is_file():
                 raise SystemExit(f"oracle source is not a regular file: {name}")
-            effective_valid = item.get("valid") is True
+            valid = item.get("valid") is True
+            expected_outcome = "invalid"
             reason = "xlrd-invalid"
-            if effective_valid and has_ambiguous_workbook_aliases(source):
-                effective_valid = False
+            if valid and has_ambiguous_workbook_aliases(source):
+                expected_outcome = "fail-closed"
                 reason = "ambiguous-workbook-aliases"
-            elif effective_valid:
+            elif valid:
+                expected_outcome = "content"
                 reason = "xlrd-valid-and-container-unambiguous"
             classifications.append(
-                {"file": name, "effectiveValid": effective_valid, "reason": reason}
+                {"file": name, "expectedOutcome": expected_outcome, "reason": reason}
             )
-            if not effective_valid:
+            if not valid:
+                continue
+            if expected_outcome == "fail-closed":
+                output.append(
+                    {
+                        "file": name,
+                        "expectedOutcome": expected_outcome,
+                        "reason": reason,
+                    }
+                )
                 continue
             try:
                 oracle = workbook_oracle(source)
             except Exception as error:
                 raise RuntimeError(f"oracle failed for {name}: {error}") from error
-            output.append({"file": name, **oracle})
+            output.append({"file": name, "expectedOutcome": "content", **oracle})
     encoded = json.dumps(
         {
             "schemaVersion": 1,

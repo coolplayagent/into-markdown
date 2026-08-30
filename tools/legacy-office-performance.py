@@ -82,7 +82,10 @@ def main() -> int:
             {
                 **item,
                 "authorityValid": item["valid"],
-                "valid": classifications[str(item["file"])]["effectiveValid"],
+                "safetyExpectedFailure": classifications[str(item["file"])][
+                    "expectedOutcome"
+                ]
+                == "fail-closed",
                 "classificationReason": classifications[str(item["file"])]["reason"],
             }
             for item in authority

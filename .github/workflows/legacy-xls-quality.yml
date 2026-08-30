@@ -25,8 +25,11 @@ jobs:
           components: clippy, rustfmt
       - name: Install the independent XLS oracle
         run: python3 -m pip install --disable-pip-version-check xlrd==2.0.2
-      - name: Reject duplicate, extra, formula, and display oracle mutations
-        run: PYTHONPATH=tools python3 -m unittest tools/test_legacy_xls_oracle.py
+      - name: Reject corpus, performance, formula, and content oracle mutations
+        run: >-
+          PYTHONPATH=tools python3 -m unittest
+          tools/test_legacy_xls_oracle.py
+          tools/test_legacy_office_perf.py
       - name: Build the candidate CLI
         run: cargo build --locked --release -p into-markdown-cli
       - name: Verify strict and best-effort public XLS content

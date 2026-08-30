@@ -330,7 +330,8 @@ fn biff4_formats_use_ordinal_keys_and_only_malformed_optional_records_recover() 
     .unwrap();
     assert_eq!(hints.recovered_format_records, 0);
     assert_eq!(hints.cell_formats.len(), 1);
-    assert_eq!(hints.cell_formats[0].format_code, "$0.00");
+    assert_eq!(hints.cell_formats[0].format_index, 0);
+    assert_eq!(hints.format_codes.get(&0).map(String::as_str), Some("$0.00"));
 
     let mut malformed_bytes = raw_biff4_with_label(b"malformed");
     let mut malformed_format = Vec::new();
@@ -365,6 +366,72 @@ fn biff4_formats_use_ordinal_keys_and_only_malformed_optional_records_recover() 
         )
         .is_err()
     );
+}
+
+#[test]
+fn long_format_mulblank_inventory_is_interned_and_obeys_its_exact_lease() {
+    let mut bytes = raw_biff4_with_label(b"anchor");
+    let mut globals = Vec::new();
+    let format = format!("${}", "0".repeat(254));
+    let mut format_body = vec![0, 0, u8::try_from(format.len()).unwrap()];
+    format_body.extend_from_slice(format.as_bytes());
+    push_biff_record(&mut globals, 0x041e, &format_body).unwrap();
+    push_biff_record(&mut globals, 0x00e0, &[0, 0, 0, 0]).unwrap();
+    bytes.splice(10..10, globals);
+
+    let mut mul_blank = Vec::new();
+    mul_blank.extend_from_slice(&0_u16.to_le_bytes());
+    mul_blank.extend_from_slice(&1_u16.to_le_bytes());
+    for _ in 1..=255 {
+        mul_blank.extend_from_slice(&0_u16.to_le_bytes());
+    }
+    mul_blank.extend_from_slice(&255_u16.to_le_bytes());
+    let eof = bytes.len() - 4;
+    let mut record = Vec::new();
+    push_biff_record(&mut record, 0x00be, &mul_blank).unwrap();
+    bytes.splice(eof..eof, record);
+
+    let normalized = normalize_raw_biff4(&bytes, raw_biff4_plan(&bytes).unwrap()).unwrap();
+    let required = inventory_memory_plan(normalized.len()).unwrap();
+    let options = ConversionOptions {
+        limits: ResourceLimits { max_memory_bytes: required, ..ResourceLimits::default() },
+        ..ConversionOptions::default()
+    };
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut scan_budget = LegacyBudget::new(normalized.len(), &options, &context).unwrap();
+    let hints = scan_workbook_inventory(
+        &normalized,
+        BIFF4,
+        WORKBOOK,
+        &mut scan_budget,
+        &context,
+        ErrorPolicy::BestEffort,
+    )
+    .unwrap();
+    assert_eq!(hints.cell_formats.len(), 256);
+    assert_eq!(hints.format_codes.len(), 1);
+    assert_eq!(hints.format_codes.get(&0), Some(&format));
+    drop(hints);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+
+    let below_options = ConversionOptions {
+        limits: ResourceLimits { max_memory_bytes: required - 1, ..ResourceLimits::default() },
+        ..ConversionOptions::default()
+    };
+    let below = ExecutionContext::new(ExecutionOptions::default(), below_options.limits.clone());
+    let mut below_budget = LegacyBudget::new(normalized.len(), &below_options, &below).unwrap();
+    assert!(matches!(
+        scan_workbook_inventory(
+            &normalized,
+            BIFF4,
+            WORKBOOK,
+            &mut below_budget,
+            &below,
+            ErrorPolicy::BestEffort,
+        ),
+        Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+    ));
+    assert_eq!(below.reserved_memory_bytes(), 0);
 }
 
 #[test]
@@ -515,8 +582,16 @@ fn xls_content_cell_order_display_values_and_merges_are_stable() {
     assert_eq!(
         values,
         [
-            ["Corpus", "=TRUE [cached: true]", "42.5"],
-            ["2024-01-01 00:00:00", "=SUM(1,2) [cached: 3]", "=cmd"],
+            [
+                "Corpus",
+                "=TRUE [biff-sha256:9db374756abdee7a36154901f76e8ea2cbcb7af47fde1b2be040e6071ca319c4] [cached: true]",
+                "42.5",
+            ],
+            [
+                "2024-01-01 00:00:00",
+                "=SUM(1,2) [biff-sha256:81908119f54f4d549711dc093838eceefabd13fa8db5cb46a94ab9b2f7f2f8aa] [cached: 3]",
+                "=cmd",
+            ],
         ]
     );
     for (row_index, row) in rows.iter().enumerate() {
