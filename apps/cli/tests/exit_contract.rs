@@ -73,6 +73,58 @@ fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn run_isolated_ocr_capability_verify() -> std::process::Output {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = temporary.path().join("project");
+    let user_data = temporary.path().join("user-data");
+    let home = temporary.path().join("home");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    #[cfg(windows)]
+    into_markdown_process_plugin::create_windows_plugin_store_directory(&user_data).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new().mode(0o700).create(&user_data).unwrap();
+    }
+    Command::new(binary())
+        .args(["--no-config", "capabilities", "verify", "ocr", "--json"])
+        .current_dir(project)
+        .env("APPDATA", &user_data)
+        .env("LOCALAPPDATA", &user_data)
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOME", home)
+        .env("INTO_MARKDOWN_USER_DATA_HOME", user_data)
+        .output()
+        .unwrap()
+}
+
+#[cfg(not(feature = "embedded-runtime"))]
+#[test]
+fn non_embedded_ocr_verification_retains_external_plugin_semantics() {
+    let output = run_isolated_ocr_capability_verify();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown plugin 'official.ocr.ppocrv6'"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(feature = "embedded-runtime")]
+#[test]
+fn embedded_ocr_verification_reports_the_public_core_identity() {
+    let output = run_isolated_ocr_capability_verify();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let verification: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(verification["schemaVersion"], 1);
+    assert_eq!(verification["capability"], "ocr");
+    assert_eq!(verification["source"], "core:ocr");
+    assert_eq!(verification["status"], "ready");
+    assert_eq!(verification["version"], env!("CARGO_PKG_VERSION"));
+    assert!(verification.get("plugin").is_none());
+}
+
 #[test]
 fn real_cli_relabels_a_meeting_ir_without_running_transcription() {
     let directory = tempfile::tempdir().unwrap();
