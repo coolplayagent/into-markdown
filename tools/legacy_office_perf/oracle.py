@@ -298,7 +298,7 @@ def value_matches(expected: dict[str, object], actual: str) -> bool:
     if expected_fingerprint is not None:
         if formula_fingerprint(actual) != str(expected_fingerprint):
             return False
-    elif expected_formula is not None:
+    if expected_formula is not None:
         actual_formula = formula_expression(actual)
         if actual_formula is None or canonical_formula(actual_formula) != canonical_formula(
             str(expected_formula)

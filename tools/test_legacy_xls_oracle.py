@@ -135,7 +135,7 @@ class OracleAdversarialTests(unittest.TestCase):
         formula["blocks"][0]["block"]["data"][0]["data"] = "50%"
         self.assertFalse(self.verify(missing_formula)["verified"])
 
-    def test_formula_token_fingerprint_rejects_unrelated_body(self) -> None:
+    def test_formula_body_fingerprint_and_cached_display_are_independent(self) -> None:
         digest = "a" * 64
         expected = oracle()
         expected["sheets"][0]["cells"][1]["formulaSha256"] = digest
@@ -146,8 +146,32 @@ class OracleAdversarialTests(unittest.TestCase):
         )
         self.assertTrue(self.verify(exact, expected)["verified"])
 
-        formula["blocks"][0]["block"]["data"][0]["data"] = "=TOTALLY_WRONG()"
-        self.assertFalse(self.verify(exact, expected)["verified"])
+        wrong_body = copy.deepcopy(exact)
+        formula = wrong_body["blocks"][0]["block"]["data"]["blocks"][0][
+            "block"
+        ]["data"]["rows"][0]["cells"][1]
+        formula["blocks"][0]["block"]["data"][0]["data"] = (
+            f"=TOTALLY_WRONG() [biff-sha256:{digest}] [cached: 50%]"
+        )
+        self.assertFalse(self.verify(wrong_body, expected)["verified"])
+
+        wrong_fingerprint = copy.deepcopy(exact)
+        formula = wrong_fingerprint["blocks"][0]["block"]["data"]["blocks"][0][
+            "block"
+        ]["data"]["rows"][0]["cells"][1]
+        formula["blocks"][0]["block"]["data"][0]["data"] = (
+            f"=A1 [biff-sha256:{'b' * 64}] [cached: 50%]"
+        )
+        self.assertFalse(self.verify(wrong_fingerprint, expected)["verified"])
+
+        wrong_cached_display = copy.deepcopy(exact)
+        formula = wrong_cached_display["blocks"][0]["block"]["data"]["blocks"][0][
+            "block"
+        ]["data"]["rows"][0]["cells"][1]
+        formula["blocks"][0]["block"]["data"][0]["data"] = (
+            f"=A1 [biff-sha256:{digest}] [cached: 0.5]"
+        )
+        self.assertFalse(self.verify(wrong_cached_display, expected)["verified"])
 
 
 if __name__ == "__main__":
