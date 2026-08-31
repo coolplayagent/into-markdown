@@ -257,6 +257,30 @@ pub(super) struct ParseState {
 }
 
 impl ParseState {
+    pub(super) fn notes_heading(
+        &mut self,
+        part: &str,
+        slide: u32,
+    ) -> Result<BlockNode, ConversionError> {
+        self.add_inlines(1)?;
+        let mut heading = self.node(
+            Block::Heading {
+                level: 3,
+                content: vec![into_markdown_core::Inline::Text {
+                    value: try_clone_string("Speaker notes", "notes heading")?,
+                    marks: Vec::new(),
+                }],
+            },
+            part,
+            slide,
+            None,
+            None,
+            None,
+        )?;
+        into_markdown_core::speaker_notes::mark_heading(&mut heading)?;
+        Ok(heading)
+    }
+
     pub(super) fn mark_note_body(&mut self, node: &mut BlockNode) -> Result<(), ConversionError> {
         let previous = node.id.0.clone();
         into_markdown_core::speaker_notes::mark_body(node)?;

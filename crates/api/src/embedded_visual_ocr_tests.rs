@@ -920,3 +920,62 @@ fn block_on<F: Future>(future: F) -> F::Output {
         }
     }
 }
+
+fn picture_only_notes(png: &[u8]) -> Vec<u8> {
+    use std::io::Read as _;
+    let original = include_bytes!("../../../fixtures/small/pptx/normal.pptx");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();
+    let mut parts = Vec::new();
+    for index in 0..archive.len() {
+        let mut part = archive.by_index(index).unwrap();
+        let mut bytes = Vec::new();
+        part.read_to_end(&mut bytes).unwrap();
+        if part.name() == "[Content_Types].xml" {
+            bytes = String::from_utf8(bytes)
+                .unwrap()
+                .replace(
+                    "</Types>",
+                    "<Default Extension=\"png\" ContentType=\"image/png\"/></Types>",
+                )
+                .into_bytes();
+        } else if part.name() == "ppt/notesSlides/notesSlide1.xml" {
+            bytes = br#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:pic><p:nvPicPr><p:cNvPr id="4" name="Picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="image"/></p:blipFill><p:spPr/></p:pic></p:spTree></p:cSld></p:notes>"#.to_vec();
+        }
+        parts.push((part.name().to_owned(), bytes));
+    }
+    parts.push(("ppt/media/note.png".into(), png.to_vec()));
+    parts.push(("ppt/notesSlides/_rels/notesSlide1.xml.rels".into(), br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="image" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/note.png"/></Relationships>"#.to_vec()));
+    zip_owned(parts)
+}
+
+#[test]
+fn presentation_notes_visibility_is_decided_after_source_bound_ocr_and_asset_policy() {
+    for (png, has_text) in [(TEST_PNG.to_vec(), true), (blank_png(), false)] {
+        for mode in [AssetMode::Extract, AssetMode::Embed, AssetMode::Omit] {
+            let ocr = Arc::new(SourceBoundOcr(AtomicUsize::new(0)));
+            let engine = default_engine_with_services(Services {
+                ocr: Some(ocr.clone()),
+                ..Services::default()
+            })
+            .unwrap();
+            let mut request = ConversionRequest::new(InputRef::bytes(
+                picture_only_notes(&png),
+                Some("notes.pptx".into()),
+            ));
+            request.options.ocr.policy = OcrPolicy::Always;
+            request.options.output.asset_mode = mode;
+            let result = block_on(engine.convert(request)).unwrap();
+            assert_eq!(ocr.0.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                result.markdown.contains("### Speaker notes"),
+                has_text || mode != AssetMode::Omit
+            );
+            assert_eq!(result.markdown.contains("text from embedded picture"), has_text);
+            assert!(
+                result.provenance.iter().any(|source| source.locator.part.as_deref()
+                    == Some("ppt/notesSlides/notesSlide1.xml"))
+            );
+            assert!(result.has_memory_lease());
+        }
+    }
+}

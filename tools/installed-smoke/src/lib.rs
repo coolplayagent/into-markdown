@@ -423,14 +423,14 @@ mod tests {
             b"Alpha \xe4\xb8\xad\xe6\x96\x87 line  \nSecond line\n".to_vec(),
             b"Corpus Alpha \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
             b"# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n".to_vec(),
-            b"# Repository MSG\n\n<strong>From: </strong>Alice \\<alice@example\\.test\\>\n\n<strong>To: </strong>Bob \\<bob@example\\.test\\>\n\n<strong>Date: </strong>1970\\-01\\-01T00:00:00Z\n\n---\n\nPlain fixture body\n\n## Transport headers\n\n```rfc822\nMessage-ID: <repository@example.test>\nX-Offline: true\n```\n".to_vec(),
-            b"Corpus <strong>Alpha</strong> \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
-            b"## Slide 1: Corpus \xe4\xbd\xa0\xe5\xa5\xbd \xe2\x80\x93 \xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n\n<em>English fran\xc3\xa7ais</em>\n\n### Speaker notes\n\nNota \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n\n## Slide 2: Second layout\n\n<em>\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7</em>\n".to_vec(),
+            b"# Repository MSG\n\n**From:** Alice \\<alice@example\\.test\\>\n\n**To:** Bob \\<bob@example\\.test\\>\n\n**Date:** 1970\\-01\\-01T00:00:00Z\n\n---\n\nPlain fixture body\n\n## Transport headers\n\n```rfc822\nMessage-ID: <repository@example.test>\nX-Offline: true\n```\n".to_vec(),
+            b"Corpus **Alpha** \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
+            b"## Slide 1: Corpus \xe4\xbd\xa0\xe5\xa5\xbd \xe2\x80\x93 \xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82\n\n*English fran\xc3\xa7ais*\n\n### Speaker notes\n\nNota \xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\n\n## Slide 2: Second layout\n\n*\xd9\x85\xd8\xb1\xd8\xad\xd8\xa8\xd8\xa7*\n".to_vec(),
             b"## Sheet: Corpus\n\n|  |  |  |\n| --- | --- | --- |\n| Corpus | true | 42\\.5 |\n| 2024\\-01\\-01 00:00:00 | `=SUM(1,2) [cached: 3]` | `=cmd` |\n|  |  |  |\n\n![corpus pixel](<data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=>)\n\n![Corpus again](<data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=>)\n".to_vec(),
             b"## Sheet: Binary\n\n|  |  |  |\n| --- | --- | --- |\n| Binary value | true | 2024\\-01\\-01 00:00:00 |\n| `=1+2 [cached: 3]` |  |  |\n".to_vec(),
-            b"## Corpus ODT\n\nAlpha <strong>\xe4\xb8\xad\xe6\x96\x87</strong>\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n".to_vec(),
+            b"## Corpus ODT\n\nAlpha **\xe4\xb8\xad\xe6\x96\x87**\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n".to_vec(),
             b"## Sheet: Data\n\n|  |  |\n| --- | --- |\n| Alpha | 1 |\n| tail |  |\n| tail |  |\n".to_vec(),
-            b"## Slide 1: Corpus ODP\n\nAlpha \xe4\xb8\xad\xe6\x96\x87\n\n<strong>Speaker notes</strong>\n\nSpeaker cue\n".to_vec(),
+            b"## Slide 1: Corpus ODP\n\nAlpha \xe4\xb8\xad\xe6\x96\x87\n\n### Speaker notes\n\nSpeaker cue\n".to_vec(),
         ];
         let dto = br#"{"schemaVersion":1,"markdown":"Alpha \u4e2d\u6587 line  \nSecond line\n","document":{"blocks":[{}]}}"#.to_vec();
         let corrupt = br#"{"code":"malformed","exitCode":3}"#.to_vec();

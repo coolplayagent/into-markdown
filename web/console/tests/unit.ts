@@ -440,10 +440,13 @@ test("history delete preserves bounded server errors and normalizes network fail
 
 test("Markdown native styles preserve nested text, escapes, and inert resources", async () => {
   const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
-  root.render(createElement(SafeMarkdownPreview, { source: "**bold** *italic* ~~deleted~~ ***both*** **outer *inner* tail** `*literal*` &amp; **中文**\\*plain\\*<br>end\n![图](<目录/图%20.png>)\n<img src='https://evil.invalid/x'>" }));
-  await waitFor(() => window.document.querySelectorAll(".markdown-preview strong").length === 4);
+  root.render(createElement(SafeMarkdownPreview, { source: "**bold** *italic* ~~deleted~~ ***both*** **outer *inner* tail** *outer **deep** tail* **bold *end*** *italic **end*** ~~**strike**~~ `*literal*` &amp; **中文**\\*plain\\*<br>end\n![图](<目录/图%20.png>)\n<img src='https://evil.invalid/x'>" }));
+  await waitFor(() => window.document.querySelectorAll(".markdown-preview strong").length === 8);
   assert.equal(window.document.querySelector("strong em")?.textContent, "both");
   assert.equal(window.document.querySelector("del")?.textContent, "deleted");
+  assert.equal(window.document.querySelector("em strong")?.textContent, "deep");
+  assert.ok(Array.from(window.document.querySelectorAll("strong em")).some((element) => element.textContent === "end"));
+  assert.equal(window.document.querySelector("del strong")?.textContent, "strike");
   assert.equal(window.document.querySelector("code")?.textContent, "*literal*");
   assert.ok(window.document.body.textContent.includes("& 中文*plain*"));
   assert.equal(window.document.querySelectorAll(".markdown-preview br").length, 1);

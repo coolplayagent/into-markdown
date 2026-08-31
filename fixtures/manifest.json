@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "aba9ef9c5d52d587a49dd710ba081db0bea21ffc2747629cbaa8691cc15d4a85",
+    "sha256": "b262034253a21b82da504b49c38fe4afb5da77f91ebfabe932b1f79c24f9ada3",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -219,7 +219,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "76a17f00b5373cb28760bf6bd9cafbd04b00f2bfc95c0b8520b156936306ddbe",
+        "semantic_sha256": "bcb809b184e28e78392074a8e82ce89fde7fc8cfc110d9d3a90999d07a16c8d5",
         "description": "header and two rows"
       }
     },
@@ -905,7 +905,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "8b79086cc60edcac290c41c1984f8787626cdaef587fb39baf8cdf316fc7b691",
+        "semantic_sha256": "aca52b961cd1c739f12c6c85ca33634246db9e4b4a7e30c894b052344673bda4",
         "description": "heading and rich list"
       }
     },
@@ -933,7 +933,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a",
+        "semantic_sha256": "413b505dc3fb65f0890dadd6f8a47b85bde52e7c6fa60198b9d7cda9f5c8299c",
         "description": "by-value and embedded MSG attachments retain assets and source chains"
       }
     },
@@ -961,7 +961,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af",
+        "semantic_sha256": "e0342c9e2fb20236cdcd3b6df842e91b3bf48818dc0e329bda8abaafd8c838c5",
         "description": "canonical CID image is bound at its HTML reference"
       }
     },
@@ -1017,7 +1017,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1",
+        "semantic_sha256": "d213336964b4877a6029da854343fac6c7f2a44c5d80787088f889ac25e3ffc4",
         "description": "HTML is selected ahead of the plain fallback"
       }
     },
@@ -1052,7 +1052,7 @@
           "failing_value": 4095,
           "passing_value": 4096,
           "error_limit": "max_input_bytes",
-          "passing_semantic_sha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3"
+          "passing_semantic_sha256": "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db"
         }
       }
     },
@@ -1108,7 +1108,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3",
+        "semantic_sha256": "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db",
         "description": "headers, time, transport headers and plain body"
       }
     },
@@ -1136,7 +1136,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367",
+        "semantic_sha256": "17be07f5d09fbec262da4ef68a198edb934c9a4a656701bb6e030c8a3aee21bf",
         "description": "LZFu is decoded and passed to the bounded RTF converter on the same request context"
       }
     },
@@ -1563,7 +1563,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "33364d2a5a9a9f1cb93e22c57d6d54d31badb3247327641cfce39ca9ac180adf",
+        "semantic_sha256": "5276964b0d08d9658d89cc450ec2f60dc4689685bdb21d768528d46a2d07cb78",
         "description": "ODP title, positioned shape, and speaker notes"
       }
     },
@@ -2116,7 +2116,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769",
+        "semantic_sha256": "9599eaa0b53968a54eda9915a7e8e59cf1bc8444786f29ae9fb7dfc3600c3b69",
         "description": "ODT heading, styled text, list, and table"
       }
     },
@@ -2508,7 +2508,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
         "description": "template main content type with the canonical semantic deck"
       }
     },
@@ -2536,7 +2536,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
         "description": "macro-enabled slideshow with a relationship-isolated VBA part"
       }
     },
@@ -2564,7 +2564,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
         "description": "slideshow main content type with the canonical semantic deck"
       }
     },
@@ -2592,7 +2592,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
         "description": "macro-enabled presentation with a relationship-isolated VBA part"
       }
     },
@@ -2655,7 +2655,7 @@
           "failing_value": 9640,
           "passing_value": 9641,
           "error_limit": "max_input_bytes",
-          "passing_semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+          "passing_semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9"
         }
       }
     },
@@ -2683,7 +2683,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b",
+        "semantic_sha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
         "description": "two layouts, multilingual rich text, master styles, and speaker notes"
       }
     },
@@ -2802,7 +2802,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a",
+        "semantic_sha256": "8629ab8e7dbc3b820d277c15397f9f4fd0d3b660ca3e0902f0960dda8342c889",
         "description": "styled English and Unicode Chinese paragraph"
       }
     },
@@ -2984,7 +2984,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "800366d08763acec506041dafe98faef619db37fe74dc52b76a640b8a520d3e2",
+        "semantic_sha256": "64004f9da5e3262491e64b55eb2ba1bc0c6069241df3584daff581d6a81450d2",
         "description": "header and two rows"
       }
     },

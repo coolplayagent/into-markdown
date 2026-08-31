@@ -979,6 +979,8 @@ impl RenderContext<'_> {
         inline_context: InlineContext,
     ) -> Result<String, ConversionError> {
         let mut rendered = Vec::with_capacity(nodes.len());
+        let mut previous_list = false;
+        let mut hidden_notes = false;
         for (index, node) in nodes.iter().enumerate() {
             if into_markdown_core::speaker_notes::is_heading(node)
                 && !nodes[index + 1..]
@@ -991,10 +993,21 @@ impl RenderContext<'_> {
                         )
                     })
             {
+                hidden_notes = true;
                 continue;
             }
-            let block = self.render_block(node, inline_context)?;
+            if hidden_notes && into_markdown_core::speaker_notes::is_body(node) {
+                continue;
+            }
+            hidden_notes = false;
+            let mut block = self.render_block(node, inline_context)?;
             if !block.is_empty() {
+                let is_list = matches!(node.block, Block::List { .. });
+                if previous_list && is_list {
+                    // CommonMark otherwise merges adjacent lists and loses restarts.
+                    block.insert_str(0, "<!-- -->\n\n");
+                }
+                previous_list = is_list;
                 rendered.push(block);
             }
         }
@@ -1658,8 +1671,10 @@ fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
                 output.push(hex_digit(byte >> 4, true));
                 output.push(hex_digit(byte & 0x0f, true));
             }
-        } else if !character.is_whitespace() && !character.is_control()
-            && character.encode_utf8(&mut [0; 4]).bytes().all(&safe) {
+        } else if !character.is_whitespace()
+            && !character.is_control()
+            && character.encode_utf8(&mut [0; 4]).bytes().all(&safe)
+        {
             output.push(character);
         } else {
             for byte in character.encode_utf8(&mut [0; 4]).bytes() {

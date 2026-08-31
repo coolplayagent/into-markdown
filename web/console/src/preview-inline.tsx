@@ -17,10 +17,34 @@ function flanks(source: string, start: number, size: number): [boolean, boolean]
     !beforeSpace && (!beforePunctuation || afterSpace || afterPunctuation)];
 }
 
-function closing(source: string, marker: string, start: number, native: boolean): number {
-  for (let index = start; index < source.length; index += 1) {
-    if (source[index] === "\\") { index += 1; continue; }
-    if (source.startsWith(marker, index) && (!native || flanks(source, index, marker.length)[1])) return index;
+type Budget = { left: number; work: number };
+
+function closing(source: string, marker: string, start: number, native: boolean, budget: Budget): number {
+  const nested: number[] = [];
+  for (let index = start; index < source.length && budget.work > 0; index += 1) {
+    budget.work -= 1;
+    if (!marker.startsWith("`") && source[index] === "\\") { index += 1; continue; }
+    if (native && source[index] === "`") {
+      const ticks = /^`+/.exec(source.slice(index))![0];
+      const end = closing(source, ticks, index + ticks.length, false, budget);
+      if (end >= 0) index = end + ticks.length - 1;
+      continue;
+    }
+    if (marker.startsWith("*") && source[index] === "*") {
+      const size = /^\*+/.exec(source.slice(index))![0].length;
+      const [opens, closes] = flanks(source, index, size);
+      let remaining = size;
+      if (closes) {
+        while (nested.length && remaining >= nested[nested.length - 1]!) remaining -= nested.pop()!;
+        if (!nested.length && remaining >= marker.length) return index + size - remaining;
+      }
+      if (opens && remaining) nested.push(remaining);
+      index += size - 1;
+      continue;
+    }
+    if (!source.startsWith(marker, index)) continue;
+    if (marker.startsWith("`") && (source[index - 1] === "`" || source[index + marker.length] === "`")) continue;
+    if (!native || flanks(source, index, marker.length)[1]) return index;
   }
   return -1;
 }
@@ -28,7 +52,7 @@ function closing(source: string, marker: string, start: number, native: boolean)
 function decodeText(source: string): string {
   return source.replace(/&(?:amp|lt|gt|quot|apos|#39|#(?:[0-9]+|x[0-9a-f]+));/gi, (entity) => {
     const named: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'", "&#39;": "'" };
-    if (named[entity]) return named[entity]!;
+    if (named[entity.toLowerCase()]) return named[entity.toLowerCase()]!;
     const number = entity.slice(2, -1);
     const value = Number.parseInt(number.replace(/^x/i, ""), /^x/i.test(number) ? 16 : 10);
     return value > 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff) ? String.fromCodePoint(value) : "\ufffd";
@@ -37,22 +61,23 @@ function decodeText(source: string): string {
 
 /** Render a bounded inline subset exclusively through inert React elements. */
 export function renderInline(source: string): ReactNode {
-  return parse(source, 0, { left: 1_000 });
+  return parse(source, 0, { left: 1_000, work: Math.min(source.length * 16, 2_000_000) });
 }
 
-function parse(source: string, depth: number, budget: { left: number }): ReactNode {
+function parse(source: string, depth: number, budget: Budget): ReactNode {
   if (depth >= 12 || budget.left <= 0) return decodeText(source);
   const nodes: ReactNode[] = [];
   let plain = "";
   const flush = () => { if (plain) { nodes.push(decodeText(plain)); plain = ""; } };
   for (let index = 0; index < source.length;) {
-    if (budget.left <= 0) { plain += source.slice(index); break; }
+    if (budget.left <= 0 || budget.work <= 0) { plain += source.slice(index); break; }
     if (source[index] === "\\" && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(source[index + 1] ?? "")) {
       plain += source[index + 1]; index += 2; continue;
     }
     if (source.startsWith("<br>", index)) {
       flush(); nodes.push(createElement("br", { key: index })); budget.left -= 1; index += 4; continue;
     }
+    budget.work -= 1;
     const rest = source.slice(index);
     const html = /^<(strong|em|del|u|sub|sup|code)>/.exec(rest);
     const code = /^`+/.exec(rest);
@@ -62,7 +87,7 @@ function parse(source: string, depth: number, budget: { left: number }): ReactNo
       plain += source[index]; index += 1; continue;
     }
     const endMarker = html ? `</${html[1]}>` : marker;
-    const end = closing(source, endMarker, index + marker.length, !!native && !html && !code);
+    const end = closing(source, endMarker, index + marker.length, !!native && !html && !code, budget);
     if (end < 0) { plain += marker; index += marker.length; continue; }
     flush(); budget.left -= 1;
     let body = source.slice(index + marker.length, end);

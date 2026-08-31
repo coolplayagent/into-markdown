@@ -27,13 +27,12 @@ mod stream_tests;
 #[cfg(test)]
 mod test_observer;
 
-use allocation::try_clone_string;
 use error::{limit, malformed};
 use geometry::sort_shapes_for_reading;
 use into_markdown_core::{
     Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink,
     ConverterOutput, ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
-    DiagnosticSeverity, ExecutionContext, FormatCandidate, Inline, InputFormat, LocalBoxFuture,
+    DiagnosticSeverity, ExecutionContext, FormatCandidate, InputFormat, LocalBoxFuture,
     ProbeOutcome, ResolvedInput, Services, SourceContentEvidence, SourceLocator,
     StreamConsumerKind, document_is_empty, estimate_retained_output,
     estimate_validation_working_set, stream_converter_output,
@@ -391,22 +390,7 @@ fn convert_presentation(
                 slide_blocks.try_reserve(note_blocks.len().saturating_add(1)).map_err(|error| {
                     limit("max_memory_bytes", format!("cannot reserve note blocks: {error}"))
                 })?;
-                state.add_inlines(1)?;
-                let mut heading = state.node(
-                    Block::Heading {
-                        level: 3,
-                        content: vec![Inline::Text {
-                            value: try_clone_string("Speaker notes", "notes heading")?,
-                            marks: Vec::new(),
-                        }],
-                    },
-                    &notes_part,
-                    slide_number,
-                    None,
-                    None,
-                    None,
-                )?;
-                into_markdown_core::speaker_notes::mark_heading(&mut heading)?;
+                let heading = state.notes_heading(&notes_part, slide_number)?;
                 for block in &mut note_blocks {
                     state.mark_note_body(block)?;
                 }

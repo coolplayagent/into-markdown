@@ -4,6 +4,7 @@ import base64
 from collections import Counter
 import hashlib
 import html.parser
+import datetime
 import json
 from pathlib import Path
 import subprocess
@@ -89,7 +90,8 @@ def run_one(item, args):
                '--max-memory-size', '2GiB', '--emit', 'result-json', '--asset-mode', 'extract',
                '--assets-dir', str((destination / '素材 中文 (a)#%&').resolve()),
                '--output', str(output.resolve()), '--conflict', 'overwrite']
-    record = {'file': item['file'], 'sha256': item['sha256'], 'command': command}
+    record = {'file': item['file'], 'sha256': item['sha256'], 'command': command,
+              'startedAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}
     start = time.monotonic()
     try:
         process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)

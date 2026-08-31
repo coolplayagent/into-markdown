@@ -1,0 +1,25 @@
+{
+  "consumer": "Codex In-app Browser",
+  "capturedAt": "2026-08-31T12:39:32.986Z",
+  "requests": [
+    {
+      "url": "http://127.0.0.1:8341/browser/index.html",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    },
+    {
+      "url": "http://127.0.0.1:8341/browser/preview.css",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    },
+    {
+      "url": "http://127.0.0.1:8341/browser/preview.js",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+    }
+  ],
+  "preview": {
+    "bold": 5,
+    "breaks": 1,
+    "deletion": 2,
+    "italic": 5,
+    "resources": 0
+  }
+}

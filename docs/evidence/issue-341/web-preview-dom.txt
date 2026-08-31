@@ -1,0 +1,36 @@
+- main:
+  - heading "Markdown 兼容性验收" [level=1]
+  - paragraph:
+    - strong: 粗体
+    - emphasis: 斜体
+    - deletion: 删除线
+    - strong:
+      - emphasis: 组合样式
+  - paragraph:
+    - strong:
+      - text: 外层
+      - emphasis: 嵌套斜体
+    - text: 和
+    - emphasis:
+      - text: 斜体
+      - strong: 嵌套粗体
+  - paragraph:
+    - text: "*字面星号*"
+    - code: "**代码**"
+    - text: "& 下划线"
+    - text: 换行
+  - table:
+    - rowgroup:
+      - row "样式 内容":
+        - columnheader "样式"
+        - columnheader "内容"
+    - rowgroup:
+      - row "中文 删除 斜体":
+        - cell "中文":
+          - strong: 中文
+        - cell "删除 斜体":
+          - deletion: 删除
+          - emphasis: 斜体
+  - paragraph: "![图片文本](https://evil.invalid/image.png)"
+  - paragraph: "[外链](https://evil.invalid/)"
+  - paragraph: <img src="https://evil.invalid/pixel.png"><script>alert(1)</script>

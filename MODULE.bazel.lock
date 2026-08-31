@@ -254,11 +254,11 @@
     "//third_party/licenses:downloads.bzl%downloads": {
       "general": {
         "bzlTransitiveDigest": "t6QlQV7bpuIjUHpTKN3xhRus/pi+nYIXvdv9PB+Vr1c=",
-        "usagesDigest": "/IWUQLmpC/0OPmrBuKMMTifjEhDw1uD+b+DoJiX0prw=",
+        "usagesDigest": "mgBOQct82+69XXxwBrMhaqvzTa5DoaLpfuthZW43gx4=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
           "FILE:@@//third_party/licenses/downloads.json b40c922ca813bc6a1d0c6f2e013d35499dd04048df5002a4620d161ef120a2e3",
-          "FILE:@@//third_party/pdfium/manifest.json c26330b3667837af127c4690c297b07e1f315fb5ec590c6d110eaf3ca3e36368"
+          "FILE:@@//third_party/pdfium/manifest.json 330c44bedcd37ee59feccfed78848c309d00e5be1439ac0d2027825d42782186"
         ],
         "generatedRepoSpecs": {
           "ppocrv6_tiny_detector_source": {
@@ -287,8 +287,7 @@
               "downloaded_file_path": "PP-OCRv6_tiny_rec_onnx_infer.tar",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },
@@ -298,8 +297,7 @@
               "downloaded_file_path": "PP-OCRv6_tiny_det_onnx_infer.tar",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -339,8 +337,7 @@
               "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -350,8 +347,7 @@
               "downloaded_file_path": "runtime-model.tar",
               "sha256": "ff6ab415b0a6e0c488550f2fb5d5046f1719848df220b2dc21b56402a65bc05d",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_det_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_det_onnx_infer.tar"
               ]
             }
           },
@@ -361,8 +357,7 @@
               "build_file_content": "exports_files(glob(['**']), visibility = ['//visibility:public'])",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },
@@ -372,8 +367,7 @@
               "downloaded_file_path": "runtime-model.tar",
               "sha256": "1e13b22717b1edd89d4cde4fda272b6c17d5b505c97c2baea99da1a3a2d54b29",
               "urls": [
-                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar",
-                "https://huggingface.co/LunarOilRig/paddleocr-onnx/resolve/e6fe11fd12923086bb6f7e7742891920ff77a208/PP-OCRv6_tiny_rec_onnx_infer.tar"
+                "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv6_tiny_rec_onnx_infer.tar"
               ]
             }
           },
@@ -614,7 +608,7 @@
     "@@rules_nodejs+//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "4pUxCNc22K4I+6+4Nxu52Hur12tFRfa1JMsN5mdDv60=",
-        "usagesDigest": "rYs94LTZuYy3cpJywlVjoqGZDhwlKNJWPqGafOjMM0M=",
+        "usagesDigest": "3Caep5czle0NZmNjoWxWSYutHSml6GdkhTOLtA1TZ8I=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "nodejs_linux_amd64": {
@@ -943,7 +937,7 @@
     "@@rules_rust+//crate_universe:extensions.bzl%crate": {
       "general": {
         "bzlTransitiveDigest": "lHgk/Tqb1in9+GUwaa3F863uwS2eCxyXpaZNMMT6hOY=",
-        "usagesDigest": "iCQNRIgWQp/2oWGamp+9gtrJlubC24k5wYQ7P8/9LSw=",
+        "usagesDigest": "wYYQ3XrZIUM3SCtxcG7u0NkPVIySy0ho1lDC5rvQbs4=",
         "recordedInputs": [
           "ENV:CARGO_BAZEL_DEBUG \\0",
           "ENV:CARGO_BAZEL_GENERATOR_SHA256 \\0",
@@ -965,8 +959,8 @@
           "REPO_MAPPING:rules_rust+,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
-          "FILE:@@//Cargo.lock 1be4bd507d2e2c565c3431a8125a2bd05105f1c1a3d80a82b5ed3504d91a9e2f",
-          "FILE:@@//Cargo.toml 11bfce1064ec89a202761de0b7b5d1ae74c86efaad626818cdb7e7a08fb8655b",
+          "FILE:@@//Cargo.lock acb086fc3f612d03cc59f6ff27acf43200a2ca0718923381c30499d431a51681",
+          "FILE:@@//Cargo.toml 15e605433de6d44c7b43aee25a5a8295ca51aeec8d8a63785124a247b38b6dc3",
           "FILE:@@//apps/cli/Cargo.toml 5a7badd4acb08c0ea95413aacd2bf2d129bb100290ba1793322b298ad4e96580",
           "FILE:@@//crates/api/Cargo.toml ea7bdb200eef0b32e0bb453fb8424304e4a44a074128c3803b1a511ab9cfc471",
           "FILE:@@//crates/ai/Cargo.toml adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",

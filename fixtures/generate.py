@@ -196,7 +196,7 @@ def odf_fixtures(root: Path) -> list[dict[str, object]]:
         "</office:text></office:body></office:document-content>"
     ).encode()
     odt_normal = odf("odt", odt_normal_xml)
-    add("odt-normal", "odt", "normal", "small/odt/normal.odt", odt_normal, "application/vnd.oasis.opendocument.text", expected("success", "ODT heading, styled text, list, and table", "## Corpus ODT\n\nAlpha <strong>中文</strong>\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n"))
+    add("odt-normal", "odt", "normal", "small/odt/normal.odt", odt_normal, "application/vnd.oasis.opendocument.text", expected("success", "ODT heading, styled text, list, and table", "## Corpus ODT\n\nAlpha **中文**\n\n- item\n\n|  |  |\n| --- | --- |\n| A | B |\n"))
     add("odt-corrupt", "odt", "corrupt", "small/odt/corrupt.odt", odt_normal[: len(odt_normal) // 2], "application/vnd.oasis.opendocument.text", expected("error", "truncated ODT ZIP package", error_code="malformed"))
     odt_limit_xml = (f"<office:document-content {namespaces}><office:body><office:text><text:section><text:p>x</text:p></text:section></office:text></office:body></office:document-content>").encode()
     add("odt-limit", "odt", "limit", "small/odt/limit.odt", odf("odt", odt_limit_xml), "application/vnd.oasis.opendocument.text", limit_expected("ODT XML crosses the exact nesting boundary", "max_nesting_depth", 4, 5, "max_nesting_depth", "x\n"))
@@ -238,7 +238,7 @@ def odf_fixtures(root: Path) -> list[dict[str, object]]:
 
     odp_normal_xml = (f"<office:document-content {namespaces} office:version='1.3'><office:body><office:presentation><draw:page draw:name='Slide 1'><draw:frame presentation:class='title'><draw:text-box><text:p>Corpus ODP</text:p></draw:text-box></draw:frame><draw:frame svg:x='1cm' svg:y='1cm' svg:width='5cm' svg:height='2cm'><draw:text-box><text:p>Alpha 中文</text:p></draw:text-box></draw:frame><presentation:notes><text:p>Speaker cue</text:p></presentation:notes></draw:page></office:presentation></office:body></office:document-content>").encode()
     odp_normal = odf("odp", odp_normal_xml)
-    add("odp-normal", "odp", "normal", "small/odp/normal.odp", odp_normal, "application/vnd.oasis.opendocument.presentation", expected("success", "ODP title, positioned shape, and speaker notes", "## Slide 1: Corpus ODP\n\nAlpha 中文\n\n<strong>Speaker notes</strong>\n\nSpeaker cue\n"))
+    add("odp-normal", "odp", "normal", "small/odp/normal.odp", odp_normal, "application/vnd.oasis.opendocument.presentation", expected("success", "ODP title, positioned shape, and speaker notes", "## Slide 1: Corpus ODP\n\nAlpha 中文\n\n### Speaker notes\n\nSpeaker cue\n"))
     add("odp-corrupt", "odp", "corrupt", "small/odp/corrupt.odp", odp_normal[: len(odp_normal) // 2], "application/vnd.oasis.opendocument.presentation", expected("error", "truncated ODP ZIP package", error_code="malformed"))
     odp_limit_xml = (f"<office:document-content {namespaces}><office:body><office:presentation><draw:page><draw:frame><draw:text-box><text:p>x</text:p></draw:text-box></draw:frame></draw:page></office:presentation></office:body></office:document-content>").encode()
     add("odp-limit", "odp", "limit", "small/odp/limit.odp", odf("odp", odp_limit_xml), "application/vnd.oasis.opendocument.presentation", limit_expected("ODP XML crosses the exact nesting boundary", "max_nesting_depth", 6, 7, "max_nesting_depth", "## Slide 1\n\nx\n"))
@@ -510,14 +510,14 @@ def msg_fixture_definitions() -> list[tuple[str, str, bytes, dict[str, object]]]
     fat_sector = struct.unpack_from("<I", malicious, 76)[0]
     struct.pack_into("<I", malicious, (fat_sector + 1) * 512, 0)
     return [
-        ("msg-normal", "normal", plain, expected_hash("headers, time, transport headers and plain body", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
-        ("msg-html", "html", html, expected_hash("HTML is selected ahead of the plain fallback", "60837228af31fb2a540e6128aabbe3dd3678a1faf57d35e19d9eff7a7e2ba3a1")),
-        ("msg-cid", "cid", cid, expected_hash("canonical CID image is bound at its HTML reference", "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af")),
-        ("msg-attachment-nested", "attachment", nested, expected_hash("by-value and embedded MSG attachments retain assets and source chains", "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a")),
-        ("msg-rtf", "rtf", rtf, expected_hash("LZFu is decoded and passed to the bounded RTF converter on the same request context", "9a9f5eaf2525c8669f22eb27199535b3f6eb6cd5415c0835d30593a398103367")),
+        ("msg-normal", "normal", plain, expected_hash("headers, time, transport headers and plain body", "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db")),
+        ("msg-html", "html", html, expected_hash("HTML is selected ahead of the plain fallback", "d213336964b4877a6029da854343fac6c7f2a44c5d80787088f889ac25e3ffc4")),
+        ("msg-cid", "cid", cid, expected_hash("canonical CID image is bound at its HTML reference", "e0342c9e2fb20236cdcd3b6df842e91b3bf48818dc0e329bda8abaafd8c838c5")),
+        ("msg-attachment-nested", "attachment", nested, expected_hash("by-value and embedded MSG attachments retain assets and source chains", "413b505dc3fb65f0890dadd6f8a47b85bde52e7c6fa60198b9d7cda9f5c8299c")),
+        ("msg-rtf", "rtf", rtf, expected_hash("LZFu is decoded and passed to the bounded RTF converter on the same request context", "17be07f5d09fbec262da4ef68a198edb934c9a4a656701bb6e030c8a3aee21bf")),
         ("msg-corrupt", "corrupt", plain[:-17], expected("error", "truncated CFB sector", error_code="malformed")),
         ("msg-malicious", "malicious", bytes(malicious), expected("error", "cyclic CFB directory FAT chain", error_code="malformed")),
-        ("msg-limit", "limit", plain, limit_expected("MSG crosses the exact input byte boundary", "max_input_bytes", len(plain) - 1, len(plain), "max_input_bytes", "", "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3")),
+        ("msg-limit", "limit", plain, limit_expected("MSG crosses the exact input byte boundary", "max_input_bytes", len(plain) - 1, len(plain), "max_input_bytes", "", "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db")),
     ]
 
 
@@ -817,11 +817,11 @@ def presentation_fixtures(root: Path) -> list[dict[str, object]]:
     media_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     semantic = (
         "## Slide 1: Corpus 你好 – Привет\n\n"
-        "<em>English français</em>\n\n"
+        "*English français*\n\n"
         "### Speaker notes\n\n"
         "Nota 日本語\n\n"
         "## Slide 2: Second layout\n\n"
-        "<em>مرحبا</em>\n"
+        "*مرحبا*\n"
     )
     variants = [
         (
@@ -1484,7 +1484,7 @@ def build(root: Path, font_path: Path) -> None:
     text_limit = b"x" * 4096
     add("text-limit", "text", "limit", "small/text/limit.txt", text_limit, "text/plain", limit_expected("input exceeds the exact configured byte budget", "max_input_bytes", len(text_limit) - 1, len(text_limit), "max_input_bytes", "", "5d05023e33a88151e829770ac45c53a2acd6f5bd111cbb101b8d649d7f9c2906"))
 
-    add("markdown-normal", "markdown", "normal", "small/markdown/normal.md", b"# Corpus\n\n- alpha\n- **beta**\n", "text/markdown", expected("success", "heading and rich list", "# Corpus\n\n- alpha\n- <strong>beta</strong>\n"))
+    add("markdown-normal", "markdown", "normal", "small/markdown/normal.md", b"# Corpus\n\n- alpha\n- **beta**\n", "text/markdown", expected("success", "heading and rich list", "# Corpus\n\n- alpha\n- **beta**\n"))
     add("markdown-corrupt", "markdown", "corrupt", "small/markdown/corrupt.md", b"# valid\n\xffbroken", "text/markdown", expected("error", "invalid UTF-8", error_code="malformed"))
     markdown_limit = (("> " * 8) + "deep\n").encode()
     add("markdown-limit", "markdown", "limit", "small/markdown/limit.md", markdown_limit, "text/markdown", limit_expected("nested block quote crosses the exact parser-depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "", "0b5587bf924fa4b9abd8f28f256f553079f3cd64b8493f5b059c4e238cf7a76b"))
@@ -1501,12 +1501,12 @@ def build(root: Path, font_path: Path) -> None:
     feed_limit = b'<rss version="2.0"><channel><title>Boundary Feed</title><item><guid>entry-limit</guid><title>Boundary</title><description>Exact input byte boundary</description></item></channel></rss>\n'
     add("feed-limit", "feed", "limit", "small/feed/limit.xml", feed_limit, "application/rss+xml", limit_expected("feed input exceeds the exact configured byte budget", "max_input_bytes", len(feed_limit) - 1, len(feed_limit), "max_input_bytes", "", "f6d6668e4b78299ae7b951b186b9c338b0c935f8aa4423122ba3199e77dfac06"))
 
-    add("csv-normal", "csv", "normal", "small/csv/normal.csv", "name,value\nalpha,1\n中文,2\n".encode(), "text/csv", expected("success", "header and two rows", "| <strong>name</strong> | <strong>value</strong> |\n| --- | --- |\n| alpha | 1 |\n| 中文 | 2 |\n"))
+    add("csv-normal", "csv", "normal", "small/csv/normal.csv", "name,value\nalpha,1\n中文,2\n".encode(), "text/csv", expected("success", "header and two rows", "| **name** | **value** |\n| --- | --- |\n| alpha | 1 |\n| 中文 | 2 |\n"))
     add("csv-corrupt", "csv", "corrupt", "small/csv/corrupt.csv", b'name,value\n"unterminated,1\n', "text/csv", expected("error", "unterminated quoted field", error_code="malformed"))
     csv_limit = ((",".join(f"c{i}" for i in range(33))) + "\n").encode()
     add("csv-limit", "csv", "limit", "small/csv/limit.csv", csv_limit, "text/csv", limit_expected("column count crosses the exact configured boundary", "max_table_columns", 32, 33, "max_table_columns", "", "bedc28a22c18681a165e567d8bb7c818230e6ff7dc047b8484ed229ba4db3d5e"))
 
-    add("tsv-normal", "tsv", "normal", "small/tsv/normal.tsv", "name\tvalue\nalpha\t1\n繁體\t2\n".encode(), "text/tab-separated-values", expected("success", "header and two rows", "| <strong>name</strong> | <strong>value</strong> |\n| --- | --- |\n| alpha | 1 |\n| 繁體 | 2 |\n"))
+    add("tsv-normal", "tsv", "normal", "small/tsv/normal.tsv", "name\tvalue\nalpha\t1\n繁體\t2\n".encode(), "text/tab-separated-values", expected("success", "header and two rows", "| **name** | **value** |\n| --- | --- |\n| alpha | 1 |\n| 繁體 | 2 |\n"))
     add("tsv-corrupt", "tsv", "corrupt", "small/tsv/corrupt.tsv", b"name\tvalue\nvalid\t\xff\n", "text/tab-separated-values", expected("error", "invalid UTF-8", error_code="malformed"))
     tsv_limit = (("\t".join(f"c{i}" for i in range(33))) + "\n").encode()
     add("tsv-limit", "tsv", "limit", "small/tsv/limit.tsv", tsv_limit, "text/tab-separated-values", limit_expected("column count crosses the exact configured boundary", "max_table_columns", 32, 33, "max_table_columns", "", "bedc28a22c18681a165e567d8bb7c818230e6ff7dc047b8484ed229ba4db3d5e"))
@@ -1547,7 +1547,7 @@ def build(root: Path, font_path: Path) -> None:
     add("docx-malicious", "docx", "malicious", "small/docx/malicious.docx", docx(external_document, external), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", expected("success", "referenced external hyperlink is rendered without any service or network request", "[safe external link](<https://example.invalid/fixture-link>)\n"))
 
     rtf_normal = b"{\\rtf1\\ansi\\ansicpg1252 Corpus {\\b Alpha} \\u20013?\\u25991?\\par}\n"
-    add("rtf-normal", "rtf", "normal", "small/rtf/normal.rtf", rtf_normal, "application/rtf", expected("success", "styled English and Unicode Chinese paragraph", "Corpus <strong>Alpha</strong> \u4e2d\u6587\n"))
+    add("rtf-normal", "rtf", "normal", "small/rtf/normal.rtf", rtf_normal, "application/rtf", expected("success", "styled English and Unicode Chinese paragraph", "Corpus **Alpha** \u4e2d\u6587\n"))
     add("rtf-corrupt", "rtf", "corrupt", "small/rtf/corrupt.rtf", b"{\\rtf1\\ansi unterminated\n", "application/rtf", expected("error", "unterminated root group", error_code="malformed"))
     rtf_limit = ("{\\rtf1\\ansi " + ("{" * 8) + "deep" + ("}" * 8) + "}\n").encode()
     add("rtf-limit", "rtf", "limit", "small/rtf/limit.rtf", rtf_limit, "application/rtf", limit_expected("RTF group stack crosses the exact configured depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "deep\n"))

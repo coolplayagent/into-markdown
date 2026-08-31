@@ -19,7 +19,7 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
       continue;
     }
     if (code) { code.push(line); continue; }
-    if (isSourceAnchor(line)) continue;
+    if (isSourceAnchor(line) || line.trim() === "<!-- -->") continue;
     const delimiter = lines[index + 1];
     if (line.includes("|") && delimiter && isTableDelimiter(delimiter)) {
       const headers = tableCells(line);

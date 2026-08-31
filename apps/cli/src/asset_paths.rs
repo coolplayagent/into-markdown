@@ -301,7 +301,8 @@ fn encode_uri_segment(segment: &[u8]) -> String {
         };
         for character in valid.chars() {
             if (!character.is_ascii() && !character.is_whitespace() && !character.is_control())
-                || character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '~' | '(' | ')')
+                || character.is_ascii_alphanumeric()
+                || matches!(character, '-' | '.' | '_' | '~' | '(' | ')')
             {
                 encoded.push(character);
             } else {

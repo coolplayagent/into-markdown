@@ -1,6 +1,10 @@
 //! Context-aware inline serialization.
 
-use super::*;
+use super::{
+    BTreeSet, ConversionError, Inline, InlineContext, InlineMark, escape_destination,
+    escape_html_attribute, escape_html_code, escape_html_text, escape_text, footnote_label,
+    normalize_lf, render_code_span, render_error, single_line, validate_link_target,
+};
 
 fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
     match inline {
@@ -113,9 +117,18 @@ fn render_marked_text(
     let native = native_boundaries(trimmed, previous, next)
         && (!html_marks || (separating(previous) && separating(next)));
     let text = escape_text(if native { trimmed } else { &value }, context);
-    let wrappers = [InlineMark::Subscript, InlineMark::Superscript, InlineMark::Underline,
-        InlineMark::Italic, InlineMark::Bold, InlineMark::Strikethrough].map(|mark| {
-        if !marks.contains(&mark) { return ("", ""); }
+    let wrappers = [
+        InlineMark::Subscript,
+        InlineMark::Superscript,
+        InlineMark::Underline,
+        InlineMark::Italic,
+        InlineMark::Bold,
+        InlineMark::Strikethrough,
+    ]
+    .map(|mark| {
+        if !marks.contains(&mark) {
+            return ("", "");
+        }
         match (mark, native) {
             (InlineMark::Bold, true) => ("**", "**"),
             (InlineMark::Italic, true) => ("*", "*"),
@@ -129,11 +142,19 @@ fn render_marked_text(
         }
     });
     let mut rendered = String::with_capacity(text.len() + 78 + leading.len() + trailing.len());
-    if native { rendered.push_str(leading); }
-    for (open, _) in wrappers.iter().rev() { rendered.push_str(open); }
+    if native {
+        rendered.push_str(leading);
+    }
+    for (open, _) in wrappers.iter().rev() {
+        rendered.push_str(open);
+    }
     rendered.push_str(&text);
-    for (_, close) in wrappers { rendered.push_str(close); }
-    if native { rendered.push_str(trailing); }
+    for (_, close) in wrappers {
+        rendered.push_str(close);
+    }
+    if native {
+        rendered.push_str(trailing);
+    }
     rendered
 }
 

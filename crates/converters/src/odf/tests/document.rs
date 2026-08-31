@@ -157,10 +157,7 @@ fn versions_and_style_family_origin_are_bound() {
     let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
     assert!(markdown.contains("*paragraph*"));
-    assert!(
-        markdown.contains("***span***"),
-        "{markdown}"
-    );
+    assert!(markdown.contains("***span***"), "{markdown}");
 
     let bad_styles = common_styles.replace("office:version='1.3'", "office:version='9.9'");
     let mismatched =

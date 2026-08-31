@@ -175,3 +175,100 @@ fn notes_heading_tracks_final_visible_content_and_preserves_ordinary_headings() 
     )];
     assert_eq!(render(&doc, &[], &options).unwrap(), "### Speaker notes\n");
 }
+
+#[test]
+fn custom_numbering_restarts_tasks_and_empty_items_preserve_structure_without_source_comments() {
+    let list = |id, start| {
+        node(
+            id,
+            Block::List {
+                kind: ListKind::Ordered,
+                start,
+                items: vec![
+                    ListItem {
+                        checked: None,
+                        marker_label: Some("第壹章".into()),
+                        blocks: vec![paragraph(&format!("{id}-p"), "item")],
+                    },
+                    ListItem {
+                        checked: None, marker_label: Some("第贰章".into()), blocks: vec![]
+                    },
+                ],
+            },
+        )
+    };
+    let doc = document(vec![
+        list("a", 7),
+        list("b", 3),
+        node(
+            "tasks",
+            Block::List {
+                kind: ListKind::Task,
+                start: 1,
+                items: vec![ListItem {
+                    checked: Some(true),
+                    marker_label: None,
+                    blocks: vec![paragraph("t", "done")],
+                }],
+            },
+        ),
+    ]);
+    let original = doc.clone();
+    let markdown = output(&doc);
+    assert!(!markdown.contains("source-marker"));
+    assert!(!markdown.contains("第壹章"));
+    let events = Parser::new_ext(&markdown, Options::ENABLE_TASKLISTS).collect::<Vec<_>>();
+    assert_eq!(
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Start(Tag::List(start)) => Some(*start),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [Some(7), Some(3), None]
+    );
+    assert_eq!(events.iter().filter(|event| matches!(event, Event::Start(Tag::Item))).count(), 5);
+    assert!(events.contains(&Event::TaskListMarker(true)));
+    assert_eq!(doc, original);
+}
+
+#[test]
+fn native_marks_beside_links_code_and_table_breaks_keep_semantics() {
+    let content = vec![
+        marked("bold", &[InlineMark::Bold]),
+        Inline::Link {
+            target: "https://example.test/中文".into(),
+            content: vec![marked("link", &[InlineMark::Italic])],
+        },
+        Inline::Code("*literal*".into()),
+        Inline::LineBreak,
+        marked("deleted", &[InlineMark::Strikethrough]),
+    ];
+    let markdown = output(&document(vec![node("p", Block::Paragraph(content.clone()))]));
+    let events = Parser::new_ext(&markdown, Options::ENABLE_STRIKETHROUGH).collect::<Vec<_>>();
+    assert!(events.contains(&Event::Start(Tag::Strong)));
+    assert!(events.contains(&Event::Start(Tag::Emphasis)));
+    assert!(events.contains(&Event::Start(Tag::Strikethrough)));
+    assert!(events.contains(&Event::Code("*literal*".into())));
+    assert!(events.contains(&Event::HardBreak));
+    let table = output(&document(vec![node(
+        "table",
+        Block::Table {
+            alignments: vec![],
+            rows: vec![TableRow {
+                cells: vec![Cell {
+                    blocks: vec![node("cell", Block::Paragraph(content))],
+                    row_span: 1,
+                    column_span: 1,
+                    header: false,
+                }],
+            }],
+        },
+    )]));
+    assert!(table.contains("<br>"));
+    assert!(
+        Parser::new_ext(&table, Options::ENABLE_TABLES)
+            .any(|event| matches!(event, Event::Start(Tag::Table(_))))
+    );
+}
