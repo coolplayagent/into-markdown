@@ -15,6 +15,12 @@ pub(super) fn validate(limits: &ResourceLimits) -> Result<(), WebTaskError> {
         || limits.max_total_asset_bytes > 128 * 1024 * 1024
         || limits.max_pages == 0
         || limits.max_pages > 10_000
+        || limits.max_pdf_page_objects == 0
+        || limits.max_pdf_page_objects > 100_000
+        || limits.max_pdf_total_objects == 0
+        || limits.max_pdf_total_objects > 10_000_000
+        || limits.max_pdf_layout_comparisons == 0
+        || limits.max_pdf_layout_comparisons > 12_000_000
         || limits.max_decompressed_bytes == 0
         || limits.max_decompressed_bytes > 1024 * 1024 * 1024
         || limits.max_archive_entries == 0
@@ -47,4 +53,28 @@ pub(super) fn validate(limits: &ResourceLimits) -> Result<(), WebTaskError> {
         return Err(WebTaskError::Invalid("resource limits exceed the Web profile".into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{WebTaskRequest, decode_web_task_request};
+    #[test]
+    fn pdf_limits_web_defaults_and_profile_ceiling() {
+        let request = WebTaskRequest::default();
+        let mut value = serde_json::to_value(&request).unwrap();
+        let fields = [
+            ("max_pdf_page_objects", 100_000_u64),
+            ("max_pdf_total_objects", 10_000_000),
+            ("max_pdf_layout_comparisons", 12_000_000),
+        ];
+        for (field, maximum) in fields {
+            value["options"]["limits"].as_object_mut().unwrap().remove(field);
+            assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_ok());
+            for rejected in [0, maximum + 1] {
+                value["options"]["limits"][field] = rejected.into();
+                assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_err());
+            }
+            value["options"]["limits"][field] = maximum.into();
+        }
+    }
 }

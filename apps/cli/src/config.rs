@@ -231,8 +231,6 @@ pub struct NetworkConfig {
     pub deny_private_networks: Option<bool>,
 }
 
-/// Partial resource budgets.
-
 /// Backward-compatible configured memory budget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -596,7 +594,19 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
     if let Some(value) = network.deny_private_networks {
         options.network.deny_private_networks = value;
     }
-    limits::apply(&config.limits, &mut options)?;
+    config.limits.apply(&mut options)?;
+    options.limits.max_memory_bytes = match config.limits.max_memory_bytes.as_ref() {
+        Some(MemoryLimitConfig::Bytes(value)) => *value,
+        Some(MemoryLimitConfig::Mode(value)) if value.eq_ignore_ascii_case("auto") => {
+            adaptive_memory_budget()
+        }
+        Some(MemoryLimitConfig::Mode(value)) => {
+            return Err(CliError::config(format!(
+                "conversion.limits.max_memory_bytes must be an integer or 'auto', got '{value}'"
+            )));
+        }
+        None => adaptive_memory_budget(),
+    };
     if let Some(value) = &config.output.asset_directory_suffix {
         options.output.asset_directory_suffix.clone_from(value);
     }

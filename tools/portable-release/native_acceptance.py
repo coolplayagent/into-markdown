@@ -620,9 +620,13 @@ def main() -> None:
     e2e = run_e2e(
         arguments.target, contents, member, audit["artifactSha256"], expected_version
     )
+    import pdf_acceptance
+
+    pdf_regression = pdf_acceptance.run(contents, member)
     evidence = output / "evidence" / arguments.target
     write_json(evidence / "native-audit.json", audit)
     write_json(evidence / "e2e.json", e2e)
+    write_json(evidence / "pdf-regression.json", pdf_regression)
 
 
 if __name__ == "__main__":

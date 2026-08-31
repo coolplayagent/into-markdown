@@ -9,6 +9,9 @@ static TEMPORARY_SEQUENCE: AtomicUsize = AtomicUsize::new(1);
 #[path = "page_lifetime_tests.rs"]
 mod page_lifetime;
 
+#[path = "resilience_tests.rs"]
+mod resilience;
+
 #[test]
 fn direct_pdf_probe_accepts_only_the_header_or_one_utf8_bom() {
     let context = ExecutionContext::new(
@@ -883,17 +886,40 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                         .find(|block| matches!(block.block, Block::Image { .. }))
                         .unwrap();
                     assert_eq!(image.provenance.locator.bounds, Some(image_bounds[index]));
-                    let Block::Paragraph(inlines) = &blocks[0].block else { panic!("text") };
-                    let Inline::SourceText { provenance, .. } = &inlines[0] else {
-                        panic!("character")
-                    };
+                    let provenance = blocks
+                        .iter()
+                        .find_map(|node| match &node.block {
+                            Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
+                                inlines.iter().find_map(|inline| match inline {
+                                    Inline::SourceText { provenance, value, .. }
+                                        if value == "R" =>
+                                    {
+                                        Some(provenance)
+                                    }
+                                    _ => None,
+                                })
+                            }
+                            _ => None,
+                        })
+                        .expect("rotated native source character");
                     let character = provenance.locator.bounds.unwrap();
                     let info = PageInfo {
                         width_points: page.provenance.locator.page_width.unwrap(),
                         height_points: page.provenance.locator.page_height.unwrap(),
                         rotation_degrees: u16::try_from(index * 90).unwrap(),
                     };
-                    assert_eq!(character, normalize_rect(raw_character, &info).unwrap());
+                    let expected = normalize_rect(raw_character, &info).unwrap();
+                    for (actual, expected) in [
+                        (character.x, expected.x),
+                        (character.y, expected.y),
+                        (character.width, expected.width),
+                        (character.height, expected.height),
+                    ] {
+                        assert!(
+                            (actual - expected).abs() <= 0.00001,
+                            "coordinate round-trip: {actual} vs {expected}"
+                        );
+                    }
                     let mut found_external = false;
                     let mut found_internal = false;
                     for block in blocks {

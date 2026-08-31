@@ -198,6 +198,12 @@ pub struct ResourceLimits {
     pub max_presentation_xml_events: u64,
     /// Maximum PDF/page-like units.
     pub max_pages: u32,
+    /// Maximum raw PDF objects on one page (1..=10,000,000).
+    pub max_pdf_page_objects: u32,
+    /// Maximum cumulative raw page objects in one PDF, counted once per page.
+    pub max_pdf_total_objects: u64,
+    /// Maximum candidate comparisons during each PDF layout reconstruction pass.
+    pub max_pdf_layout_comparisons: u64,
     /// Maximum bytes retained by one asset.
     pub max_asset_bytes: u64,
     /// Maximum bytes retained across all assets before content deduplication.
@@ -234,6 +240,9 @@ impl Default for ResourceLimits {
             max_nesting_depth: 256,
             max_presentation_xml_events: 2_000_000,
             max_pages: 10_000,
+            max_pdf_page_objects: 100_000,
+            max_pdf_total_objects: 10_000_000,
+            max_pdf_layout_comparisons: 12_000_000,
             max_asset_bytes: 256 * 1024 * 1024,
             max_total_asset_bytes: 1024 * 1024 * 1024,
             max_memory_bytes: 2 * 1024 * 1024 * 1024,
@@ -249,6 +258,34 @@ impl Default for ResourceLimits {
             max_feed_text_bytes: 64 * 1024 * 1024,
             max_feed_html_bytes: 64 * 1024 * 1024,
         }
+    }
+}
+
+impl ResourceLimits {
+    /// Validate PDF work budgets before opening the native runtime.
+    ///
+    /// # Errors
+    /// Returns a named resource error for a zero or unsupported page budget.
+    pub fn validate_pdf(&self) -> Result<(), crate::ConversionError> {
+        if !(1..=10_000_000).contains(&self.max_pdf_page_objects) {
+            return Err(crate::ConversionError::ResourceLimit {
+                limit: "max_pdf_page_objects",
+                detail: format!("{} must be within 1..=10000000", self.max_pdf_page_objects),
+            });
+        }
+        if self.max_pdf_layout_comparisons == 0 {
+            return Err(crate::ConversionError::ResourceLimit {
+                limit: "max_pdf_layout_comparisons",
+                detail: "must be greater than zero".into(),
+            });
+        }
+        if self.max_pdf_total_objects == 0 {
+            return Err(crate::ConversionError::ResourceLimit {
+                limit: "max_pdf_total_objects",
+                detail: "must be greater than zero".into(),
+            });
+        }
+        Ok(())
     }
 }
 
@@ -400,6 +437,30 @@ mod tests {
         assert_eq!(defaults.ocr.policy, OcrPolicy::Auto);
         assert_eq!(defaults.ai.vision_ocr, AiMode::Off);
         assert_eq!(defaults.ai.markdown_postprocess, AiMode::Off);
+    }
+
+    #[test]
+    fn pdf_budgets_default_for_old_payloads_and_validate_independently() {
+        let mut old = serde_json::to_value(ResourceLimits::default()).unwrap();
+        old.as_object_mut().unwrap().remove("max_pdf_page_objects");
+        old.as_object_mut().unwrap().remove("max_pdf_total_objects");
+        old.as_object_mut().unwrap().remove("max_pdf_layout_comparisons");
+        let mut decoded: ResourceLimits = serde_json::from_value(old).unwrap();
+        assert_eq!(decoded.max_pdf_page_objects, 100_000);
+        assert_eq!(decoded.max_pdf_total_objects, 10_000_000);
+        assert_eq!(decoded.max_pdf_layout_comparisons, 12_000_000);
+        decoded.validate_pdf().unwrap();
+        decoded.max_pdf_page_objects = 0;
+        assert!(decoded.validate_pdf().is_err());
+        decoded.max_pdf_page_objects = 10_000_001;
+        assert!(decoded.validate_pdf().is_err());
+        decoded.max_pdf_page_objects = 100_000;
+        decoded.max_pdf_total_objects = 0;
+        assert!(decoded.validate_pdf().is_err());
+        decoded.max_pdf_total_objects = u64::MAX;
+        decoded.validate_pdf().unwrap();
+        decoded.max_pdf_layout_comparisons = 0;
+        assert!(decoded.validate_pdf().is_err());
     }
 
     #[test]

@@ -1,14 +1,14 @@
 //! CLI orchestration, input expansion, policy application, and management commands.
 
 mod limits;
-use limits::apply as apply_limit_overrides;
+use limits::apply_limit_overrides;
 
 use crate::args::{
     AssetModeArg, CapabilitiesCommand, Cli, Command, CompletionShell, ConfigCommand,
     ConfigOutputFormat, ConflictPolicy, ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg,
-    ErrorPolicyArg, FormatsCommand, LogFormat, MemorySizeArg, OcrPolicyArg, PluginsCommand,
-    ProfileCommand, ProviderType, ProvidersCommand, RaggedRowsArg, Scope, SetupCommand,
-    TableHeaderArg, TranscriptCommand, UiArgs,
+    ErrorPolicyArg, FormatsCommand, LogFormat, OcrPolicyArg, PluginsCommand, ProfileCommand,
+    ProviderType, ProvidersCommand, RaggedRowsArg, Scope, SetupCommand, TableHeaderArg,
+    TranscriptCommand, UiArgs,
 };
 use crate::config::{self, LoadedConfig, PluginConfig, ProviderConfig};
 use crate::error::{CliError, ExitClass};

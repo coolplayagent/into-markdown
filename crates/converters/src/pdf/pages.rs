@@ -4,15 +4,14 @@
 use super::IMAGE_BITMAP_MATERIALIZATIONS;
 use super::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
-    Diagnostic, DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext, HashSet, Inline,
-    Limits, LinkTarget, MAX_RENDER_DIMENSION, MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE,
-    NodeId, OcrPolicy, PageCoverage, Path, Pdfium, Rect, ResourceReservation, account_asset,
+    Diagnostic, DiagnosticSeverity, Document, ExecutionContext, HashSet, Limits,
+    MAX_RENDER_DIMENSION, MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE, NodeId, OcrPolicy,
+    PageCoverage, Path, Pdfium, Rect, ResourceReservation, account_asset,
     allocation_capacity_bound, asset_record_overhead, character_working_set_bytes, checked_count,
     content_asset_id, diagnostic_overhead, displayed_dimensions, image_bitmap_to_bmp,
     image_pixels_required, map_pdfium_error, materialize_after_reserve, normalize_rect,
     output_block_overhead, page_locator, provenance, render_dimensions, rendered_bitmap_to_bmp,
-    request_path_scan, resource, retain_existing_reservation, retain_output_bytes,
-    safe_link_target, text_block,
+    request_path_scan, resource, retain_existing_reservation, retain_output_bytes, text_block,
 };
 
 #[derive(Default)]
@@ -21,7 +20,45 @@ pub(super) struct Counts {
     pub(super) asset_ids: HashSet<String>,
     nodes: usize,
     inlines: usize,
-    page_objects: usize,
+    page_objects: u64,
+}
+
+impl Counts {
+    pub(super) fn account_link(&mut self) -> Result<(), ConversionError> {
+        self.nodes =
+            checked_count(self.nodes, 1, into_markdown_core::MAX_DOCUMENT_NODES, "documentNodes")?;
+        self.inlines = checked_count(
+            self.inlines,
+            2,
+            into_markdown_core::MAX_DOCUMENT_INLINES,
+            "documentInlines",
+        )?;
+        Ok(())
+    }
+    fn account_page_objects(
+        &mut self,
+        count: u32,
+        page: u32,
+        options: &ConversionOptions,
+    ) -> Result<(), ConversionError> {
+        if count > options.limits.max_pdf_page_objects {
+            return Err(resource(
+                "max_pdf_page_objects",
+                format!("page {page}: {count} > {}", options.limits.max_pdf_page_objects),
+            ));
+        }
+        let total = self.page_objects.checked_add(u64::from(count)).ok_or_else(|| {
+            resource("max_pdf_total_objects", format!("page {page}: object count overflow"))
+        })?;
+        if total > options.limits.max_pdf_total_objects {
+            return Err(resource(
+                "max_pdf_total_objects",
+                format!("page {page}: {total} > {}", options.limits.max_pdf_total_objects),
+            ));
+        }
+        self.page_objects = total;
+        Ok(())
+    }
 }
 
 pub(super) struct PdfOutput {
@@ -37,6 +74,7 @@ pub(super) fn load_runtime(
     runtime_path: &Path,
     options: &ConversionOptions,
 ) -> Result<Pdfium, ConversionError> {
+    options.limits.validate_pdf()?;
     let bitmap_limit =
         options.limits.max_asset_bytes.min(options.limits.max_memory_bytes).min(400_000_000);
     let limits = Limits {
@@ -47,7 +85,7 @@ pub(super) fn load_runtime(
         max_render_dimension: MAX_RENDER_DIMENSION,
         max_render_pixels: bitmap_limit / 4,
         max_images_per_page: 10_000,
-        max_page_objects: u32::try_from(into_markdown_core::MAX_DOCUMENT_NODES).unwrap_or(u32::MAX),
+        max_page_objects: options.limits.max_pdf_page_objects,
         max_password_bytes: 1024,
         max_bitmap_bytes: bitmap_limit,
         max_links_per_page: 10_000,
@@ -110,12 +148,8 @@ impl PdfOutput {
         context.checkpoint()?;
         let page_number = page_index + 1;
         let page = pdf.page(page_index).map_err(map_pdfium_error)?;
-        counts.page_objects = checked_count(
-            counts.page_objects,
-            usize::try_from(page.object_count().map_err(map_pdfium_error)?).unwrap_or(usize::MAX),
-            into_markdown_core::MAX_DOCUMENT_NODES,
-            "pdfPageObjects",
-        )?;
+        let page_objects = page.object_count().map_err(map_pdfium_error)?;
+        counts.account_page_objects(page_objects, page_number, options)?;
         let info = page.info().map_err(map_pdfium_error)?;
         let path_plan = request_path_scan(context, |checkpoint| {
             page.plan_path_bounds_with_checkpoint(checkpoint)
@@ -186,87 +220,17 @@ impl PdfOutput {
                 .map_err(|_| resource("max_memory_bytes", "PDF block allocation failed"))?;
             blocks.push(text_block(page_number, &info, &characters)?);
         }
-        let link_plan = text_page.plan_links().map_err(map_pdfium_error)?;
-        let link_plan_bytes = link_plan.allocation_bytes();
-        let (links, link_memory) = materialize_after_reserve(context, link_plan_bytes, || {
-            link_plan.materialize().map_err(map_pdfium_error)
-        })?;
-        for (link_index, link) in links.into_iter().enumerate() {
-            counts.nodes = checked_count(
-                counts.nodes,
-                1,
-                into_markdown_core::MAX_DOCUMENT_NODES,
-                "documentNodes",
-            )?;
-            counts.inlines = checked_count(
-                counts.inlines,
-                2,
-                into_markdown_core::MAX_DOCUMENT_INLINES,
-                "documentInlines",
-            )?;
-            let target_length = match &link.target {
-                LinkTarget::ExternalUri(value) => value.len(),
-                LinkTarget::InternalPage { .. } => 32,
-            };
-            let link_ir_bytes = u64::try_from(target_length)
-                .unwrap_or(u64::MAX)
-                .checked_mul(2)
-                .and_then(|bytes| bytes.checked_add(output_block_overhead(2).ok()?))
-                .ok_or_else(|| resource("max_memory_bytes", "link IR memory overflow"))?;
-            retain_output_bytes(context, &mut retained_memory, link_ir_bytes)?;
-            let display_text = match &link.target {
-                LinkTarget::ExternalUri(value) => Some(value.clone()),
-                LinkTarget::InternalPage { .. } => None,
-            };
-            let target = match safe_link_target(link.target, pdf.page_count()) {
-                Ok(target) => target,
-                Err(error) if options.error_policy == ErrorPolicy::Strict => return Err(error),
-                Err(error) => {
-                    diagnostics.push(Diagnostic {
-                        code: "pdf.linkOmitted".into(),
-                        severity: DiagnosticSeverity::Warning,
-                        message: error.to_string(),
-                        locator: Some(page_locator(page_number, &info)),
-                    });
-                    if let Some(value) = display_text {
-                        blocks.try_reserve(1).map_err(|_| {
-                            resource("max_memory_bytes", "PDF block allocation failed")
-                        })?;
-                        blocks.push(BlockNode {
-                            id: NodeId(format!("pdf-page-{page_number}-link-{link_index}")),
-                            block: Block::Paragraph(vec![Inline::Text {
-                                value,
-                                marks: Vec::new(),
-                            }]),
-                            provenance: provenance(
-                                page_number,
-                                Some(normalize_rect(link.bounds, &info)?),
-                                None,
-                                &info,
-                            )?,
-                        });
-                    }
-                    continue;
-                }
-            };
-            blocks
-                .try_reserve(1)
-                .map_err(|_| resource("max_memory_bytes", "PDF block allocation failed"))?;
-            blocks.push(BlockNode {
-                id: NodeId(format!("pdf-page-{page_number}-link-{link_index}")),
-                block: Block::Paragraph(vec![Inline::Link {
-                    target: target.clone(),
-                    content: vec![Inline::Text { value: target, marks: Vec::new() }],
-                }]),
-                provenance: provenance(
-                    page_number,
-                    Some(normalize_rect(link.bounds, &info)?),
-                    None,
-                    &info,
-                )?,
-            });
+        super::links::PageLinks {
+            number: page_number,
+            info: &info,
+            options,
+            context,
+            counts,
+            blocks: &mut blocks,
+            diagnostics: &mut diagnostics,
+            retained: &mut retained_memory,
         }
-        drop(link_memory);
+        .extract(&text_page, pdf.page_count())?;
 
         let mut coverage = PageCoverage::default();
         let image_plan = page.plan_images().map_err(map_pdfium_error)?;
@@ -461,7 +425,7 @@ impl PdfOutput {
             limits: into_markdown_pdf_layout::LayoutLimits {
                 max_atoms: into_markdown_core::MAX_DOCUMENT_INLINES,
                 max_lines: into_markdown_core::MAX_DOCUMENT_NODES,
-                max_comparisons: 12_000_000,
+                max_comparisons: options.limits.max_pdf_layout_comparisons,
                 max_table_columns: usize::try_from(options.limits.max_table_columns)
                     .unwrap_or(usize::MAX)
                     .min(into_markdown_core::MAX_TABLE_COLUMNS),
@@ -504,5 +468,25 @@ impl PdfOutput {
             retained_memory,
         );
         output.account_retained(context)
+    }
+}
+
+#[cfg(test)]
+mod object_budget_tests {
+    use super::*;
+    #[test]
+    fn cumulative_object_overflow_and_ir_nodes_fail_independently() {
+        let mut counts = Counts { page_objects: u64::MAX, ..Counts::default() };
+        let mut options = ConversionOptions::default();
+        options.limits.max_pdf_total_objects = u64::MAX;
+        assert!(
+            matches!(counts.account_page_objects(1, 7, &options), Err(ConversionError::ResourceLimit { limit: "max_pdf_total_objects", detail }) if detail.contains("page 7") && detail.contains("overflow"))
+        );
+        let mut counts =
+            Counts { nodes: into_markdown_core::MAX_DOCUMENT_NODES, ..Counts::default() };
+        assert!(matches!(
+            counts.account_link(),
+            Err(ConversionError::ResourceLimit { limit: "documentNodes", .. })
+        ));
     }
 }
