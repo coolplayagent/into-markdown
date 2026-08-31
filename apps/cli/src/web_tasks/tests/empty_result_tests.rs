@@ -7,7 +7,7 @@ use std::io::Cursor;
 use zip::write::SimpleFileOptions;
 
 #[test]
-fn empty_source_and_empty_content_share_the_web_terminal_contract() {
+fn empty_source_and_omitted_chunk_preserve_the_web_terminal_contract() {
     let temporary = tempfile::tempdir().unwrap();
     let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
 
@@ -38,11 +38,23 @@ fn empty_source_and_empty_content_share_the_web_terminal_contract() {
     upload.write_chunk(&docx).unwrap();
     let omitted = upload.finish().unwrap();
     let omitted = wait_terminal(&backend, &omitted.id);
-    assert_eq!(omitted.status, TaskStatus::Failed);
-    assert!(omitted.artifacts.is_empty());
-    let failure = backend.web_record(omitted).unwrap().failure.unwrap();
-    assert_eq!(failure.code, "malformed");
-    assert_eq!(failure.reason_code.as_deref(), Some("emptyContent"));
+    assert_eq!(omitted.status, TaskStatus::Succeeded);
+    let markdown =
+        omitted.artifacts.iter().find(|artifact| artifact.kind == ArtifactKind::Markdown).unwrap();
+    let (mut file, _) = backend.artifact(&omitted.id, &markdown.storage_key).unwrap();
+    let mut source = String::new();
+    file.read_to_string(&mut source).unwrap();
+    assert!(source.contains("Embedded Word content omitted"));
+    let diagnostics = omitted
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == ArtifactKind::Diagnostics)
+        .unwrap();
+    let (mut file, _) = backend.artifact(&omitted.id, &diagnostics.storage_key).unwrap();
+    let mut source = String::new();
+    file.read_to_string(&mut source).unwrap();
+    assert!(source.contains("word.unsupportedWrapperOmitted"));
+    assert!(backend.web_record(omitted).unwrap().failure.is_none());
 }
 
 #[test]

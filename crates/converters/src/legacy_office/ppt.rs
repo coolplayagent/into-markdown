@@ -583,3 +583,43 @@ mod tests {
         document.validate().unwrap();
     }
 }
+
+#[cfg(test)]
+mod notes_tests {
+    use super::*;
+    use into_markdown_core::{
+        AssetMode, ConversionOptions, Document, ExecutionContext, ExecutionOptions,
+    };
+
+    #[test]
+    fn empty_whitespace_text_and_tabular_notes_keep_effective_content_and_source() {
+        for (text, visible) in [
+            (vec![], false),
+            (vec![String::new()], false),
+            (vec![" \t \n ".into()], false),
+            (vec!["actual note".into()], true),
+            (vec!["left\tright".into()], true),
+        ] {
+            let mut options = ConversionOptions::default();
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let mut budget = LegacyBudget::new(0, &options, &context).unwrap();
+            let mut blocks = Vec::new();
+            append_notes(&mut OutputBuilder::new("ppt"), &mut blocks, &text, 1, &mut budget)
+                .unwrap();
+            assert_eq!(!blocks.is_empty(), visible);
+            assert!(
+                blocks.iter().all(|node| node.provenance.locator.part.as_deref()
+                    == Some("PowerPoint Document/notes"))
+            );
+            let document = Document { blocks, ..Document::default() };
+            document.validate().unwrap();
+            for mode in [AssetMode::Extract, AssetMode::Embed, AssetMode::Omit] {
+                options.output.asset_mode = mode;
+                let markdown =
+                    into_markdown_render_markdown::render(&document, &[], &options).unwrap();
+                assert_eq!(markdown.contains("### Speaker notes"), visible);
+            }
+        }
+    }
+}

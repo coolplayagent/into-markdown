@@ -239,7 +239,7 @@ fn odp_notes_omit_empty_groups_and_keep_images_alt_and_tables() {
     image::DynamicImage::new_rgba8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
     let picture = "<draw:frame><draw:image xlink:href='Pictures/a.png'/></draw:frame>";
     for (body, extracted, omitted) in [
-        ("".to_owned(), false, false), ("<text:p> \t </text:p>".into(), false, false),
+        (String::new(), false, false), ("<text:p> \t </text:p>".into(), false, false),
         ("<text:p>Useful note</text:p>".into(), true, true),
         (picture.to_owned(), true, false),
         (picture.replace("<draw:image", "<svg:desc>Diagram note</svg:desc><draw:image"), true, true),

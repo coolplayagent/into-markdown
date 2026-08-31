@@ -818,11 +818,11 @@
     },
     {
       "path": "crates/converters/src/markdown.rs",
-      "lines": 1383,
+      "lines": 1379,
       "functions": [
         {
           "symbol": "impl Builder<'a>::close",
-          "lines": 294
+          "lines": 282
         },
         {
           "symbol": "impl Builder<'a>::start",

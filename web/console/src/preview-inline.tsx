@@ -21,6 +21,8 @@ type Budget = { left: number; work: number };
 
 function closing(source: string, marker: string, start: number, native: boolean, budget: Budget): number {
   const nested: number[] = [];
+  const htmlOpen = marker.startsWith("</") ? marker.replace("</", "<") : null;
+  let htmlDepth = 0;
   for (let index = start; index < source.length && budget.work > 0; index += 1) {
     budget.work -= 1;
     if (!marker.startsWith("`") && source[index] === "\\") { index += 1; continue; }
@@ -42,7 +44,9 @@ function closing(source: string, marker: string, start: number, native: boolean,
       index += size - 1;
       continue;
     }
+    if (htmlOpen && source.startsWith(htmlOpen, index)) { htmlDepth += 1; index += htmlOpen.length - 1; continue; }
     if (!source.startsWith(marker, index)) continue;
+    if (htmlOpen && htmlDepth > 0) { htmlDepth -= 1; index += marker.length - 1; continue; }
     if (marker.startsWith("`") && (source[index - 1] === "`" || source[index + marker.length] === "`")) continue;
     if (!native || flanks(source, index, marker.length)[1]) return index;
   }

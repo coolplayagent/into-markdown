@@ -960,7 +960,7 @@ fn presentation_notes_visibility_is_decided_after_source_bound_ocr_and_asset_pol
             .unwrap();
             let mut request = ConversionRequest::new(InputRef::bytes(
                 picture_only_notes(&png),
-                Some("notes.pptx".into()),
+                Some("notes.pptx"),
             ));
             request.options.ocr.policy = OcrPolicy::Always;
             request.options.output.asset_mode = mode;

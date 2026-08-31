@@ -91,10 +91,11 @@ def run_one(item, args):
                '--assets-dir', str((destination / '素材 中文 (a)#%&').resolve()),
                '--output', str(output.resolve()), '--conflict', 'overwrite']
     record = {'file': item['file'], 'sha256': item['sha256'], 'command': command,
-              'startedAt': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+              'startedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              'processTimeoutSeconds': args.process_timeout}
     start = time.monotonic()
     try:
-        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=args.process_timeout)
         record.update(exit=process.returncode, seconds=round(time.monotonic() - start, 3))
         (destination / 'stderr.txt').write_bytes(process.stderr)
         if process.returncode:
@@ -110,6 +111,7 @@ def run_one(item, args):
         consumer.feed(rendered.decode('utf-8'))
         assets = verify_assets(result, consumer, output)
         record.update(status='success', markdownSha256=sha(markdown.encode()),
+                      visibleTextSha256=sha(''.join(''.join(consumer.text).replace('Speaker notes', '').split()).encode()),
                       semanticSha256=sha(json.dumps(canonical_content(result['document']), sort_keys=True, ensure_ascii=False).encode()),
                       assetVerification=assets, htmlTags=dict(consumer.tags),
                       sourceMarkerComments=markdown.count('<!-- source-marker:'),
@@ -124,6 +126,7 @@ def main():
     for name in ('cli', 'probe', 'corpus', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--revision', required=True)
+    parser.add_argument('--process-timeout', type=int, default=120)
     args = parser.parse_args()
     args.cli = args.cli.resolve()
     args.probe = args.probe.resolve()
@@ -131,7 +134,8 @@ def main():
     manifest = json.loads((args.corpus / 'manifest.json').read_text())
     items = [item for group in manifest['formats'] for item in group['items']]
     report = {'schemaVersion': 1, 'revision': args.revision, 'cliSha256': sha(args.cli.read_bytes()),
-              'consumer': 'pulldown-cmark 0.13.4 (GFM tables, strikethrough, tasks, footnotes)', 'items': []}
+              'consumer': 'pulldown-cmark 0.13.4 (GFM tables, strikethrough, tasks, footnotes)',
+              'processTimeoutSeconds': args.process_timeout, 'items': []}
     for item in items:
         record = run_one(item, args)
         report['items'].append(record)

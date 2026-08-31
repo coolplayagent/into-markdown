@@ -18,6 +18,7 @@ def compare(before, after):
         row = {'file': name, 'baseline': old['status'], 'candidate': new['status']}
         if old['status'] == new['status'] == 'success':
             row.update(contentEqual=old['semanticSha256'] == new['semanticSha256'],
+                       visibleTextEqual=old['visibleTextSha256'] == new['visibleTextSha256'],
                        assetsEqual=old['assetVerification']['inventory'] == new['assetVerification']['inventory'],
                        candidateAssetFailures=new['assetVerification']['failures'],
                        baselineAssetFailures=old['assetVerification']['failures'],
@@ -26,7 +27,7 @@ def compare(before, after):
                        removedMarkerComments=old['sourceMarkerComments'] - new['sourceMarkerComments'])
         rows.append(row)
     regressions = [row for row in rows if row['baseline'] == 'success' and
-                   (row['candidate'] != 'success' or not row['contentEqual'] or not row['assetsEqual'] or row['candidateAssetFailures'])]
+                   (row['candidate'] != 'success' or not row['contentEqual'] or not row['visibleTextEqual'] or not row['assetsEqual'] or row['candidateAssetFailures'])]
     return {'baselineRevision': before['revision'], 'candidateRevision': after['revision'],
             'baselineCliSha256': before['cliSha256'], 'candidateCliSha256': after['cliSha256'],
             'consumer': after['consumer'], 'testedByFormat': dict(Counter(name.split('/')[0] for name in baseline)),
