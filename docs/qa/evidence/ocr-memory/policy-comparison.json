@@ -1,0 +1,1334 @@
+{
+  "schemaVersion": 1,
+  "scope": "17-format policy observations; status success alone is not OCR coverage; zero or one-character contributions remain explicit quality gaps",
+  "baselineBinarySha256": "4a435e8694a84d82b13d554e1c1f92232005901f1f2a3054212f2a94620eafde",
+  "candidateBinarySha256": "81127f7ecf1718e7f2aed9bcf2604db0a1e49108b39183da9b0e1c0e70c00b14",
+  "files": [
+    {
+      "sha256": "9bbac8ae8790581133abd2570c6ce4cc831216dc9030d9b16801a24ff393905f",
+      "kind": "docx",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-ocr-module/src/test/resources/test-documents/testOCR.docx",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "1381ffdb6b07ac191a5c427f69804201dd7054fb5c668787927d8c6d42cd34a5",
+      "kind": "epub",
+      "sourcePath": "98",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "epub.spine.chapterOmitted",
+          "ocr": {
+            "recognizedRegions": 23,
+            "recognizedChars": 345
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "epub.spine.chapterOmitted",
+          "ocr": {
+            "recognizedRegions": 23,
+            "recognizedChars": 345
+          },
+          "runtime": {
+            "requests": 20,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "8ccbd4f0952c9bbf55074fe3e9c7a5adb68f37f85669f0bd2d62583719533d10",
+      "kind": "image",
+      "sourcePath": "docs/api_examples/template_path/media/image1.png",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "ocr.lowConfidence",
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 66
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "51ae8d8de92a030cda35422316dd7882dde395f7a329867b43fcc9dcf731568d",
+      "kind": "ipynb",
+      "sourcePath": "tests/exporters/files/attachment.ipynb",
+      "before": {
+        "always": {
+          "status": "failed",
+          "reason": "componentUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "markdown.externalImageReferencedOffline",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "componentUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "markdown.externalImageReferencedOffline",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 8
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "markdown.externalImageReferencedOffline",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 8
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "markdown.externalImageReferencedOffline",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 8
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "ba3c378c3612a1a72a030f3c198ddede9304ffe466f871585956cb87b553d0b3",
+      "kind": "msg",
+      "sourcePath": "test-data/hsmf/no_recipient_address.msg",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 11,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "e414ee8c52f0176277500ac9b3598ffc12913c58ac4948e0347859e77b1314b6",
+      "kind": "odp",
+      "sourcePath": "sd/qa/unit/data/odp/image_transparency.odp",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 34
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "bae7c1f1a753e540918e8a4ccc05ab49459d2ce2a41904fb02f339e519f70773",
+      "kind": "odt",
+      "sourcePath": "sw/qa/core/undo/data/image-as-character.odt",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "odf.layoutMetadata",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "1aafc014db92b73a21b45352287406c9bd3d0f52ee64be40ae8613052c05ca2d",
+      "kind": "pdf",
+      "sourcePath": "sd/qa/unit/data/pdf/SampleSlideDeck.pdf",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 121
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 121
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 121
+          },
+          "runtime": {
+            "requests": 4,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 6,
+            "recognizedChars": 121
+          },
+          "runtime": {
+            "requests": 4,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "6204faae7bcaf1f1a30263e71f19b2a169dd3dd424cc62e85ae6cd45152ce8ec",
+      "kind": "ppt",
+      "sourcePath": "test-data/slideshow/41246-2.ppt",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "legacyOffice.ppt.imagePlacementRecovered",
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 1
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "d70b17a89e1ccc536ca02263b20d4326d3ce0b732551fb968c1111456c1055ff",
+      "kind": "pptx",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-ocr-module/src/test/resources/test-documents/testOCR.pptx",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 1,
+            "recognizedChars": 20
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "fea2f13189e87d06297d7b5313abca4d0b6cd8747d5ca450e4db11273b265279",
+      "kind": "xlsx",
+      "sourcePath": "test-data/spreadsheet/picture.xlsx",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "spreadsheet.largeTablePaged",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 10
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "spreadsheet.largeTablePaged",
+          "ocr": {
+            "recognizedRegions": 2,
+            "recognizedChars": 10
+          },
+          "runtime": {
+            "requests": 1,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "6f5224140f6381e7f7af069badcf8970a01ecb5630a2bbd30f155d164c767f66",
+      "kind": "doc",
+      "sourcePath": "test-data/document/testPictures.doc",
+      "before": {
+        "always": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "dd35970bf68df7bb609b681634602ead30001816009c791012d00b5563ab9314",
+      "kind": "xls",
+      "sourcePath": "test-data/spreadsheet/SimpleWithImages.xls",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "legacyOffice.xls.embeddedObjectsSkipped",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "legacyOffice.xls.embeddedObjectsSkipped",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "a65c5e0466caec3629b9eb39a476c1c3e1ee27575b16c03780ff14fdc866e150",
+      "kind": "ods",
+      "sourcePath": "sc/qa/unit/data/ods/document_with_two_images.ods",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "odf.emptyRowPadding",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "odf.emptyRowPadding",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "malformed",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "72e21862e0d72073f6c0678edb7af8a9b82d4b1e785705a3f6ba589fb1961152",
+      "kind": "rtf",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testRTFRegularImages.rtf",
+      "before": {
+        "always": {
+          "status": "failed",
+          "reason": "componentUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "failed",
+          "reason": "componentUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "rtf.unknownControlIgnored",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 2,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 805306368,
+            "workerBudgetMaxBytes": 805306368
+          }
+        }
+      }
+    },
+    {
+      "sha256": "c97a3dd5de2f42255d8d36e156060c732941bb0aa36b7cff2dd3ac2a5492c703",
+      "kind": "html",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-html-module/src/test/resources/test-documents/testHTML_embedded_img.html",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": "html.sourceLocationUnavailable",
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    },
+    {
+      "sha256": "af075282de577f8f70bc1eb433c7d5a49ecd582bfd71d7302935ec816c9f3748",
+      "kind": "zip",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-pkg-module/src/test/resources/test-documents/testEmbedded.zip",
+      "before": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {}
+        }
+      },
+      "after": {
+        "always": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        },
+        "always-strict": {
+          "status": "success",
+          "reason": null,
+          "ocr": {
+            "recognizedRegions": 0,
+            "recognizedChars": 0
+          },
+          "runtime": {
+            "requests": 0,
+            "recognitionMemoryRefusals": 0,
+            "workerBudgetMinBytes": 0,
+            "workerBudgetMaxBytes": 0
+          }
+        }
+      }
+    }
+  ]
+}

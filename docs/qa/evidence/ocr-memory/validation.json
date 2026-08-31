@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "businessSourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+  "integratedMainRevision": "c2c7aecbc28a23998209d7816ad0bf96b49a380f",
+  "localChecks": [
+    {
+      "log": "test-cli-global-preflight.log",
+      "sha256": "dc3e831758d325f16562d08be40f3cf08b94e1f893a424b849c08024b306cd9b",
+      "commandDescription": "cargo test --locked -p into-markdown-cli --bin into-md",
+      "conclusions": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.02s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.05s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.19s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.13s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.04s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.12s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.21s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.06s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.06s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.10s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.24s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 339 filtered out; finished in 0.06s",
+        "test result: ok. 339 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 19.56s"
+      ]
+    },
+    {
+      "log": "test-api-lib-global-preflight.log",
+      "sha256": "a0c2ae8abb8945a5a0091e583a46bea4782d75495639a4d16afbf98a645f524f",
+      "commandDescription": "cargo test --locked -p into-markdown --lib",
+      "conclusions": [
+        "test result: ok. 79 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.91s"
+      ]
+    },
+    {
+      "log": "test-api-parity-final-preflight.log",
+      "sha256": "d571560a1b0293597172da7ffca7f5a8283b21ff182aefe29fc6976194422742",
+      "commandDescription": "cargo test --locked -p into-markdown --test collecting_parity",
+      "conclusions": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.23s"
+      ]
+    },
+    {
+      "log": "test-engine-global-preflight.log",
+      "sha256": "599de04a5a6b150bf3786d0b29c133704524bba40b6deb050590bd475eb75654",
+      "commandDescription": "cargo test --locked -p into-markdown-engine --lib",
+      "conclusions": [
+        "test result: ok. 82 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s"
+      ]
+    },
+    {
+      "log": "test-converters-final-a756.log",
+      "sha256": "c08d5dd717f072d99dd970980c4c251a0957587e5b5374e815e416322bdd704e",
+      "commandDescription": "cargo test --locked -p into-markdown-converters --lib",
+      "conclusions": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 677 filtered out; finished in 0.00s",
+        "test result: ok. 662 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 12.80s"
+      ]
+    },
+    {
+      "log": "test-libs-19073df.log",
+      "sha256": "9b1bc04338339bc157ca9a997424af62afc76ce020bcf9b36454cb7abaeea363",
+      "commandDescription": "cargo test --locked --lib (Core/OCR/ONNX/process/provider package selection recorded in original log)",
+      "conclusions": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 676 filtered out; finished in 0.00s",
+        "test result: ok. 661 passed; 0 failed; 16 ignored; 0 measured; 0 filtered out; finished in 12.91s",
+        "test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s",
+        "test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s",
+        "test result: ok. 131 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 39.07s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      ]
+    },
+    {
+      "log": "test-process-runtime-19073df.log",
+      "sha256": "913cc4e3e14bd0649684189792e01d4ffe73cc28c2f66d88aced198800d8c321",
+      "commandDescription": "cargo test --locked -p into-markdown-process-plugin --test runtime -- --test-threads=1",
+      "conclusions": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.27s"
+      ]
+    },
+    {
+      "log": "test-web-c2c7.log",
+      "sha256": "453048a1d2efea19a10b29eb8d8457c76c26cf428794c06eba59d7d1cfd2e85c",
+      "commandDescription": "Bazel Web typecheck, unit, asset and determinism targets",
+      "conclusions": [
+        "//web/console:admin_unit_test                                            PASSED in 2.3s",
+        "//web/console:determinism_test                                           PASSED in 0.1s",
+        "//web/console:dist_integration_test                                      PASSED in 0.3s",
+        "//web/console:typecheck                                                  PASSED in 1.7s",
+        "//web/console:unit_test_accessibility                                    PASSED in 0.4s",
+        "//web/console:unit_test_core                                             PASSED in 0.3s",
+        "//web/console:unit_test_history_actions                                  PASSED in 0.5s",
+        "//web/console:unit_test_history_cleanup                                  PASSED in 0.4s",
+        "//web/console:unit_test_preview                                          PASSED in 0.6s",
+        "//web/console:unit_test_workbench                                        PASSED in 0.9s",
+        "Executed 10 out of 10 tests: 10 tests pass."
+      ]
+    },
+    {
+      "log": "test-release-19073df.log",
+      "sha256": "8627dc3c951fc22d068ba665dd33bccf1c90b1ec6599b95ae2a7473001a813ae",
+      "commandDescription": "bazel test //tools/license-check:license_check //tools/license-check:license_check_unit_test //tools/platform-release:release_test",
+      "conclusions": [
+        "//tools/license-check:license_check                                      PASSED in 18.4s",
+        "//tools/license-check:license_check_unit_test                            PASSED in 17.5s",
+        "//tools/platform-release:release_test                                    PASSED in 0.8s",
+        "Executed 3 out of 3 tests: 3 tests pass."
+      ]
+    },
+    {
+      "log": "test-policy-final.log",
+      "sha256": "96a785a02c5a40c662497b4005d9db3666ab278db6b0817c83c2fb42a8fa26bd",
+      "commandDescription": "python3 -m unittest tools.platform-release.test_pr_fast_gate tools.ocr_memory.test_observations tools.portable-release.test_ocr_smoke",
+      "conclusions": [
+        "Ran 16 tests in 0.021s"
+      ]
+    }
+  ],
+  "localArchive": {
+    "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+    "coreCommand": [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "into-markdown-cli",
+      "--bin",
+      "into-md",
+      "--features",
+      "embedded-runtime"
+    ],
+    "profile": "local optimized Cargo; release archive authority; no publisher signature",
+    "coreSha256": "81127f7ecf1718e7f2aed9bcf2604db0a1e49108b39183da9b0e1c0e70c00b14",
+    "archiveSha256": "d447ca13c7bd9c57c551c9226befcc55a2d4b28455679910e63d2c1d63404a8f",
+    "ocrFiles": {
+      "bin/into-md-ocr-provider": "7d9da88d79d856bbeea5ff522f4f42bc22051aeaab30910afa10880a1b40250d",
+      "bin/onnxruntime-worker": "6eaf16936fe7d61f3cdc454fa46c918dfd61c48c2dc16d7b90ed7434648aaeea",
+      "models/pp-ocrv6-tiny-detector-onnx/inference.onnx": "193bab7a04fca699a6c82e6abb5b81bdb28177f0abd4062552b04908dafb19f8",
+      "models/pp-ocrv6-tiny-detector-onnx/install-state.json": "c5a1fa8ba305e6a61c16361bad0dcfbda5f49319e81df68a2974c6a640d2b0d4",
+      "models/pp-ocrv6-tiny-recognizer-onnx/inference.onnx": "9ef676d6ed3c88256a2d92c640c44f25b0c40947e111b14b8be8f594091563e6",
+      "models/pp-ocrv6-tiny-recognizer-onnx/install-state.json": "465b32f3bdffaa5802e36f6261195b6757370098d1cf65a9af1bb68682212512",
+      "models/pp-ocrv6-tiny-recognizer-onnx/ppocrv6_tiny_dict.txt": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+      "official-publisher.json": "93402f760c05800c870ddd637ee9f67aaf3f163aa44a0632c8eb274cacbf32cf",
+      "onnxruntime/lib/libonnxruntime.dylib": "c04fe65021445904a3cae047272cad05e648282c75bf1f9eb7b3440120ae13dc",
+      "provider.json": "031dd5b187e91ef21ff3427a4af21a4fd689158a18bdf046c36e220aadd78195"
+    },
+    "pdfiumSha256": "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc601d52b0"
+  },
+  "installedRealOcr": {
+    "name": "real-ocr-provider",
+    "exitCode": 0,
+    "elapsedMs": 4682,
+    "command": [
+      "/Users/yx/projects/document-convert/into-markdown-issue-340/target/ocr340/final-local-package/installed/into-md",
+      "--no-config",
+      "--ocr",
+      "always",
+      "--error-policy",
+      "strict",
+      "--max-memory-size",
+      "2GiB",
+      "--timeout-ms",
+      "120000",
+      "--progress",
+      "never",
+      "--log-format",
+      "json",
+      "--emit",
+      "result-json",
+      "--asset-mode",
+      "omit",
+      "--conflict",
+      "error",
+      "--output",
+      "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-installed-ocr-3f_nw0j0/result.json",
+      "--report",
+      "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-installed-ocr-3f_nw0j0/report.json",
+      "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-installed-ocr-3f_nw0j0/ocr-english-clear-1.png"
+    ],
+    "binarySha256": "81127f7ecf1718e7f2aed9bcf2604db0a1e49108b39183da9b0e1c0e70c00b14",
+    "fixtureSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+    "outputSha256": "34a6bac307d58d50e8c954326fc141f81382919fad90a0709fcdd64d3c62c8e7",
+    "reportSha256": "55b058780b6eb90ebed7895526a88c87e6f3757937c97cc8cbbb95017638525d",
+    "resourceUsage": {
+      "memory": {
+        "totalBytes": 17179869184,
+        "availableBytes": 2905735168,
+        "systemReserveBytes": 2147483648,
+        "autoBudgetBytes": 758251520,
+        "effectiveBudgetBytes": 2147483648,
+        "automatic": false
+      },
+      "ocrRuntime": {
+        "requests": 1,
+        "recognitionMemoryRefusals": 0,
+        "workerBudgetMinBytes": 805306368,
+        "workerBudgetMaxBytes": 805306368
+      },
+      "sharedLeaseBudgetBytes": 2147483648,
+      "sharedLeasePeakBytes": 2147483648,
+      "ocr": {
+        "recognizedRegions": 1,
+        "recognizedChars": 67
+      }
+    },
+    "networkRequired": false,
+    "conclusion": "pass"
+  },
+  "web": {
+    "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+    "scope": "Real Web console source with a controlled local API; excludes production backend validation",
+    "url": "http://127.0.0.1:8340/",
+    "assertions": [
+      "Optional OCR omissions appear beside this file content with page and asset locations",
+      "Required OCR memory failure appears in this file failure area and history row"
+    ],
+    "files": {
+      "omission-final-dom.txt": "fa82929f939301640156e7cfc097fc45dcaabf71a6794ddb2f067c72abef4933",
+      "omission-final.png": "83436f611412476869cc1c9032ba1443ef3415bd8a41926aae975b1d7f5e0bf2",
+      "failure-final-dom.txt": "8fe8f09acdf68630351cba1865e1078d1d0c8ce542f6f3e39ca95cb02fd938ff",
+      "failure-final.png": "ba97be0b077ec128747f1b7809f072924dd5ee0b0b4d7a3e5025dda13722d870"
+    }
+  },
+  "ci": {
+    "fastGate": "https://github.com/coolplayagent/into-markdown/actions/runs/33410086118",
+    "fastGateResult": "four jobs passed",
+    "priorAuthorizedInstallRun": "https://github.com/coolplayagent/into-markdown/actions/runs/33408650194",
+    "priorInstallResult": "passed at 19073df; user removed final four-platform installation requirement"
+  },
+  "evidencePreservationDirectory": "/Users/yx/projects/document-convert/into-markdown/target/issue340-evidence",
+  "structureGate": {
+    "log": "structure-close.log",
+    "sha256": "16a1d5f128930b703988ecffd8dfc04d7a4fdf8cf6e2d4738e11db015900a2cf",
+    "files": 611,
+    "violations": 0,
+    "baseRevision": "c2c7aecbc28a23998209d7816ad0bf96b49a380f"
+  }
+}

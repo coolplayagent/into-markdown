@@ -62,6 +62,7 @@ def experiment(root):
             'hostTotalBytes': bounds([r.get('hostTotalBytes') for _, r, _ in runs]),
             'hostAvailableBytes': bounds([r.get('hostAvailableBytes') for _, r, _ in runs]),
             'workerBudgetBytes': bounds([u.get('ocrRuntime', {}).get(k) for u in usages
+                if u.get('ocrRuntime', {}).get('requests', 0) > 0
                 for k in ('workerBudgetMinBytes', 'workerBudgetMaxBytes')]),
             'processTreeRssSamplePeakBytes': bounds([r['processTreeRssSamplePeakBytes'] for _, r, _ in runs]),
             'operatingSystemPeakBytes': bounds([r.get('operatingSystemPeakBytes') for _, r, _ in runs]),
