@@ -4,8 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from drawio_smoke import drawio_cases
-
 import hashlib
 import json
 import os
@@ -17,6 +15,12 @@ import sys
 import tempfile
 import time
 import zipfile
+
+
+PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
+if str(PORTABLE_RELEASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
+from drawio_smoke import drawio_cases
 
 
 CORE_ARCHIVES = {

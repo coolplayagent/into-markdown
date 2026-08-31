@@ -20,6 +20,7 @@
 | Web | TypeScript 和确定性 dist 校验通过；core 13、workbench 17、preview 4 项通过 |
 | 安装和发布契约 | installed-smoke 27 项通过；portable 34、skill 16、platform 72 项 Python 测试通过（platform 的 1 项平台专属测试跳过） |
 | 许可 | license-check 94 项及仓库审计通过；候选导出辅助测试默认忽略，显式执行过 |
+| 补充回归 | Engine 80、renderer 31、layout-quality 10、OCR 130（1 项忽略、1 项既有 CI 排除）、PDF 质量声明 1 项通过；PR 同组 Python 发布检查 113 项通过 |
 | 结构 | 按 `origin/main` 执行 ratchet/check；缩减既有结构债务，不增加阈值或 lint 豁免 |
 
 主要复现命令：
@@ -66,6 +67,16 @@ Web 使用静态受限缩进类保留层级，沿用严格 CSP 和安全预览�
 完整 collecting parity 7 项通过，大型 XLSX 的 native/aggregate 均为 286720 字节。
 公共契约中两处 Markdown 文本预期同步到现有源文本保留行为，并检查标题 IR，
 生产 Markdown 路径保持原样。
+
+扩展执行 PDF layout 的全部 43 项测试时，42 项通过；未改动的
+`outside_page_geometry_fails_without_a_publishable_document_or_lease` 失败，
+其断言要求页边界外的矩形返回 Malformed。本次仅同步 PDF 质量声明的 manifest/OCR
+关联哈希，PDF 几何生产代码与该测试均未修改；对应质量声明专项通过。
+该项与 Drawio 验收分开记录。
+
+首次 PR CI 检出了 fixture manifest 的关联哈希缺口。修正后同步 OCR、PDF、语义布局
+和非分发测试来源声明，并确认全部既有 fixture 与 OCR goldens 逐项不变。
+十二个发布 profile 随测试来源哈希更新，仅 SBOM/SOURCES 的摘要变化，材料大小保持。
 
 #331 报告的原始 20 个 Drawio 文件尚未取得。当前样本均为仓库自建 Apache-2.0 数据，
 不代表这些原文件已通过验收。四平台安装产物的实际执行结果与本地契约测试分开记录；
