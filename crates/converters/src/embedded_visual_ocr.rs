@@ -15,6 +15,7 @@ use std::io::Cursor;
 mod candidate_index;
 mod geometry;
 mod jpeg_input;
+mod node_budget;
 mod pdf_placement;
 mod runtime;
 use candidate_index::{
@@ -367,8 +368,7 @@ fn plan_enrichment(
         ));
     }
 
-    let existing_nodes = count_document_nodes(&output.document.blocks, context)?;
-    let mut planned_added_nodes = 0_usize;
+    node_budget::NodeBudget::new(count_document_nodes(&output.document.blocks, context)?)?;
     let mut provider_working_peak = 0_u64;
     // Only consult provider plans after every knowable input count and envelope
     // bound has passed, so a provider cannot observe a request that preflight
@@ -385,21 +385,19 @@ fn plan_enrichment(
             .and_then(|bytes| bytes.checked_add(64 * 1024))
             .ok_or_else(|| resource("max_memory_bytes", "normalization plan overflow"))?;
         checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
-        let (provider_bound, provider_working, provider_regions) = match services.ocr.as_deref() {
+        let (provider_bound, provider_working) = match services.ocr.as_deref() {
             Some(engine) => {
                 match engine.planned_normalized_png_output(width, height, options, context) {
-                    Ok(plan) => {
-                        (plan.max_retained_bytes(), plan.max_working_bytes(), plan.max_regions())
-                    }
+                    Ok(plan) => (plan.max_retained_bytes(), plan.max_working_bytes()),
                     Err(ConversionError::ComponentUnavailable { .. })
                         if effective_ocr_policy(options) == OcrPolicy::Auto =>
                     {
-                        (0, 0, 0)
+                        (0, 0)
                     }
                     Err(error) => return Err(error),
                 }
             }
-            None if effective_ocr_policy(options) == OcrPolicy::Auto => (0, 0, 0),
+            None if effective_ocr_policy(options) == OcrPolicy::Auto => (0, 0),
             None => {
                 return Err(ConversionError::ComponentUnavailable {
                     component: "ocr".into(),
@@ -408,23 +406,9 @@ fn plan_enrichment(
             }
         };
         provider_working_peak = provider_working_peak.max(provider_working);
-        let added_nodes = usize::try_from(provider_regions)
-            .unwrap_or(usize::MAX)
-            .checked_mul(usize::try_from(group.reference_copies).unwrap_or(usize::MAX))
-            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?;
-        planned_added_nodes = planned_added_nodes
-            .checked_add(added_nodes)
-            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?;
-        if existing_nodes
-            .checked_add(planned_added_nodes)
-            .ok_or_else(|| resource("documentNodes", "embedded OCR node preflight overflow"))?
-            > into_markdown_core::MAX_DOCUMENT_NODES
-        {
-            return Err(resource(
-                "documentNodes",
-                "embedded OCR output can exceed the document node limit",
-            ));
-        }
+        // Provider ceilings bound retained memory, not the number of nodes a
+        // picture will actually produce. Recognition admits its real nodes,
+        // including every reference copy, before retaining or cloning them.
         let retained_copies = group
             .reference_copies
             .checked_add(group.asset_copies)
@@ -787,7 +771,6 @@ async fn enrich(
             eligible_assets.insert(reference.asset.clone());
         }
     }
-    let mut eligible_reference_count = 0_u32;
     if input_format == InputFormat::Pdf {
         pdf_placement::filter_references(
             &mut references,
@@ -797,29 +780,14 @@ async fn enrich(
             context,
         )?;
     }
-    for (index, reference) in references.iter().enumerate() {
-        if index % 256 == 0 {
-            context.checkpoint()?;
-        }
-        if !assets.contains_key(&reference.asset) {
-            return Err(ConversionError::Internal {
-                detail: format!("image node references missing asset {}", reference.asset.0),
-            });
-        }
-        if !eligible_assets.contains(&reference.asset) {
-            continue;
-        }
-        eligible_reference_count = eligible_reference_count.checked_add(1).ok_or_else(|| {
-            resource("max_archive_entries", "embedded visual reference count is not representable")
-        })?;
-        if eligible_reference_count > options.limits.max_archive_entries {
-            return Err(resource(
-                "max_archive_entries",
-                "embedded visual references exceed the request limit",
-            ));
-        }
-    }
-    if eligible_reference_count == 0 {
+    let reference_counts = node_budget::reference_counts(
+        &references,
+        &assets,
+        &eligible_assets,
+        options.limits.max_archive_entries,
+        context,
+    )?;
+    if reference_counts.is_empty() {
         return Ok(output);
     }
     let mut candidates = CandidateBuffer::new(eligible_assets.len(), context)?;
@@ -855,7 +823,7 @@ async fn enrich(
         let digest = checkpointed_sha256(&asset.bytes, context)?;
         candidates.push(OcrCandidate {
             asset_index: *asset_index,
-            reference_count: 1,
+            reference_count: reference_counts[&reference.asset],
             dimensions: (0, 0),
             digest,
         })?;
@@ -869,6 +837,8 @@ async fn enrich(
     }
 
     let mut cache = Vec::<Option<CachedContribution>>::new();
+    let mut node_budget =
+        node_budget::NodeBudget::new(count_document_nodes(&output.document.blocks, context)?)?;
     cache.try_reserve_exact(grouping.groups.len()).map_err(|error| {
         resource("max_memory_bytes", format!("allocate OCR contribution cache: {error}"))
     })?;
@@ -879,6 +849,11 @@ async fn enrich(
         let asset = &output.assets[candidate.asset_index];
         match runtime::recognize(asset, ordinal, options, services, context).await {
             Ok((contribution, memory)) => {
+                node_budget.admit(
+                    &contribution.nodes,
+                    grouping.groups[group_index].reference_copies,
+                    context,
+                )?;
                 if let Some(memory) = memory {
                     output.attach_memory_reservation(context, memory)?;
                 }
@@ -1404,6 +1379,7 @@ mod tests {
         plans: AtomicUsize,
         planned_bytes: u64,
         planned_working_bytes: u64,
+        planned_regions: u32,
         corrupt_identity: bool,
     }
 
@@ -1528,7 +1504,7 @@ mod tests {
             OcrOutputPlan::try_new_with_working(
                 self.planned_bytes,
                 self.planned_working_bytes,
-                1,
+                self.planned_regions,
                 128,
             )
         }
@@ -1682,6 +1658,7 @@ mod tests {
             plans: AtomicUsize::new(0),
             planned_bytes,
             planned_working_bytes,
+            planned_regions: 1,
             corrupt_identity,
         })
     }
@@ -2130,7 +2107,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_region_bound_is_multiplied_by_eligible_references_before_recognition() {
+    fn provider_region_ceiling_reserves_memory_without_predicting_actual_nodes() {
         let ocr = Arc::new(EntryGuardOcr {
             plans: AtomicUsize::new(0),
             calls: AtomicUsize::new(0),
@@ -2141,12 +2118,68 @@ mod tests {
         options.ocr.policy = OcrPolicy::Always;
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
 
-        let error = plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context)
-            .unwrap_err();
-
-        assert!(matches!(error, ConversionError::ResourceLimit { limit: "documentNodes", .. }));
+        let plan =
+            plan_enrichment(&output(), InputFormat::Docx, &options, &services, &context).unwrap();
+        assert!(matches!(plan, EnrichmentPlan::Reserve(_)));
         assert_eq!(ocr.plans.load(Ordering::SeqCst), 1);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn many_image_references_with_sparse_ocr_do_not_exhaust_the_node_limit() {
+        let mut ocr = source_bound_ocr_with_plan(false, 1024 * 1024);
+        Arc::get_mut(&mut ocr).unwrap().planned_regions = 3000;
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut source = output();
+        let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        *blocks = (0..35)
+            .map(|index| image_node(&format!("image-{index}"), "asset-a", "word/media/a.png"))
+            .collect();
+
+        assert!(matches!(
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context).unwrap(),
+            EnrichmentPlan::Reserve(_)
+        ));
+        let enriched =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+        assert_eq!(count_document_nodes(&enriched.document.blocks, &context).unwrap(), 71);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
+        drop(enriched);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn actual_ocr_reference_copies_still_fail_before_publication_when_nodes_overflow() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut source = output();
+        source.document.blocks.extend((0..into_markdown_core::MAX_DOCUMENT_NODES - 4).map(
+            |index| BlockNode {
+                id: NodeId(format!("native-{index}")),
+                block: Block::Paragraph(vec![into_markdown_core::Inline::Text {
+                    value: "native body".into(),
+                    marks: vec![],
+                }]),
+                provenance: provenance("word/document.xml"),
+            },
+        ));
+        assert_eq!(
+            count_document_nodes(&source.document.blocks, &context).unwrap(),
+            into_markdown_core::MAX_DOCUMENT_NODES - 1
+        );
+        let error =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "documentNodes", .. }));
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
