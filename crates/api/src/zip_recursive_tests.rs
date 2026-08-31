@@ -354,7 +354,7 @@ fn corrupt_crc(bytes: &mut [u8], target: &str) {
 #[test]
 fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
     for signature in [b"Rar!\x1a\x07\x00".as_slice(), b"Rar!\x1a\x07\x01\x00".as_slice()] {
-        for name in ["input.rar", "input.txt", "input.zip", "input.bin"] {
+        for name in ["input.rar", "input.txt", "input.zip", "input.bin", "input.drawio"] {
             let request = ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
             let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
             assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");

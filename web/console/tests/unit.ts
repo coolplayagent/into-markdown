@@ -1124,3 +1124,32 @@ nodeTest("RAR upload and safe failure reasons preserve extraction guidance", () 
   assert.deepEqual(archiveMembers(JSON.stringify({ diagnostics: [{ code: "zip.entry.archiveExtractionRequired", locator: { part: "中文.zip!/归档.rar" }, message: "ignored provider text" }] })), ["中文.zip!/归档.rar"]);
   assert.deepEqual(archiveMembers('{"diagnostics":[{"code":"zip.entry.archiveExtractionRequired","locator":{"part":false}}]}'), []);
 });
+
+test("Drawio uploads and detected task formats share the workbench contract", async () => {
+  const { FORMATS, SUPPORTED_FILE_ACCEPT, supportsFileName, formatForName } = await import("../src/task-ui");
+  assert.ok(FORMATS.includes("drawio"));
+  assert.ok(SUPPORTED_FILE_ACCEPT.includes(".drawio"));
+  assert.equal(supportsFileName("流程.DRAWIO"), true);
+  assert.equal(supportsFileName("diagram.data", "drawio"), true);
+  assert.equal(formatForName("diagram.drawio"), "drawio");
+  assert.equal(formatForName("diagram.xml"), "xml");
+  assert.equal(parseTask({ ...task("succeeded"), format: "drawio" }).format, "drawio");
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  const failed = { ...task("failed"), displayName: "broken.drawio", format: "drawio" as const, diagnostics: [{ code: "malformed" }] };
+  const api: ApiClient = { ...availableApi, async listTasks() { return { tasks: [failed] }; } };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "broken.drawio");
+  const row = [...window.document.querySelectorAll("li")].find((item) => item.textContent.includes("broken.drawio"));
+  assert.ok(row?.textContent.includes("The file is damaged or its format is invalid"));
+});
+
+
+test("Markdown preview retains bounded node hierarchy indentation", async () => {
+  const window = installWindow();
+  const root = trackedRoot(window.document.getElementById("app")!);
+  root.render(createElement(SafeMarkdownPreview, { source: "- Layer\n\n    - Group\n        - Node\n" + " ".repeat(100) + "- Deep" }));
+  await waitForText(window, "Deep");
+  const items = [...window.document.querySelectorAll(".preview-list-item")];
+  assert.deepEqual(items.map(item => item.className), ["preview-list-item list-depth-0", "preview-list-item list-depth-1", "preview-list-item list-depth-2", "preview-list-item list-depth-12"]);
+  assert.equal(window.document.querySelectorAll("[style]").length, 0);
+});

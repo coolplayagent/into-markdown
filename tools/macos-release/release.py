@@ -41,6 +41,7 @@ CORE_COMPONENTS = ["pdfium"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
 FIXTURES = [
+    "drawio/normal.drawio", "drawio/compressed.drawio",
     "docx/normal.docx", "docx/corrupt.docx", "epub/normal.epub", "msg/normal.msg",
     "ocr/ocr-english-clear-1.png", "pdf/structures.pdf", "rtf/normal.rtf",
     "text/normal.txt", "xlsx/normal.xlsx", "xlsb/normal.xlsb", "pptx/normal.pptx",
@@ -400,7 +401,7 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path) -> l
     pdfium = destination / "pdfium-mac-arm64.tgz"
     copy_file(cache / "pdfium", pdfium, 0o644)
     result.append(material(pdfium, output, "notice-bundle", ["pdfium"], []))
-    for component, source, spdx in [("opencc-transcript-character-table", "LICENSE", "Apache-2.0"), ("imageproc-contour-adaptation", "third_party/licenses/imageproc-MIT.txt", "MIT"), ("clipper2-rust", "third_party/licenses/BSL-1.0.txt", "BSL-1.0"), ("calamine", "third_party/licenses/calamine-MIT.txt", "MIT")]:
+    for component, source, spdx in [("opencc-transcript-character-table", "LICENSE", "Apache-2.0"), ("imageproc-contour-adaptation", "third_party/licenses/imageproc-MIT.txt", "MIT"), ("diagram-design-drawio-adaptation", "third_party/licenses/diagram-design-MIT.txt", "MIT"), ("clipper2-rust", "third_party/licenses/BSL-1.0.txt", "BSL-1.0"), ("calamine", "third_party/licenses/calamine-MIT.txt", "MIT")]:
         path = destination / f"{component}.txt"
         copy_file(ROOT / source, path, 0o644)
         result.append(material(path, output, "license-text", [component], [spdx], contents=True))

@@ -114,3 +114,12 @@ pinned whisper.cpp commit and is recorded as `LicenseRef-Public-Domain`. The Chi
 sample is the pinned Wikimedia Commons revision by Ngguls under CC0-1.0. Exact URLs, revisions,
 attribution, sizes, and SHA-256 values are fail-closed in the license audit. No network access is
 used by the test, and neither fixture is included in release payloads.
+
+## Drawio
+
+`generate.py --drawio-only` uses `drawio_generate.py` to produce repository-authored Apache-2.0
+diagrams: equivalent bare, inline and compressed models, an invalid payload and an adjacent input
+byte limit. Manifest hashes bind the inputs and expected Markdown. They contain no user diagrams,
+remote images or copied upstream tests. The converter's extraction pipeline reference is audited
+separately as the MIT `diagram-design-drawio-adaptation` component. The 20 files reported in #331
+remain unavailable; these generated diagrams establish reproducible coverage, not that sample acceptance.

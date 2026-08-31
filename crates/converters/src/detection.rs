@@ -54,6 +54,9 @@ pub(super) fn detect_content(
     if let Some(candidate) = magic_candidate(bytes) {
         return Ok(vec![candidate]);
     }
+    if super::drawio::evidence(bytes, context)? {
+        return Ok(vec![FormatCandidate::new(InputFormat::Drawio, 0.99, "Drawio graph root")]);
+    }
     if let Some(candidate) = structured_text_candidate(bytes, context)? {
         return Ok(vec![candidate]);
     }

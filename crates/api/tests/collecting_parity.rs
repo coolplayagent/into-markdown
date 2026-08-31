@@ -168,8 +168,14 @@ struct Profile {
     rss_delta_peak: u64,
 }
 
+// These fixed fixtures contain at most 4096 staged cells. Allow bounded disk staging
+// (currently about 280 KiB) while retaining headroom for record-format changes.
+const PROFILE_TEMPORARY_LIMIT: u64 = 1024 * 1024;
+
 fn profile_conversion(engine: &Engine, bytes: Arc<[u8]>, name: &str) -> Profile {
-    let request = ConversionRequest::new(InputRef::Bytes { data: bytes, name: Some(name.into()) });
+    let mut request =
+        ConversionRequest::new(InputRef::Bytes { data: bytes, name: Some(name.into()) });
+    request.options.limits.max_temporary_bytes = PROFILE_TEMPORARY_LIMIT;
     let context = ExecutionContext::new(request.execution.clone(), request.options.limits.clone());
     let limit = request.options.limits.max_memory_bytes;
     let stop = Arc::new(AtomicBool::new(false));
@@ -204,11 +210,12 @@ fn profile_conversion(engine: &Engine, bytes: Arc<[u8]>, name: &str) -> Profile 
         }
     });
     let started = Instant::now();
-    let result = block_on(engine.convert_with_context(request, context)).unwrap();
+    let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
     let elapsed_us = started.elapsed().as_micros();
     stop.store(true, Ordering::Release);
     sampler.join().unwrap();
     drop(result);
+    assert_eq!(context.reserved_temporary_bytes(), 0, "{name} leaked temporary storage");
     Profile {
         elapsed_us,
         logical_memory_peak: memory_peak.load(Ordering::Relaxed),
@@ -401,7 +408,11 @@ fn production_large_inputs_have_bounded_native_overhead_and_resources() {
             native.elapsed_us,
             aggregate.elapsed_us
         );
-        assert_eq!(native.temporary_peak, 0, "{format} native temporary bytes");
+        assert!(
+            native.temporary_peak <= PROFILE_TEMPORARY_LIMIT,
+            "{format} native temporary bytes {} exceed {PROFILE_TEMPORARY_LIMIT}",
+            native.temporary_peak
+        );
         assert!(native.logical_memory_peak <= 2 * 1024 * 1024 * 1024);
         println!(
             "production profile {format}: native={}us aggregate={}us native_logical_peak={} aggregate_logical_peak={} native_rss_delta={} aggregate_rss_delta={} native_temp={} aggregate_temp={}",
@@ -428,4 +439,60 @@ fn compound_file_pptx_preserves_the_encrypted_error() {
         block_on(default_engine().unwrap().convert(request)),
         Err(ConversionError::Encrypted)
     ));
+}
+
+#[test]
+fn drawio_public_memory_detection_explicit_xml_and_zip_use_shared_contract() {
+    let source = br#"<mxGraphModel><root><mxCell id="a" vertex="1" value="Start"/><mxCell id="b" vertex="1" value="End"/><mxCell id="e" edge="1" source="a" target="b" value="Continue"/></root></mxGraphModel>"#;
+    for name in ["diagram.drawio", "diagram.xml", "diagram"] {
+        let result = public(Arc::from(source.as_slice()), name);
+        assert_eq!(result.detected_format(), Some(InputFormat::Drawio));
+        assert!(result.markdown.contains("## Connections"));
+        assert_public_matches_aggregate(
+            &into_markdown_converters::DrawioConverter,
+            Arc::from(source.as_slice()),
+            name,
+            InputFormat::Drawio,
+        );
+    }
+    let mut request =
+        ConversionRequest::new(InputRef::bytes(source.as_slice(), Some("diagram.drawio")));
+    request.hint.format = Some(InputFormat::Xml);
+    let result = block_on(default_engine().unwrap().convert(request)).unwrap();
+    assert_eq!(result.detected_format(), Some(InputFormat::Xml));
+    assert!(result.markdown.contains("xml-attribute"));
+    let result = public(Arc::from(b"<ordinary>kept</ordinary>".as_slice()), "ordinary.xml");
+    assert_eq!(result.detected_format(), Some(InputFormat::Xml));
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    archive.start_file("diagram.drawio", zip::write::SimpleFileOptions::default()).unwrap();
+    archive.write_all(source).unwrap();
+    let zip = archive.finish().unwrap().into_inner();
+    let result = public(Arc::from(zip), "diagrams.zip");
+    assert!(result.markdown.contains("## Connections"));
+    assert!(result.markdown.contains("Continue"));
+    assert!(serde_json::to_string(&result.document).unwrap().contains("drawio/pages/1/cells/3"));
+}
+
+#[test]
+fn drawio_extension_conflicts_and_explicit_invalid_structures_fail_clearly() {
+    for source in [b"<ordinary/>".as_slice(), b"%PDF-1.7\ninvalid", b"not XML"] {
+        let request = ConversionRequest::new(InputRef::bytes(source, Some("bad.drawio")));
+        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+        assert!(matches!(error, ConversionError::Malformed { .. }), "{error}");
+    }
+    let mut request =
+        ConversionRequest::new(InputRef::bytes(b"<ordinary/>".as_slice(), Some("input.xml")));
+    request.hint.format = Some(InputFormat::Drawio);
+    assert!(matches!(
+        block_on(default_engine().unwrap().convert(request)),
+        Err(ConversionError::Malformed { .. })
+    ));
+}
+
+#[test]
+fn drawio_content_with_other_extension_reports_conflict() {
+    let source = b"<mxGraphModel><root><mxCell id='a' vertex='1' value='A'/></root></mxGraphModel>";
+    let result = public(Arc::from(source.as_slice()), "diagram.html");
+    assert_eq!(result.detected_format(), Some(InputFormat::Drawio));
+    assert!(result.diagnostics.iter().any(|d| d.code == "drawio.extensionMismatch"));
 }

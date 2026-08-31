@@ -5,6 +5,7 @@ exports_files([
     "build-tools.json",
     "cargo-normal-runtime.json",
     "imageproc-MIT.txt",
+    "diagram-design-MIT.txt",
     "OFL-1.1.txt",
     "downloads.bzl",
     "downloads.json",

@@ -9,7 +9,7 @@ use std::path::Path;
 
 const AUTHORITY_PATH: &str = "third_party/licenses/release-material-authority.json";
 const REVIEWED_AUTHORITY_SHA256: &str =
-    "5cae41df5f2b445e39a9ef1e4190dd77f6269c08067b0f28e09bac9651e2f13e";
+    "251327e97d357e481f8fc741b36d04f6b14b07d45935b029b47fb2a5fe6fd400";
 const GENERATED_PATHS: [&str; 5] =
     ["NOTICE", "THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json", "core-catalog.json"];
 const PROFILE_PATHS: [&str; 12] = [
@@ -26,8 +26,9 @@ const PROFILE_PATHS: [&str; 12] = [
     "tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json",
     "tools/license-check/fixtures/release-request-x86_64-unknown-linux-gnu.json",
 ];
-const RENDERER_PATHS: [&str; 5] = [
+const RENDERER_PATHS: [&str; 6] = [
     "tools/license-check/src/release.rs",
+    "tools/license-check/src/materials.rs",
     "tools/license-check/src/sbom.rs",
     "tools/deterministic_zip.py",
     "tools/macos-release/release.py",

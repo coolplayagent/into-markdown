@@ -84,6 +84,7 @@ mod tests {
                 InputFormat::OutlookMsg,
                 InputFormat::Audio,
                 InputFormat::Video,
+                InputFormat::Drawio,
             ]
         );
 
@@ -100,7 +101,8 @@ mod tests {
             Some("notes.md"),
         ));
         let result = block_on(engine.convert(markdown)).unwrap();
-        assert_eq!(result.markdown, "# Heading\n\n- [x] done\n");
+        assert_eq!(result.markdown, "Heading\n=======\n\n- [x] done\n");
+        assert!(matches!(result.document.blocks[0].block, Block::Heading { level: 1, .. }));
         assert!(result.assets.is_empty());
         assert_eq!(result.provenance[0].locator.byte_start, Some(0));
 
@@ -109,7 +111,7 @@ mod tests {
             Some("diagram.md"),
         ));
         let image_result = block_on(engine.convert(external_image)).unwrap();
-        assert_eq!(image_result.markdown, "![diagram](<https://cdn.example.com/diagram.png>)\n");
+        assert_eq!(image_result.markdown, "![diagram](https://cdn.example.com/diagram.png)\n");
         assert_eq!(image_result.assets.len(), 1);
         assert!(image_result.assets[0].bytes.is_empty());
         assert_eq!(

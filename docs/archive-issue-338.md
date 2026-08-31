@@ -68,7 +68,8 @@ python3 tools/archive-compat/compare.py \
 - 本地：Core、Engine、转换器、API 整组通过；Web 分组、113 项发布契约和许可审计通过。
   CLI 全量的 3 项失败已在 `26aaf83` 独立构建中复现相同断言，见
   [逐项日志](qa/evidence/issue-338/local-baseline-failures.json)：空正文判定，以及两项
-  macOS Web 存储配额测试的 4096 字节差异。慢读写关闭测试曾在本机并发负载下超时，单项继续复核。
+  macOS Web 存储配额测试的 4096 字节差异。慢读写关闭测试曾在本机并发负载下超时，主线与修复版单项复跑均通过。
+  CLI 空正文集成测试的 4 项失败也复现相同主线断言，逐项日志同上；插件生命周期测试在构建所需 fixture 后全部通过。
 - 四平台：专用 PR 工作流覆盖 macOS ARM64、Linux x86_64/ARM64、Windows x86_64，
   每个平台执行真实样本、中文落盘、资产链接及精确 PR 基线对比。
 - 安装产物：发布 build-only 工作流从实际归档提取可执行文件，执行合成安全回归和

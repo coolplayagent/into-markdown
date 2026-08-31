@@ -59,6 +59,7 @@ def material_bytes(name: str) -> bytes:
         / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt": e2e.ROOT
         / "third_party/licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt": e2e.ROOT / "third_party/licenses/diagram-design-MIT.txt",
     }
     if name in static:
         return static[name].read_bytes()

@@ -1,0 +1,36 @@
+{
+  "sourceCommit": "7ee9b328e3056a035be8f3dfe90f6e1ba117473c",
+  "artifactSha256": "0757c8b72e6765c20c8bdb3b6dc1ebe90d94e71df864da7845d434eb7bb2ae8f",
+  "binarySha256": "85dd9514303cb6cc843a3baaa9fedc19deb9d14733fb49a23a5dfa748390bb38",
+  "status": "passed",
+  "cases": [
+    {
+      "name": "mixed",
+      "exitCode": 0,
+      "markdownSha256": "3f3574740c8df6727c44e69aa91bfa7bd8c8bea69683c5df6ce615bf97b42cc5",
+      "pages": 1
+    },
+    {
+      "name": "strict",
+      "exitCode": 3
+    },
+    {
+      "name": "page-budget",
+      "exitCode": 5
+    },
+    {
+      "name": "total-budget",
+      "exitCode": 5
+    },
+    {
+      "name": "exact-budget",
+      "exitCode": 0,
+      "markdownSha256": "3f3574740c8df6727c44e69aa91bfa7bd8c8bea69683c5df6ce615bf97b42cc5",
+      "pages": 1
+    },
+    {
+      "name": "batch",
+      "exitCode": 0
+    }
+  ]
+}

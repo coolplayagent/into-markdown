@@ -42,6 +42,7 @@ def core_materials(root: pathlib.Path) -> dict[str, pathlib.Path]:
         / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt": assemble.ROOT
         / "third_party/licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt": assemble.ROOT / "third_party/licenses/diagram-design-MIT.txt",
     }
     result = {}
     for name in assemble.CORE_MATERIAL_MEMBERS:

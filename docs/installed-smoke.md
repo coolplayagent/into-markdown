@@ -44,7 +44,7 @@ together cannot manufacture a different production catalog.
 
 The CLI cases cover version and independently authorized formats, Markdown and result DTO output,
 file and stdin conversion, malformed input and stable exits, representative DOCX, EPUB, MSG, RTF,
-ZIP, PDF, image OCR, and real speech inputs. Optional runtimes either convert successfully when `doctor` reports
+Drawio (plain and compressed semantic goldens), ZIP, PDF, image OCR, and real speech inputs. Optional runtimes either convert successfully when `doctor` reports
 them ready or return `componentUnavailable`, exit 9, and the catalog installation guidance. The Rust
 case compiles and runs an external in-memory text conversion and reads the stable DTO.
 

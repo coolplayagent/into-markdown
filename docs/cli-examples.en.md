@@ -140,6 +140,8 @@ Every example invokes `into-md` directly. CI compares coverage with the real `--
 - JSON: `into-md data.json --format json -o data.md --conflict error`
 <!-- format-example: xml -->
 - XML: `into-md data.xml --format xml -o data.md --conflict error`
+<!-- format-example: drawio -->
+- Drawio: `into-md diagram.drawio --format drawio -o diagram.md --conflict error`
 <!-- format-example: feed -->
 - RSS/Atom: `into-md feed.xml --format feed -o feed.md --conflict error`
 <!-- format-example: ipynb -->

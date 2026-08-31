@@ -17,6 +17,12 @@ import time
 import zipfile
 
 
+PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
+if str(PORTABLE_RELEASE_DIR) not in sys.path:
+    sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
+from drawio_smoke import drawio_cases
+
+
 CORE_ARCHIVES = {
     "x86_64-pc-windows-msvc": ("into-md-windows-x86_64.zip", "into-md.exe", "PE", "x86_64"),
     "x86_64-unknown-linux-gnu": ("into-md-linux-x86_64.zip", "into-md", "ELF", "x86_64"),
@@ -61,6 +67,7 @@ CORE_MATERIAL_MEMBERS = (
     "licenses/npm/npm-release.spdx.json",
     "licenses/npm/lucide-ISC-MIT.txt",
     "licenses/npm/react-MIT.txt",
+    "licenses/diagram-design-MIT.txt",
     *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
 )
 
@@ -357,7 +364,7 @@ def run_e2e(
             work,
             environment,
         )
-        cases = [help_case, version_case, text_case]
+        cases = [help_case, version_case, text_case, *drawio_cases(binary, work, environment, run_case, AcceptanceError)]
         if not result.is_file() or "portable release acceptance" not in result.read_text(
             encoding="utf-8"
         ):
