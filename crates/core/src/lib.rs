@@ -17,6 +17,7 @@ mod nested;
 mod ocr_binding;
 mod options;
 mod result_policy;
+pub mod speaker_notes;
 mod spi;
 mod stream;
 mod summary;

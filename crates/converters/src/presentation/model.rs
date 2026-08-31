@@ -257,6 +257,19 @@ pub(super) struct ParseState {
 }
 
 impl ParseState {
+    pub(super) fn mark_note_body(&mut self, node: &mut BlockNode) -> Result<(), ConversionError> {
+        let previous = node.id.0.clone();
+        into_markdown_core::speaker_notes::mark_body(node)?;
+        for prefix in ["presentation.zOrder.", "presentation.languages."] {
+            if let Some(value) =
+                self.document.metadata.properties.remove(&format!("{prefix}{previous}"))
+            {
+                self.document.metadata.properties.insert(format!("{prefix}{}", node.id.0), value);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn node(
         &mut self,
         block: Block,

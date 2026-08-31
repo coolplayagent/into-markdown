@@ -1721,7 +1721,7 @@ mod tests {
             &ConversionOptions::default(),
         )
         .unwrap();
-        assert_eq!(rendered, "<em>x</em>\n");
+        assert_eq!(rendered, "*x*\n");
 
         let crossing = convert(b"<em>[x](https://example.com)</em>\n").unwrap();
         crossing.document.validate().unwrap();

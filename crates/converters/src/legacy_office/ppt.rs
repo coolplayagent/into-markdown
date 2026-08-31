@@ -82,20 +82,8 @@ pub(super) fn convert(
         let number = u32::try_from(index + 1).unwrap_or(u32::MAX);
         let mut blocks =
             text_blocks(&mut builder, &text, number, "PowerPoint Document/slide", budget)?;
-        if let Some(note_text) = notes.get(&reference.slide_id)
-            && !note_text.is_empty()
-        {
-            blocks.push(builder.node(
-                Block::Heading { level: 3, content: vec![OutputBuilder::text("Speaker notes")] },
-                slide_locator("PowerPoint Document/notes", number),
-            ));
-            blocks.extend(text_blocks(
-                &mut builder,
-                note_text,
-                number,
-                "PowerPoint Document/notes",
-                budget,
-            )?);
+        if let Some(note_text) = notes.get(&reference.slide_id) {
+            append_notes(&mut builder, &mut blocks, note_text, number, budget)?;
         }
         let title = text.iter().find(|value| !value.trim().is_empty()).cloned();
         builder.push(
@@ -302,6 +290,33 @@ fn push_text(output: &mut Vec<String>, value: &str) {
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
     );
+}
+
+fn append_notes(
+    builder: &mut OutputBuilder,
+    blocks: &mut Vec<BlockNode>,
+    note_text: &[String],
+    number: u32,
+    budget: &mut LegacyBudget<'_>,
+) -> Result<(), ConversionError> {
+    let mut note_blocks =
+        text_blocks(builder, note_text, number, "PowerPoint Document/notes", budget)?;
+    if into_markdown_core::speaker_notes::has_visible_content(
+        &note_blocks,
+        into_markdown_core::AssetMode::Extract,
+    ) {
+        let mut heading = builder.node(
+            Block::Heading { level: 3, content: vec![OutputBuilder::text("Speaker notes")] },
+            slide_locator("PowerPoint Document/notes", number),
+        );
+        into_markdown_core::speaker_notes::mark_heading(&mut heading)?;
+        for block in &mut note_blocks {
+            into_markdown_core::speaker_notes::mark_body(block)?;
+        }
+        blocks.push(heading);
+        blocks.append(&mut note_blocks);
+    }
+    Ok(())
 }
 
 fn text_blocks(

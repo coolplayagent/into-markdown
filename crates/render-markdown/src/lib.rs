@@ -4,6 +4,9 @@
 //! assets remains the caller's responsibility.
 
 mod fixed_alloc;
+mod inline;
+
+use inline::{render_html_inlines, render_inlines};
 
 use base64::Engine as _;
 use into_markdown_core::{
@@ -625,6 +628,9 @@ fn planned_render_peak(
             self.add(source)?;
             self.add(source)?;
             self.add(source)?;
+            // Adjacent marked runs own a joined buffer with geometric capacity.
+            self.add(source)?;
+            self.add(source)?;
             let output = source
                 .checked_mul(5)
                 .and_then(|value| value.checked_add(6 * 13))
@@ -679,8 +685,8 @@ fn planned_render_peak(
                         .ok_or_else(render_plan_overflow)?
                 }
                 Inline::LineBreak => {
-                    plan.add(3)?;
-                    3
+                    plan.add(4)?;
+                    4
                 }
                 _ => {
                     return Err(ConversionError::Internal {
@@ -717,11 +723,6 @@ fn planned_render_peak(
                     let mut rendered = 0_u64;
                     for item in items {
                         plan.unit()?;
-                        if let Some(label) = &item.marker_label {
-                            rendered = rendered
-                                .checked_add(plan.text(label, depth)?)
-                                .ok_or_else(render_plan_overflow)?;
-                        }
                         rendered = rendered
                             .checked_add(
                                 nodes(&item.blocks, depth + 1, plan)?
@@ -850,8 +851,8 @@ fn planned_render_peak(
                     .and_then(|value| value.checked_add(16))
                     .ok_or_else(render_plan_overflow)?,
                 Block::Rule => {
-                    plan.add(3)?;
-                    3
+                    plan.add(4)?;
+                    4
                 }
                 _ => {
                     return Err(ConversionError::Internal {
@@ -978,7 +979,20 @@ impl RenderContext<'_> {
         inline_context: InlineContext,
     ) -> Result<String, ConversionError> {
         let mut rendered = Vec::with_capacity(nodes.len());
-        for node in nodes {
+        for (index, node) in nodes.iter().enumerate() {
+            if into_markdown_core::speaker_notes::is_heading(node)
+                && !nodes[index + 1..]
+                    .iter()
+                    .take_while(|node| into_markdown_core::speaker_notes::is_body(node))
+                    .any(|node| {
+                        into_markdown_core::speaker_notes::has_visible_content(
+                            std::slice::from_ref(node),
+                            self.options.output.asset_mode,
+                        )
+                    })
+            {
+                continue;
+            }
             let block = self.render_block(node, inline_context)?;
             if !block.is_empty() {
                 rendered.push(block);
@@ -1105,7 +1119,7 @@ impl RenderContext<'_> {
     ) -> Result<String, ConversionError> {
         let mut lines = Vec::with_capacity(items.len());
         for (index, item) in items.iter().enumerate() {
-            let mut marker = match kind {
+            let marker = match kind {
                 ListKind::Bullet => "-".to_owned(),
                 ListKind::Task => {
                     if item.checked == Some(true) {
@@ -1121,11 +1135,6 @@ impl RenderContext<'_> {
                     format!("{number}.")
                 }
             };
-            if let Some(label) = &item.marker_label {
-                marker.push_str(" <!-- source-marker: ");
-                marker.push_str(&encode_bytes(label, |byte| byte.is_ascii_alphanumeric()));
-                marker.push_str(" -->");
-            }
             let body = self.render_blocks_in(&item.blocks, context)?;
             let paragraph_first =
                 item.blocks.first().is_some_and(|node| matches!(node.block, Block::Paragraph(_)));
@@ -1383,7 +1392,7 @@ impl RenderContext<'_> {
             flattened
         };
         if cell.header {
-            let wrapped = format!("<strong>{rendered}</strong>");
+            let wrapped = inline::bold_cell(&rendered);
             wrapper_peak = wrapper_peak.max(
                 u64::try_from(rendered.capacity())
                     .ok()
@@ -1459,127 +1468,6 @@ fn page_render_identity(node: &BlockNode) -> (&'static str, &'static str) {
         // producers. New source families opt in through an audited identity.
         ("pdf-page", "Page")
     }
-}
-
-fn render_inlines(inlines: &[Inline], context: InlineContext) -> Result<String, ConversionError> {
-    let mut output = String::new();
-    for inline in inlines {
-        match inline {
-            Inline::Text { value, marks }
-            | Inline::SourceText { value, marks, .. }
-            | Inline::OcrText { value, marks, .. } => {
-                output.push_str(&render_marked_text(value, marks, context));
-            }
-            Inline::Code(value) => output.push_str(&render_code_span(value, context)),
-            Inline::Link { target, content } => {
-                validate_link_target(target)?;
-                output.push('[');
-                output.push_str(&render_inlines(content, context)?);
-                output.push_str("](<");
-                output.push_str(&escape_destination(target, context));
-                output.push_str(">)");
-            }
-            Inline::Formula(value) => {
-                let code = render_code_span(value, context);
-                output.push('$');
-                output.push_str(&code);
-                output.push('$');
-            }
-            Inline::FootnoteReference(label) => {
-                output.push_str("[^");
-                output.push_str(&footnote_label(label));
-                output.push(']');
-            }
-            Inline::LineBreak => output.push_str("  \n"),
-            _ => {
-                return Err(render_error("document contains an unsupported future inline variant"));
-            }
-        }
-    }
-    Ok(output)
-}
-
-fn render_html_inlines(inlines: &[Inline]) -> Result<String, ConversionError> {
-    let mut output = String::new();
-    for inline in inlines {
-        match inline {
-            Inline::Text { value, marks }
-            | Inline::SourceText { value, marks, .. }
-            | Inline::OcrText { value, marks, .. } => {
-                let mut rendered = escape_html_text(&normalize_lf(value)).replace('\n', "<br>");
-                let marks = marks.iter().copied().collect::<BTreeSet<_>>();
-                for mark in [
-                    InlineMark::Subscript,
-                    InlineMark::Superscript,
-                    InlineMark::Underline,
-                    InlineMark::Strikethrough,
-                    InlineMark::Italic,
-                    InlineMark::Bold,
-                ] {
-                    if marks.contains(&mark) {
-                        let tag = match mark {
-                            InlineMark::Bold => "strong",
-                            InlineMark::Italic => "em",
-                            InlineMark::Strikethrough => "del",
-                            InlineMark::Underline => "u",
-                            InlineMark::Superscript => "sup",
-                            InlineMark::Subscript => "sub",
-                        };
-                        rendered = format!("<{tag}>{rendered}</{tag}>");
-                    }
-                }
-                output.push_str(&rendered);
-            }
-            Inline::Code(value) | Inline::Formula(value) => {
-                output.push_str("<code>");
-                output.push_str(&escape_html_code(value, InlineContext::Normal));
-                output.push_str("</code>");
-            }
-            Inline::Link { target, content } => {
-                validate_link_target(target)?;
-                output.push_str("<a href=\"");
-                output.push_str(&escape_html_attribute(target));
-                output.push_str("\">");
-                output.push_str(&render_html_inlines(content)?);
-                output.push_str("</a>");
-            }
-            Inline::FootnoteReference(label) => {
-                output.push_str("[^");
-                output.push_str(&escape_html_text(label));
-                output.push(']');
-            }
-            Inline::LineBreak => output.push_str("<br>"),
-            _ => {
-                return Err(render_error("document contains an unsupported future inline variant"));
-            }
-        }
-    }
-    Ok(output)
-}
-
-fn render_marked_text(value: &str, marks: &[InlineMark], context: InlineContext) -> String {
-    let mut rendered = escape_text(&single_line(value), context);
-    let marks = marks.iter().copied().collect::<BTreeSet<_>>();
-    for mark in [
-        InlineMark::Subscript,
-        InlineMark::Superscript,
-        InlineMark::Underline,
-        InlineMark::Strikethrough,
-        InlineMark::Italic,
-        InlineMark::Bold,
-    ] {
-        if marks.contains(&mark) {
-            rendered = match mark {
-                InlineMark::Bold => format!("<strong>{rendered}</strong>"),
-                InlineMark::Italic => format!("<em>{rendered}</em>"),
-                InlineMark::Strikethrough => format!("<del>{rendered}</del>"),
-                InlineMark::Underline => format!("<u>{rendered}</u>"),
-                InlineMark::Superscript => format!("<sup>{rendered}</sup>"),
-                InlineMark::Subscript => format!("<sub>{rendered}</sub>"),
-            };
-        }
-    }
-    rendered
 }
 
 fn render_code_span(value: &str, context: InlineContext) -> String {
@@ -1760,13 +1648,25 @@ fn escape_html_attribute(value: &str) -> String {
 
 fn encode_bytes(value: &str, safe: impl Fn(u8) -> bool) -> String {
     let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if safe(byte) {
-            output.push(char::from(byte));
+    for character in value.chars() {
+        if character.is_ascii() {
+            let byte = character as u8;
+            if safe(byte) {
+                output.push(character);
+            } else {
+                output.push('%');
+                output.push(hex_digit(byte >> 4, true));
+                output.push(hex_digit(byte & 0x0f, true));
+            }
+        } else if !character.is_whitespace() && !character.is_control()
+            && character.encode_utf8(&mut [0; 4]).bytes().all(&safe) {
+            output.push(character);
         } else {
-            output.push('%');
-            output.push(hex_digit(byte >> 4, true));
-            output.push(hex_digit(byte & 0x0f, true));
+            for byte in character.encode_utf8(&mut [0; 4]).bytes() {
+                output.push('%');
+                output.push(hex_digit(byte >> 4, true));
+                output.push(hex_digit(byte & 0x0f, true));
+            }
         }
     }
     output
@@ -2046,6 +1946,7 @@ fn validate_planned_references<'a>(
 
 #[cfg(test)]
 mod tests {
+    mod readability;
     use super::*;
     use into_markdown_core::{
         AssetId, CellRef, DocumentMetadata, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
@@ -2172,7 +2073,7 @@ mod tests {
         let doc = document(vec![node("h", Block::Heading { level: 3, content })]);
         assert_eq!(
             output(&doc),
-            "### <strong><em><u>a\\*\\[x\\] b</u></em></strong>```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$  \n<del>tail</del>\n"
+            "### ***<u>a\\*\\[x\\] b</u>***```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$  \n~~tail~~\n"
         );
     }
 
@@ -2205,10 +2106,7 @@ mod tests {
                 ],
             },
         )]);
-        assert_eq!(
-            output(&doc),
-            "- [x] <!-- source-marker: ignored%20safely --> done\n    \n    - nested\n- [ ]\n"
-        );
+        assert_eq!(output(&doc), "- [x] done\n    \n    - nested\n- [ ]\n");
     }
 
     #[test]
@@ -2408,7 +2306,7 @@ mod tests {
     }
 
     #[test]
-    fn marked_boundary_whitespace_remains_inside_the_mark() {
+    fn marked_boundary_whitespace_surrounds_native_delimiters() {
         let doc = document(vec![node(
             "p",
             Block::Paragraph(vec![Inline::Text {
@@ -2417,10 +2315,13 @@ mod tests {
             }]),
         )]);
         let markdown = output(&doc);
-        assert_eq!(markdown, "<strong><em><del>\u{2003} x \u{2003}</del></em></strong>\n");
+        assert_eq!(markdown, "\u{2003} ~~***x***~~ \u{2003}\n");
         let mut html = String::new();
-        pulldown_cmark::html::push_html(&mut html, Parser::new(&markdown));
-        assert!(html.contains("<strong><em><del>\u{2003} x \u{2003}</del></em></strong>"));
+        pulldown_cmark::html::push_html(
+            &mut html,
+            Parser::new_ext(&markdown, Options::ENABLE_STRIKETHROUGH),
+        );
+        assert!(html.contains("<del><em><strong>x</strong></em></del>"));
     }
 
     #[test]
@@ -2819,7 +2720,7 @@ mod tests {
             marks.reverse();
         }
         assert_eq!(output(&left), output(&right));
-        assert_eq!(output(&left), "<strong><em>x</em></strong>\n");
+        assert_eq!(output(&left), "***x***\n");
     }
 
     #[test]

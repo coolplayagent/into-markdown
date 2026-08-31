@@ -1,0 +1,177 @@
+use super::*;
+
+fn marked(value: &str, marks: &[InlineMark]) -> Inline {
+    Inline::Text { value: value.into(), marks: marks.to_vec() }
+}
+
+fn mask(marks: &[InlineMark]) -> u8 {
+    marks.iter().fold(0, |bits, mark| {
+        bits | match mark {
+            InlineMark::Bold => 1,
+            InlineMark::Italic => 2,
+            InlineMark::Strikethrough => 4,
+            InlineMark::Underline => 8,
+            InlineMark::Superscript => 16,
+            InlineMark::Subscript => 32,
+        }
+    })
+}
+
+fn semantic_text(html: &str) -> Vec<(char, u8)> {
+    let mut output = Vec::new();
+    let mut bits = 0;
+    let mut rest = html;
+    while !rest.is_empty() {
+        if let Some(tag) = rest.strip_prefix('<') {
+            let (tag, tail) = tag.split_once('>').unwrap();
+            let bit = match tag.trim_start_matches('/') {
+                "strong" => 1,
+                "em" => 2,
+                "del" => 4,
+                "u" => 8,
+                "sup" => 16,
+                "sub" => 32,
+                _ => 0,
+            };
+            if tag.starts_with('/') {
+                bits &= !bit;
+            } else {
+                bits |= bit;
+            }
+            rest = tail;
+        } else if rest.starts_with('&') {
+            let (entity, tail) = rest.split_once(';').unwrap();
+            let character = match entity {
+                "&amp" => '&',
+                "&lt" => '<',
+                "&gt" => '>',
+                "&quot" => '"',
+                "&#39" => '\'',
+                _ => panic!("unexpected {entity}"),
+            };
+            output.push((character, bits));
+            rest = tail;
+        } else {
+            let character = rest.chars().next().unwrap();
+            if !character.is_whitespace() {
+                output.push((character, bits));
+            }
+            rest = &rest[character.len_utf8()..];
+        }
+    }
+    output
+}
+
+#[test]
+fn native_marks_preserve_text_and_styles_across_word_and_punctuation_boundaries() {
+    let mark_sets = [
+        vec![InlineMark::Bold],
+        vec![InlineMark::Italic],
+        vec![InlineMark::Strikethrough],
+        vec![InlineMark::Bold, InlineMark::Italic],
+        vec![InlineMark::Bold, InlineMark::Strikethrough],
+        vec![InlineMark::Bold, InlineMark::Underline],
+        vec![InlineMark::Bold, InlineMark::Italic, InlineMark::Strikethrough],
+    ];
+    for marks in mark_sets {
+        for text in ["word", "中文", "!", "“中文”", "a!", "*x*", "x_y", " x ", "e\u{301}", "<>&"]
+        {
+            for (before, after) in [("", ""), ("a", "b"), (" ", " "), ("中", "文"), ("(", ")")] {
+                let inlines = vec![marked(before, &[]), marked(text, &marks), marked(after, &[])];
+                let markdown = output(&document(vec![node("p", Block::Paragraph(inlines))]));
+                let mut html = String::new();
+                pulldown_cmark::html::push_html(
+                    &mut html,
+                    Parser::new_ext(&markdown, Options::ENABLE_STRIKETHROUGH),
+                );
+                let expected = [(before, 0), (text, mask(&marks)), (after, 0)]
+                    .into_iter()
+                    .flat_map(|(text, mask)| {
+                        text.chars().filter(|c| !c.is_whitespace()).map(move |c| (c, mask))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(semantic_text(&html), expected, "{markdown:?} => {html:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn adjacent_equal_marks_merge_and_different_marks_keep_their_extent() {
+    let inlines = vec![
+        marked("one", &[InlineMark::Bold]),
+        marked("two", &[InlineMark::Bold]),
+        marked("three", &[InlineMark::Italic]),
+        marked("four", &[InlineMark::Bold]),
+    ];
+    let markdown = output(&document(vec![node("p", Block::Paragraph(inlines))]));
+    assert!(markdown.starts_with("**onetwo**"));
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, Parser::new(&markdown));
+    let expected = [("onetwo", 1), ("three", 2), ("four", 1)]
+        .into_iter()
+        .flat_map(|(s, mark)| s.chars().map(move |c| (c, mark)))
+        .collect::<Vec<_>>();
+    assert_eq!(semantic_text(&html), expected, "{markdown:?}");
+}
+
+#[test]
+fn unicode_uri_and_preencoded_octets_survive_rendering_without_double_encoding() {
+    let destination = "目录/图 (1)%20%23%3F%25.png?a=中&b=%26";
+    let markdown = output(&document(vec![node(
+        "p",
+        Block::Paragraph(vec![Inline::Link {
+            target: destination.into(),
+            content: vec![marked("image", &[])],
+        }]),
+    )]));
+    let hrefs = Parser::new(&markdown)
+        .filter_map(|event| match event {
+            Event::Start(Tag::Link { dest_url, .. }) => Some(dest_url.into_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(hrefs, [destination.replace(' ', "%20")]);
+    assert!(markdown.contains("目录/图"));
+    assert!(!markdown.contains("%2520"));
+}
+
+#[test]
+fn notes_heading_tracks_final_visible_content_and_preserves_ordinary_headings() {
+    use into_markdown_core::speaker_notes;
+    let mut heading =
+        node("notes", Block::Heading { level: 3, content: vec![marked("Speaker notes", &[])] });
+    speaker_notes::mark_heading(&mut heading).unwrap();
+    let mut image = node("picture", Block::Image { asset: AssetId("image".into()), alt: None });
+    speaker_notes::mark_body(&mut image).unwrap();
+    let asset = Asset {
+        id: AssetId("image".into()),
+        filename: Some("image.png".into()),
+        media_type: "image/png".into(),
+        bytes: vec![1],
+        external_uri: None,
+    };
+    let mut doc = document(vec![heading.clone(), image.clone()]);
+    let mut options = ConversionOptions::default();
+    for mode in [AssetMode::Extract, AssetMode::Embed, AssetMode::Omit] {
+        options.output.asset_mode = mode;
+        let markdown = render(&doc, std::slice::from_ref(&asset), &options).unwrap();
+        assert_eq!(markdown.contains("Speaker notes"), mode != AssetMode::Omit);
+    }
+    doc.blocks.push(paragraph(&format!("{}::ocr::1", image.id.0), "Recognized note"));
+    assert!(
+        render(&doc, std::slice::from_ref(&asset), &options).unwrap().contains("Speaker notes")
+    );
+    doc.blocks = vec![heading, image];
+    if let Block::Image { alt, .. } = &mut doc.blocks[1].block {
+        *alt = Some("Alternative text".into());
+    }
+    assert!(
+        render(&doc, std::slice::from_ref(&asset), &options).unwrap().contains("Speaker notes")
+    );
+    doc.blocks = vec![node(
+        "ordinary",
+        Block::Heading { level: 3, content: vec![marked("Speaker notes", &[])] },
+    )];
+    assert_eq!(render(&doc, &[], &options).unwrap(), "### Speaker notes\n");
+}

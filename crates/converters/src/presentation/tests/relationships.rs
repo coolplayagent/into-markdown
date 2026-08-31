@@ -123,7 +123,7 @@ fn layout_master_theme_notes_and_chart_are_authorized_and_extracted() {
         parts.iter().map(|(name, value)| (name.as_str(), value.clone())).collect::<Vec<_>>();
     let output = convert(&zip(&part_refs)).unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-    assert!(markdown.contains("<strong>Slide content</strong>"));
+    assert!(markdown.contains("**Slide content**"));
     assert!(!markdown.contains("Master default"));
     assert!(markdown.contains("Speaker notes"));
     assert!(markdown.contains("Speaker note"));
