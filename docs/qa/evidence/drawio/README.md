@@ -44,7 +44,7 @@ Fixture 的正常、压缩、裸模型输出 SHA-256 均为
 共享 HTML builder 在构造文本时去重 marks，并复用原有子节点遍历，保证重复粗体标签形成合法 IR。
 Web 使用静态受限缩进类保留层级，沿用严格 CSP 和安全预览策略。
 
-## 实际 Web 验收
+## 调试构建的实际 Web 验收
 
 用当前 worktree 编译的 CLI 启动独立 loopback 服务，在浏览器选择并上传
 `normal.drawio`、`compressed.drawio`、`corrupt.drawio`，点击批量转换。
@@ -56,6 +56,41 @@ Web 使用静态受限缩进类保留层级，沿用严格 CSP 和安全预览�
 ![层级列表和连接表](preview.png)
 
 ![损坏文件的任务内错误](error.png)
+
+## 本地发布安装包验收
+
+2026-08-31 在 macOS ARM64 上通过 `tools/portable-release/assemble.py build`
+完成发布流程，包含固定摘要的运行时、内嵌 OCR、许可材料、原生审计和归档校验。
+使用临时 Ed25519 测试密钥及 ad-hoc codesign；只生成本地产物，未发布 Release，
+验收后已删除临时私钥。构建源码为 `d377f647c3386a38e7669dca16c0f31d0fa137b1`；
+后续提交仅补英文 CLI 示例及本节证据，产品代码保持一致。
+
+Core ZIP 大小为 39565128 字节，SHA-256 为
+`206ba304cbb4916ad1db01f25422dd505baad34617e099bd8f61cca020d61566`。
+产物保存在 worktree 的 `target/drawio-local-release/output/release/`。
+
+- [归档审计](native-audit.json)通过：27 个成员的双向清单、字节摘要、权限及 ARM64 Mach-O 身份一致。
+- [原生 E2E](e2e.json)全部 9 项通过：帮助、版本、TXT、普通及压缩 Drawio、DOC/PPT/XLS，
+  以及通过 macOS `/var` 别名和临时运行时回退路径执行的真实 PDF；运行时清理检查通过。
+- [Drawio 安装件黑盒](drawio-installed.json)全部 14 项通过：从中文目录解压安装，隔离用户配置、
+  缓存及临时目录，覆盖格式目录、普通/压缩/裸模型、stdin、结果 DTO 来源、显式 XML、普通 XML、
+  批量、中文 ZIP、损坏输入、输入预算，以及损坏多页的 strict/best-effort。
+  三种编码和 stdin 的输出均匹配同一语义摘要，安装目录逐字节不变，临时文件释放，MIT 原文匹配。
+- 从同一解压后的 CLI 执行完整文档契约通过，覆盖中英文示例、实际格式目录、命令语法、
+  dry-run 和真实 TXT/stdin；补齐英文 Drawio 示例。
+- 从该安装件启动独立 Web 服务，实际选择并上传正常、压缩和损坏的 Drawio 文件。
+  正常与压缩结果均成功且预览文本完全相等，图层/子节点缩进分别为 0/24 px，连接表五列完整。
+  损坏文件同时在文件行与所属结果对话框中显示错误；验收后服务及浏览器页已关闭。
+
+```sh
+python3 tools/portable-release/assemble.py verify --target aarch64-apple-darwin --output target/drawio-local-release/output
+python3 tools/portable-release/native_acceptance.py --target aarch64-apple-darwin --output target/drawio-local-release/output --expected-version 0.0.4
+python3 tools/docs-check/docs_check.py --into-md target/drawio-local-release/installed/图形转换程序/into-md --repository .
+```
+
+![安装件实际层级与连接预览](installed-preview.jpg)
+
+![安装件实际任务内错误](installed-error.jpg)
 
 ## 既有回归与证据边界
 
@@ -79,8 +114,9 @@ Web 使用静态受限缩进类保留层级，沿用严格 CSP 和安全预览�
 十二个发布 profile 随测试来源哈希更新，仅 SBOM/SOURCES 的摘要变化，材料大小保持。
 
 #331 报告的原始 20 个 Drawio 文件尚未取得。当前样本均为仓库自建 Apache-2.0 数据，
-不代表这些原文件已通过验收。四平台安装产物的实际执行结果与本地契约测试分开记录；
-本地 Web 使用工作树调试构建，已发布版本不在这组证据中。
+不代表这些原文件已通过验收。四平台 PR 快速门禁已通过；额外发起的四平台 build-only
+任务已取消，本次补充的安装件执行证据限于本地 macOS ARM64。其它平台的完整原生安装
+及插件功能验收保留在正式发布门禁，已发布版本不在本次证据中。
 
 发布门禁的 profile 哈希通过显式运行
 `cargo test -p license-check export_release_material_profile_candidate -- --ignored`

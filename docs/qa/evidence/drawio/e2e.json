@@ -1,0 +1,82 @@
+{
+  "artifactSha256": "206ba304cbb4916ad1db01f25422dd505baad34617e099bd8f61cca020d61566",
+  "cases": [
+    {
+      "elapsedMs": 2069,
+      "exitCode": 0,
+      "name": "help",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "b21af8426573a09153f4ff7cbbc1bf65eb24d7fc51552d3484d578ba0af6bdbf"
+    },
+    {
+      "elapsedMs": 13,
+      "exitCode": 0,
+      "name": "version",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdoutSha256": "f4fb47b74c8ba973f4b0194af6db0f93dd97704d765755e8a7c9f13705d2965f"
+    },
+    {
+      "elapsedMs": 110,
+      "exitCode": 0,
+      "name": "plain-text",
+      "stderrSha256": "bc2cf61709c98cfda349dcfdf1dc17a444b5d2206ae7b279f98e991516558d53",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 85,
+      "exitCode": 0,
+      "name": "drawio-normal",
+      "stderrSha256": "feaf17ca1a5cffe51f8df91ea9430a872107b2d9da0b73496724d6250e92a34f",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 87,
+      "exitCode": 0,
+      "name": "drawio-compressed",
+      "stderrSha256": "15bbd8ad97d55ec4b3a1f57233f5ec5ba73cce4e5c7bb5cb80820f5b103f8da9",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 89,
+      "exitCode": 0,
+      "name": "legacy-office-doc",
+      "stderrSha256": "9ae48cf2467c34741cd8b5b2549ca756c44e9e47f390ce002e08b1f8ba5b37e5",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 111,
+      "exitCode": 0,
+      "name": "legacy-office-ppt",
+      "stderrSha256": "a9f50efb4cfabbbe495dab4afbf188ecb3b8b3868036b6f3180a129967284aef",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 101,
+      "exitCode": 0,
+      "name": "legacy-office-xls",
+      "stderrSha256": "5142a622f5eca623ee45c27e4a0b00046deb20861b8af1e4c8f9a7fc4b03a83a",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "elapsedMs": 1323,
+      "exitCode": 0,
+      "name": "real-pdf-macos-var-fallback",
+      "stderrSha256": "d1485b681444064ff16857307fc17ea9f36159463a66afa3e04794da8054d877",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "conclusion": "pass",
+  "negativeCases": [],
+  "networkRequired": false,
+  "pdfiumRuntime": {
+    "bytes": 7191008,
+    "materialization": "canonical-var-fallback",
+    "sha256": "33c98063af28c0b7cbf8227f4422bf5c15942df2455cf7f0a5dce3dc601d52b0",
+    "version": "153.0.7999.0"
+  },
+  "plainTextOutputSha256": "3f9ac57f9f4e4d507adec99555318ec10b263eaf393d2c1e19df8b75a7611505",
+  "runtimeCacheCreated": false,
+  "schemaVersion": 1,
+  "target": "aarch64-apple-darwin",
+  "version": "0.0.4"
+}
