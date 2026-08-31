@@ -1,0 +1,85 @@
+name: Format admission and HTML
+
+on:
+  pull_request:
+    paths:
+      - 'crates/core/src/detection.rs'
+      - 'crates/engine/src/nested.rs'
+      - 'crates/converters/src/**'
+      - 'crates/api/**'
+      - 'apps/cli/src/services/**'
+      - 'apps/cli/src/app.rs'
+      - 'apps/cli/src/web_tasks.rs'
+      - 'apps/cli/tests/exit_contract.rs'
+      - 'docs/evidence/issue-339-*'
+      - 'tools/text-html-corpus-evidence.py'
+      - '.github/workflows/format-admission.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: format-admission-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
+jobs:
+  regressions:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            binary: into-md
+          - os: ubuntu-24.04
+            binary: into-md
+          - os: ubuntu-24.04-arm
+            binary: into-md
+          - os: windows-2025
+            binary: into-md.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: format-admission-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Shared converters, engine, API, CLI and capability routing
+        run: |
+          cargo test --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown --lib
+          cargo test --locked -p into-markdown-cli --test exit_contract
+          cargo test --locked -p into-markdown-cli --bin into-md durable_web_requests_use_content_identity
+          cargo test --locked -p into-markdown-cli --bin into-md services::capabilities::tests
+          cargo build --locked -p into-markdown-cli
+      - name: Verify public corpus provenance and both error policies
+        run: >-
+          python tools/text-html-corpus-evidence.py
+          --manifest docs/evidence/issue-339-corpus-manifest.json
+          --cache target/issue339-corpus --fetch
+          --binary 'target/debug/${{ matrix.binary }}'
+          --source-revision '${{ github.sha }}'
+          --report target/issue339-corpus-report.json --enforce
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: format-admission-${{ matrix.os }}
+          path: target/issue339-corpus-report.json
+          if-no-files-found: ignore

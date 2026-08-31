@@ -106,6 +106,10 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
   unreachable: "unreachableFailure",
 };
 
+export function taskFailureCode(task: TaskRecord): string {
+  return task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed";
+}
+
 export function diagnosticLabel(code: string, t: (key: MessageKey) => string): string {
   return t(DIAGNOSTIC_MESSAGES[code] ?? "conversionFailedReason");
 }

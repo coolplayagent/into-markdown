@@ -41,10 +41,11 @@ export interface ArtifactReference {
 }
 export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
 export interface ArtifactDownload { blob: Blob; filename: string }
+export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
 export interface TaskRecord {
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
-  pinned: boolean; artifactGeneration: number;
+  pinned: boolean; artifactGeneration: number; failure?: TaskFailure | null;
   displayName?: string | null; format?: InputFormat | null; batchId?: string | null;
   workflow: "conversion" | "meetingTranscript";
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
@@ -264,6 +265,11 @@ function isArtifact(value: unknown): value is ArtifactReference {
     && (value.filename === undefined || value.filename === null || typeof value.filename === "string" && value.filename.length <= 255 && !/[\u0000-\u001f\u007f/\\]/.test(value.filename))
     && (value.mediaType === undefined || value.mediaType === null || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
 }
+function isTaskFailure(value: unknown): value is TaskFailure {
+  const code = (value: unknown) => shortString(value, 128) && /^[A-Za-z0-9._-]+$/.test(value);
+  return isObject(value) && value.schemaVersion === 1 && code(value.code) && code(value.stage)
+    && typeof value.retryable === "boolean" && (value.reasonCode == null || code(value.reasonCode));
+}
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || !taskStatuses.has(value.status as TaskStatus) || !Number.isSafeInteger(value.progressMillionths)
@@ -278,6 +284,7 @@ export function parseTask(value: unknown): TaskRecord {
     || value.batchId !== undefined && value.batchId !== null
       && (typeof value.batchId !== "string" || !/^[0-9a-f]{32}$/.test(value.batchId))
     || value.workflow !== "conversion" && value.workflow !== "meetingTranscript"
+    || value.failure != null && !isTaskFailure(value.failure)
     || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }

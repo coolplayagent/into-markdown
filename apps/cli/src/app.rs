@@ -4182,7 +4182,7 @@ struct ExecutionPolicy {
     options: ConversionOptions,
     execution: into_markdown::ExecutionOptions,
     output_context: into_markdown::ExecutionContext,
-    services: into_markdown::Services,
+    loaded: LoadedConfig,
     hint: FormatHint,
     emit: EmitKind,
     asset_mode: AssetModeArg,
@@ -4195,79 +4195,6 @@ struct ExecutionPolicy {
 struct AssetOutputPlan {
     uri_prefix: Option<String>,
     external_directory: Option<PathBuf>,
-}
-
-fn invocation_capabilities(
-    plans: &[WorkPlan],
-    explicit_format: Option<InputFormat>,
-    extension_hint: Option<&str>,
-    options: &ConversionOptions,
-) -> crate::services::InvocationCapabilities {
-    let hinted = explicit_format.or_else(|| extension_hint.and_then(InputFormat::from_extension));
-    let mut formats = Vec::new();
-    for plan in plans {
-        let format = hinted.or_else(|| {
-            plan.item
-                .local_path
-                .as_deref()
-                .and_then(Path::extension)
-                .and_then(OsStr::to_str)
-                .and_then(InputFormat::from_extension)
-        });
-        let Some(format) = format else {
-            // Stdin and opaque URIs are detected after service assembly. Keep
-            // every configured route available rather than guessing.
-            return crate::services::InvocationCapabilities {
-                ocr: true,
-                transcription: true,
-                diarization: true,
-                legacy_office: true,
-            };
-        };
-        formats.push(format);
-    }
-    let visual = |format| {
-        matches!(
-            format,
-            InputFormat::Pdf
-                | InputFormat::Doc
-                | InputFormat::Docx
-                | InputFormat::Ppt
-                | InputFormat::Pptx
-                | InputFormat::Xls
-                | InputFormat::Xlsx
-                | InputFormat::Odt
-                | InputFormat::Ods
-                | InputFormat::Odp
-                | InputFormat::Epub
-                | InputFormat::Html
-                | InputFormat::Image
-                | InputFormat::OutlookMsg
-        )
-    };
-    let media =
-        |format| matches!(format, InputFormat::Audio | InputFormat::Video | InputFormat::YouTube);
-    let legacy_office =
-        |format| matches!(format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls);
-    let effective_ocr_policy = effective_ocr_policy(options);
-    crate::services::InvocationCapabilities {
-        ocr: formats.iter().copied().any(|format| {
-            visual(format) && !(effective_ocr_policy == OcrPolicy::Auto && legacy_office(format))
-        }),
-        transcription: formats.iter().copied().any(media),
-        diarization: formats.iter().copied().any(media),
-        legacy_office: formats.iter().copied().any(legacy_office),
-    }
-}
-
-fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
-    match options.ai.vision_ocr {
-        AiMode::Only => OcrPolicy::Always,
-        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
-            OcrPolicy::Auto
-        }
-        _ => options.ocr.policy,
-    }
 }
 
 fn run_conversion(
@@ -4326,20 +4253,13 @@ fn run_conversion(
         ..into_markdown::ExecutionOptions::default()
     };
     let explicit_format = arguments.format.as_deref().map(parse_format).transpose()?;
-    let capability_needs = invocation_capabilities(
-        &plans,
-        explicit_format,
-        arguments.extension.as_deref(),
-        &loaded.options,
-    );
-    let services = crate::services::assemble(&loaded, &execution, &context.cwd, capability_needs)?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
     let policy = ExecutionPolicy {
         execution,
         output_context,
-        services,
-        options: loaded.options,
+        options: loaded.options.clone(),
+        loaded,
         hint: FormatHint {
             format: explicit_format,
             extension: arguments.extension,
@@ -4356,7 +4276,7 @@ fn run_conversion(
     let reports = execute_plans(
         plans,
         &policy,
-        arguments.jobs.map_or(loaded.jobs, std::num::NonZero::get),
+        arguments.jobs.map_or(policy.loaded.jobs, std::num::NonZero::get),
         arguments.report.is_some(),
         catalog,
         json_log,
@@ -4373,7 +4293,7 @@ fn run_conversion(
             stderr: context.stderr,
             output_context: &policy.output_context,
             wall_duration_ms: batch_timer.elapsed_ms(),
-            ocr_enabled: effective_ocr_policy(&policy.options) != OcrPolicy::Off,
+            ocr_enabled: crate::services::effective_ocr_policy(&policy.options) != OcrPolicy::Off,
         },
     )
 }
@@ -5271,19 +5191,30 @@ fn convert_item_into(
     }
     request.execution = policy.execution.clone();
     request.hint = policy.hint.clone();
-    let engine = into_markdown::default_engine_with_services(policy.services.clone())
-        .map_err(CliError::from)?;
+    let engine = into_markdown::default_engine().map_err(CliError::from)?;
     let context = policy.output_context.fork_with_shared_resources(policy.execution.clone());
     let observed_context = context.clone();
     let mut spool = output::StructuredSpool::new(context.clone(), policy.emit, policy.asset_mode)?;
     let result = futures::executor::block_on(async {
-        let prepared =
-            engine.prepare_into_with_context(request, context, spool.capabilities()).await?;
-        engine.execute_prepared_into(prepared, &mut spool).await
+        let prepared = engine
+            .prepare_into_with_context(request, context.clone(), spool.capabilities())
+            .await
+            .map_err(CliError::from)?;
+        let needs = crate::services::InvocationCapabilities::for_format(
+            context.detected_format(),
+            &policy.options,
+        );
+        let services = crate::services::assemble_with_context(
+            &policy.loaded,
+            &context,
+            &policy.working_directory,
+            needs,
+        )?;
+        let routed =
+            into_markdown::default_engine_with_services(services).map_err(CliError::from)?;
+        routed.execute_prepared_into(prepared, &mut spool).await.map_err(CliError::from)
     })
-    .map_err(|error| {
-        CliError::from(error).with_detected_format(observed_context.detected_format())
-    })?;
+    .map_err(|error: CliError| error.with_detected_format(observed_context.detected_format()))?;
     Ok((spool, result))
 }
 
@@ -6984,8 +6915,14 @@ mod tests {
         let (output, _) = invoke(&["formats", "detect", path], true).unwrap();
         let lines = output.lines().collect::<Vec<_>>();
         assert_eq!(lines[0], "FORMAT\tCONFIDENCE\tEXPLICIT\tDETECTOR\tREASON\tDIAGNOSTICS");
-        assert_eq!(lines[1], "pdf\t0.990\tfalse\tbuiltin.detector.content\tPDF magic bytes\t");
-        assert_eq!(lines[2], "docx\t0.910\tfalse\tbuiltin.detector.hints\tfilename extension\t");
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[1].starts_with("pdf\t0.990\tfalse\tbuiltin.detector.content\tPDF magic bytes\t")
+        );
+        assert!(
+            lines[1]
+                .contains("content signature takes precedence over conflicting format hints: docx")
+        );
     }
 
     #[test]
@@ -7003,9 +6940,10 @@ mod tests {
         assert_eq!(candidates[0]["detectorId"], "builtin.detector.content");
         assert_eq!(candidates[0]["reason"], "PDF magic bytes");
         assert!(candidates[0]["diagnostics"].as_array().is_some());
-        assert_eq!(candidates[1]["format"], "json");
-        assert_eq!(candidates[2]["format"], "docx");
-        assert_eq!(candidates[1]["diagnostics"][0], "filename extension and media type disagree");
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            candidates[0]["diagnostics"][0].as_str().unwrap().contains("conflicting format hints")
+        );
     }
 
     #[test]
@@ -7263,49 +7201,6 @@ mod tests {
 
         assert_eq!(plans[0].output.as_deref(), Some(Path::new("out/atom.xml.md")));
         assert_eq!(plans[1].output.as_deref(), Some(Path::new("out/atom.rss.md")));
-    }
-
-    #[test]
-    fn service_assembly_is_scoped_to_reachable_input_capabilities() {
-        let plan = |name: &str| WorkPlan {
-            item: WorkItem {
-                input: InputRef::Path(PathBuf::from(name)),
-                display: name.into(),
-                relative: PathBuf::from(name),
-                root_label: "input".into(),
-                input_root: PathBuf::from("input"),
-                from_directory: false,
-                local_path: Some(PathBuf::from(name)),
-            },
-            output: None,
-            output_root: None,
-        };
-        let mut options = ConversionOptions::default();
-        let office = invocation_capabilities(&[plan("report.xls")], None, None, &options);
-        assert!(office.legacy_office);
-        assert!(!office.ocr);
-        assert!(!office.transcription);
-        assert!(!office.diarization);
-
-        options.ocr.policy = OcrPolicy::Always;
-        let office_with_explicit_ocr =
-            invocation_capabilities(&[plan("slides.ppt")], None, None, &options);
-        assert!(office_with_explicit_ocr.legacy_office);
-        assert!(office_with_explicit_ocr.ocr);
-
-        options = ConversionOptions::default();
-        let image = invocation_capabilities(&[plan("scan.png")], None, None, &options);
-        assert!(image.ocr);
-
-        let media = invocation_capabilities(&[plan("meeting.webm")], None, None, &options);
-        assert!(media.transcription);
-        assert!(media.diarization);
-        assert!(!media.legacy_office);
-        assert!(!media.ocr);
-
-        let unknown = invocation_capabilities(&[plan("opaque")], None, None, &options);
-        assert!(unknown.ocr && unknown.transcription && unknown.diarization);
-        assert!(unknown.legacy_office);
     }
 
     #[test]

@@ -158,3 +158,10 @@ Every example invokes `into-md` directly. CI compares coverage with the real `--
 - Video: `into-md meeting.webm --format video --ai audio-transcription=only -o meeting.md --conflict error`
 
 See the [CLI](cli.md) and [format matrix](formats.md).
+
+## Supported formats and renamed inputs
+
+Automatic conversion uses supported file signatures to correct misleading extensions: a PPT
+renamed to `.bin` still uses the PPT parser. Source files with unsupported `.js/.py/.css` extensions
+return `unsupported`. Use the existing `--format` option to explicitly interpret an input;
+`--charset` only selects decoding. See [format detection](formats.md#format-detection-and-admission).

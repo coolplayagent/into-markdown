@@ -82,6 +82,25 @@ fn storage_stream_metadata_recovers_only_in_best_effort() {
 }
 
 #[test]
+fn html_repeated_marks_and_blank_links_keep_message_body() {
+    let bytes = message(
+        Vec::new(),
+        Vec::new(),
+        None,
+        Some(b"<main><p><b><strong><a href=' '>message-visible</a></strong></b></p></main>"),
+        None,
+    );
+    for policy in [ErrorPolicy::Strict, ErrorPolicy::BestEffort] {
+        let mut options = ConversionOptions::default();
+        options.error_policy = policy;
+        let output = convert_with(&bytes, &options).unwrap();
+        output.document.validate().unwrap();
+        assert!(paragraph_text(&output).contains("message-visible"));
+        assert_eq!(output.document.metadata.properties["msg.body_kind"], "html");
+    }
+}
+
+#[test]
 fn html_cid_and_by_value_attachment_are_offline_assets() {
     let attachment =
         AttachmentFixture::value("logo.png", "image/png", Some("logo@example.test"), tiny_png());

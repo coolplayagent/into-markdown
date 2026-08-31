@@ -187,7 +187,7 @@ fn cancelled_and_timed_out_workers_return_no_report_timings_without_fake_process
             ),
             options,
             execution,
-            services: into_markdown::Services::default(),
+            loaded: config::load(&root, &[], true, None, None).unwrap(),
             hint: FormatHint::default(),
             emit: EmitKind::Markdown,
             asset_mode: AssetModeArg::Extract,

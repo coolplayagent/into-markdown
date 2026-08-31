@@ -114,6 +114,7 @@ rust_test(
     name = "api_test",
     crate = ":into_markdown",
     data = [
+        "//tools/macos-release:legacy_fixtures",
         "//fixtures:corpus",
         "//fixtures:manifest.json",
     ],

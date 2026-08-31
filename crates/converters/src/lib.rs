@@ -2,6 +2,8 @@
 //!
 //! Built-in source resolvers, format detectors, and converters.
 
+mod admission;
+use admission::format_from_media_type;
 mod core_catalog;
 mod core_catalog_authority;
 mod delimited;
@@ -769,7 +771,7 @@ impl FormatDetector for HintFormatDetector {
                 .as_deref()
                 .or_else(|| hint.filename.as_deref().and_then(extension_of))
                 .or_else(|| input.metadata.name.as_deref().and_then(extension_of));
-            if let Some(format) = extension.and_then(InputFormat::from_extension) {
+            if let Some(format) = extension.and_then(admission::format_from_extension) {
                 evidence.entry(format).or_default().push("filename extension");
             }
             let media_type = hint.media_type.as_deref().or(input.metadata.media_type.as_deref());
@@ -781,7 +783,8 @@ impl FormatDetector for HintFormatDetector {
             if hint.charset.is_some() && !delimited_hint {
                 evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
             }
-            let conflict = evidence.len() > 1;
+            let conflict =
+                evidence.len() > 1 || admission::hint_mime_conflict(extension, media_type);
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
@@ -826,6 +829,21 @@ impl FormatDetector for HintFormatDetector {
                 .collect())
         })
     }
+    fn detect_with_authority<'a>(
+        &'a self,
+        input: &'a ResolvedInput,
+        hint: &'a FormatHint,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<into_markdown_core::FormatDetection, ConversionError>> {
+        Box::pin(async move {
+            Ok(into_markdown_core::FormatDetection {
+                candidates: self.detect(input, hint, context).await?,
+                authority: into_markdown_core::DetectionAuthority::Hint,
+                compatible_hints: Vec::new(),
+                unsupported_reason: None,
+            })
+        })
+    }
 }
 
 /// Detector for file signatures and bounded inspection of ZIP/OLE containers.
@@ -844,13 +862,25 @@ impl FormatDetector for ContentFormatDetector {
     fn detect<'a>(
         &'a self,
         input: &'a ResolvedInput,
-        _: &'a FormatHint,
+        hint: &'a FormatHint,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
         Box::pin(async move {
-            context.checkpoint()?;
-            detect_content(&input.bytes, context)
+            let result = admission::detect(input, hint, context)?;
+            if let Some(detail) = result.unsupported_reason {
+                return Err(ConversionError::Unsupported { detail });
+            }
+            Ok(result.candidates)
         })
+    }
+
+    fn detect_with_authority<'a>(
+        &'a self,
+        input: &'a ResolvedInput,
+        hint: &'a FormatHint,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<into_markdown_core::FormatDetection, ConversionError>> {
+        Box::pin(async move { admission::detect(input, hint, context) })
     }
 }
 
@@ -865,26 +895,27 @@ const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 const JSON_SCAN_DEPTH_LIMIT: usize = 4096;
 const JSON_SCAN_CHECKPOINT_BYTES: usize = 4096;
 
+#[cfg(test)]
 fn detect_content(
     bytes: &[u8],
     context: &ExecutionContext,
 ) -> Result<Vec<FormatCandidate>, ConversionError> {
-    if bytes.starts_with(b"PK\x03\x04")
-        || bytes.starts_with(b"PK\x05\x06")
-        || bytes.starts_with(b"PK\x07\x08")
-    {
-        return Ok(detect_zip(bytes));
+    if let Some(candidates) = admission::binary_candidates(bytes) {
+        return Ok(candidates);
     }
-    if bytes.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
-        return Ok(detect_ole(bytes));
-    }
-    if let Some(candidate) = magic_candidate(bytes) {
-        return Ok(vec![candidate]);
-    }
+    detect_text(bytes, context, &mut into_markdown_core::DetectionAuthority::Heuristic)
+}
+
+fn detect_text(
+    bytes: &[u8],
+    context: &ExecutionContext,
+    authority: &mut into_markdown_core::DetectionAuthority,
+) -> Result<Vec<FormatCandidate>, ConversionError> {
     if drawio::evidence(bytes, context)? {
+        *authority = into_markdown_core::DetectionAuthority::StructuredText;
         return Ok(vec![FormatCandidate::new(InputFormat::Drawio, 0.99, "Drawio graph root")]);
     }
-    if let Some(candidate) = structured_text_candidate(bytes, context)? {
+    if let Some(candidate) = structured_text_candidate(bytes, context, authority)? {
         return Ok(vec![candidate]);
     }
     Ok(text::sniff_unstructured_text(bytes, context)?
@@ -1138,14 +1169,28 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
 }
 
+#[cfg(test)]
+fn structured_for_test(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<FormatCandidate>, ConversionError> {
+    structured_text_candidate(
+        bytes,
+        context,
+        &mut into_markdown_core::DetectionAuthority::Heuristic,
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 fn structured_text_candidate(
     bytes: &[u8],
     context: &ExecutionContext,
+    authority: &mut into_markdown_core::DetectionAuthority,
 ) -> Result<Option<FormatCandidate>, ConversionError> {
     if let Some(json) = json_payload(bytes) {
         let summary = scan_json(json, context)?;
         if summary.status == JsonScanStatus::Complete {
+            *authority = into_markdown_core::DetectionAuthority::StructuredText;
             return Ok(Some(if summary.notebook {
                 FormatCandidate::new(InputFormat::Ipynb, 0.99, "Jupyter notebook JSON structure")
             } else {
@@ -1172,44 +1217,8 @@ fn structured_text_candidate(
         )));
     }
 
-    if let Some(decoded) = structured::decode_xml_for_detection(bytes, context)? {
-        match decoded {
-            structured::XmlDetectionText::Decoded(decoded) => {
-                let text = decoded.trim_start();
-                if let Some(root) = xml_root_name(text) {
-                    return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
-                        FormatCandidate::new(
-                            InputFormat::Xml,
-                            0.92,
-                            format!("complete UTF-16 XML {root} root element"),
-                        )
-                    } else {
-                        FormatCandidate::new(
-                            InputFormat::Xml,
-                            0.50,
-                            format!("incomplete UTF-16 XML {root} root element"),
-                        )
-                        .with_diagnostic(
-                            "incomplete XML evidence does not override a filename extension",
-                        )
-                    }));
-                }
-                if strong_xml_prefix(text) {
-                    return Ok(Some(FormatCandidate::new(
-                        InputFormat::Xml,
-                        0.90,
-                        "UTF-16 XML declaration or paired markup",
-                    )));
-                }
-            }
-            structured::XmlDetectionText::InvalidUtf16 => {
-                return Ok(Some(FormatCandidate::new(
-                    InputFormat::Xml,
-                    0.50,
-                    "UTF-16 XML signature with invalid encoded content",
-                )));
-            }
-        }
+    if let Some(candidate) = admission::utf16_xml_candidate(bytes, context, authority)? {
+        return Ok(Some(candidate));
     }
 
     let Some((prefix, _)) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT) else {
@@ -1232,7 +1241,7 @@ fn structured_text_candidate(
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element")));
     }
     if text.starts_with("<?xml") {
-        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+        return Ok(Some(if admission::complete_xml(bytes, context, authority)? {
             FormatCandidate::new(InputFormat::Xml, 0.92, "complete XML declaration")
         } else {
             FormatCandidate::new(InputFormat::Xml, 0.50, "incomplete XML declaration")
@@ -1256,7 +1265,7 @@ fn structured_text_candidate(
         )));
     }
     if let Some(root) = root {
-        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+        return Ok(Some(if admission::complete_xml(bytes, context, authority)? {
             FormatCandidate::new(
                 InputFormat::Xml,
                 0.92,
@@ -1292,7 +1301,11 @@ fn structured_text_candidate(
     let Ok(delimited_text) = std::str::from_utf8(delimited_bytes) else {
         return Ok(None);
     };
-    delimited::detected_candidate(delimited_text, context)
+    let candidate = delimited::detected_candidate(delimited_text, context)?;
+    if candidate.is_some() {
+        *authority = into_markdown_core::DetectionAuthority::StructuredText;
+    }
+    Ok(candidate)
 }
 
 fn strong_json_prefix(json: &[u8]) -> bool {
@@ -2763,7 +2776,7 @@ fn detect_ole(bytes: &[u8]) -> Vec<FormatCandidate> {
     };
     let mut candidates = Vec::new();
     for (format, stream) in streams {
-        if directory_names.iter().any(|name| name == stream) {
+        if directory_names.iter().any(|name| name.eq_ignore_ascii_case(stream)) {
             candidates.push(FormatCandidate::new(
                 format,
                 0.98,
@@ -2983,7 +2996,7 @@ mod tests {
     }
 
     fn structured(bytes: &[u8]) -> Option<FormatCandidate> {
-        structured_text_candidate(bytes, &execution_context()).unwrap()
+        structured_for_test(bytes, &execution_context()).unwrap()
     }
 
     #[test]

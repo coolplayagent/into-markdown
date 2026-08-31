@@ -157,3 +157,9 @@
 - 视频：`into-md meeting.webm --format video --ai audio-transcription=only -o meeting.md --conflict error`
 
 参数与失败边界见 [CLI](cli.md)和[格式矩阵](formats.md)。
+
+## 格式支持与错误后缀
+
+自动转换允许可靠文件签名纠正错误后缀；例如内容为 PPT 的 `.bin` 文件仍按 PPT 处理。
+内容为源码的 `.js/.py/.css` 等不支持后缀返回 `unsupported`。需要按已知格式解释输入时，
+使用现有 `--format` 参数；`--charset` 只选择字符集。完整检测规则见 [格式说明](formats.md)。

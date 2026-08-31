@@ -10,7 +10,7 @@ import { SafeMarkdownPreview } from "./preview";
 import { useI18n } from "./i18n";
 import { useDialogLifecycle } from "./dialog-lifecycle";
 import {
-  TERMINAL, artifactLabel, bytesLabel, diagnosticLabel, downloadArtifact, iconForFormat, taskFormat,
+  TERMINAL, artifactLabel, bytesLabel, diagnosticLabel, taskFailureCode, downloadArtifact, iconForFormat, taskFormat,
   taskName,
 } from "./task-ui";
 
@@ -83,7 +83,7 @@ export function ResultDialog({ api, taskId, onSelectTask, onClose, onTaskRemoved
   const FormatIcon = iconForFormat(task ? taskFormat(task) : "auto");
   const assets = useMemo(() => task?.artifacts.filter((artifact) => artifact.kind === "asset") ?? [], [task]);
   const failureMessage = task && (task.status === "failed" || task.status === "interrupted")
-    ? diagnosticLabel(task.diagnostics[0]?.code ?? "conversionFailed", t)
+    ? diagnosticLabel(taskFailureCode(task), t)
     : null;
 
   const pin = async () => { if (task) setTask(await api.setPinned(task.id, !task.pinned)); };

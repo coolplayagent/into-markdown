@@ -350,3 +350,30 @@ fn corrupt_crc(bytes: &mut [u8], target: &str) {
     }
     panic!("target central entry not found");
 }
+
+#[test]
+fn unsupported_members_are_reported_and_renamed_documents_keep_their_identity() {
+    let pptx = include_bytes!("../../../fixtures/small/pptx/normal.pptx");
+    let bytes = archive(
+        &[
+            ("source.js", b"const value = '<article><p>wrong</p></article>';"),
+            ("slides.md", pptx),
+            ("kept.txt", b"kept text"),
+        ],
+        false,
+    );
+    let result =
+        convert(bytes.clone(), ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    result.document.validate().unwrap();
+    assert!(result.markdown.contains("Corpus"));
+    assert!(result.markdown.contains("kept text"));
+    assert!(!result.markdown.contains("wrong"));
+    assert!(result.diagnostics.iter().any(|item| item.code == "zip.entry.failed"
+        && item.locator.as_ref().and_then(|loc| loc.part.as_deref()) == Some("source.js")));
+    let mut options = ConversionOptions::default();
+    options.error_policy = crate::ErrorPolicy::Strict;
+    let strict = convert(bytes, options, ExecutionOptions::default()).unwrap();
+    assert!(strict.markdown.contains("Corpus"));
+    assert!(strict.diagnostics.iter().any(|item| item.code == "zip.entry.failed"
+        && item.locator.as_ref().and_then(|loc| loc.part.as_deref()) == Some("source.js")));
+}

@@ -429,23 +429,6 @@ pub trait SourceResolver: Send + Sync {
     }
 }
 
-/// Produce format hypotheses from bytes, metadata, and explicit hints.
-pub trait FormatDetector: Send + Sync {
-    /// Stable implementation ID.
-    fn id(&self) -> &'static str;
-    /// Detector priority; larger values run first.
-    fn priority(&self) -> i32 {
-        0
-    }
-    /// Detect zero or more candidates.
-    fn detect<'a>(
-        &'a self,
-        input: &'a ResolvedInput,
-        hint: &'a FormatHint,
-        context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>>;
-}
-
 /// Result of a cheap converter applicability probe.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProbeOutcome {
@@ -2172,6 +2155,7 @@ pub struct Services {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FormatDetector;
 
     fn assert_object_safe() {
         let _: Option<&dyn SourceResolver> = None;

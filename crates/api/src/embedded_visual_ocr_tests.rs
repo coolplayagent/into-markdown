@@ -920,3 +920,24 @@ fn block_on<F: Future>(future: F) -> F::Output {
         }
     }
 }
+
+#[test]
+fn renamed_images_and_office_still_invoke_bound_ocr_and_preserve_assets() {
+    for bytes in [TEST_PNG.to_vec(), docx_with_png()] {
+        for name in ["renamed.js", "renamed.md", "renamed.csv", "renamed.bin", "renamed"] {
+            let ocr = Arc::new(SourceBoundOcr(AtomicUsize::new(0)));
+            let engine = default_engine_with_services(Services {
+                ocr: Some(ocr.clone()),
+                ..Services::default()
+            })
+            .unwrap();
+            let mut request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+            request.options.ocr.policy = OcrPolicy::Always;
+            let result = block_on(engine.convert(request)).unwrap();
+            result.document.validate().unwrap();
+            assert!(result.markdown.contains("text from embedded picture"));
+            assert!(!result.assets.is_empty());
+            assert!(ocr.0.load(Ordering::SeqCst) > 0);
+        }
+    }
+}

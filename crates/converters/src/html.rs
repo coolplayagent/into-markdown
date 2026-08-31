@@ -2856,6 +2856,10 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 let Some(href) = self.attr(id, "href") else {
                     return Ok(content);
                 };
+                // Empty references resolve against an admitted base; whitespace-only
+                // attributes have the same meaning and never become blank IR targets.
+                let empty_reference = href.trim().is_empty();
+                let href = if empty_reference { "" } else { href };
                 let href_bytes = href.len();
                 let resolved =
                     Url::parse(href).ok().or_else(|| self.base.as_ref()?.join(href).ok());
@@ -2863,6 +2867,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                     resolved.as_ref().map_or_else(|| href_bytes, |url| url.as_str().len());
                 let target = if let Some(resolved) = resolved.as_ref() {
                     self.output_string(resolved.as_str())?
+                } else if empty_reference {
+                    String::new()
                 } else {
                     self.attr_output(id, "href")?
                 };
@@ -2877,36 +2883,36 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 if !content.is_empty() {
                     self.push_warning(
                         "html.linkUriRejected",
-                        "unsafe link destination was omitted",
+                        "empty or unsafe link destination was omitted; visible content was retained",
                     )?;
+                    // HTML5 may reparent nodes. Report the reliable enclosing source
+                    // range rather than inventing a byte offset for the attribute.
+                    if let Some(diagnostic) = self.diagnostics.last_mut() {
+                        diagnostic.locator = Some(SourceLocator {
+                            byte_start: Some(0),
+                            byte_end: u64::try_from(self.input_len).ok(),
+                            ..SourceLocator::default()
+                        });
+                    }
                 }
                 return Ok(content);
             }
-            match name {
-                "strong" | "b" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Bold);
-                }
-                "em" | "i" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Italic);
-                }
-                "del" | "s" | "strike" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Strikethrough);
-                }
-                "u" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Underline);
-                }
-                "sup" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Superscript);
-                }
-                "sub" => {
-                    self.reserve_vector(&mut marks, 1)?;
-                    marks.push(InlineMark::Subscript);
-                }
+            let mark = match name {
+                "strong" | "b" => Some(InlineMark::Bold),
+                "em" | "i" => Some(InlineMark::Italic),
+                "del" | "s" | "strike" => Some(InlineMark::Strikethrough),
+                "u" => Some(InlineMark::Underline),
+                "sup" => Some(InlineMark::Superscript),
+                "sub" => Some(InlineMark::Subscript),
+                _ => None,
+            };
+            if let Some(mark) = mark
+                && !marks.contains(&mark)
+            {
+                self.reserve_vector(&mut marks, 1)?;
+                marks.push(mark);
+            }
+            match self.name(id).unwrap_or("") {
                 "br" => {
                     self.reserve_inline()?;
                     self.reserve_vector(&mut output, 1)?;
@@ -3433,7 +3439,7 @@ fn image_media_type(uri: &str) -> &'static str {
     }
 }
 pub(crate) fn safe_link_target(value: &str) -> bool {
-    if value.chars().any(char::is_control) || value.contains('&') {
+    if value.trim().is_empty() || value.chars().any(char::is_control) || value.contains('&') {
         return false;
     }
     let Some(colon) = value.find(':') else { return true };
@@ -3466,6 +3472,99 @@ mod tests {
             &context(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn repeated_and_mixed_styles_preserve_unique_marks_in_encounter_order() {
+        let output = convert(
+            "<main><p><strong><b><em><i><del><s><strike><u><u><sup><sup>styled</sup></sup></u></u></strike></s></del></i></em></b></strong></p></main>",
+        );
+        output.document.validate().unwrap();
+        let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
+            panic!("paragraph")
+        };
+        let Inline::Text { value, marks } = &inlines[0] else { panic!("text") };
+        assert_eq!(value, "styled");
+        assert_eq!(
+            marks,
+            &[
+                InlineMark::Bold,
+                InlineMark::Italic,
+                InlineMark::Strikethrough,
+                InlineMark::Underline,
+                InlineMark::Superscript,
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_subscripts_are_unique() {
+        let output = convert("<p><sub><sub>lower</sub></sub></p>");
+        let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
+            panic!("paragraph")
+        };
+        assert!(
+            matches!(&inlines[0], Inline::Text { marks, .. } if marks == &[InlineMark::Subscript])
+        );
+    }
+
+    #[test]
+    fn empty_links_resolve_only_with_admitted_bases_and_retain_styled_labels() {
+        for base in [None, Some("https://example.com/document")] {
+            for attribute in ["", " href=''", " href='   '", " href='&#9;&#10;'"] {
+                let source = format!(
+                    "<main><p><a{attribute}><b><strong>visible</strong></b></a></p></main>"
+                );
+                let input = ResolvedInput {
+                    bytes: Arc::from(source.as_bytes()),
+                    metadata: SourceMetadata {
+                        uri: base.map(str::to_owned),
+                        ..SourceMetadata::default()
+                    },
+                };
+                let output =
+                    convert_html(&input, &ConversionOptions::default(), &context()).unwrap();
+                output.document.validate().unwrap();
+                let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
+                    panic!("paragraph")
+                };
+                if !attribute.is_empty() && base.is_some() {
+                    let Inline::Link { target, content } = &inlines[0] else {
+                        panic!("resolved link")
+                    };
+                    assert_eq!(target, base.unwrap());
+                    assert!(
+                        matches!(&content[0], Inline::Text { value, marks } if value == "visible" && marks == &[InlineMark::Bold])
+                    );
+                } else {
+                    assert!(
+                        matches!(&inlines[0], Inline::Text { value, marks } if value == "visible" && marks == &[InlineMark::Bold])
+                    );
+                    if !attribute.is_empty() {
+                        let diagnostic = output
+                            .diagnostics
+                            .iter()
+                            .find(|item| item.code == "html.linkUriRejected")
+                            .unwrap();
+                        assert_eq!(
+                            diagnostic.locator.as_ref().unwrap().byte_end,
+                            Some(source.len() as u64)
+                        );
+                    }
+                }
+            }
+        }
+        let output = convert(
+            "<head><base href='https://example.com/base/'></head><main><p><a href=' '>base</a><a href='javascript:alert(1)'>safe label</a></p></main>",
+        );
+        output.document.validate().unwrap();
+        let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
+            panic!("paragraph")
+        };
+        assert!(
+            matches!(&inlines[0], Inline::Link { target, .. } if target == "https://example.com/base/")
+        );
+        assert!(matches!(&inlines[1], Inline::Text { value, .. } if value == "safe label"));
     }
 
     #[test]
@@ -3907,7 +4006,7 @@ mod tests {
             !crate::html_document_evidence("# Markdown\n\n<div>raw</div>", &context()).unwrap()
         );
         let candidate =
-            crate::structured_text_candidate(b"<article><h1>x</h1><p>y</p></article>", &context())
+            crate::structured_for_test(b"<article><h1>x</h1><p>y</p></article>", &context())
                 .unwrap()
                 .unwrap();
         assert_eq!(candidate.format, InputFormat::Html);
@@ -4062,7 +4161,7 @@ mod tests {
             assert_eq!(detected_format(source.as_bytes()), InputFormat::Markdown);
         }
         assert_ne!(
-            crate::structured_text_candidate(
+            crate::structured_for_test(
                 b"<!-- <article><p>x</p></article> --> ordinary text",
                 &context()
             )
@@ -4145,7 +4244,7 @@ mod tests {
     }
 
     fn detected_format(source: &[u8]) -> InputFormat {
-        crate::structured_text_candidate(source, &context()).unwrap().unwrap().format
+        crate::structured_for_test(source, &context()).unwrap().unwrap().format
     }
 
     fn count_tables(blocks: &[BlockNode]) -> usize {

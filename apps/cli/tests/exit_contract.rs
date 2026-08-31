@@ -833,3 +833,55 @@ fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
     assert!(!bad.status.success());
     assert!(String::from_utf8_lossy(&bad.stderr).contains("malformed"));
 }
+
+#[test]
+fn format_admission_is_shared_by_detect_convert_stdin_and_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let bad = directory.path().join("unsupported.py");
+    let good = directory.path().join("source.html");
+    std::fs::write(&bad, "print('keep as unsupported')").unwrap();
+    std::fs::write(&good, "<main><p><b><strong><a href=' '>kept label</a></strong></b></p></main>")
+        .unwrap();
+    let detected = Command::new(binary())
+        .args(["--no-config", "formats", "detect", "--json", bad.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!detected.status.success());
+    assert!(String::from_utf8_lossy(&detected.stderr).contains("unsupported"));
+    for policy in ["strict", "best-effort"] {
+        let output = Command::new(binary())
+            .args(["--no-config", "--error-policy", policy, good.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("kept label"));
+        let output = run_with_stdin(
+            &["--no-config", "--extension", "js", "--error-policy", policy, "-"],
+            b"{\"valid\":true}",
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unsupported"));
+    }
+    let output = run_with_stdin(
+        &["--no-config", "--extension", "js", "--format", "text", "-"],
+        b"explicit text",
+    );
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"explicit text\n");
+    let report = directory.path().join("batch.json");
+    let output = Command::new(binary())
+        .args([
+            "--no-config",
+            "--output-dir",
+            directory.path().join("output").to_str().unwrap(),
+            "--report",
+            report.to_str().unwrap(),
+            bad.to_str().unwrap(),
+            good.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report = std::fs::read_to_string(report).unwrap();
+    assert!(report.contains("unsupported"));
+    assert!(directory.path().join("output/source.md").exists());
+}

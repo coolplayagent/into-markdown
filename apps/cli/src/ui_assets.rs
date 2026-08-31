@@ -11,31 +11,31 @@ pub struct Asset {
 pub const INDEX: Asset = Asset {
     path: "/index.html",
     mime: "text/html; charset=utf-8",
-    sha256: "c38c40777ff1653816d4795553b28a4cf372a7d899a99d749de9ab40415dd4ba",
+    sha256: "16aa87f1e6ce06f894a3a5d3d7879f8b9acb7ce336beaa0152af22559d691f4b",
     bytes: include_bytes!("../../../web/console/dist/index.html"),
     immutable: false,
 };
 
 pub const ASSETS: &[Asset] = &[
     Asset {
-        path: "/assets/app.9b4d0a39248559e7.js",
-        mime: "text/javascript; charset=utf-8",
-        sha256: "9b4d0a39248559e75dbcfd64ad3720c88217a5defaa747e91304fe7bcb37f88e",
-        bytes: include_bytes!("../../../web/console/dist/assets/app.9b4d0a39248559e7.js"),
-        immutable: true,
-    },
-    Asset {
-        path: "/assets/app.c0776ec608dc945c.css",
+        path: "/assets/app.62a4c012f2178828.css",
         mime: "text/css; charset=utf-8",
-        sha256: "c0776ec608dc945c44bd7cbbf0e590d4b573fdae4c984571667ca64fb791d6b4",
-        bytes: include_bytes!("../../../web/console/dist/assets/app.c0776ec608dc945c.css"),
+        sha256: "62a4c012f2178828b0dc9233ec8bfbb8f667f5175ae6129b1bff2e3f876c4d6f",
+        bytes: include_bytes!("../../../web/console/dist/assets/app.62a4c012f2178828.css"),
         immutable: true,
     },
     Asset {
-        path: "/assets/bootstrap.0a523f0d30675cca.js",
+        path: "/assets/app.7dcd991ddb8633d9.js",
         mime: "text/javascript; charset=utf-8",
-        sha256: "0a523f0d30675ccac31cc153144b0a1b7a4f8cf25440566b1a56e8b48eb3b994",
-        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.0a523f0d30675cca.js"),
+        sha256: "7dcd991ddb8633d9ce81bdd35bd9cffcdca6ed5886d39f6136f343d7b4c9c804",
+        bytes: include_bytes!("../../../web/console/dist/assets/app.7dcd991ddb8633d9.js"),
+        immutable: true,
+    },
+    Asset {
+        path: "/assets/bootstrap.9a0a89e015db485d.js",
+        mime: "text/javascript; charset=utf-8",
+        sha256: "9a0a89e015db485d6debd0e31f8c34180114f26d287b55424090151d6d312b50",
+        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.9a0a89e015db485d.js"),
         immutable: true,
     },
 ];

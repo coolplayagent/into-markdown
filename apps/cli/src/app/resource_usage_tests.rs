@@ -134,7 +134,7 @@ fn cancellation_and_timeout_reports_keep_terminal_zero_ocr_and_resource_usage() 
             ),
             options,
             execution,
-            services: into_markdown::Services::default(),
+            loaded: config::load(&root, &[], true, None, None).unwrap(),
             hint: FormatHint::default(),
             emit: EmitKind::Markdown,
             asset_mode: AssetModeArg::Extract,
