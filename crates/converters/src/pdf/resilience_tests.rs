@@ -1,12 +1,17 @@
 use super::*;
 
 fn links_pdf(rectangles: &[&str]) -> Vec<u8> {
-    links_pdf_on_page(rectangles, "0 0 100 200")
+    links_pdf_on_page(rectangles, "0 0 100 200", false)
 }
 
-fn links_pdf_on_page(rectangles: &[&str], media_box: &str) -> Vec<u8> {
+fn links_pdf_on_page(rectangles: &[&str], media_box: &str, prefix_note: bool) -> Vec<u8> {
     let annotations =
         (0..rectangles.len()).map(|i| format!("{} 0 R", i + 6)).collect::<Vec<_>>().join(" ");
+    let annotations = if prefix_note {
+        format!("{} 0 R {annotations}", rectangles.len() + 6)
+    } else {
+        annotations
+    };
     let mut objects = vec![
         b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
@@ -16,6 +21,10 @@ fn links_pdf_on_page(rectangles: &[&str], media_box: &str) -> Vec<u8> {
     ];
     for (i, rect) in rectangles.iter().enumerate() {
         objects.push(format!("<< /Type /Annot /Subtype /Link /Rect [{rect}] /A << /S /URI /URI (https://example.test/link-{i}) >> >>").into_bytes());
+    }
+    if prefix_note {
+        objects
+            .push(b"<< /Type /Annot /Subtype /Text /Rect [1 1 10 10] /Contents (Note) >>".to_vec());
     }
     assemble_pdf(&objects)
 }
@@ -210,12 +219,25 @@ fn native_issue334_explicit_layout_budget_is_enforced() {
 #[test]
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
 fn native_issue334_link_clipping_accounts_for_nonzero_page_origin() {
-    let bytes = links_pdf_on_page(&["90 190 150 350"], "100 200 200 400");
+    let bytes = links_pdf_on_page(&["90 190 150 350"], "100 200 200 400", false);
     let output = convert(bytes, &ConversionOptions::default()).unwrap();
     let Block::Page { blocks, .. } = &output.document.blocks[0].block else { panic!("page") };
     let link = blocks.iter().find(|node| node.id.0.contains("-link-")).unwrap();
     assert_eq!(
         link.provenance.locator.bounds,
         Some(Rect { x: 0.0, y: 50.0, width: 50.0, height: 150.0 })
+    );
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn native_issue334_diagnostics_keep_original_annotation_array_index() {
+    let bytes = links_pdf_on_page(&["10 20 10 40", "10 40 20 60"], "0 0 100 200", true);
+    let output = convert(bytes, &ConversionOptions::default()).unwrap();
+    assert!(
+        output
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "pdf.linkOmitted" && d.message.contains("annotation[1]"))
     );
 }

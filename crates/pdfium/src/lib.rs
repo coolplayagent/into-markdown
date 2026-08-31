@@ -810,7 +810,7 @@ pub enum LinkPolicy {
     BestEffort,
 }
 
-/// Zero-based identity in the original annotation or automatic-web-link stream.
+/// Zero-based annotation array index or automatic-web-link/rectangle index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkIdentity {
     Annotation { index: u32 },

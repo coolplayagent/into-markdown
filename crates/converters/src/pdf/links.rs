@@ -52,6 +52,10 @@ impl PageLinks<'_> {
                 part,
                 detail: format!("page {}: {detail}", self.number),
             },
+            ConversionError::ResourceLimit { limit, detail } => ConversionError::ResourceLimit {
+                limit,
+                detail: format!("page {}: {detail}", self.number),
+            },
             other => other,
         }
     }

@@ -19,6 +19,11 @@ concurrency:
   group: pdf-resilience-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+
 jobs:
   native:
     strategy:
@@ -47,6 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
+          components: clippy, rustfmt
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'

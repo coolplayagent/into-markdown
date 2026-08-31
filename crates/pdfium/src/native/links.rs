@@ -230,7 +230,6 @@ impl Native {
     ) -> Result<(), Error> {
         let LinkRequest { document, page, limits, .. } = request;
         let mut position = 0;
-        let mut index = 0;
         loop {
             checkpoint(check)?;
             let previous = position;
@@ -244,8 +243,9 @@ impl Native {
                 return Err(invalid("enumerate_link", "invalid enumeration progress or handle"));
             }
             scan.consume(1, limits)?;
-            let identity = LinkIdentity::Annotation { index };
-            index += 1;
+            let identity = LinkIdentity::Annotation {
+                index: nonnegative("link_annotation_index", position - 1)?,
+            };
             let mut rect = FsRectF::default();
             // GetAnnotRect reports a local boolean result; GetLastError has
             // document-load semantics and may contain an unrelated stale code.
