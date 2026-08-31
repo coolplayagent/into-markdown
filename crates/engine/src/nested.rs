@@ -228,18 +228,7 @@ pub(crate) async fn detect_formats(
         if let Some(conflict) = &conflict {
             candidate.diagnostics.push(conflict.clone());
         }
-        let replace = best.get(&candidate.format).is_none_or(|existing| {
-            !existing.explicit
-                && (candidate.confidence > existing.confidence
-                    || candidate.confidence.total_cmp(&existing.confidence)
-                        == std::cmp::Ordering::Equal
-                        && (candidate.detector_priority > existing.detector_priority
-                            || candidate.detector_priority == existing.detector_priority
-                                && candidate.detector_id < existing.detector_id))
-        });
-        if replace {
-            best.insert(candidate.format, candidate);
-        }
+        merge_candidate(&mut best, candidate);
     }
     let mut candidates = best.into_values().collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
@@ -256,4 +245,23 @@ pub(crate) async fn detect_formats(
 
 fn normalize_confidence(confidence: f32) -> f32 {
     if confidence.is_finite() { confidence.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+fn merge_candidate(best: &mut BTreeMap<InputFormat, FormatCandidate>, candidate: FormatCandidate) {
+    let Some(existing) = best.get_mut(&candidate.format) else {
+        best.insert(candidate.format, candidate);
+        return;
+    };
+    let replace = !existing.explicit
+        && (candidate.confidence > existing.confidence
+            || candidate.confidence.total_cmp(&existing.confidence) == std::cmp::Ordering::Equal
+                && (candidate.detector_priority > existing.detector_priority
+                    || candidate.detector_priority == existing.detector_priority
+                        && candidate.detector_id < existing.detector_id));
+    let other = if replace { std::mem::replace(existing, candidate) } else { candidate };
+    for diagnostic in other.diagnostics {
+        if !existing.diagnostics.contains(&diagnostic) {
+            existing.diagnostics.push(diagnostic);
+        }
+    }
 }

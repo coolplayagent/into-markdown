@@ -353,11 +353,11 @@ fn corrupt_crc(bytes: &mut [u8], target: &str) {
 
 #[test]
 fn unsupported_members_are_reported_and_renamed_documents_keep_their_identity() {
-    let pptx = include_bytes!("../../../fixtures/small/pptx/normal.pptx");
+    let pptx = std::fs::read(crate::test_fixture_root().join("small/pptx/normal.pptx")).unwrap();
     let bytes = archive(
         &[
             ("source.js", b"const value = '<article><p>wrong</p></article>';"),
-            ("slides.md", pptx),
+            ("slides.md", pptx.as_slice()),
             ("kept.txt", b"kept text"),
         ],
         false,
