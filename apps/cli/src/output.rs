@@ -3,6 +3,7 @@
 mod assets;
 mod bundle;
 mod commit;
+mod report;
 mod serialization;
 mod stdout;
 mod stream;
@@ -17,7 +18,8 @@ use assets::{plan_asset_writes, write_assets_with_hook};
 pub(crate) use bundle::write_bundle;
 #[cfg(test)]
 use commit::write_preflighted_file;
-pub(crate) use commit::{preflight_file, write_file, write_report, write_spooled_output_set_file};
+pub(crate) use commit::{preflight_file, write_file, write_spooled_output_set_file};
+pub(crate) use report::write_report;
 pub(crate) use serialization::encode_result;
 pub(crate) use stdout::publish as publish_stdout;
 pub(crate) use stream::StructuredSpool;

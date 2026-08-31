@@ -25,7 +25,11 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
 `axum::Json<ResultDto>` 作为 extractor 或 response 均在类型层不可用；HTTP、SSE、CLI 和
 库调用方入站必须使用 `from_json` 或 `from_json_with_limits`；已有 owned DTO 出站使用
 `to_json` 或 `to_pretty_json`，内部 `ConversionResult` 出站使用
-`write_json_from_result`。这些入口通过私有 Raw/borrowed wire 类型编码或解码，并执行
+`write_json_from_result`；CLI 内部类型化批量报告使用 `BatchReportDto::write_json` 流式
+写入暂存事务，保留语义、JSON 总字节及字符串字节限制，不克隆整个 wire 报告或生成
+整串 JSON 后回读。该固定类型的出站路径不套用不可信输入的结构数量限制；入站
+`from_json` 的默认限额、重复键和深度检查不变。大报告消费者仍须显式选择适合自身
+信任边界的 `from_json_with_limits` 预算。这些入口通过私有 Raw/borrowed wire 类型编码或解码，并执行
 版本、预算和不变量检查，避免框架绕过稳定边界。字段公开用于读取已验证结果及应用代码
 显式构造，但不能直接进入通用 serde/Axum wire 边界。
 

@@ -30,6 +30,8 @@ use std::fmt;
 use std::io::{self, Write};
 use thiserror::Error;
 
+mod batch_report;
+
 /// Schema version emitted and accepted by application DTOs.
 pub const DTO_SCHEMA_VERSION: u32 = 1;
 /// Current portable bundle manifest schema version.

@@ -1,12 +1,11 @@
 //! Atomic primary-artifact publication and conflict handling.
 
 use super::assets::plan_spooled_asset_writes;
-use super::serialization::report_json_with_newline;
 use super::stream::StructuredSpool;
 use crate::args::{AssetModeArg, ConflictPolicy};
 use crate::error::{CliError, ExitClass};
 use crate::transaction::{self, FileTarget, Target};
-use into_markdown::{BatchReportDto, ExecutionContext};
+use into_markdown::ExecutionContext;
 #[cfg(test)]
 use std::fs;
 #[cfg(test)]
@@ -79,15 +78,6 @@ pub(super) fn write_preflighted_file(
 ) -> Result<WriteOutcome, CliError> {
     write_exact_file(path, bytes, conflict == ConflictPolicy::Overwrite)?;
     Ok(WriteOutcome { path: path.to_path_buf(), renamed: false })
-}
-
-/// Write a versioned JSON report atomically.
-pub(crate) fn write_report(
-    path: &Path,
-    report: &BatchReportDto,
-    context: &ExecutionContext,
-) -> Result<WriteOutcome, CliError> {
-    write_file(path, &report_json_with_newline(report)?, ConflictPolicy::Overwrite, context)
 }
 
 fn resolve_conflict(
