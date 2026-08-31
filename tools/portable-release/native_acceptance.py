@@ -21,6 +21,7 @@ PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
 if str(PORTABLE_RELEASE_DIR) not in sys.path:
     sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
 from drawio_smoke import drawio_cases
+from ocr_smoke import ocr_case
 
 
 CORE_ARCHIVES = {
@@ -577,6 +578,7 @@ def run_e2e(
                 "bytes": authority["library_size"],
                 "materialization": "canonical-var-fallback",
             }
+        real_ocr = ocr_case(binary, environment, AcceptanceError)
         return {
             "schemaVersion": 1,
             "target": target,
@@ -585,6 +587,7 @@ def run_e2e(
             "cases": cases,
             "plainTextOutputSha256": sha256_file(result),
             "pdfiumRuntime": pdfium_runtime,
+            "realOcr": real_ocr,
             "negativeCases": negative_cases,
             "runtimeCacheCreated": False,
             "networkRequired": False,

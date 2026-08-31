@@ -30,6 +30,12 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(len(observed['ocrInlines']), 1)
         self.assertEqual(observed['ocrInlines'][0]['characters'], len('inlined OCR'))
         self.assertEqual(observed['assetInventory'][0]['bytes'], 14)
+        # Core serialization uses sourceText; the public DTO uses text with
+        # provenance. Both must retain the same OCR and native inventories.
+        result['document']['blocks'][0]['block']['data'][1]['type'] = 'text'
+        public = content(result)
+        for field in ('nativeUnits', 'ocrBlocks', 'ocrInlines', 'assetInventory'):
+            self.assertEqual(public[field], observed[field])
 
 
 if __name__ == '__main__':

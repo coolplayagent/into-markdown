@@ -157,16 +157,28 @@ impl SandboxChild {
     // The owned process group includes provider and model workers. Windows applies
     // the aggregate limit through its Job Object before starting the process.
     #[cfg_attr(windows, allow(clippy::unused_self, clippy::unnecessary_wraps))]
-    pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
+    pub(crate) fn check_memory(&self, limit: u64) -> Result<(), PluginError> {
         #[cfg(unix)]
         {
             let Self::Unix(child) = self;
-            memory::group_bytes(child.id()).map(|bytes| bytes > limit)
+            let bytes = memory::group_bytes(child.id()).map_err(|()| {
+                PluginError::new(
+                    PluginErrorCode::Crashed,
+                    "plugin process-group memory observation failed",
+                )
+            })?;
+            if bytes > limit {
+                return Err(PluginError::new(
+                    PluginErrorCode::ResourceLimit,
+                    format!("plugin process-group memory {bytes} exceeds {limit} bytes"),
+                ));
+            }
+            Ok(())
         }
         #[cfg(windows)]
         {
             let _ = limit;
-            Ok(false)
+            Ok(())
         }
     }
 
@@ -185,46 +197,6 @@ impl SandboxChild {
             #[cfg(windows)]
             Self::Windows(child) => child.terminate(),
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_peak_resident_bytes(status: &str) -> Result<Option<u64>, ()> {
-    let mut maximum_kibibytes = None;
-    let mut zombie = false;
-    for line in status.lines() {
-        if let Some(value) = line.strip_prefix("State:") {
-            zombie = value.split_ascii_whitespace().next() == Some("Z");
-        }
-        let Some(value) = line.strip_prefix("VmRSS:").or_else(|| line.strip_prefix("VmHWM:"))
-        else {
-            continue;
-        };
-        let mut fields = value.split_ascii_whitespace();
-        let kibibytes = fields.next().ok_or(())?.parse::<u64>().map_err(|_| ())?;
-        if fields.next() != Some("kB") || fields.next().is_some() {
-            return Err(());
-        }
-        maximum_kibibytes =
-            Some(maximum_kibibytes.map_or(kibibytes, |current: u64| current.max(kibibytes)));
-    }
-    if zombie {
-        return Ok(None);
-    }
-    maximum_kibibytes.ok_or(())?.checked_mul(1024).map(Some).ok_or(())
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod linux_memory_tests {
-    use super::linux_peak_resident_bytes;
-
-    #[test]
-    fn physical_memory_parser_uses_the_peak_and_rejects_ambiguous_units() {
-        let status = "Name:\tfixture\nState:\tS (sleeping)\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n";
-        assert_eq!(linux_peak_resident_bytes(status), Ok(Some(2 * 1024 * 1024)));
-        assert_eq!(linux_peak_resident_bytes("State:\tZ (zombie)\n"), Ok(None));
-        assert!(linux_peak_resident_bytes("VmRSS: 1 MB\n").is_err());
-        assert!(linux_peak_resident_bytes("Name: fixture\n").is_err());
     }
 }
 

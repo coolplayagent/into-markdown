@@ -36,7 +36,7 @@ def content(result):
             for item in value:
                 visit(item)
         elif isinstance(value, dict):
-            if value.get('type') == 'sourceText':
+            if value.get('type') in {'text', 'sourceText'}:
                 data = value.get('data', {})
                 origin = data.get('provenance', {})
                 if origin.get('kind') == 'localOcr':

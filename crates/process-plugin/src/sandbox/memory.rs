@@ -1,5 +1,8 @@
 //! Aggregate memory of the process group owned by one sandbox request.
 
+#[cfg(any(target_os = "linux", test))]
+mod linux;
+
 #[cfg(target_os = "linux")]
 pub(super) fn group_bytes(group: u32) -> Result<u64, ()> {
     let mut total = 0_u64;
@@ -10,19 +13,20 @@ pub(super) fn group_bytes(group: u32) -> Result<u64, ()> {
         }
         let stat = match std::fs::read_to_string(entry.path().join("stat")) {
             Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if linux::process_gone(&error) => continue,
             Err(_) => return Err(()),
         };
         if stat_group(&stat)? != group {
             continue;
         }
-        let status = match std::fs::read_to_string(entry.path().join("status")) {
+        let rollup = match std::fs::read_to_string(entry.path().join("smaps_rollup")) {
             Ok(value) => value,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) if linux::process_gone(&error) => continue,
             Err(_) => return Err(()),
         };
-        let peak = super::linux_peak_resident_bytes(&status)?.unwrap_or(0);
-        total = total.checked_add(peak).ok_or(())?;
+        // Current proportional memory counts shared pages once across workers.
+        // Independent process high-water marks can occur at different times.
+        total = total.checked_add(linux::proportional_bytes(&rollup)?).ok_or(())?;
     }
     Ok(total)
 }

@@ -925,16 +925,16 @@ fn write_request_bounded(
         }
         let context_error = context.checkpoint().err().map(|error| map_execution_error(&error));
         let policy_timeout = deadline.is_some_and(|value| Instant::now() >= value);
-        let memory_exceeded = child.memory_exceeded(max_memory_bytes).unwrap_or(true);
+        let memory_error = child.check_memory(max_memory_bytes).err();
         let child_ended = child.try_wait().ok().flatten().is_some();
-        if context_error.is_some() || policy_timeout || memory_exceeded || child_ended {
+        if context_error.is_some() || policy_timeout || memory_error.is_some() || child_ended {
             child.terminate();
             let _ = writer.join();
             return Err(context_error.unwrap_or_else(|| {
                 if policy_timeout {
                     PluginError::new(PluginErrorCode::Timeout, "plugin request write timed out")
-                } else if memory_exceeded {
-                    PluginError::new(PluginErrorCode::ResourceLimit, "plugin memory limit exceeded")
+                } else if let Some(error) = memory_error {
+                    error
                 } else {
                     PluginError::new(
                         PluginErrorCode::Crashed,
@@ -977,12 +977,7 @@ fn receive_until(
                 ));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if child.memory_exceeded(max_memory_bytes).unwrap_or(true) {
-                    return Err(PluginError::new(
-                        PluginErrorCode::ResourceLimit,
-                        "plugin memory limit exceeded",
-                    ));
-                }
+                child.check_memory(max_memory_bytes)?;
                 if child
                     .try_wait()
                     .map_err(|()| PluginError::new(PluginErrorCode::Crashed, "plugin wait failed"))?
