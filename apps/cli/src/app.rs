@@ -38,6 +38,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
+mod plugin_execution;
+mod resource_usage;
+
 // Self-contained OCR and speech capability packages intentionally
 // include their audited models/runtimes. Keep the wire bound finite while
 // allowing the reviewed packages plus release metadata.
@@ -2348,26 +2351,14 @@ fn run_plugins(
             let (source, _input_memory) = read_plugin_input(&input, maximum, &execution)?;
             match configured.protocol.as_str() {
                 "process-v1" => {
-                    let prepared = manager
-                        .process_manifest(
-                            &id,
-                            into_markdown_process_plugin::RuntimePolicy::default(),
-                            &execution,
-                        )
-                        .map_err(plugin_manager_error)?;
-                    let result = prepared
-                        .execute(
-                            into_markdown_process_plugin::PluginRequest {
-                                request_id: "cli-plugin-run",
-                                input_format: &input_format,
-                                source_name: input.file_name().and_then(OsStr::to_str),
-                                parameters_json: None,
-                                source: &source,
-                            },
-                            &execution,
-                        )
-                        .map_err(process_plugin_error)?;
-                    let encoded = output::encode_result(&result.result, EmitKind::ResultJson)?;
+                    let encoded = plugin_execution::run_process(
+                        &manager,
+                        &id,
+                        &input,
+                        &input_format,
+                        &source,
+                        &execution,
+                    )?;
                     context.stdout.write_all(&encoded).map_err(CliError::from)
                 }
                 "wasi-v1" => {
@@ -4129,10 +4120,7 @@ fn run_conversion(
     context: &mut RunContext<'_>,
 ) -> Result<(), CliError> {
     let batch_timer = crate::timing::ItemTimer::start();
-    apply_conversion_overrides(&arguments, &mut loaded)?;
-    if loaded.options.limits.max_memory_bytes == 0 {
-        return Err(CliError::usage("shared conversion memory budget must be greater than zero"));
-    }
+    resource_usage::prepare(&arguments, &mut loaded)?;
     let includes = build_globset(&arguments.include)?;
     let excludes = build_globset(&arguments.exclude)?;
     let mut items = expand_inputs(&arguments, includes.as_ref(), excludes.as_ref())?;
@@ -4217,6 +4205,7 @@ fn run_conversion(
             output_context: &policy.output_context,
             wall_duration_ms: batch_timer.elapsed_ms(),
             ocr_enabled: crate::services::effective_ocr_policy(&policy.options) != OcrPolicy::Off,
+            memory_snapshot: policy.loaded.memory_snapshot,
         },
     )
 }
@@ -4269,6 +4258,7 @@ struct FinishReportsContext<'a> {
     output_context: &'a into_markdown::ExecutionContext,
     wall_duration_ms: f64,
     ocr_enabled: bool,
+    memory_snapshot: into_markdown::MemoryBudgetSnapshotDto,
 }
 
 fn finish_reports(
@@ -4284,6 +4274,7 @@ fn finish_reports(
         output_context,
         wall_duration_ms,
         ocr_enabled,
+        memory_snapshot,
     } = context;
     for report in &reports {
         for warning in &report.warnings {
@@ -4319,15 +4310,7 @@ fn finish_reports(
     if !global.quiet {
         crate::timing::write_summary(stderr, &reports, wall_duration_ms, catalog, json_log)?;
     }
-    let usage = output_context.resource_usage();
-    let resource_usage = into_markdown::BatchResourceUsageDto {
-        shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
-        shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
-        ocr: ocr_enabled.then_some(into_markdown::BatchOcrUsageDto {
-            recognized_regions: usage.ocr_recognized_regions,
-            recognized_chars: usage.ocr_recognized_chars,
-        }),
-    };
+    let resource_usage = resource_usage::report(output_context, memory_snapshot, ocr_enabled);
     let report = BatchReport::try_new_with_resource_usage(
         reports,
         Some(wall_duration_ms),
@@ -4367,6 +4350,7 @@ fn apply_conversion_overrides(
     apply_text_overrides(arguments, &mut loaded.options);
     apply_network_overrides(arguments, &mut loaded.options)?;
     apply_limit_overrides(arguments, &mut loaded.options);
+    config::memory::apply_override(arguments.max_memory_size, loaded);
     apply_output_overrides(arguments, &mut loaded.options);
     apply_ai_capability_overrides(arguments, loaded)?;
     if arguments.diarize && loaded.options.ai.audio_transcription == AiMode::Off {

@@ -1,0 +1,391 @@
+{
+  "schemaVersion": 1,
+  "scope": "Local optimized source build with authenticated real provider files; self-assembled HTML is excluded from real-network-file counts",
+  "assertions": {
+    "nativeBodyEqualsOcrOff": true,
+    "assetsEqualOcrOff": true,
+    "allLeasesAndTemporaryReservationsReleased": true,
+    "mixedUniqueRequests": 2,
+    "mixedRefusals": 1,
+    "mixedReferenceOmissions": 2,
+    "mixedRecognizedCharacters": 67
+  },
+  "runs": [
+    {
+      "elapsedMs": 3323,
+      "leasePeakBytes": 2147483648,
+      "memoryAfter": 0,
+      "ocrRequests": 2,
+      "recognitionMemoryRefusals": 1,
+      "recognizedChars": 67,
+      "recognizedRegions": 1,
+      "temporaryAfter": 0,
+      "workerBudgetBytes": 595591168,
+      "name": "mixed",
+      "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+      "probeSha256": "3d0eb6cda564a8da93c44a1c141a05e518668db5e281cf3c030aa46b4af7db1c",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-340/target/release/examples/ocr_memory_probe",
+        "target/ocr340/candidate-ocr",
+        "target/ocr340/probe-inputs/mixed.html",
+        "568",
+        "auto",
+        "best-effort"
+      ],
+      "measurementSha256": "90d8f707140eb899ac6d47c3dfc18728ce9cfff6ebd28fc38248e991acfc60ee",
+      "resultSha256": "a4cc23f5d6c9aa3be3b0a35475956c50db8766dca3534cea392933c34ce96aca",
+      "status": "success",
+      "reason": null,
+      "processTreeRssSamplePeakBytes": 474562560,
+      "operatingSystemPeakBytes": 245055488,
+      "operatingSystemPeakSource": "wait4.ru_maxrss; kernel child accounting, not concurrent tree sum",
+      "content": {
+        "nativeUnits": [
+          {
+            "locator": {
+              "bounds": null,
+              "byteEnd": 106282,
+              "byteStart": 0,
+              "cell": null,
+              "page": null,
+              "part": null,
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "characters": 52,
+            "sha256": "bd697c703d86c7154688411f1a9e8a5d5542b01bc0858a5ea8e1a3fd04b9df71"
+          }
+        ],
+        "assetInventory": [
+          {
+            "id": "html-data-image-000001",
+            "mediaType": "image/png",
+            "bytes": 5896,
+            "sha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+            "externalUri": null
+          },
+          {
+            "id": "html-data-image-000002",
+            "mediaType": "image/png",
+            "bytes": 36829,
+            "sha256": "8ccbd4f0952c9bbf55074fe3e9c7a5adb68f37f85669f0bd2d62583719533d10",
+            "externalUri": null
+          }
+        ],
+        "ocrBlocks": [
+          {
+            "locator": {
+              "bounds": {
+                "height": 56.0,
+                "width": 1336.0,
+                "x": 15.0,
+                "y": 15.0
+              },
+              "cell": null,
+              "page": 1,
+              "pageHeight": 80.0,
+              "pageWidth": 1800.0,
+              "part": null,
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "sha256": "ee79ce64084b2e84342d3dbe34eea2399cb62b7e95aa0cc92be37055081426ec"
+          }
+        ],
+        "ocrInlines": [
+          {
+            "locator": {
+              "bounds": {
+                "height": 56.0,
+                "width": 1336.0,
+                "x": 15.0,
+                "y": 15.0
+              },
+              "cell": null,
+              "page": 1,
+              "pageHeight": 80.0,
+              "pageWidth": 1800.0,
+              "part": null,
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "characters": 67,
+            "sha256": "e0d4f6b65fab632ed74021660a7464cb157af855c8d8f68e9fdb1a4b4cc5e88d"
+          }
+        ],
+        "diagnostics": [
+          {
+            "code": "html.sourceLocationUnavailable",
+            "locator": null,
+            "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+            "severity": "warning"
+          },
+          {
+            "code": "html.mainContentFallback",
+            "locator": null,
+            "message": "no non-empty explicit main-content region; used visible body content",
+            "severity": "warning"
+          },
+          {
+            "code": "ocr.optionalRecognitionMemorySkipped",
+            "locator": {
+              "bounds": null,
+              "cell": null,
+              "page": null,
+              "part": "document/image/2",
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "message": "OCR recognition memory refused by builtin.ocr.ppocrv6-image: plugin returned ocrRecognitionMemory: resource limit exceeded (ocrRecognitionMemory): 7867820 + 588284104 exceeds 595591168",
+            "severity": "warning"
+          },
+          {
+            "code": "ocr.optionalRecognitionMemorySkipped",
+            "locator": {
+              "bounds": null,
+              "cell": null,
+              "page": null,
+              "part": "document/image/3",
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "message": "OCR recognition memory refused by builtin.ocr.ppocrv6-image: plugin returned ocrRecognitionMemory: resource limit exceeded (ocrRecognitionMemory): 7867820 + 588284104 exceeds 595591168",
+            "severity": "warning"
+          }
+        ],
+        "documentSha256": "6fede59a692beea2a40788e0cd8e6ea3303c7be19c3f2e6a51a79497c9a5e26e",
+        "markdownSha256": "dff2d104b8085ba34ef7d2e80d906fbf0a9ea66fad4ea6c63d4835b54ec80dd8"
+      },
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "locator": null,
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "severity": "warning"
+        },
+        {
+          "code": "html.mainContentFallback",
+          "locator": null,
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "severity": "warning"
+        },
+        {
+          "code": "ocr.optionalRecognitionMemorySkipped",
+          "locator": {
+            "bounds": null,
+            "cell": null,
+            "page": null,
+            "part": "document/image/2",
+            "sheet": null,
+            "slide": null,
+            "time": null
+          },
+          "message": "OCR recognition memory refused by builtin.ocr.ppocrv6-image: plugin returned ocrRecognitionMemory: resource limit exceeded (ocrRecognitionMemory): 7867820 + 588284104 exceeds 595591168",
+          "severity": "warning"
+        },
+        {
+          "code": "ocr.optionalRecognitionMemorySkipped",
+          "locator": {
+            "bounds": null,
+            "cell": null,
+            "page": null,
+            "part": "document/image/3",
+            "sheet": null,
+            "slide": null,
+            "time": null
+          },
+          "message": "OCR recognition memory refused by builtin.ocr.ppocrv6-image: plugin returned ocrRecognitionMemory: resource limit exceeded (ocrRecognitionMemory): 7867820 + 588284104 exceeds 595591168",
+          "severity": "warning"
+        }
+      ]
+    },
+    {
+      "elapsedMs": 1637,
+      "leasePeakBytes": 2147483648,
+      "memoryAfter": 0,
+      "ocrRequests": 1,
+      "recognitionMemoryRefusals": 1,
+      "recognizedChars": 0,
+      "recognizedRegions": 0,
+      "temporaryAfter": 0,
+      "workerBudgetBytes": 595591168,
+      "name": "strict",
+      "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+      "probeSha256": "3d0eb6cda564a8da93c44a1c141a05e518668db5e281cf3c030aa46b4af7db1c",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-340/target/release/examples/ocr_memory_probe",
+        "target/ocr340/candidate-ocr",
+        "target/ocr340/probe-inputs/mixed.html",
+        "568",
+        "auto",
+        "strict"
+      ],
+      "measurementSha256": "84ba1f24d7ad77b9eed93418dc251548af10510614c95a3240c3bb7ece7481ed",
+      "resultSha256": "1a0c1a5968635a3ec6c4ab901729b6a869668b6016d8b93a9b4ef4cb30398ab9",
+      "status": "failed",
+      "reason": "ocrRecognitionMemory",
+      "processTreeRssSamplePeakBytes": 474677248,
+      "operatingSystemPeakBytes": 245104640,
+      "operatingSystemPeakSource": "wait4.ru_maxrss; kernel child accounting, not concurrent tree sum"
+    },
+    {
+      "elapsedMs": 2310,
+      "leasePeakBytes": 2147483648,
+      "memoryAfter": 0,
+      "ocrRequests": 1,
+      "recognitionMemoryRefusals": 1,
+      "recognizedChars": 0,
+      "recognizedRegions": 0,
+      "temporaryAfter": 0,
+      "workerBudgetBytes": 595591168,
+      "name": "always",
+      "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+      "probeSha256": "3d0eb6cda564a8da93c44a1c141a05e518668db5e281cf3c030aa46b4af7db1c",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-340/target/release/examples/ocr_memory_probe",
+        "target/ocr340/candidate-ocr",
+        "target/ocr340/probe-inputs/mixed.html",
+        "568",
+        "always",
+        "best-effort"
+      ],
+      "measurementSha256": "363c55179a9e489b0a38241aeb1973c4534ff1c13cea5d5d54ac458fc3361906",
+      "resultSha256": "53765ea20ed6b53cb93ed5c82027348aae42db96059f4760c354de7e35898a97",
+      "status": "failed",
+      "reason": "ocrRecognitionMemory",
+      "processTreeRssSamplePeakBytes": 483442688,
+      "operatingSystemPeakBytes": 246562816,
+      "operatingSystemPeakSource": "wait4.ru_maxrss; kernel child accounting, not concurrent tree sum"
+    },
+    {
+      "elapsedMs": 2614,
+      "leasePeakBytes": 2147483648,
+      "memoryAfter": 0,
+      "ocrRequests": 1,
+      "recognitionMemoryRefusals": 1,
+      "recognizedChars": 0,
+      "recognizedRegions": 0,
+      "temporaryAfter": 0,
+      "workerBudgetBytes": 595591168,
+      "name": "necessary",
+      "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+      "probeSha256": "3d0eb6cda564a8da93c44a1c141a05e518668db5e281cf3c030aa46b4af7db1c",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-340/target/release/examples/ocr_memory_probe",
+        "target/ocr340/candidate-ocr",
+        "target/ocr340/probe-inputs/necessary.html",
+        "568",
+        "auto",
+        "best-effort"
+      ],
+      "measurementSha256": "57c53893dbeeaf0039c7e42655638b32e807dca1a7c5baaff7c599f5fe9d5b97",
+      "resultSha256": "215c1df0d4aa39f5bb12afbca32dcffa45b0291843314407dd5600d8e763b4b2",
+      "status": "failed",
+      "reason": "ocrRecognitionMemory",
+      "processTreeRssSamplePeakBytes": 474775552,
+      "operatingSystemPeakBytes": 245170176,
+      "operatingSystemPeakSource": "wait4.ru_maxrss; kernel child accounting, not concurrent tree sum"
+    },
+    {
+      "elapsedMs": 1,
+      "leasePeakBytes": 2147483648,
+      "memoryAfter": 0,
+      "ocrRequests": 0,
+      "recognitionMemoryRefusals": 0,
+      "recognizedChars": 0,
+      "recognizedRegions": 0,
+      "temporaryAfter": 0,
+      "workerBudgetBytes": 595591168,
+      "name": "off",
+      "sourceRevision": "a75678b86096f0d668ff10ec9baa40bbc9d98317",
+      "probeSha256": "3d0eb6cda564a8da93c44a1c141a05e518668db5e281cf3c030aa46b4af7db1c",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-340/target/release/examples/ocr_memory_probe",
+        "target/ocr340/candidate-ocr",
+        "target/ocr340/probe-inputs/mixed.html",
+        "568",
+        "off",
+        "best-effort"
+      ],
+      "measurementSha256": "0a3e25f5b3b482879c63df5b5bf267ea81b4b9153ded0c244099f51e41d5edfa",
+      "resultSha256": "8a4225408b4177a7aae6d90a8842ebbf4a5fa01ad8b5bc0f385b8ecd6da0245c",
+      "status": "success",
+      "reason": null,
+      "processTreeRssSamplePeakBytes": 60801024,
+      "operatingSystemPeakBytes": 64110592,
+      "operatingSystemPeakSource": "wait4.ru_maxrss; kernel child accounting, not concurrent tree sum",
+      "content": {
+        "nativeUnits": [
+          {
+            "locator": {
+              "bounds": null,
+              "byteEnd": 106282,
+              "byteStart": 0,
+              "cell": null,
+              "page": null,
+              "part": null,
+              "sheet": null,
+              "slide": null,
+              "time": null
+            },
+            "characters": 52,
+            "sha256": "bd697c703d86c7154688411f1a9e8a5d5542b01bc0858a5ea8e1a3fd04b9df71"
+          }
+        ],
+        "assetInventory": [
+          {
+            "id": "html-data-image-000001",
+            "mediaType": "image/png",
+            "bytes": 5896,
+            "sha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+            "externalUri": null
+          },
+          {
+            "id": "html-data-image-000002",
+            "mediaType": "image/png",
+            "bytes": 36829,
+            "sha256": "8ccbd4f0952c9bbf55074fe3e9c7a5adb68f37f85669f0bd2d62583719533d10",
+            "externalUri": null
+          }
+        ],
+        "ocrBlocks": [],
+        "ocrInlines": [],
+        "diagnostics": [
+          {
+            "code": "html.sourceLocationUnavailable",
+            "locator": null,
+            "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+            "severity": "warning"
+          },
+          {
+            "code": "html.mainContentFallback",
+            "locator": null,
+            "message": "no non-empty explicit main-content region; used visible body content",
+            "severity": "warning"
+          }
+        ],
+        "documentSha256": "202218d925c1aa3c471d4b3060efcdf276a984dd405429d4ef25c8dcbbea2257",
+        "markdownSha256": "5495bc5d04485d328645afb91a833c8a9639b9c806c0b60240460cbc0cfcc0f0"
+      },
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "locator": null,
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "severity": "warning"
+        },
+        {
+          "code": "html.mainContentFallback",
+          "locator": null,
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "severity": "warning"
+        }
+      ]
+    }
+  ]
+}

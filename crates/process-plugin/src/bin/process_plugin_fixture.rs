@@ -11,6 +11,9 @@ use std::time::Duration;
 // This fixture intentionally keeps the complete protocol branch matrix visible in one process.
 #[allow(clippy::too_many_lines)]
 fn main() -> std::io::Result<()> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--memory-child")) {
+        hold_resident_memory();
+    }
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--child-probe")) {
         print!("child-ok");
         return Ok(());
@@ -37,6 +40,27 @@ fn main() -> std::io::Result<()> {
             unreachable!("raw fixtures always exit the process")
         }
         match command.as_ref() {
+            "child-memory" => {
+                let executable = std::env::current_exe()
+                    .map_err(|_| WorkerError::new("childPrepare", "helper unavailable"))?;
+                let helper = executable.with_file_name(if cfg!(windows) {
+                    "verified-helper.exe"
+                } else {
+                    "verified-helper"
+                });
+                let _child = std::process::Command::new(helper)
+                    .arg("--memory-child")
+                    .current_dir(std::env::var_os("INTO_MARKDOWN_PRIVATE_TEMP").ok_or_else(
+                        || WorkerError::new("childPrepare", "private child directory unavailable"),
+                    )?)
+                    .env_clear()
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .map_err(|error| WorkerError::new("childLaunch", error.to_string()))?;
+                hold_resident_memory();
+            }
             "crash" => std::process::abort(),
             "hang" => loop {
                 std::thread::sleep(Duration::from_millis(10));
@@ -167,11 +191,25 @@ fn main() -> std::io::Result<()> {
             }
             value if value.starts_with("large-ok") => Ok(result("large-ok")),
             "resource-error" => Err(WorkerError::new("resourceLimit", "bounded inference failed")),
+            "recognition-memory-error" => {
+                Err(WorkerError::new("ocrRecognitionMemory", "bounded recognition failed"))
+            }
             "timeout-error" => Err(WorkerError::new("timeout", "bounded inference timed out")),
             "cancelled-error" => Err(WorkerError::new("cancelled", "bounded inference cancelled")),
             _ => Err(WorkerError::new("unknownFixture", "unknown fixture command")),
         }
     })
+}
+
+fn hold_resident_memory() -> ! {
+    let mut bytes = vec![0_u8; 288 * 1024 * 1024];
+    loop {
+        for (index, page) in bytes.chunks_mut(4096).enumerate() {
+            page.fill((index.wrapping_mul(71) % 251) as u8);
+        }
+        std::hint::black_box(&bytes);
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn exit_for_raw_fixture(command: &str, request_id: &str) -> bool {

@@ -42,6 +42,8 @@ fn write_report<W: Write>(
         items: Items(&report.items),
         wall_duration_ms: report.wall_duration_ms,
         resource_usage: report.resource_usage.as_ref().map(|usage| RawBatchResourceUsageDto {
+            memory: usage.memory.map(Into::into),
+            ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| RawBatchOcrUsageDto {

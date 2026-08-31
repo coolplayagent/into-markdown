@@ -1,10 +1,11 @@
 use super::*;
 use into_markdown_core::{
-    Block, BlockNode, BoxFuture, DiagnosticSeverity, ErrorPolicy, ExecutionOptions, Inline,
-    IrErrorCode, MAX_DOCUMENT_NODES, NodeId, OcrPolicy, Provenance, ProvenanceKind, ResourceLimits,
-    SourceLocator,
+    Block, BlockNode, BoxFuture, Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionOptions,
+    Inline, IrErrorCode, MAX_DOCUMENT_NODES, NodeId, OcrPolicy, Provenance, ProvenanceKind,
+    ResourceLimits, SourceLocator,
 };
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Fixture {
@@ -126,7 +127,8 @@ fn auto_preflight_resource_failures_preserve_native_page_without_running_ocr() {
             ExecutionOptions::default(),
             ResourceLimits { max_memory_bytes: 4096, ..ResourceLimits::default() },
         );
-        let input = source();
+        let mut input = source();
+        input.document.blocks[0].provenance.provider = "builtin.pdf.layout".into();
         let expected = input.document.clone();
         let output = enrich(&fixture, &options, &context, input).unwrap();
         assert_eq!(output.document, expected);
@@ -137,6 +139,78 @@ fn auto_preflight_resource_failures_preserve_native_page_without_running_ocr() {
         assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
         drop(output);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+fn scanned_or_bodyless_pages_cannot_skip_required_ocr_preflight() {
+    let mut scanned = source();
+    scanned.diagnostics.push(Diagnostic {
+        code: "pdf.scannedPage".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: "image coverage requires OCR despite a native page number".into(),
+        locator: Some(SourceLocator { page: Some(1), ..SourceLocator::default() }),
+    });
+    let mut bodyless = source();
+    bodyless.document.blocks[0].block =
+        Block::Paragraph(vec![Inline::Text { value: "\u{8}\n ".into(), marks: vec![] }]);
+    let mut recognized_only = source();
+    recognized_only.document.blocks[0].provenance.kind = ProvenanceKind::LocalOcr;
+    for output in [scanned, bodyless, recognized_only] {
+        let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+        let fixture = fixture(Err(resource("max_memory_bytes")));
+        assert!(matches!(
+            enrich(&fixture, &options(), &context, output),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+fn aggregate_ocr_preflight_keeps_global_and_structure_failures_terminal() {
+    for format in [
+        InputFormat::Html,
+        InputFormat::Docx,
+        InputFormat::Pptx,
+        InputFormat::Xlsx,
+        InputFormat::Odt,
+        InputFormat::Ipynb,
+        InputFormat::Pdf,
+    ] {
+        for plan in [
+            Err(resource("documentNodes")),
+            Err(resource("max_memory_bytes")),
+            Ok(EnrichmentPlan::Reserve(4097)),
+        ] {
+            let fixture = Arc::new(fixture(plan));
+            let enrichers: Vec<Arc<dyn OutputEnricher>> = vec![fixture.clone()];
+            let context = ExecutionContext::new(
+                ExecutionOptions::default(),
+                ResourceLimits { max_memory_bytes: 4096, ..ResourceLimits::default() },
+            );
+            let options = options();
+            let services = Services::default();
+            let mut future = std::pin::pin!(crate::invoke_enrichers(
+                &enrichers,
+                source(),
+                "native.converter",
+                format,
+                &options,
+                &services,
+                &context
+            ));
+            let mut task = std::task::Context::from_waker(std::task::Waker::noop());
+            let result = loop {
+                if let std::task::Poll::Ready(result) = future.as_mut().poll(&mut task) {
+                    break result;
+                }
+            };
+            assert!(matches!(result, Err(ConversionError::ResourceLimit { .. })), "{format:?}");
+            assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(context.reserved_memory_bytes(), 0);
+        }
     }
 }
 

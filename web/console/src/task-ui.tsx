@@ -88,6 +88,8 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
   encrypted: "encryptedInputFailure",
   resourceLimit: "resourceLimitFailure",
   ocr: "ocrFailure",
+  ocrRecognitionMemory: "ocrRecognitionMemoryFailure",
+  "ocr.optionalRecognitionMemorySkipped": "ocrMemoryOmission",
   ai: "aiFailure",
   network: "networkFailure",
   networkAuthorizationRequired: "authorizationRequired",
@@ -112,8 +114,7 @@ export function diagnosticLabel(code: string, t: (key: MessageKey) => string): s
 }
 
 export function taskFailureLabel(task: TaskRecord, t: (key: MessageKey) => string): string {
-  const reason = task.failure?.reasonCode;
-  return diagnosticLabel(reason && DIAGNOSTIC_MESSAGES[reason] ? reason : task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed", t);
+  return diagnosticLabel(taskFailureCode(task), t);
 }
 
 export function executionStageLabel(stage: string, locale: Locale): string {
@@ -179,4 +180,10 @@ export function createBatchId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function taskFailureCode(task: TaskRecord): string {
+  const reason = task.failure?.reasonCode;
+  if (reason && Object.hasOwn(DIAGNOSTIC_MESSAGES, reason)) return reason;
+  return task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed";
 }

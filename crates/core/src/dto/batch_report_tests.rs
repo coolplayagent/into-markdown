@@ -52,6 +52,8 @@ fn typed_report_matches_existing_bytes_for_optional_fields_and_outcomes() {
         vec![item(), failed],
         Some(20.0),
         Some(BatchResourceUsageDto {
+            memory: None,
+            ocr_runtime: None,
             shared_lease_budget_bytes: 1024,
             shared_lease_peak_bytes: 512,
             ocr: Some(BatchOcrUsageDto { recognized_regions: 1, recognized_chars: 2 }),

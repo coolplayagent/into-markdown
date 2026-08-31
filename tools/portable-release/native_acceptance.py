@@ -21,6 +21,7 @@ PORTABLE_RELEASE_DIR = pathlib.Path(__file__).resolve().parent
 if str(PORTABLE_RELEASE_DIR) not in sys.path:
     sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
 from drawio_smoke import drawio_cases
+from ocr_smoke import ocr_case
 
 
 CORE_ARCHIVES = {
@@ -550,7 +551,7 @@ def run_e2e(
             unsafe_cache.mkdir()
             os.symlink(unsafe_cache, home / "Library", target_is_directory=True)
             pdf_result = work / "structures.md"
-            pdf_case, _ = run_case(
+            cases.append(run_case(
                 "real-pdf-macos-var-fallback",
                 binary,
                 [
@@ -565,8 +566,7 @@ def run_e2e(
                 ],
                 work,
                 environment,
-            )
-            cases.append(pdf_case)
+            )[0])
             if not pdf_result.is_file() or not pdf_result.read_bytes():
                 raise AcceptanceError("macOS /var fallback PDF output is missing or empty")
             assert_runtime_absent(cache, home, temporary, "macOS /var fallback cleanup")
@@ -585,6 +585,7 @@ def run_e2e(
             "cases": cases,
             "plainTextOutputSha256": sha256_file(result),
             "pdfiumRuntime": pdfium_runtime,
+            "realOcr": ocr_case(binary, environment, AcceptanceError),
             "negativeCases": negative_cases,
             "runtimeCacheCreated": False,
             "networkRequired": False,

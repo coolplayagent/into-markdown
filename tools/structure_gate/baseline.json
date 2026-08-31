@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5105,
+      "lines": 5088,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -39,7 +39,7 @@
         },
         {
           "symbol": "run_plugins",
-          "lines": 836
+          "lines": 824
         },
         {
           "symbol": "run_providers",
@@ -55,7 +55,7 @@
     },
     {
       "path": "apps/cli/src/config.rs",
-      "lines": 1805,
+      "lines": 1776,
       "functions": [
         {
           "symbol": "load_with_global",
@@ -460,11 +460,11 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1342,
+      "lines": 1316,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 256
+          "lines": 217
         },
         {
           "symbol": "plan_enrichment",
@@ -1689,7 +1689,7 @@
     },
     {
       "path": "crates/core/src/dto.rs",
-      "lines": 2292,
+      "lines": 2268,
       "functions": [
         {
           "symbol": "impl BundleManifestDto::validate",
@@ -1705,7 +1705,7 @@
     },
     {
       "path": "crates/core/src/execution.rs",
-      "lines": 1196,
+      "lines": 1177,
       "functions": [],
       "allowances": []
     },
@@ -2065,7 +2065,7 @@
     },
     {
       "path": "crates/process-plugin/src/lib.rs",
-      "lines": 1422,
+      "lines": 1366,
       "functions": [
         {
           "symbol": "copy_runtime_tree",
@@ -2073,7 +2073,7 @@
         },
         {
           "symbol": "impl ProcessPlugin::execute_raw",
-          "lines": 456
+          "lines": 455
         }
       ],
       "allowances": [
@@ -2446,7 +2446,7 @@
       "functions": [
         {
           "symbol": "ResultDialog",
-          "lines": 135
+          "lines": 134
         }
       ],
       "allowances": []

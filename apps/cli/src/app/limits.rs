@@ -1,5 +1,4 @@
-use crate::args::{ConversionArgs, MemorySizeArg};
-use crate::config;
+use crate::args::ConversionArgs;
 use into_markdown::ConversionOptions;
 
 pub(super) fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
@@ -23,12 +22,6 @@ pub(super) fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut Co
     assign!(max_pdf_total_objects, max_pdf_total_objects);
     assign!(max_pdf_layout_comparisons, max_pdf_layout_comparisons);
     assign!(max_asset_size, max_asset_bytes);
-    if let Some(value) = arguments.max_memory_size {
-        options.limits.max_memory_bytes = match value {
-            MemorySizeArg::Auto => config::adaptive_memory_budget(),
-            MemorySizeArg::Bytes(bytes) => bytes,
-        };
-    }
     assign!(max_temporary_size, max_temporary_bytes);
     assign!(max_table_rows, max_table_rows);
     assign!(max_table_columns, max_table_columns);

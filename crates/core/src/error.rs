@@ -106,6 +106,31 @@ pub enum ConversionError {
         /// Observed and permitted values where known.
         detail: String,
     },
+    /// An isolated OCR worker refused its private recognition memory budget.
+    /// Host/shared allocations and native crashes retain their original failures.
+    #[error("OCR recognition memory refused by {provider}: {detail}")]
+    OcrRecognitionMemory {
+        /// Authenticated provider identity.
+        provider: String,
+        /// Bounded worker explanation.
+        detail: String,
+    },
+    /// An isolated provider violated its authenticated protocol.
+    #[error("provider protocol failed in {provider}: {detail}")]
+    ProviderProtocol {
+        /// Authenticated provider identity.
+        provider: String,
+        /// Bounded explanation.
+        detail: String,
+    },
+    /// An isolated provider exited before producing a terminal result.
+    #[error("provider process failed in {provider}: {detail}")]
+    ProviderProcess {
+        /// Authenticated provider identity.
+        provider: String,
+        /// Bounded explanation.
+        detail: String,
+    },
     /// Local OCR failed.
     #[error("OCR failed in {provider}: {detail}")]
     Ocr {
@@ -175,7 +200,9 @@ impl ConversionError {
             Self::NoConverter { .. } => ErrorCode::NoConverter,
             Self::Malformed { .. } | Self::EmptyContent => ErrorCode::Malformed,
             Self::Encrypted => ErrorCode::Encrypted,
-            Self::ResourceLimit { .. } => ErrorCode::ResourceLimit,
+            Self::ResourceLimit { .. } | Self::OcrRecognitionMemory { .. } => {
+                ErrorCode::ResourceLimit
+            }
             Self::Ocr { .. } => ErrorCode::Ocr,
             Self::Ai { .. } => ErrorCode::Ai,
             Self::Network { .. } => ErrorCode::Network,
@@ -184,7 +211,9 @@ impl ConversionError {
             Self::Cancelled => ErrorCode::Cancelled,
             Self::Timeout => ErrorCode::Timeout,
             Self::Recovery { .. } => ErrorCode::Recovery,
-            Self::Internal { .. } => ErrorCode::Internal,
+            Self::Internal { .. }
+            | Self::ProviderProtocol { .. }
+            | Self::ProviderProcess { .. } => ErrorCode::Internal,
         }
     }
 
@@ -196,6 +225,9 @@ impl ConversionError {
             Self::ArchiveExtractionRequired { .. } => "archiveExtractionRequired",
             Self::Recovery { reason, .. } => reason,
             Self::ResourceLimit { limit, .. } => limit,
+            Self::OcrRecognitionMemory { .. } => "ocrRecognitionMemory",
+            Self::ProviderProtocol { .. } => "providerProtocol",
+            Self::ProviderProcess { .. } => "providerProcess",
             _ => self.code().as_str(),
         }
     }
@@ -205,7 +237,11 @@ impl ConversionError {
     pub fn component(&self) -> Option<&str> {
         match self {
             Self::ComponentUnavailable { component, .. } => Some(component),
-            Self::Ocr { provider, .. } | Self::Ai { provider, .. } => Some(provider),
+            Self::Ocr { provider, .. }
+            | Self::Ai { provider, .. }
+            | Self::OcrRecognitionMemory { provider, .. }
+            | Self::ProviderProtocol { provider, .. }
+            | Self::ProviderProcess { provider, .. } => Some(provider),
             _ => None,
         }
     }
@@ -224,6 +260,7 @@ impl ConversionError {
     pub fn limit(&self) -> Option<(&'static str, &str)> {
         match self {
             Self::ResourceLimit { limit, detail } => Some((limit, detail)),
+            Self::OcrRecognitionMemory { detail, .. } => Some(("ocrRecognitionMemory", detail)),
             _ => None,
         }
     }

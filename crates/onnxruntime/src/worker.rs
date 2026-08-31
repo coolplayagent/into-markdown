@@ -67,7 +67,11 @@ impl WorkerClient {
         authenticated_snapshot: bool,
     ) -> Result<(Self, ModelMetadata), ConversionError> {
         context.checkpoint()?;
-        let limits = worker_limits(library, model, contract)?;
+        let mut limits = worker_limits(library, model, contract)?;
+        // The enclosing provider owns the aggregate quota. Each model worker also
+        // remains bounded by the request and its fixed model envelope.
+        limits.physical_memory =
+            limits.physical_memory.min(context.resource_limits().max_memory_bytes);
         let working_directory = worker_working_directory(authenticated_snapshot)
             .map_err(|()| ort_error("workerLaunch"))?;
         let mut process = spawn_worker(

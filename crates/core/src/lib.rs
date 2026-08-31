@@ -17,7 +17,11 @@ mod media_checkpoint;
 mod nested;
 mod ocr_binding;
 mod options;
+mod resource_usage;
 mod result_policy;
+pub use resource_usage::{
+    BatchOcrUsageDto, BatchResourceUsageDto, MemoryBudgetSnapshotDto, OcrRuntimeUsageDto,
+};
 pub mod speaker_notes;
 mod spi;
 mod stream;
@@ -27,12 +31,12 @@ pub use artifact::{ArtifactSinkCapabilities, DocumentStreamEvent};
 pub use detection::{DetectionAuthority, FormatDetection, FormatDetector};
 pub use dto::{
     AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
-    BatchLimitDto, BatchOcrUsageDto, BatchReportDto, BatchResourceUsageDto, BundleAssetDto,
-    BundleManifestDto, DTO_SCHEMA_VERSION, DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto,
-    DtoError, DtoErrorCode, DtoJsonStyle, DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES,
-    MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH, MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES,
-    MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES, MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES,
-    ProvenanceDto, ProvenanceKindDto, ProvenanceListDto, ResultDto, canonical_external_asset_uri,
+    BatchLimitDto, BatchReportDto, BundleAssetDto, BundleManifestDto, DTO_SCHEMA_VERSION,
+    DiagnosticDto, DiagnosticSeverityDto, DiagnosticsDto, DtoError, DtoErrorCode, DtoJsonStyle,
+    DtoLimits, MAX_DTO_ASSETS, MAX_DTO_BASE64_BYTES, MAX_DTO_BATCH_ITEMS, MAX_DTO_DEPTH,
+    MAX_DTO_DIAGNOSTICS, MAX_DTO_JSON_BYTES, MAX_DTO_PROVENANCE, MAX_DTO_STRING_BYTES,
+    MAX_DTO_TOTAL_STRING_BYTES, MAX_DTO_VALUES, ProvenanceDto, ProvenanceKindDto,
+    ProvenanceListDto, ResultDto, canonical_external_asset_uri,
 };
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{

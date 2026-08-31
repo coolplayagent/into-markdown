@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Recovery policy for non-critical format defects.
+/// Recovery policy for non-critical format defects and optional enhancements.
 ///
-/// Security, integrity, resource, cancellation, timeout, and I/O failures are
-/// never recoverable through this policy.
+/// Optional OCR may omit one recognition unit after a typed worker-private
+/// memory refusal, with source-local diagnostics. Shared resource, security,
+/// integrity, cancellation, timeout, and I/O failures remain terminal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorPolicy {

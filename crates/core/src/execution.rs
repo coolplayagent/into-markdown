@@ -1,3 +1,4 @@
+mod resource_usage;
 use crate::{ConversionError, InputFormat, ResourceLimits};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -238,6 +239,7 @@ struct SharedResourceAccounting {
 
 #[derive(Default)]
 struct OcrAccounting {
+    runtime: crate::OcrRuntimeUsageDto,
     recognized_regions: u64,
     recognized_chars: u64,
 }
@@ -636,29 +638,6 @@ impl ExecutionContext {
                 .limits
                 .max_memory_bytes
                 .saturating_sub(self.shared.resources.memory_bytes.load(Ordering::Acquire))
-        }
-    }
-
-    /// Return the invocation-wide historical resource accounting shared with every fork.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn resource_usage(&self) -> ExecutionResourceUsage {
-        let ocr = lock_unpoisoned(&self.shared.resources.ocr);
-        ExecutionResourceUsage {
-            shared_lease_budget_bytes: self.shared.limits.max_memory_bytes,
-            shared_lease_peak_bytes: self
-                .shared
-                .resources
-                .memory_peak_bytes
-                .load(Ordering::Acquire),
-            temporary_lease_budget_bytes: self.shared.limits.max_temporary_bytes,
-            temporary_lease_peak_bytes: self
-                .shared
-                .resources
-                .temporary_peak_bytes
-                .load(Ordering::Acquire),
-            ocr_recognized_regions: ocr.recognized_regions,
-            ocr_recognized_chars: ocr.recognized_chars,
         }
     }
 

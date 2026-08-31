@@ -129,6 +129,21 @@ reserve 不抬高它，且任务释放 lease 后仍保留。OCR 计数只累计�
 字段都为 `0`，关闭时省略 `ocr`。旧 schema 1 报告可缺少 `resourceUsage`；新生产者
 必须提供大于零的 budget，并保证 `0 <= peak <= budget`。
 
+可选 `memory` 字段记录 `totalBytes`、`availableBytes`（缺失时 null）、`systemReserveBytes`、
+`autoBudgetBytes`、`effectiveBudgetBytes` 与 `automatic`。有效预算必须等于共享预算，
+自动选择时还必须等于该快照的自动预算。可选 `ocrRuntime` 字段记录 `requests`、
+`recognitionMemoryRefusals`、`workerBudgetMinBytes` 与 `workerBudgetMaxBytes`；未请求
+provider 时计数和额度均为零，拒绝数不得超过请求数，worker 额度不得超过共享预算。
+请求数包含已分配额度并提交到进程适配器的尝试，可能在启动阶段失败；实际并发进程数
+由进程树采样单独记录。
+这些观测与已接受的 `ocr` 文本贡献分开统计。`sharedLeasePeakBytes` 是应用租约高水位；
+进程树 RSS 的采样峰值与操作系统峰值由测量工具分别记录，不能据租约推导实际 RSS。
+
+受控识别内存拒绝在失败报告中保留 `errorCode: resourceLimit` 与
+`reasonCode: ocrRecognitionMemory`。允许逐图跳过时，结果仍保留原生正文和资产，并通过
+`ocr.optionalRecognitionMemorySkipped` 诊断和其 locator 报告遗漏；结果是否 degraded
+沿用统一结果策略。Web 在相应结果区域显示诊断，在失败文件区域显示结构化原因。
+
 ## 不可信输入边界
 
 `from_json_with_limits` 在类型化使用前限制 JSON 字节数、结构深度、资源数、base64

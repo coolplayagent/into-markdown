@@ -29,10 +29,9 @@ async function bundle(entryPoint, options = {}) {
     jsxImportSource: "react",
     legalComments: "eof",
     logLevel: "silent",
-    // Identifier mangling incorporates module path identity. Keep source identifiers so
-    // workspace and sandbox absolute paths produce the same release bytes, while still
-    // applying deterministic whitespace and syntax minification.
-    minifyIdentifiers: false,
+    // Remove CommonJS debug labels containing dependency-store paths. The Bazel
+    // inputs include package.json so ESM interop matches the pnpm workspace.
+    minifyIdentifiers: true,
     minifySyntax: true,
     minifyWhitespace: true,
     platform: "browser",

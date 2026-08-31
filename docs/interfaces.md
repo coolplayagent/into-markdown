@@ -233,7 +233,8 @@ RAII guard；`temporary_file` 在写入时计费，并在成功、错误、取�
 source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserve_exact` 避免实现主动
 请求额外增长余量；allocator 的 size-class 舍入、元数据及其他 RSS 开销不属于这项
 协作式逻辑预算。Rust 库的确定性 `ResourceLimits::default()` 使用 2 GiB；本地 CLI/Desktop
-按物理内存自动选择 1、2、4 或 8 GiB 的批处理共享预算。`--jobs` 不会复制该预算；当前
+按调用开始时的一次机器快照选择批处理共享预算，公式与探测缺口规则见 [CLI 内存策略](cli.md)。
+Web 安全上限保持独立。`--jobs` 不会复制该预算；当前
 converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
 source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
 
@@ -339,3 +340,15 @@ unsupported platform，损坏 enum/JSON 不会降级为默认值。
 Markdown/asset 已发布；artifact index 可独立为空。Failed、Interrupted、Cancelled terminal
 transition 禁止新增 artifact。进度只允许单调增加；reconcile 对 Converted/Succeeded 分别修复
 最低 `900_000`/`1_000_000`，其他 terminal 状态保留此前进度。
+
+隔离 OCR 请求额度取用户配置、认证 capability 上限和已取得工作租约可用量的最小值。
+宿主协议缓冲单独保留，provider 与模型子进程共同受该请求额度约束；Unix 检查所属进程组，
+Windows 使用 Job Object 总内存上限。`OcrRecognitionMemory` 仅表示受控的识别阶段私有
+逻辑预算拒绝，`code()` 保持 `resourceLimit`，`reason_code()` 为 `ocrRecognitionMemory`。
+公共 API 的调用方可据此区分识别额度与全局资源失败，禁止通过错误文本判断降级。
+
+Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 huge-page 字段，
+共享普通页面按比例计入，历史进程峰值单独用于测量报告。已退出进程的 ENOENT/ESRCH
+视为离开进程组；其他观测失败终止请求并报告进程异常。内存超额错误包含观测字节数及额度。
+PDF 原生页沿用逐页预检降级：必须有本页原生正文，扫描页标记会阻止降级。
+通用容器增强器的全局预检与工作租约不足保持失败，逐图片运行期恢复由识别错误分类决定。

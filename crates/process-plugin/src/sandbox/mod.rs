@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 #[cfg(unix)]
+mod memory;
+#[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 pub(crate) mod windows;
@@ -152,46 +154,31 @@ impl SandboxChild {
         }
     }
 
-    // The cross-platform worker loop intentionally has one fallible physical-memory query
-    // contract. Linux reads the kernel-owned per-PID high-water mark while macOS uses the
-    // platform physical-footprint API; Windows enforces the same value in a Job Object.
+    // The owned process group includes provider and model workers. Windows applies
+    // the aggregate limit through its Job Object before starting the process.
     #[cfg_attr(windows, allow(clippy::unused_self, clippy::unnecessary_wraps))]
-    pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
-        #[cfg(target_os = "linux")]
+    pub(crate) fn check_memory(&self, limit: u64) -> Result<(), PluginError> {
+        #[cfg(unix)]
         {
             let Self::Unix(child) = self;
-            return match std::fs::read_to_string(format!("/proc/{}/status", child.id())) {
-                Ok(status) => linux_peak_resident_bytes(&status)
-                    .map(|bytes| bytes.is_some_and(|bytes| bytes > limit)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-                Err(_) => Err(()),
-            };
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let Self::Unix(child) = self;
-            let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
-            // SAFETY: the owned child PID is live while borrowed and the V2
-            // output buffer has the exact layout requested by the flavor.
-            let result = unsafe {
-                libc::proc_pid_rusage(
-                    i32::try_from(child.id()).map_err(|_| ())?,
-                    libc::RUSAGE_INFO_V2,
-                    (&raw mut usage).cast(),
+            let bytes = memory::group_bytes(child.id()).map_err(|()| {
+                PluginError::new(
+                    PluginErrorCode::Crashed,
+                    "plugin process-group memory observation failed",
                 )
-            };
-            if result == 0 {
-                return Ok(usage.ri_phys_footprint.max(usage.ri_resident_size) > limit);
+            })?;
+            if bytes > limit {
+                return Err(PluginError::new(
+                    PluginErrorCode::ResourceLimit,
+                    format!("plugin process-group memory {bytes} exceeds {limit} bytes"),
+                ));
             }
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-                return Ok(false);
-            }
-            return Err(());
+            Ok(())
         }
         #[cfg(windows)]
         {
             let _ = limit;
-            Ok(false)
+            Ok(())
         }
     }
 
@@ -210,46 +197,6 @@ impl SandboxChild {
             #[cfg(windows)]
             Self::Windows(child) => child.terminate(),
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn linux_peak_resident_bytes(status: &str) -> Result<Option<u64>, ()> {
-    let mut maximum_kibibytes = None;
-    let mut zombie = false;
-    for line in status.lines() {
-        if let Some(value) = line.strip_prefix("State:") {
-            zombie = value.split_ascii_whitespace().next() == Some("Z");
-        }
-        let Some(value) = line.strip_prefix("VmRSS:").or_else(|| line.strip_prefix("VmHWM:"))
-        else {
-            continue;
-        };
-        let mut fields = value.split_ascii_whitespace();
-        let kibibytes = fields.next().ok_or(())?.parse::<u64>().map_err(|_| ())?;
-        if fields.next() != Some("kB") || fields.next().is_some() {
-            return Err(());
-        }
-        maximum_kibibytes =
-            Some(maximum_kibibytes.map_or(kibibytes, |current: u64| current.max(kibibytes)));
-    }
-    if zombie {
-        return Ok(None);
-    }
-    maximum_kibibytes.ok_or(())?.checked_mul(1024).map(Some).ok_or(())
-}
-
-#[cfg(all(test, target_os = "linux"))]
-mod linux_memory_tests {
-    use super::linux_peak_resident_bytes;
-
-    #[test]
-    fn physical_memory_parser_uses_the_peak_and_rejects_ambiguous_units() {
-        let status = "Name:\tfixture\nState:\tS (sleeping)\nVmHWM:\t2048 kB\nVmRSS:\t1024 kB\n";
-        assert_eq!(linux_peak_resident_bytes(status), Ok(Some(2 * 1024 * 1024)));
-        assert_eq!(linux_peak_resident_bytes("State:\tZ (zombie)\n"), Ok(None));
-        assert!(linux_peak_resident_bytes("VmRSS: 1 MB\n").is_err());
-        assert!(linux_peak_resident_bytes("Name: fixture\n").is_err());
     }
 }
 

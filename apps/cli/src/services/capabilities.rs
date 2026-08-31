@@ -33,6 +33,8 @@ impl InvocationCapabilities {
                     | Odt
                     | Ods
                     | Odp
+                    | Rtf
+                    | Ipynb
                     | Epub
                     | Html
                     | Image

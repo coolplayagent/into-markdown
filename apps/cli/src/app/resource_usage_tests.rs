@@ -5,6 +5,46 @@ fn read_report(path: &Path) -> serde_json::Value {
 }
 
 #[test]
+fn every_embedded_visual_entry_assembles_ocr_and_preserves_legacy_auto_routing() {
+    for extension in [
+        "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub",
+        "html", "ipynb", "zip", "msg", "png",
+    ] {
+        let mut options = ConversionOptions::default();
+        for policy in [OcrPolicy::Auto, OcrPolicy::Always] {
+            options.ocr.policy = policy;
+            let needs = crate::services::InvocationCapabilities::for_format(
+                InputFormat::from_extension(extension),
+                &options,
+            );
+            let legacy_auto =
+                policy == OcrPolicy::Auto && matches!(extension, "doc" | "ppt" | "xls");
+            assert_eq!(needs.ocr, !legacy_auto, "{extension} {policy:?}");
+        }
+    }
+}
+
+#[test]
+fn exhausted_automatic_budget_is_a_resource_refusal_before_output_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let mut loaded = config::load(root.path(), &[], true, None, None).unwrap();
+    loaded.memory_snapshot = config::memory::select(Some(16 * 1024_u64.pow(3)), Some(0));
+    let error = resource_usage::prepare(
+        &ConversionArgs {
+            max_memory_size: Some(crate::args::MemorySizeArg::Auto),
+            ..Default::default()
+        },
+        &mut loaded,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "resourceLimit");
+    assert_eq!(error.exit_code(), 5);
+    assert_eq!(error.limit().unwrap().0, "max_memory_bytes");
+    assert!(error.message().contains("availableBytes=Some(0)"));
+    assert!(root.path().read_dir().unwrap().next().is_none());
+}
+
+#[test]
 fn text_batches_publish_real_shared_budget_and_peak_without_job_multiplication() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();
@@ -51,23 +91,24 @@ fn text_batches_publish_real_shared_budget_and_peak_without_job_multiplication()
     let automatic_report = root.join("automatic-report.json");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    run(
-        vec![
-            OsString::from("--no-config"),
-            first.into_os_string(),
-            second.into_os_string(),
-            OsString::from("--output-dir"),
-            root.join("automatic-output").into_os_string(),
-            OsString::from("--report"),
-            automatic_report.clone().into_os_string(),
-            OsString::from("--jobs"),
-            OsString::from("2"),
-            OsString::from("--max-memory-size"),
-            OsString::from("auto"),
-            OsString::from("--ocr"),
-            OsString::from("auto"),
-        ],
-        RunContext {
+    let mut loaded = config::load(&root, &[], true, None, None).unwrap();
+    loaded.memory_snapshot =
+        config::memory::select(Some(16 * 1024_u64.pow(3)), Some(12 * 1024_u64.pow(3)));
+    run_conversion(
+        ConversionArgs {
+            inputs: vec![first.into_os_string(), second.into_os_string()],
+            output_dir: Some(root.join("automatic-output")),
+            report: Some(automatic_report.clone()),
+            jobs: std::num::NonZero::new(4),
+            max_memory_size: Some(crate::args::MemorySizeArg::Auto),
+            ocr: Some(crate::args::OcrPolicyArg::Auto),
+            ..Default::default()
+        },
+        &crate::args::GlobalArgs::default(),
+        loaded,
+        Catalog::new(crate::args::Language::En),
+        false,
+        &mut RunContext {
             user_data_anchor: Some(root.join(".test-user-data")),
             stdout: &mut stdout,
             stderr: &mut stderr,
@@ -78,8 +119,12 @@ fn text_batches_publish_real_shared_budget_and_peak_without_job_multiplication()
     .unwrap();
     let report = read_report(&automatic_report);
     let usage = &report["resourceUsage"];
-    assert_eq!(usage["sharedLeaseBudgetBytes"], config::adaptive_memory_budget());
-    assert!(usage["sharedLeasePeakBytes"].as_u64().unwrap() <= config::adaptive_memory_budget());
+    assert_eq!(usage["sharedLeaseBudgetBytes"], usage["memory"]["autoBudgetBytes"]);
+    assert_eq!(usage["memory"]["automatic"], true);
+    assert!(
+        usage["sharedLeasePeakBytes"].as_u64().unwrap()
+            <= usage["sharedLeaseBudgetBytes"].as_u64().unwrap()
+    );
     assert_eq!(usage["ocr"]["recognizedRegions"], 0);
     assert_eq!(usage["ocr"]["recognizedChars"], 0);
 }
@@ -175,6 +220,11 @@ fn cancellation_and_timeout_reports_keep_terminal_zero_ocr_and_resource_usage() 
                 output_context: &policy.output_context,
                 wall_duration_ms: 0.0,
                 ocr_enabled: true,
+                memory_snapshot: into_markdown::MemoryBudgetSnapshotDto {
+                    effective_budget_bytes: policy.options.limits.max_memory_bytes,
+                    automatic: false,
+                    ..config::memory::select(None, None)
+                },
             },
         )
         .unwrap_err();

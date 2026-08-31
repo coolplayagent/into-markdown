@@ -245,15 +245,22 @@ markdown-postprocess
   版面比较默认上限 12,000,000。对应 `--max-pdf-page-objects`、
   `--max-pdf-total-objects`、`--max-pdf-layout-comparisons`；均拒绝零值，单页最多
   10,000,000。最终 IR、资产、页数、内存和执行时间继续独立限制。
-- 本地 CLI 默认使用 `auto` 共享内存预算：物理内存小于 8 GiB、8–16 GiB、16–32 GiB、
-  32 GiB 及以上分别取 1、2、4、8 GiB。预算覆盖整个批处理，不随 `--jobs` 倍增；显式
-  数值覆盖自动值。
+- 本地 CLI 的 `auto` 在每次调用开始时探测一次总内存 T 与可用内存 A，系统余量
+  R = max(1 GiB, T / 8)，共享预算为 min(T / 2, A − R)。A 不足以覆盖余量时拒绝准入。
+  仅探测到 T 时采用 min(2 GiB, T / 4)，仅探测到 A 时采用 min(2 GiB, A − 1 GiB)，
+  两者均不可得时采用 2 GiB；缺失值在预算快照中保留为 null。预算覆盖整个批处理，
+  不随 `--jobs` 倍增。CLI 参数优先于配置，显式数值保持原值。
 - 超过统一 IR 节点阈值的大型 XLS、XLSX 与 XLSB 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
   block，所有块仍写入同一个最终 Markdown，并报告 `spreadsheet.largeTablePaged`。普通
   工作簿继续输出 GFM table；分页不会放宽 `max_table_rows`、`max_table_cells` 或 ZIP
   解压边界，发布门禁可显式提高这些结构上限，同时继续由共享内存预算约束实际处理。
-- `best-effort` 是默认错误策略，只恢复非关键格式兼容问题；路径穿越、DTD/实体、容器
-  损坏、加密、资源超限、组件缺失、取消、超时和 I/O 错误仍始终失败。外部资源不会下载。
+- `best-effort` 是默认错误策略，可恢复非关键格式兼容问题。有效 `auto` 下，若当前页面或
+  内容单元已有原生正文，经过隔离 provider 结构化报告的 `ocrRecognitionMemory` 可逐图
+  跳过，并产生带引用位置的 `ocr.optionalRecognitionMemorySkipped` 诊断；正文、资产及
+  其他图片成功识别的贡献保留。同内容图片在本次转换内共用成功或跳过结果。
+  `strict`、强制 OCR 和承载必要正文的图片保持失败语义。旧版通用 `resourceLimit`、
+  结构/张量上限、全局预算、帧/协议故障、进程异常、取消与超时继续失败。既有 auto
+  组件不可用诊断与动画图片路由保持原有边界。外部资源不会下载，也不自动重试。
 - `--zip-charset` 只在 ZIP 缺少有效 Unicode Path extra field 和 UTF-8 标志时生效；支持
   `encoding_rs` 标签（包括 GB18030 与 Shift-JIS），未指定时使用 CP437。
 - `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回
