@@ -21,7 +21,7 @@ on:
         options: [unsigned, signed]
 
 concurrency:
-  group: release-${{ inputs.build_only && github.ref || inputs.release_tag }}
+  group: release-${{ inputs.release_tag }}
   cancel-in-progress: false
 
 permissions:

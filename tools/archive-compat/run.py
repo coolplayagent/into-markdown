@@ -16,6 +16,8 @@ import time
 import zipfile
 from samples import fetch, sha256
 
+PROCESS_TIMEOUT_SECONDS = 180
+
 
 def run_process(command, cwd, log):
     system = platform.system()
@@ -37,11 +39,11 @@ def run_process(command, cwd, log):
                 counters = Counters(); counters.cb = ctypes.sizeof(counters)
                 if get_memory(wintypes.HANDLE(int(process._handle)), ctypes.byref(counters), counters.cb):
                     peak = max(peak, counters.PeakWorkingSetSize)
-                if time.monotonic() - started > 180:
+                if time.monotonic() - started > PROCESS_TIMEOUT_SECONDS:
                     process.kill(); process.wait(); raise TimeoutError(command)
                 time.sleep(0.025)
         try:
-            code = process.wait(timeout=180)
+            code = process.wait(timeout=PROCESS_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
@@ -161,6 +163,7 @@ def synthetic(binary, root):
 
 
 def main():
+    global PROCESS_TIMEOUT_SECONDS
     parser = argparse.ArgumentParser()
     parser.add_argument('--into-md', type=Path, required=True)
     parser.add_argument('--work-root', type=Path, required=True)
@@ -168,10 +171,14 @@ def main():
     parser.add_argument('--public-samples', action='store_true')
     parser.add_argument('--baseline', action='store_true')
     parser.add_argument('--representative', action='store_true', help='one reviewed public file per format for installed artifacts')
+    parser.add_argument('--process-timeout', type=int, default=180, help='per-file harness deadline in seconds (conversion budgets stay unchanged)')
     parser.add_argument('--source-revision', default=os.environ.get('GITHUB_SHA'))
     args = parser.parse_args()
+    if not 0 < args.process_timeout <= 3600:
+        parser.error('--process-timeout must be between 1 and 3600 seconds')
+    PROCESS_TIMEOUT_SECONDS = args.process_timeout
     binary = args.into_md.resolve(); root = args.work_root.resolve(); root.mkdir(parents=True, exist_ok=True)
-    report = dict(schema_version=1, source_revision=args.source_revision, platform=platform.platform(), binary_sha256=sha256(binary.read_bytes()), version=subprocess.check_output([str(binary),'version','--json','--no-config'],text=True), cases=[])
+    report = dict(schema_version=1, process_timeout_seconds=PROCESS_TIMEOUT_SECONDS, source_revision=args.source_revision, platform=platform.platform(), binary_sha256=sha256(binary.read_bytes()), version=subprocess.check_output([str(binary),'version','--json','--no-config'],text=True), cases=[])
     if not args.baseline:
         report['synthetic'] = synthetic(binary, root/'synthetic')
     if args.public_samples:

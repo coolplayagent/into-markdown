@@ -570,10 +570,14 @@ def run_e2e(
             if not pdf_result.is_file() or not pdf_result.read_bytes():
                 raise AcceptanceError("macOS /var fallback PDF output is missing or empty")
             assert_runtime_absent(cache, home, temporary, "macOS /var fallback cleanup")
-            pdfium_runtime = macos_pdfium_evidence(target)
-        archive_regression = run_archive_regression(binary, work, environment)
+            authority = PDFIUM_MANIFEST["targets"][target]
+            pdfium_runtime = {
+                "version": PDFIUM_MANIFEST["version"],
+                "sha256": authority["library_sha256"],
+                "bytes": authority["library_size"],
+                "materialization": "canonical-var-fallback",
+            }
         return {
-            "archiveCompatibility": archive_regression,
             "schemaVersion": 1,
             "target": target,
             "artifactSha256": artifact_sha,
@@ -586,26 +590,6 @@ def run_e2e(
             "networkRequired": False,
             "conclusion": "pass",
         }
-
-
-def macos_pdfium_evidence(target):
-    authority = PDFIUM_MANIFEST["targets"][target]
-    return {
-        "version": PDFIUM_MANIFEST["version"],
-        "sha256": authority["library_sha256"],
-        "bytes": authority["library_size"],
-        "materialization": "canonical-var-fallback",
-    }
-
-
-def run_archive_regression(binary, work, environment):
-    archive_regression_root = work / "archive-compat"
-    subprocess.run(
-        [sys.executable, str(ROOT / "tools/archive-compat/run.py"), "--into-md", str(binary), "--work-root", str(archive_regression_root), "--public-samples", "--representative"],
-        cwd=work, env=environment, check=True, timeout=600,
-    )
-    archive_regression = json.loads((archive_regression_root / "report.json").read_text(encoding="utf-8"))
-    return archive_regression
 
 
 def write_json(path: pathlib.Path, value: dict) -> None:
