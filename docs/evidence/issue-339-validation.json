@@ -64,6 +64,13 @@
       "command": "node web/console/build.mjs <temporary-directory>; compare complete output to checked-in dist",
       "status": "byte-identical",
       "logSha256": "ff112c571fed8fcdfb5fec45cf6f7cbdb733bb2f1687ff44f403bb6141f616d9"
+    },
+    {
+      "command": "python -m tools.structure_gate check --base-ref origin/main",
+      "status": "passed",
+      "files": 577,
+      "violations": 0,
+      "logSha256": "2d085b0ee51bc1dd06b37528b09e44d9a7d4707ea7097f6e78c6998f77971a1d"
     }
   ],
   "baselineFailures": [

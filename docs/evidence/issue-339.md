@@ -58,9 +58,14 @@
   JSON/XML/HTML、误导 MIME、显式字符集；另覆盖显式格式和旧式自定义 detector 注册。
 - MIME 忽略大小写与参数，支持后缀与未知 MIME 保留冲突诊断；无后缀、普通 stdin、
   `application/octet-stream` 保留通用检测，未知 image/audio MIME 拒绝。
-- 仓库真实 DOC/PPT/XLS、DOCX/PPTX/XLSX、PNG fixture：原文件与 `.js/.md/.csv/.bin`、
+- 仓库自建 DOC/PPT/XLS、DOCX/PPTX/XLSX、PNG fixture：原文件与 `.js/.md/.csv/.bin`、
   无后缀对照实际选定转换器、完整 Markdown、资产数量和合法 IR；误导 JS MIME 同时存在。
-  PDF `structures.pdf` 用固定目标 PDFium 单独执行原生页结构和正文等价测试。两个固定 libarchive ZIP 原始样本另执行
+  PDF `structures.pdf` 用固定目标 PDFium 单独执行原生页结构和正文等价测试。[独立原始二进制清单](issue-339-binary-manifest.json)固定 Microsoft MarkItDown、Apache POI
+  的 DOC/PPT/XLS、DOCX/PPTX/XLSX、PDF/JPEG 共 9 个上游文件；安装包矩阵另行验证。
+  其中 `test.pdf` 的目标页索引、`simple.doc` 的 CFB 目录被现有解析器拒绝，
+  [固定基线也复现相同错误](issue-339-public-binary-baseline.json)。这两项验证路由和既有错误边界，
+  不计作转换成功；其余上游文件验证正文/资产等价。
+  两个固定 libarchive ZIP 原始样本另执行
   [48 个改名/策略用例](issue-339-real-zip.json)，正文和 ZIP 路由全部保持一致。
 - TXT 不完整 UTF-8 JSON/XML、BOM、UTF-16 JSON、全长二进制扫描及检测窗口边界保护在
   基线已存在。本次补强：UTF-16 LE/BE 的不完整 XML 声明从高分 XML 降为弱证据。

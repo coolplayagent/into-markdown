@@ -60,13 +60,29 @@ def fixtures(root, work, zip_cache):
     return sources, original
 
 
+def public_fixtures(manifest, cache):
+    samples = json.loads(manifest.read_text())["samples"]
+    sources = []
+    for sample in samples:
+        path = cache / sample["name"]
+        data = path.read_bytes()
+        assert len(data) == sample["bytes"] and digest(data) == sample["sha256"]
+        sources.append((path, sample["format"], sample.get("errorContains")))
+    return sources, samples
+
+
 def renamed_cases(binary, sources, work, environment):
     records = []
-    for source, expected in sources:
+    for source_record in sources:
+        source, expected = source_record[:2]
+        boundary = source_record[2] if len(source_record) > 2 else None
         data = source.read_bytes()
         reference_process, reference, _ = convert(binary, source, work, environment)
-        assert reference_process.returncode == 0, reference_process.stderr.decode()
-        assert reference["markdown"].strip(), source
+        if boundary:
+            assert reference_process.returncode != 0 and boundary in reference_process.stderr.decode()
+        else:
+            assert reference_process.returncode == 0, reference_process.stderr.decode()
+            assert reference["markdown"].strip(), source
         suffixes = [source.suffix, ".md", ".csv", ".js", ".bin", ""]
         if expected == "zip":
             suffixes += [".docx", ".epub", ".rar"]
@@ -76,13 +92,17 @@ def renamed_cases(binary, sources, work, environment):
             selected = detect(binary, path, environment)
             process, result, command = convert(binary, path, work, environment)
             result = result or {}
-            passed = (process.returncode == 0 and selected == expected
-                      and result.get("markdown") == reference["markdown"]
-                      and len(result.get("assets", [])) == len(reference.get("assets", [])))
+            if boundary:
+                passed = process.returncode != 0 and selected == expected and boundary in process.stderr.decode()
+            else:
+                passed = (process.returncode == 0 and selected == expected
+                          and result.get("markdown") == reference["markdown"]
+                          and len(result.get("assets", [])) == len(reference.get("assets", [])))
             records.append({
                 "source": str(source), "sourceSha256": digest(data), "name": path.name,
                 "command": command, "format": selected, "exit": process.returncode,
-                "passed": passed, "markdownSha256": digest(result.get("markdown", "").encode()),
+                "passed": passed, "expectedOutcome": "existingParserBoundary" if boundary else "converted",
+                "markdownSha256": digest(result.get("markdown", "").encode()),
                 "assets": len(result.get("assets", [])),
                 "diagnostics": result.get("diagnostics", []), "stderr": process.stderr.decode(),
             })
@@ -122,6 +142,8 @@ def main():
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--zip-cache", type=Path, required=True)
+    parser.add_argument("--public-manifest", type=Path, required=True)
+    parser.add_argument("--public-cache", type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     binary = args.binary.resolve()
@@ -131,14 +153,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix="binary-evidence-", dir=args.work.resolve()) as temporary:
         work = Path(temporary)
         sources, original = fixtures(root, work, args.zip_cache.resolve())
-        records = renamed_cases(binary, sources, work, environment)
+        public_sources, public_samples = public_fixtures(args.public_manifest, args.public_cache.resolve())
+        records = renamed_cases(binary, sources + public_sources, work, environment)
         records += native_cases(binary, root, work, environment)
     report = {
         "schemaVersion": 1, "sourceRevision": args.source_revision,
         "binarySha256": digest(binary.read_bytes()),
         "binaryVersion": subprocess.check_output([str(binary), "--version"], text=True).strip(),
         "profile": "packaged native runtime with default config disabled",
-        "realZipSource": original, "records": records,
+        "realZipSource": original, "publicBinarySources": public_samples, "records": records,
         "passed": sum(record["passed"] for record in records), "total": len(records),
     }
     args.report.parent.mkdir(parents=True, exist_ok=True)
