@@ -1,6 +1,8 @@
 #![allow(clippy::cast_precision_loss, reason = "small bounded fixture coordinates")]
 
 use super::*;
+
+mod relayout_ids;
 use into_markdown_core::{
     AssetId, Block, BlockNode, CancellationToken, ExecutionOptions, Inline, NodeId, OcrEvidence,
     OcrEvidenceStage, OcrEvidenceStep, OcrSourceRegion, Provenance, ProvenanceKind, Rect,

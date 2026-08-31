@@ -12,6 +12,7 @@ mod dedup;
 mod footnotes;
 mod geometry;
 mod gutters;
+mod ids;
 mod lines;
 mod materialize;
 mod model;

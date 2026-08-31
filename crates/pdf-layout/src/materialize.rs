@@ -53,6 +53,7 @@ pub(crate) fn reconstruct_page(
         .try_reserve_exact(table_blocks.len() + content.passthrough.len())
         .map_err(|_| memory("layout rebuilt page"))?;
     rebuilt.append(&mut table_blocks);
+    crate::ids::avoid_retained_collisions(&mut rebuilt, &content.passthrough, budget)?;
     for (index, node) in content.passthrough.into_iter().enumerate() {
         rebuilt.push(RebuiltBlock {
             bounds: node.provenance.locator.bounds,
