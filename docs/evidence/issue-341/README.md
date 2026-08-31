@@ -5,7 +5,7 @@
 
 ## 验收范围
 
-- 样式：固定 pulldown-cmark 0.13.4，350 组空白、标点、Unicode、相邻和组合标记检查，
+- 样式：固定 pulldown-cmark 0.13.4，455 组空白、标点、Unicode、相邻和组合标记检查，
   加上链接、代码、表格、硬换行及自定义列表重启的语义回归。
 - 来源标记：正文移除 source-marker，IR 保留 marker_label、任务状态与来源；空结构分隔符
   在 Markdown 再次导入时保留独立列表结构，不产生代码块。
@@ -24,6 +24,7 @@
 [实际工作台截图](web-product.png) 和 [结果 DOM](web-product-dom.txt) 来自本地候选 CLI：
 上传仓库自有 PPTX，关闭 OCR，完成转换后打开阅读预览，检查多语言斜体与三级备注。
 [图片加载记录](browser-images.json) 验证生成的特殊字符目录图片链接可在浏览器中实际加载。
+[真实 PPTX 图片记录](public-browser-images.json) 另核对公开课件中的六张图片完整加载。
 
 ## 公开语料与复跑
 
@@ -35,8 +36,8 @@
 python3 tools/markdown-quality/replay.py --manifest docs/evidence/issue-341/public-corpus.json --output "$QA_ROOT/corpus"
 cargo build --locked --release -p into-markdown-cli
 cargo build --locked -p into-markdown-render-markdown --example inspect
-python3 tools/markdown-quality/run.py --cli "$CANDIDATE_CLI" --probe target/debug/examples/inspect --corpus "$QA_ROOT/corpus" --output "$QA_ROOT/candidate" --revision "$CANDIDATE_SHA"
-python3 tools/markdown-quality/compare.py --baseline "$QA_ROOT/baseline/report.json" --candidate "$QA_ROOT/candidate/report.json" --output "$QA_ROOT/comparison.json"
+python3 tools/markdown-quality/pair.py --baseline-cli "$BASELINE_CLI" --candidate-cli "$CANDIDATE_CLI" --probe target/debug/examples/inspect --corpus "$QA_ROOT/corpus" --output "$QA_ROOT/paired" --baseline-revision "$BASELINE_SHA" --candidate-revision "$CANDIDATE_SHA"
+python3 tools/markdown-quality/compare.py --baseline "$QA_ROOT/paired/baseline.json" --candidate "$QA_ROOT/paired/candidate.json" --output "$QA_ROOT/comparison.json"
 python3 tools/markdown-quality/path_matrix.py --cli "$CANDIDATE_CLI" --probe target/debug/examples/inspect --fixture fixtures/small/odt/image-exact.odt --output "$QA_ROOT/paths"
 ```
 
@@ -46,8 +47,12 @@ python3 tools/markdown-quality/path_matrix.py --cli "$CANDIDATE_CLI" --probe tar
 可见正文额外经过独立 GFM 消费端比较，忽略空白和生成备注标签。
 
 初次转换脚本使用 120 秒外层超时。大型 XLSX 在本机并行构建负载下出现超时；
-`repeat.py` 对全部 11 份 XLSX 按基线/候选配对复跑，保持 CLI 参数相同并将外层等待扩为
-600 秒。原尝试嵌入报告，包含所有失败。运行时长受本机并行任务影响，不作为性能基准。
+最终 `pair.py` 对全部 55 份文档按基线/候选配对复跑，保持 CLI 参数相同、禁用用户配置，
+将外层等待扩为 600 秒。初次尝试与失败单独保留。运行时长受本机并行任务影响，不作为性能基准。
+
+比较器默认拒绝所有可见正文变化。已逐项审核的预期变化通过 `--reviewed-deltas` 传入，
+每条记录同时绑定源文件、基线可见正文和候选可见正文的 SHA-256；过期记录直接失败。
+该审核只解释旧输出中误显示的转义符、HTML 标签与实体，实质 IR、资产和链接检查仍独立执行。
 
 ## Golden 差异审核
 
