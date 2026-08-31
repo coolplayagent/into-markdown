@@ -216,6 +216,23 @@ fn twelve_product_target_fixtures_generate_authoritative_metadata() {
 }
 
 #[test]
+#[ignore = "writes candidate declarations for explicit authority review"]
+fn generate_release_material_review_candidate() {
+    let repository = std::env::var_os("RELEASE_MATERIAL_REVIEW_ROOT")
+        .map_or_else(root, std::path::PathBuf::from);
+    let output = std::path::PathBuf::from(
+        std::env::var_os("RELEASE_MATERIAL_REVIEW_OUTPUT").expect("review output directory"),
+    );
+    fs::create_dir_all(&output).unwrap();
+    for request_path in crate::release_authority::profile_paths() {
+        let request = fs::read_to_string(repository.join(request_path)).unwrap();
+        let generated = generate_release_inputs_unchecked(&repository, &request).unwrap();
+        let name = std::path::Path::new(request_path).file_name().unwrap();
+        fs::write(output.join(name), serde_json::to_string_pretty(&generated).unwrap()).unwrap();
+    }
+}
+
+#[test]
 fn plugin_runtime_closures_do_not_cross_capability_boundaries() {
     let repository = root();
     let ocr = [

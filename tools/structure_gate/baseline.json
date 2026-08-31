@@ -2134,7 +2134,7 @@
     },
     {
       "path": "crates/render-markdown/src/lib.rs",
-      "lines": 1786,
+      "lines": 1788,
       "functions": [
         {
           "symbol": "plan_assets",

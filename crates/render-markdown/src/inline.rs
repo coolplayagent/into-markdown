@@ -158,6 +158,18 @@ fn render_marked_text(
     rendered
 }
 
+// Office paragraph indentation is text, while Markdown indentation can start code.
+pub(super) fn protect_paragraph_indent(mut rendered: String) -> String {
+    let leading = rendered.chars().take_while(|c| matches!(c, ' ' | '\t'));
+    let (count, tab) =
+        leading.fold((0_usize, false), |(count, tab), c| (count + 1, tab || c == '\t'));
+    if !rendered.trim().is_empty() && (tab || count >= 4) {
+        let entity = if rendered.starts_with('\t') { "&#9;" } else { "&#32;" };
+        rendered.replace_range(..1, entity);
+    }
+    rendered
+}
+
 pub(super) fn bold_cell(rendered: &str) -> String {
     if rendered.trim().is_empty() {
         return rendered.to_owned();

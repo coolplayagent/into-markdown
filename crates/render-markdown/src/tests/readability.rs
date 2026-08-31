@@ -47,9 +47,13 @@ fn semantic_text(html: &str) -> Vec<(char, u8)> {
                 "&gt" => '>',
                 "&quot" => '"',
                 "&#39" => '\'',
+                "&#32" => ' ',
+                "&#9" => '\t',
                 _ => panic!("unexpected {entity}"),
             };
-            output.push((character, bits));
+            if !character.is_whitespace() {
+                output.push((character, bits));
+            }
             rest = tail;
         } else {
             let character = rest.chars().next().unwrap();
@@ -74,8 +78,21 @@ fn native_marks_preserve_text_and_styles_across_word_and_punctuation_boundaries(
         vec![InlineMark::Bold, InlineMark::Italic, InlineMark::Strikethrough],
     ];
     for marks in mark_sets {
-        for text in ["word", "中文", "!", "“中文”", "a!", "*x*", "x_y", " x ", "e\u{301}", "<>&"]
-        {
+        for text in [
+            "word",
+            "中文",
+            "!",
+            "“中文”",
+            "a!",
+            "*x*",
+            "x_y",
+            " x ",
+            "    word",
+            "\tword",
+            " \tword",
+            "e\u{301}",
+            "<>&",
+        ] {
             for (before, after) in [("", ""), ("a", "b"), (" ", " "), ("中", "文"), ("(", ")")] {
                 let inlines = vec![marked(before, &[]), marked(text, &marks), marked(after, &[])];
                 let markdown = output(&document(vec![node("p", Block::Paragraph(inlines))]));

@@ -43,6 +43,7 @@ jobs:
       - name: Run the bounded quality engine and real converter goldens through Bazel
         run: >-
           bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.config }} --lockfile_mode=error
+          --distdir=third_party/runtime-assets/models
           //crates/layout-quality:layout_quality_test
           //crates/layout-quality:semantic_layout_quality
           //crates/converters:converters_test
@@ -53,6 +54,7 @@ jobs:
       - name: Run the OCR merge and runtime regressions
         run: >-
           bazel --output_user_root="${{ runner.temp }}/bazel" test --config=${{ matrix.config }} --lockfile_mode=error
+          --distdir=third_party/runtime-assets/models
           //crates/ocr:ocr_test
           --jobs=1 --local_resources=memory=4096 --test_output=errors
 

@@ -6,7 +6,7 @@
 mod fixed_alloc;
 mod inline;
 
-use inline::{render_html_inlines, render_inlines};
+use inline::{protect_paragraph_indent, render_html_inlines, render_inlines};
 
 use base64::Engine as _;
 use into_markdown_core::{
@@ -1021,7 +1021,9 @@ impl RenderContext<'_> {
         inline_context: InlineContext,
     ) -> Result<String, ConversionError> {
         match &node.block {
-            Block::Paragraph(content) => render_inlines(content, inline_context),
+            Block::Paragraph(content) => {
+                render_inlines(content, inline_context).map(protect_paragraph_indent)
+            }
             Block::Heading { level, content } => Ok(format!(
                 "{} {}",
                 "#".repeat(usize::from(*level)),
