@@ -2162,6 +2162,11 @@ mod tests {
         options.ocr.policy = OcrPolicy::Always;
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
         let mut source = output();
+        let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else {
+            panic!("page expected")
+        };
+        let Block::Image { asset, .. } = &mut blocks[1].block else { panic!("image expected") };
+        *asset = AssetId("asset-a".into());
         source.document.blocks.extend((0..into_markdown_core::MAX_DOCUMENT_NODES - 4).map(
             |index| BlockNode {
                 id: NodeId(format!("native-{index}")),
