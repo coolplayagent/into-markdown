@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode } from "react";
+import { renderInline as renderSafeInline } from "./preview-inline";
 
 const MAX_TREE_DEPTH = 12;
 const MAX_TREE_NODES = 1_000;
@@ -18,7 +19,7 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
       continue;
     }
     if (code) { code.push(line); continue; }
-    if (isSourceAnchor(line)) continue;
+    if (isSourceAnchor(line) || line.trim() === "<!-- -->") continue;
     const delimiter = lines[index + 1];
     if (line.includes("|") && delimiter && isTableDelimiter(delimiter)) {
       const headers = tableCells(line);
@@ -56,22 +57,7 @@ function isSourceAnchor(line: string): boolean {
 }
 
 function renderInline(source: string): ReactNode {
-  source = stripOcrBoundaryMarkers(source);
-  const nodes: ReactNode[] = [];
-  const pattern = /(<strong>[^<>\n]{1,512}<\/strong>|<em>[^<>\n]{0,512}<\/em>|\*\*[^*\n]{1,512}\*\*|`[^`\n]{1,512}`)/g;
-  let cursor = 0;
-  for (const match of source.matchAll(pattern)) {
-    const offset = match.index ?? 0;
-    if (offset > cursor) nodes.push(unescapeInline(source.slice(cursor, offset)));
-    const value = match[0];
-    if (value.startsWith("<strong>")) nodes.push(<strong key={`${offset}-strong`}>{unescapeInline(value.slice(8, -9))}</strong>);
-    else if (value.startsWith("<em>")) nodes.push(<em key={`${offset}-em`}>{unescapeInline(value.slice(4, -5))}</em>);
-    else if (value.startsWith("**")) nodes.push(<strong key={`${offset}-bold`}>{unescapeInline(value.slice(2, -2))}</strong>);
-    else nodes.push(<code key={`${offset}-code`}>{unescapeInline(value.slice(1, -1))}</code>);
-    cursor = offset + value.length;
-  }
-  if (cursor < source.length) nodes.push(unescapeInline(source.slice(cursor)));
-  return nodes.length === 1 ? nodes[0] : nodes;
+  return renderSafeInline(stripOcrBoundaryMarkers(source));
 }
 
 function stripOcrBoundaryMarkers(source: string): string {
@@ -82,9 +68,6 @@ function stripOcrBoundaryMarkers(source: string): string {
     .trim();
 }
 
-function unescapeInline(source: string): string {
-  return source.replace(/\\([\\`*{}[\]()#+.!_|>~-])/g, "$1");
-}
 
 function tableCells(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");

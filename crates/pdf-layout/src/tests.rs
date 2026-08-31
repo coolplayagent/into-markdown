@@ -1282,15 +1282,27 @@ fn layout_preflight_has_an_exact_memory_boundary_and_bounded_work_failures() {
 }
 
 #[test]
-fn outside_page_geometry_fails_without_a_publishable_document_or_lease() {
+fn outside_page_native_geometry_preserves_text_and_releases_lease() {
     let input = document(source_text(
         "outside",
         Rect { x: 590.0, y: 20.0, width: 20.0, height: 12.0 },
         12.0,
     ));
     let execution = context();
+    let expected = input.blocks.clone();
+    let output = reconstruct_document(input, &LayoutConfig::default(), &execution).unwrap();
+    let (rebuilt, reservation) = output.into_parts();
+    assert_eq!(rebuilt.blocks, expected);
+    drop(reservation);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+
+    let invalid = document(source_text(
+        "invalid",
+        Rect { x: 590.0, y: 20.0, width: -20.0, height: 12.0 },
+        12.0,
+    ));
     assert!(matches!(
-        reconstruct_document(input, &LayoutConfig::default(), &execution),
+        reconstruct_document(invalid, &LayoutConfig::default(), &execution),
         Err(ConversionError::Malformed { .. })
     ));
     assert_eq!(execution.reserved_memory_bytes(), 0);

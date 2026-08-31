@@ -13,6 +13,7 @@
   排障和卸载。
 - [配置](configuration.md)：分层配置、profile、网络授权和能力路由。
 - [格式矩阵](formats.md)：catalog 中的格式、检测、转换和失败边界。
+- [Markdown 输出](markdown-output.md)：样式、列表、资产路径、备注及受限预览的消费规则。
 - [DTO](dto.md)：Document IR、result JSON、batch report 与兼容规则。
 - [本地 Web 服务](ui.md)：工作台、任务历史、产物、管理能力和 loopback 安全边界。
 - [Agent Skill](agent-skill.md)：`into-markdown` skill 的安装、发布和验证。

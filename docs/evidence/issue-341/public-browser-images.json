@@ -1,0 +1,44 @@
+{
+  "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+  "capturedAt": "2026-08-31T14:13:50.277Z",
+  "source": "pptx/01-1ecab1282a1bfd23.pptx",
+  "consumer": "Chromium 151; pulldown-cmark 0.13.4 generated HTML",
+  "images": [
+    {
+      "complete": true,
+      "height": 366,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-0c708fd1b04d4c31c9c9feb7095a0b7f9289024d69c51fd21558d0110d128eee.png",
+      "width": 733
+    },
+    {
+      "complete": true,
+      "height": 940,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-688e741f8ab9edff8e025bcc3f744ffb9178ec81844898e085b4c42a2d17d83a.png",
+      "width": 994
+    },
+    {
+      "complete": true,
+      "height": 600,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-90f8b3d4c474e484328efa1874d9befc003e629f1ece6acbe2f8fbb373a29860.png",
+      "width": 600
+    },
+    {
+      "complete": true,
+      "height": 345,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-af3df1a61b7d3c83885cbb5a3016ecc516ef4ecd543d3bac7eb7f8a9dc9c8431.png",
+      "width": 565
+    },
+    {
+      "complete": true,
+      "height": 197,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-50533b155491292cd9d7e90012da901c2d66ee0af99d106ac5cf942bb36ead46.png",
+      "width": 601
+    },
+    {
+      "complete": true,
+      "height": 695,
+      "src": "%E7%B4%A0%E6%9D%90%20%E4%B8%AD%E6%96%87%20(a)%23%25%26/asset-5ae529f50d8369857d008f633cbf2a92d888f6c5c0ba00c111a0175002059bf8.png",
+      "width": 455
+    }
+  ]
+}

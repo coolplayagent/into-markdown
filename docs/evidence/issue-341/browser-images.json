@@ -1,0 +1,13 @@
+{
+  "source": "repository fixture odt/image-exact.odt",
+  "route": "file/extract",
+  "directory": "(图)#?%&",
+  "images": [
+    {
+      "complete": true,
+      "height": 1,
+      "src": "(%E5%9B%BE)%23%3F%25%26/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+      "width": 1
+    }
+  ]
+}

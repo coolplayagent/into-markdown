@@ -1,0 +1,100 @@
+[
+  {
+    "file": "docx/03-451e290b2c619147.docx",
+    "sourceSha256": "451e290b2c619147b59609eaa2e6fb023029b93502fa6bda16374e348e1532a4",
+    "baselineVisibleTextSha256": "a2a77d653cb3dc3472fe539f764b48bd3fb31cfced542f6c789ca6b025fa13c1",
+    "candidateVisibleTextSha256": "9e8f3c9503bcb8462493480aaa05ee549d74db6ee527a43d54292cb46eff15b2",
+    "reason": "Old rendered text exposed Markdown backslash escapes; native delimiters now render the same substantive IR text."
+  },
+  {
+    "file": "docx/05-2b234095b6f95b9c.docx",
+    "sourceSha256": "2b234095b6f95b9c7fe70d7a5b3e20daee8044e7ffc72a4fcb3a20b41c416b76",
+    "baselineVisibleTextSha256": "0199aaf8f7ff497126882520f80c14cdad311b7d04b1ca1b85c52e4d91cac4bf",
+    "candidateVisibleTextSha256": "5623a0ea6af598767c298de3b757e4e8d6762f1bc7ee37021c059db3b066b5e7",
+    "reason": "Old rendered text exposed Markdown backslash escapes; native delimiters now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/01-1ecab1282a1bfd23.pptx",
+    "sourceSha256": "1ecab1282a1bfd23adbb2c179ab658229b64dc8c55865aa9450970992237b727",
+    "baselineVisibleTextSha256": "69a6f169c735f7a670d6d7ad25c9dc0ef8795c08aca2fcfa8585bc6359668e0b",
+    "candidateVisibleTextSha256": "078e0362a3881c76503e4e4b7111b2a20cce6f2518889e01705a8ca6a1e82459",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/02-d6e1d9f1cca9a72a.pptx",
+    "sourceSha256": "d6e1d9f1cca9a72adbaf8b0ee4040b3fdb1397e2dec103d81368833b459db6a8",
+    "baselineVisibleTextSha256": "efc59ca624d2ee1c31ad25c9c3a4f425389b6949e9d881b5f6aada526b098e04",
+    "candidateVisibleTextSha256": "f1b2b99cfc76d3ae59dfd96e18d6a54529e54bd12790175727ba4b1e7d469de4",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/03-9e97b63323b07d8e.pptx",
+    "sourceSha256": "9e97b63323b07d8eb244ae8189c751bdb1aee2d792c1ae494957f7999fd5e687",
+    "baselineVisibleTextSha256": "962b7317566ad5f30700f6d25eb6a49ddbefd4481ad625de54f80da4080cc554",
+    "candidateVisibleTextSha256": "dca4fb530235b383e662fe61055a796949b4fc4903a0e67d93358e99b66725ce",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/04-c3c60b36a86dee6a.pptx",
+    "sourceSha256": "c3c60b36a86dee6a58aaa050d6ac161d84f918c4841ac7d0ad6bde1638b1c10b",
+    "baselineVisibleTextSha256": "d5311d0952fb46b413e9b970b17f9a7dd1d9defa3cebfa3a2d82e4aec399bff2",
+    "candidateVisibleTextSha256": "586abf53c2ef614ea464b5405de366a223a55b76b443c9ef071be40d1fb1e233",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/05-bb1721a445ebb6b7.pptx",
+    "sourceSha256": "bb1721a445ebb6b7fd13034b2ffa5ddb8ed6a66aeddac0dc118446e0c3e76ce1",
+    "baselineVisibleTextSha256": "b4652c17e168ff99c5e67836ee606299f6c0a2d4ea4f2f1ed2222cef18dc47e5",
+    "candidateVisibleTextSha256": "c6206eb7139e75b17f6d1a45338a9201b533e2384891b998c65fcab3f1032f1c",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/06-798a5e3d3eedb7d9.pptx",
+    "sourceSha256": "798a5e3d3eedb7d94eb453cc3e13f368baf6decc8e282ebc97783f65c254c65f",
+    "baselineVisibleTextSha256": "1f2e34e14dffc7505103bcb66a4c38e8a7f1b7faad55e2c88455195dc0a552d0",
+    "candidateVisibleTextSha256": "03c152ee809f6e4ee274ffb21743f0344ea705d51c61578769c75b678949a098",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/07-025c7c666a1dbb08.pptx",
+    "sourceSha256": "025c7c666a1dbb08721bc5c24cf95ada17c421a338aad1a808ab804038e74442",
+    "baselineVisibleTextSha256": "4cfb07d54260f0ccb66d48e38484b61fd937b4caf64cd41e8fda40031a57dea6",
+    "candidateVisibleTextSha256": "c90569337c612c583d5530b532c3fae6bcddcd361ddb58d86b3d87083adb2f09",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/08-6dca078016e46a44.pptx",
+    "sourceSha256": "6dca078016e46a44cc90b51c27a3b9827fa23c6cfb1a31d2771df0e5254117af",
+    "baselineVisibleTextSha256": "8736810503bcf740fd98c9f12441abdf1acaa0dc947cf7be1b9567d19b7fa671",
+    "candidateVisibleTextSha256": "2c6a96f72ec572768a5823013cd446cb459fa170fef7a2da6a2b793cadd56b51",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/09-ccb3c39d9e2f00d2.pptx",
+    "sourceSha256": "ccb3c39d9e2f00d2dd825a09223e2e2a296ed8a6678fb247749e1acd97f7994a",
+    "baselineVisibleTextSha256": "4394ffabb51401ccc4b368b1e6b0a2ad5c25a96a71b711c1d51cf34b4ad1df37",
+    "candidateVisibleTextSha256": "6e0942d992af605e53ac8705eaf88727fdebb2e9d8ddd4c7baa72a76cb7f4032",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/10-51c9273a9d82f7f8.pptx",
+    "sourceSha256": "51c9273a9d82f7f84d907a1871ac4fe2e1418b8f8d10c3797d6e41a3b70dfcec",
+    "baselineVisibleTextSha256": "24bc08ce84a6062094c00d2c5c24f5455a55b85983613e680b6449c1590c5236",
+    "candidateVisibleTextSha256": "7effacf8f9e90c2d7536747bdbf3344f61acef03e20ac84b38660d7d6cd6aa45",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "pptx/11-5f21aa7d681c550f.pptx",
+    "sourceSha256": "5f21aa7d681c550fade2876589bba486fba3e8d788272cdc999ec0f8862b6992",
+    "baselineVisibleTextSha256": "6beb7e139fe1f39d923f4041b97683ae07b934056ca13d44d2a20d622a6dd78f",
+    "candidateVisibleTextSha256": "9c1d58c5b4d1f6a5423660bb629db9d06302e2a96807da233c91b242a65c675b",
+    "reason": "Legacy source-marker comments and indentation exposed emphasis HTML, backslash escapes and HTML entities; native styles now render the same substantive IR text."
+  },
+  {
+    "file": "odp/09-1f3246a7f1510e53.odp",
+    "sourceSha256": "1f3246a7f1510e53bc9aef5437097a2f800833a3eabf47bbd77f33ae6b4a2924",
+    "baselineVisibleTextSha256": "cd8f7171c5b45add2147a2f6f81f5769df8674d7acc725134f86b234241bfb98",
+    "candidateVisibleTextSha256": "407a4245cd5a050ad7694a955186edfa24fd46231c167ea6c0624d49fc9a230a",
+    "reason": "Old rendered text exposed Markdown backslash escapes; native delimiters now render the same substantive IR text."
+  }
+]

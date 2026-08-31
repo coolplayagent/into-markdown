@@ -1,0 +1,122 @@
+- link "跳到主要内容":
+  - /url: "#main"
+- banner:
+  - link "into-markdown 控制台":
+    - /url: /workbench
+    - generic: M↓
+    - generic: into-markdown
+  - navigation "主要导航":
+    - link "文稿转换":
+      - /url: /workbench
+    - link "语音转写":
+      - /url: /meetings
+    - link "系统管理":
+      - /url: /admin/capabilities
+  - status:
+    - generic: 系统就绪
+  - generic: 语言
+  - combobox "语言":
+    - option "简体中文" [selected]
+    - option "English"
+  - generic: 主题
+  - combobox "主题":
+    - option "跟随系统" [selected]
+    - option "浅色"
+    - option "深色"
+- main:
+  - region "转换文档":
+    - paragraph: DOCUMENT TO MARKDOWN
+    - heading "转换文档" [level=1]
+    - region "添加文档":
+      - paragraph: 来源文件
+      - heading "添加文档" [level=2]
+      - generic: "1"
+      - button "将文件拖放到这里":
+        - strong: 将文件拖放到这里
+      - button "选择文件":
+        - text: 选择文件
+      - button "选择文件"
+      - button "选择目录"
+      - button "选择目录":
+        - text: 选择目录
+      - generic: 最多 100 个文件
+      - region "当前批次":
+        - strong: 当前批次
+        - generic: 9.4 KiB
+        - list:
+          - button "转换结果 normal.pptx":
+            - strong: normal.pptx
+            - generic: 已完成
+    - region "转换能力":
+      - strong: 文档解析
+      - text: 本地就绪
+      - strong: 图片 OCR
+      - text: 尚未选择来源
+      - link "前往设置":
+        - /url: /admin/capabilities
+    - region "转换设置":
+      - heading "转换设置" [level=2]
+      - generic: 输出格式
+      - generic "输出格式":
+        - button "Markdown" [disabled] [pressed]:
+          - text: Markdown
+      - generic: 图片文字识别
+      - group "图片文字识别":
+        - button "自动 推荐" [disabled]:
+          - text: 自动
+          - generic: 推荐
+        - button "始终识别扫描内容" [disabled]
+        - button "关闭" [disabled] [pressed]
+      - generic: 不识别扫描页和图片中的文字。
+      - generic: 图片与附件
+      - group "图片与附件":
+        - button "保存到同名文件夹 推荐" [disabled] [pressed]:
+          - text: 保存到同名文件夹
+          - generic: 推荐
+        - button "不保存附件" [disabled]
+      - generic: 图片与附件保存到 Markdown 旁边的同名文件夹。
+    - button "开始转换 (1)" [disabled]:
+      - text: 开始转换 (1)
+    - complementary "最近记录":
+      - text: 历史记录
+      - heading "最近记录" [level=2]
+      - generic: "0"
+      - generic: 搜索记录
+      - textbox "搜索记录"
+      - combobox "状态筛选":
+        - option "全部状态" [selected]
+        - option "已完成"
+        - option "失败"
+        - option "已中断"
+        - option "已取消"
+      - paragraph: 还没有任务
+      - generic: 0 任务 · 1/1
+      - button "立即清理":
+        - text: 立即清理
+      - button "上一页" [disabled]:
+      - button "下一页" [disabled]:
+- dialog "normal.pptx":
+  - generic: 转换结果
+  - text: 已完成
+  - heading "normal.pptx" [level=1]
+  - button "关闭" [active]:
+  - group "预览模式":
+    - button "阅读预览" [pressed]:
+      - text: 阅读预览
+    - button "Markdown 源码":
+      - text: Markdown 源码
+  - button "下载 Markdown":
+    - text: 下载 Markdown
+  - button "详情与资源":
+    - text: 详情与资源
+  - button "更多操作":
+  - document:
+    - article:
+      - 'heading "Slide 1: Corpus 你好 – Привет" [level=2]'
+      - paragraph:
+        - emphasis: English français
+      - heading "Speaker notes" [level=3]
+      - paragraph: Nota 日本語
+      - 'heading "Slide 2: Second layout" [level=2]'
+      - paragraph:
+        - emphasis: مرحبا

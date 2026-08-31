@@ -331,15 +331,8 @@ impl<'a> Builder<'a> {
                     let node = self.node(Block::Formula(value), span)?;
                     self.push_block(node)?;
                 }
-                Event::Html(value) => {
-                    self.diagnostic(
-                        RAW_HTML_CODE,
-                        "raw HTML was preserved as non-executable code",
-                        &span,
-                    )?;
-                    let value = self.own_parser_text(value)?;
-                    self.push_inline(Inline::Code(value))?;
-                }
+                // HTML blocks are retained from their complete source span on close.
+                Event::Html(_) => {}
                 Event::InlineHtml(value) => self.inline_html(&value, span)?,
                 Event::FootnoteReference(label) => {
                     let label = normalize_footnote_label(&label, &mut self.parser_memory)?;
@@ -701,19 +694,7 @@ impl<'a> Builder<'a> {
                 )?;
                 self.push_block(node)
             }
-            FrameKind::HtmlBlock => {
-                self.diagnostic(
-                    RAW_HTML_CODE,
-                    "raw HTML was preserved as non-executable code",
-                    &frame.span,
-                )?;
-                let raw =
-                    self.owned_text(self.source.text.get(frame.span.clone()).unwrap_or_default())?;
-                self.parser_memory.charge("html".len())?;
-                let node = self
-                    .node(Block::Code { language: Some("html".into()), text: raw }, frame.span)?;
-                self.push_block(node)
-            }
+            FrameKind::HtmlBlock => self.close_html_block(frame),
             FrameKind::Emphasis => self.finish_mark(frame.inlines, InlineMark::Italic),
             FrameKind::Strong => self.finish_mark(frame.inlines, InlineMark::Bold),
             FrameKind::Strikethrough => self.finish_mark(frame.inlines, InlineMark::Strikethrough),
@@ -955,6 +936,23 @@ impl<'a> Builder<'a> {
         memory.reserve_vec(&mut parent.inlines, inlines.len())?;
         parent.inlines.extend(inlines);
         Ok(())
+    }
+
+    fn close_html_block(&mut self, frame: Frame) -> Result<(), ConversionError> {
+        let raw = self.source.text.get(frame.span.clone()).unwrap_or_default();
+        if raw.trim() == "<!-- -->" {
+            return Ok(());
+        }
+        self.diagnostic(
+            RAW_HTML_CODE,
+            "raw HTML was preserved as non-executable code",
+            &frame.span,
+        )?;
+        let raw = self.owned_text(self.source.text.get(frame.span.clone()).unwrap_or_default())?;
+        self.parser_memory.charge("html".len())?;
+        let node =
+            self.node(Block::Code { language: Some("html".into()), text: raw }, frame.span)?;
+        self.push_block(node)
     }
 
     fn push_block(&mut self, block: BlockNode) -> Result<(), ConversionError> {
@@ -1721,7 +1719,7 @@ mod tests {
             &ConversionOptions::default(),
         )
         .unwrap();
-        assert_eq!(rendered, "<em>x</em>\n");
+        assert_eq!(rendered, "*x*\n");
 
         let crossing = convert(b"<em>[x](https://example.com)</em>\n").unwrap();
         crossing.document.validate().unwrap();

@@ -1,0 +1,28 @@
+{
+  "capturedAt": "2026-08-31T14:12:04.531Z",
+  "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+  "fixture": "fixtures/small/pptx/normal.pptx",
+  "ocr": "off",
+  "assetMode": "extract",
+  "result": {
+    "bootstrap": [
+      "/assets/bootstrap.e80528a7ade45a1b.js"
+    ],
+    "headings": [
+      {
+        "level": "2",
+        "text": "Slide 1: Corpus 你好 – Привет"
+      },
+      {
+        "level": "3",
+        "text": "Speaker notes"
+      },
+      {
+        "level": "2",
+        "text": "Slide 2: Second layout"
+      }
+    ],
+    "italic": 2,
+    "resourceElements": 0
+  }
+}

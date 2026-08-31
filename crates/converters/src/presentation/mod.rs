@@ -27,13 +27,12 @@ mod stream_tests;
 #[cfg(test)]
 mod test_observer;
 
-use allocation::try_clone_string;
 use error::{limit, malformed};
 use geometry::sort_shapes_for_reading;
 use into_markdown_core::{
     Block, BoxFuture, ConversionError, ConversionOptions, Converter, ConverterEventSink,
     ConverterOutput, ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
-    DiagnosticSeverity, ExecutionContext, FormatCandidate, Inline, InputFormat, LocalBoxFuture,
+    DiagnosticSeverity, ExecutionContext, FormatCandidate, InputFormat, LocalBoxFuture,
     ProbeOutcome, ResolvedInput, Services, SourceContentEvidence, SourceLocator,
     StreamConsumerKind, document_is_empty, estimate_retained_output,
     estimate_validation_working_set, stream_converter_output,
@@ -46,7 +45,7 @@ use relationships::{
     resolve_target, unique_internal, unique_relationship,
 };
 use schema::{COMPOUND_FILE_SIGNATURE, FORMATS, NOTES_REL, OFFICE_REL, PROVIDER_ID, SLIDE_REL};
-use shape_elements::{shape_block_count, validate_shape_relationships};
+use shape_elements::validate_shape_relationships;
 use slides::{parse_shapes, parse_slide_order, slide_is_hidden};
 use std::fmt::Write as _;
 use styles::{apply_inheritance, apply_pending_group_transforms, inherited_styles};
@@ -374,41 +373,29 @@ fn convert_presentation(
                     )
             });
             sort_shapes_for_reading(&mut notes, context)?;
-            if !notes.is_empty() {
-                let additional = shape_block_count(&notes)?
-                    .checked_add(1)
-                    .ok_or_else(|| limit("max_document_nodes", "notes block count overflow"))?;
-                slide_blocks.try_reserve(additional).map_err(|error| {
+            let mut note_blocks = shapes_to_blocks(
+                notes,
+                &mut package,
+                &notes_relationships,
+                &notes_part,
+                slide_number,
+                options,
+                context,
+                &mut state,
+            )?;
+            if into_markdown_core::speaker_notes::has_visible_content(
+                &note_blocks,
+                into_markdown_core::AssetMode::Extract,
+            ) {
+                slide_blocks.try_reserve(note_blocks.len().saturating_add(1)).map_err(|error| {
                     limit("max_memory_bytes", format!("cannot reserve note blocks: {error}"))
                 })?;
-                state.add_inlines(1)?;
-                let mut heading_content = Vec::new();
-                heading_content.try_reserve_exact(1).map_err(|error| {
-                    limit("max_memory_bytes", format!("cannot reserve notes heading: {error}"))
-                })?;
-                heading_content.push(Inline::Text {
-                    value: try_clone_string("Speaker notes", "notes heading")?,
-                    marks: Vec::new(),
-                });
-                let heading = state.node(
-                    Block::Heading { level: 3, content: heading_content },
-                    &notes_part,
-                    slide_number,
-                    None,
-                    None,
-                    None,
-                )?;
+                let heading = state.notes_heading(&notes_part, slide_number)?;
+                for block in &mut note_blocks {
+                    state.mark_note_body(block)?;
+                }
                 slide_blocks.push(heading);
-                slide_blocks.extend(shapes_to_blocks(
-                    notes,
-                    &mut package,
-                    &notes_relationships,
-                    &notes_part,
-                    slide_number,
-                    options,
-                    context,
-                    &mut state,
-                )?);
+                slide_blocks.append(&mut note_blocks);
             }
         }
         let slide = state.node(

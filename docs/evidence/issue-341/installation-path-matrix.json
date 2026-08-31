@@ -1,0 +1,2127 @@
+{
+  "cliSha256": "9585babf8745080eecf498df8d056f11494fb23a871195e95970b4b984a174f9",
+  "fixtureSha256": "693d828c72b5adee1286364abf15194e84bee445c903aad4886a8f2c82d755b3",
+  "items": [
+    {
+      "spelling": "中文素材",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%E7%B4%A0%E6%9D%90/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%E7%B4%A0%E6%9D%90/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%E7%B4%A0%E6%9D%90/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "%E4%B8%AD%E6%96%87%E7%B4%A0%E6%9D%90/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文素材",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文素材",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "assets%20with%20spaces/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "assets%20with%20spaces/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "assets%20with%20spaces/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "assets%20with%20spaces/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "assets with spaces",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "assets with spaces",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "(%E5%9B%BE)%23%3F%25%26/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "(%E5%9B%BE)%23%3F%25%26/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "(%E5%9B%BE)%23%3F%25%26/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "(%E5%9B%BE)%23%3F%25%26/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "(图)#?%&",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "(图)#?%&",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "literal%2520/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "literal%2520/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "literal%2520/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "literal%2520/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "literal%20",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "literal%20",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "e%CC%81%E7%BB%84%E5%90%88/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "e%CC%81%E7%BB%84%E5%90%88/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "e%CC%81%E7%BB%84%E5%90%88/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "e%CC%81%E7%BB%84%E5%90%88/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "é组合",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "é组合",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "nested/../assets",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "nested/../assets",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "file",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%C2%A0%E7%A9%BA%E7%99%BD/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "file",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "file",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--output",
+        "result.md"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "stdout",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%C2%A0%E7%A9%BA%E7%99%BD/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "stdout",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "stdout",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "batch",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "%E4%B8%AD%E6%96%87%C2%A0%E7%A9%BA%E7%99%BD/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png",
+        "%E4%B8%AD%E6%96%87%C2%A0%E7%A9%BA%E7%99%BD/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "batch",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "batch",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "第二份.odt",
+        "--output-dir",
+        ".",
+        "--report",
+        "batch.json"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "bundle",
+      "mode": "extract",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "extract",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "assets/asset-431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460.png"
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "bundle",
+      "mode": "embed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "embed",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      ],
+      "status": "passed"
+    },
+    {
+      "spelling": "中文 空白",
+      "route": "bundle",
+      "mode": "omit",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "--no-config",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/image-exact.odt",
+        "--ocr",
+        "off",
+        "--asset-mode",
+        "omit",
+        "--assets-dir",
+        "中文 空白",
+        "--conflict",
+        "overwrite",
+        "--emit",
+        "bundle",
+        "--output",
+        "result.mdpkg.zip"
+      ],
+      "exit": 0,
+      "images": [],
+      "status": "passed"
+    }
+  ]
+}
