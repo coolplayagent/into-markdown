@@ -182,8 +182,8 @@ pub(crate) async fn detect_formats(
     let signature = observed.iter().any(|(authority, _)| {
         matches!(authority, DetectionAuthority::Signature | DetectionAuthority::Container)
     });
-    let content = observed.iter().any(|(authority, _)| *authority != DetectionAuthority::Hint);
-    if !content
+    let accepted = observed.iter().any(|(authority, _)| *authority != DetectionAuthority::Hint);
+    if !accepted
         && hint.format.is_none()
         && let Some(detail) = unsupported.take()
     {
