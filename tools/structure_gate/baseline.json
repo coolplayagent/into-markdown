@@ -2253,7 +2253,7 @@
     },
     {
       "path": "tools/license-check/src/lib.rs",
-      "lines": 3989,
+      "lines": 3940,
       "functions": [
         {
           "symbol": "pdfium_expected_targets",
