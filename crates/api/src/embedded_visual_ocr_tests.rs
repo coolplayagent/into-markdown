@@ -944,7 +944,8 @@ fn renamed_images_and_office_still_invoke_bound_ocr_and_preserve_assets() {
 
 fn picture_only_notes(png: &[u8]) -> Vec<u8> {
     use std::io::Read as _;
-    let original = include_bytes!("../../../fixtures/small/pptx/normal.pptx");
+    let original =
+        std::fs::read(crate::test_fixture_root().join("small/pptx/normal.pptx")).unwrap();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();
     let mut parts = Vec::new();
     for index in 0..archive.len() {
