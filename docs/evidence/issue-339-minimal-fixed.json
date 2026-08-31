@@ -1,0 +1,1751 @@
+{
+  "records": [
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          },
+          {
+            "confidence": 0.5,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [
+              "incomplete JSON evidence does not override a filename extension"
+            ],
+            "evidence": "JSON structural prefix with invalid or incomplete syntax",
+            "explicit": false,
+            "format": "json"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.structured-data",
+            "format": "json",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 7,
+          "markdownSha256": "4a883e8aee4f0dd7e223b6e428401d2d3722583c368018fb29d158d32df7af1d",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "incomplete-json.txt",
+      "sha256": "ffb38b22ee3e0ca90325ebce953a9846990f292faf44c50498771602e31cb61f"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          },
+          {
+            "confidence": 0.5,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [
+              "incomplete XML evidence does not override a filename extension"
+            ],
+            "evidence": "incomplete XML root root element",
+            "explicit": false,
+            "format": "xml"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.structured-data",
+            "format": "xml",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 13,
+          "markdownSha256": "51570d4b9947b70b8c3bb48c5621f3fc9cdd19d5174d16783e5bacbd22268559",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "incomplete-xml.txt",
+      "sha256": "29d6f33653db58ba8a43b22931d6930caaada19c716b73535533107c5d58880c"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          },
+          {
+            "confidence": 0.5,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "incomplete UTF-16 XML declaration or paired markup",
+            "explicit": false,
+            "format": "xml"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.structured-data",
+            "format": "xml",
+            "probe": {
+              "outcome": "notApplicable"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 35,
+          "markdownSha256": "d919606f67b934495f538ec1513a6a10d17eb4a5f0e040a1f14d48c65fc63430",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "declaration-le.txt",
+      "sha256": "c3e85471d625ebe20ff2730065cb58d9467515f5ed270db738dc43411f407f31"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          },
+          {
+            "confidence": 0.5,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "incomplete UTF-16 XML declaration or paired markup",
+            "explicit": false,
+            "format": "xml"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.structured-data",
+            "format": "xml",
+            "probe": {
+              "outcome": "notApplicable"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 35,
+          "markdownSha256": "d919606f67b934495f538ec1513a6a10d17eb4a5f0e040a1f14d48c65fc63430",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "declaration-be.txt",
+      "sha256": "7b4befbbbfe8396909d6fddcbe68f22ca494a8f152a457c2eb2fcc19c0f332e7"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 31,
+          "markdownSha256": "9f4c9c889884cb10d49fd8a795547b99950b32407b563fd17f7480f4bc486f10",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "nested.html",
+      "sha256": "3e9e77f3e9a7ec5fe952aea7d49d73283c093a233d51992e3f561c183b80d6af"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            },
+            {
+              "code": "html.linkUriRejected",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 76,
+                "byteStart": 0,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "empty or unsafe link destination was omitted; visible content was retained",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 23,
+          "markdownSha256": "e9921bec68520ac369175f7ec3cb336a4fc63f2e8308749f975be24d953029e2",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "blank.html",
+      "sha256": "8867a17d5ac2462206b9a156dc9f3f1a1d5917f2186d3c1ed3ce034123325723"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            },
+            {
+              "code": "html.linkUriRejected",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 75,
+                "byteStart": 0,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "empty or unsafe link destination was omitted; visible content was retained",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 23,
+          "markdownSha256": "e9921bec68520ac369175f7ec3cb336a4fc63f2e8308749f975be24d953029e2",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "empty.html",
+      "sha256": "f77cea8b03420402ee45a5da297f91460ce644a853f005cc1718001e2bbc9693"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            },
+            {
+              "code": "html.linkUriRejected",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 114,
+                "byteStart": 0,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "empty or unsafe link destination was omitted; visible content was retained",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 23,
+          "markdownSha256": "e9921bec68520ac369175f7ec3cb336a4fc63f2e8308749f975be24d953029e2",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "base.html",
+      "sha256": "022efba556f37054dcf685671ede7670120155dc44520750d587242b6296c462"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            },
+            {
+              "code": "html.linkUriRejected",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 94,
+                "byteStart": 0,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "empty or unsafe link destination was omitted; visible content was retained",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 23,
+          "markdownSha256": "e9921bec68520ac369175f7ec3cb336a4fc63f2e8308749f975be24d953029e2",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "unsafe.html",
+      "sha256": "aa20ed5167d9ce39cc852ae9fe54b7831dded39051890c96bdee59ea0177a8b4"
+    },
+    {
+      "kind": "constructed",
+      "observation": {
+        "error": "unsupported input: unsupported input \"complete-json.py\" (extension Some(\"py\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+        "errorCode": "unsupported",
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": []
+      },
+      "path": "complete-json.py",
+      "sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862"
+    },
+    {
+      "kind": "repository-fixture",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9800000190734863,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [
+              "content signature takes precedence over conflicting format hints: markdown"
+            ],
+            "evidence": "OLE compound file stream PowerPoint Document",
+            "explicit": false,
+            "format": "ppt"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "legacyOffice.ppt.imagePlacementRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "Pictures",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+              "severity": "warning"
+            },
+            {
+              "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "PowerPoint Document",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 266,
+          "markdownSha256": "04a94b74bbbc1cf8c24482882aefcf03d9c96671af3bcf283155892c5799189f",
+          "providers": [
+            "builtin.converter.legacy-office"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "ppt"
+      },
+      "path": "renamed.md",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6"
+    },
+    {
+      "kind": "repository-fixture",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9800000190734863,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [
+              "content signature takes precedence over conflicting format hints: csv"
+            ],
+            "evidence": "OLE compound file stream PowerPoint Document",
+            "explicit": false,
+            "format": "ppt"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "legacyOffice.ppt.imagePlacementRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "Pictures",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+              "severity": "warning"
+            },
+            {
+              "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "PowerPoint Document",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 266,
+          "markdownSha256": "04a94b74bbbc1cf8c24482882aefcf03d9c96671af3bcf283155892c5799189f",
+          "providers": [
+            "builtin.converter.legacy-office"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "ppt"
+      },
+      "path": "renamed.csv",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6"
+    },
+    {
+      "kind": "repository-fixture",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9800000190734863,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "OLE compound file stream PowerPoint Document",
+            "explicit": false,
+            "format": "ppt"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_presentation_xml_events": 2000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "legacyOffice.ppt.imagePlacementRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "Pictures",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+              "severity": "warning"
+            },
+            {
+              "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+              "locator": {
+                "bounds": null,
+                "cell": null,
+                "page": null,
+                "part": "PowerPoint Document",
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 266,
+          "markdownSha256": "04a94b74bbbc1cf8c24482882aefcf03d9c96671af3bcf283155892c5799189f",
+          "providers": [
+            "builtin.converter.legacy-office"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "ppt"
+      },
+      "path": "renamed.js",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+  "helperSha256": "8e6baf7c84b6c6f920663ece7146c5d58d705117ddb58caad47cabe42011dd2c",
+  "manifestSha256": "a3b9ea7c570991647a0ce7b9afe748a6e4ee21b684ab1ca128d7021587e3bcb9"
+}

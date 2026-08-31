@@ -490,6 +490,26 @@ fn every_epub_xml_document_enforces_prolog_and_character_rules() {
 }
 
 #[test]
+fn xhtml_nested_style_aliases_keep_valid_ir() {
+    let chapter = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p><b><strong><em><i>epub-styled</i></em></strong></b></p></body></html>"#;
+    let bytes = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", chapter),
+        ("OPS/text/two.xhtml", chapter_two()),
+        ("OPS/text/extra.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}"),
+    ]);
+    for result in [convert(bytes.clone()), convert_strict(bytes)] {
+        let result = result.unwrap();
+        result.document.validate().unwrap();
+        assert!(result.markdown.replace("\\-", "-").contains("epub-styled"));
+    }
+}
+
+#[test]
 fn unicode_archive_names_preserve_epub_spine_navigation_and_assets() {
     let names = [
         ("one.xhtml", "章节（第一）.xhtml"),

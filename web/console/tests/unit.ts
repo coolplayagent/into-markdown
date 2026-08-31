@@ -41,14 +41,14 @@ const testGroups = {
   workbench: new Set([
     "workbench keeps the current batch and conversion controls in one route",
     "workbench keeps OCR neutral while the fast capability snapshot is pending",
-    "workbench rejects unsupported files before upload and explains terminal failures",
+    "workbench uploads unknown suffixes for content detection and explains terminal failures",
     "completed current-batch rows open their result from the whole row",
     "workbench separates the current batch from scrollable recent history",
     "history paginates in place and loads records beyond the first server page",
     "root workbench automatically opens the first successful result dialog",
     "local workbench keeps implementation limits and network policy out of the normal flow",
     "remote OCR requires nearby network and provider authorization without enabling unrelated AI modes",
-    "meeting recording is an independent route and media never enters the document workbench",
+    "meeting recording keeps its dedicated workflow alongside generic file conversion",
     "Chinese meeting UI defaults to Simplified Chinese without overriding explicit choices",
     "meeting page keeps recording primary and setup feedback beside transcript controls",
     "meeting keeps speech capabilities neutral while the fast snapshot is pending",
@@ -687,36 +687,31 @@ test("workbench keeps OCR neutral while the fast capability snapshot is pending"
   assert.equal(window.document.body.textContent.includes("Install and verify"), false);
 });
 
-test("workbench rejects unsupported files before upload and explains terminal failures", async () => {
+test("workbench uploads unknown suffixes for content detection and explains terminal failures", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   let uploads = 0;
-  const failed = { ...task("failed"), displayName: "broken.pdf", format: "pdf" as const, diagnostics: [{ code: "malformed" }] };
+  const failed = { ...task("failed"), displayName: "unsupported.py", diagnostics: [{ code: "conversionFailed" }], failure: { schemaVersion: 1 as const, code: "unsupported", stage: "detection", retryable: false } };
   const api: ApiClient = {
     ...availableApi,
     async listTasks() { return { tasks: [failed] }; },
     async upload() { uploads += 1; return task("running"); },
   };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitForText(window, "broken.pdf");
-  assert.ok(window.document.body.textContent.includes("The file is damaged or its format is invalid"));
+  await waitForText(window, "unsupported.py");
+  assert.ok(window.document.querySelector(".recent-history")?.textContent.includes("No supported format was identified; check the file type"));
   const input = window.document.querySelector<HTMLInputElement>('input[type="file"]')!;
-  assert.ok(input.accept.includes(".pdf"));
-  assert.ok(input.accept.includes(".pptm"));
-  assert.ok(input.accept.includes(".msg"));
-  assert.equal(input.accept.includes(".plist"), false);
+  assert.equal(input.accept, "");
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", {
     value: { files: [new File(["plist"], "settings.plist"), new File(["markdown"], "notes.md")] },
   });
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
-  await waitForText(window, "Skipped unsupported files: settings.plist");
-  assert.equal(window.document.querySelectorAll(".current-batch li").length, 1);
+  await waitForText(window, "Selected (2)");
+  assert.equal(window.document.querySelectorAll(".current-batch li").length, 2);
   assert.ok(window.document.body.textContent.includes("notes.md"));
-  assert.equal(window.document.body.textContent.includes("settings.plist"), true, "the rejection message should name the skipped input");
-  assert.ok(window.document.querySelector(".upload-card .picker-feedback")?.textContent?.includes("settings.plist"));
-  assert.equal(window.document.querySelector(".control-column .message-bar")?.textContent?.includes("settings.plist"), false);
-  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitFor(() => uploads === 1);
+  assert.ok(window.document.body.textContent.includes("settings.plist"));
+  [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (2)")!.click();
+  await waitFor(() => uploads === 2);
 });
 
 test("workbench separates the current batch from scrollable recent history", async () => {
@@ -803,7 +798,7 @@ test("root workbench automatically opens the first successful result dialog", as
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitForText(window, "Add documents");
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.py")] } });
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
   await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
@@ -853,7 +848,7 @@ test("remote OCR requires nearby network and provider authorization without enab
   assert.equal(uploaded[0]!.authorizeProvider, true);
 });
 
-test("meeting recording is an independent route and media never enters the document workbench", async () => {
+test("meeting recording keeps its dedicated workflow alongside generic file conversion", async () => {
   const window = installWindow(); window.history.replaceState(null, "", "/workbench");
   const uploads: Array<[string, boolean]> = []; let cancellations = 0; let cancelRequested = false;
   let emitTaskEvent: Parameters<ApiClient["watchTask"]>[1] | undefined;
@@ -878,7 +873,7 @@ test("meeting recording is an independent route and media never enters the docum
   Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["audio"], "recording.m4a")] } });
   window.document.getElementById("upload-zone")!.dispatchEvent(drop);
   await waitForText(window, "recording.m4a");
-  assert.equal(window.document.body.textContent.includes("Selected (1)"), false);
+  assert.equal(window.document.body.textContent.includes("Selected (1)"), true);
   [...window.document.querySelectorAll("a")]
     .find((link) => link.textContent === "Speech transcription")!
     .dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -1021,10 +1016,10 @@ test("workbench explains upload rejection without exposing an internal code", as
   await waitForText(window, "Add documents");
   const zone = window.document.getElementById("upload-zone")!;
   const drop = new window.Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.md")] } });
+  Object.defineProperty(drop, "dataTransfer", { value: { files: [new File(["contract"], "contract.py")] } });
   zone.dispatchEvent(drop); await waitForText(window, "Selected (1)");
   [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Start conversion (1)")!.click();
-  await waitForText(window, "contract.md: The conversion settings are invalid");
+  await waitForText(window, "contract.py: The conversion settings are invalid");
   assert.equal(window.document.body.textContent.includes("invalidTaskOptions"), false);
 });
 

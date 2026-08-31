@@ -1814,8 +1814,7 @@ mod tests {
     #[test]
     fn top_level_json_scalars_are_deterministic_candidates() {
         for input in [b"true".as_slice(), b"123".as_slice(), br#""x""#.as_slice()] {
-            let candidate =
-                super::super::structured_text_candidate(input, &context()).unwrap().unwrap();
+            let candidate = super::super::structured_for_test(input, &context()).unwrap().unwrap();
             assert_eq!(candidate.format, InputFormat::Json);
             assert!(convert_json(input, &ConversionOptions::default(), &context()).is_ok());
         }
@@ -2069,20 +2068,15 @@ mod tests {
     fn damaged_structures_are_protected_without_swallowing_prose() {
         let context = context();
         assert_eq!(
-            super::super::structured_text_candidate(br#"{ "a":}"#, &context)
-                .unwrap()
-                .unwrap()
-                .format,
+            super::super::structured_for_test(br#"{ "a":}"#, &context).unwrap().unwrap().format,
             InputFormat::Json
         );
-        assert!(super::super::structured_text_candidate(b"{hello}", &context).unwrap().is_none());
+        assert!(super::super::structured_for_test(b"{hello}", &context).unwrap().is_none());
         assert_eq!(
-            super::super::structured_text_candidate(b"<r></x>", &context).unwrap().unwrap().format,
+            super::super::structured_for_test(b"<r></x>", &context).unwrap().unwrap().format,
             InputFormat::Xml
         );
-        assert!(
-            super::super::structured_text_candidate(b"<3 is less", &context).unwrap().is_none()
-        );
+        assert!(super::super::structured_for_test(b"<3 is less", &context).unwrap().is_none());
     }
 
     #[test]

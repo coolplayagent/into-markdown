@@ -53,6 +53,45 @@ PNG/SVG 内嵌编辑模型提取在本格式范围之外。
 许可正文与移植来源进入第三方审计及安装包。仓库自建样本见 `fixtures/small/drawio`；
 #331 报告的原始 20 个文件尚未取得，当前测试不代表这些文件已通过验收。
 
+## 格式检测与支持边界
+
+自动检测先确认文件签名和容器身份，再考虑后缀、MIME 与文本结构。真实 PPT、PDF 或
+Office 包即使改为 `.js`、`.md`、`.csv` 或未知后缀，仍交给内容身份对应的解析器。
+ZIP 外壳保留与其兼容的 Office 格式提示：缺少工作簿部件的 `.xlsx` 仍报告损坏。
+签名只用于选择解析器，完整格式、安全、资源和加密校验仍由解析器执行。
+
+缺少可靠签名时，具有受支持后缀的输入沿用结构化文本检测；不完整 JSON/XML 前缀保持
+低置信度，安全 TXT 可以继续转换，完整 JSON/XML/CSV 等仍保留内容识别能力。
+不支持的后缀返回 `unsupported`，包括内容可读或包含合法 JSON/HTML 的源码文件。
+格式目录保持为 `into-md formats --json` 列出的集合；JS、Python、CSS 等源码不自动转换。
+
+无后缀输入使用具体 MIME 判断支持范围；`application/octet-stream`、空 MIME 和普通
+stdin 使用受界内容检测。MIME 忽略大小写与参数，只接受明确支持的类型。
+受支持后缀与 MIME 冲突时保留诊断；不支持的 MIME 不单独否决受支持后缀。
+`--format` 保持显式格式权威性，`--charset` 控制解码且不改变格式支持范围。
+CLI、Web、API 与 ZIP 成员共享规则，批量结果会定位被拒绝的文件。
+
+检测 SPI 的 `detect_with_authority` 区分 Hint、Heuristic、StructuredText、Signature、Container 及自定义 Content 证据；已有自定义
+`FormatDetector::detect` 实现默认提供 Content 证据，仍可接管自定义输入。该新增默认方法
+保持旧实现兼容，公共格式 ID、检测 JSON 和结果 DTO 均不变。
+
+### Format detection and admission
+
+Automatic detection prioritizes file signatures and container identity over extensions, MIME
+hints and text heuristics. Renamed PPT/PDF/Office inputs retain their actual parsers. A ZIP shell
+also preserves compatible Office hints so an incomplete `.xlsx` remains a malformed workbook.
+Parsers still enforce structural validation, encryption, budgets and safety.
+
+Without a supported signature, supported extensions retain structured-text inference; unknown
+extensions return `unsupported`, including readable source code and valid JSON/HTML inside it.
+Nameless inputs use concrete MIME hints; an absent MIME or `application/octet-stream` retains
+bounded content detection. A supported extension takes precedence over an unknown MIME, with
+a diagnostic. Explicit `--format` retains authority; `--charset` only controls decoding.
+
+CLI, Web, API and ZIP members share this boundary. The default `detect_with_authority` SPI method
+preserves existing custom detectors as Content evidence; format IDs and public JSON DTOs remain
+unchanged. Signature evidence selects a parser and does not bypass its validation.
+
 ## 图片
 
 图片转换器只按完整 magic 与 container envelope 接受 PNG、JPEG、Classic TIFF/BigTIFF、
@@ -240,6 +279,14 @@ HTML 转换器使用固定版本 `html5ever 0.39.0` 执行 HTML5 容错树构造
 评分；document order 用于打破同分。没有可用显式候选时降级到 `body` 并产生
 `html.mainContentFallback`。`nav`、`aside`、`footer`、导航/广告/弹窗/推荐区域以及
 `hidden`、`inert`、`aria-hidden=true` 内容不会混入正文；仅剩这些区域时稳定返回无可见正文。
+
+嵌套同类样式按首次出现顺序合并，混合 marks 保留且唯一。缺少 `href` 的链接保留可见
+内容；空或纯空白引用仅在有效 base/source URI 下生成目标，否则保留文字和样式并记录
+`html.linkUriRejected`。诊断保留可靠的源包含范围，容器入口继续补充成员路径。
+
+Repeated inline styles are deduplicated in encounter order. Missing `href` preserves visible
+content. Empty or whitespace-only references resolve only against an admitted base/source URI;
+otherwise labels and styles are retained with `html.linkUriRejected` and a reliable source range.
 
 标题、段落、行内样式、链接、图片、列表、带 rowspan/colspan 的表格、`pre`/`code`、分隔线、
 title/author/description/lang 等 metadata 进入统一 IR。HTML5 tree builder 可能合成或重挂节点，
@@ -496,3 +543,7 @@ ZIP 与 EPUB 保留解码后的逻辑名称，用于成员查找、标题、引�
 RAR4/5 依据[官方签名](https://www.rarlab.com/technote.htm)识别，扩展名和 MIME 作为提示。
 完整签名返回 `unsupported` 并建议先解压；截断签名返回损坏诊断。混合 ZIP 保留可转换
 成员，并在对应成员的诊断中报告 RAR；目录与 Web 格式列表将其显示为“可识别，请先解压后转换”。
+
+含成员的普通 ZIP 在完整目录检查后按 ZIP 路由，即使后缀为 DOCX、PPTX、XLSX、EPUB 或 ODF。空容器、具有文档包标记或目录检查不完整的容器保留兼容候选，以维持损坏、加密和资源限制错误。格式目录中的 `Unsupported` 状态同样参与准入；真实 RAR 沿用先解压提示，普通文本使用 `.rar` 后缀返回 `unsupported`，显式格式仍执行所选解析器。
+
+A fully inspected nonempty generic ZIP routes to ZIP even with an Office, EPUB, or ODF suffix. Empty containers, package markers or incomplete directory inspection retain compatible candidates for parser-specific damage, encryption, and resource errors. Catalog entries marked `Unsupported` participate in admission: real RAR retains extraction guidance, while plain text named `.rar` returns `unsupported`; an explicit format still selects its parser.

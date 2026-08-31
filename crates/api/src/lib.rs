@@ -184,6 +184,9 @@ pub fn model_manifest() -> Result<ModelManifest, ConversionError> {
 }
 
 #[cfg(test)]
+mod format_admission_tests;
+
+#[cfg(test)]
 mod epub_regression_tests;
 
 #[cfg(test)]
@@ -334,7 +337,7 @@ mod tests {
         crate::test_fixture_root().join(relative)
     }
 
-    fn block_on<F: Future>(future: F) -> F::Output {
+    pub(super) fn block_on<F: Future>(future: F) -> F::Output {
         let mut future = std::pin::pin!(future);
         let waker = std::task::Waker::noop();
         let mut context = std::task::Context::from_waker(waker);

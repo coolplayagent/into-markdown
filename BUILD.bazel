@@ -63,7 +63,7 @@ filegroup(
         "README.en.md",
         "README.md",
         "THIRD_PARTY_NOTICES.md",
-    ]),
+    ]) + ["//tools:archive-compat/samples.json"],
 )
 
 # Every source or binary archive starts with this mandatory declaration set.

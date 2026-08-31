@@ -1,0 +1,5131 @@
+{
+  "records": [
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.7200000286102295,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 581,
+          "markdownSha256": "4fe6e9aa70e9253e52ecdb4567e8cb4cdabdad957a3b15a3c597667a6f9c2cbe",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/cjkencodings/big5.txt",
+      "sha256": "43c21b213b1fc167b642af992768ac2249680e57247ff539999d9060094342d7"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.7200000286102295,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 1157,
+          "markdownSha256": "5ec7dc343674b9e4c2bf854225446e291ad71fa991c256e7707b62331fe30109",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/cjkencodings/gb18030.txt",
+      "sha256": "e4de892443028c3f230ab37e0c658f5bd0246b07147005580c2904b733ecf4fc"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.7200000286102295,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 1103,
+          "markdownSha256": "15dff60b46ed79406ebc89cce2c1e94517c8b5cf70848daeae6bbdeb057eab6b",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/cjkencodings/shift_jis.txt",
+      "sha256": "73cdabebfb92b4eaf6b8af8442953da1041fa8141a0513279b8df215879d4246"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 2570,
+          "markdownSha256": "32424139633796f9fb035a3abb7e46ea2b858ce0b42a89bd0a95061ded92ed9b",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/exception_hierarchy.txt",
+      "sha256": "bfa1d806de1482507b5582bcec118bfb87777e33d7d75872b8aea71c375b96fd"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9100000262260437,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "multiple unambiguous Markdown/GFM structures",
+            "explicit": false,
+            "format": "markdown"
+          },
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.markdown-gfm",
+            "format": "markdown",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 83,
+                "byteStart": 75,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 94,
+                "byteStart": 84,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 134,
+                "byteStart": 127,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 164,
+                "byteStart": 156,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 221,
+                "byteStart": 211,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.rawHtmlPreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 533,
+                "byteStart": 526,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "raw inline HTML was preserved as non-executable code",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 144586,
+          "markdownSha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
+          "providers": [
+            "builtin.converter.markdown-gfm"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "markdown"
+      },
+      "path": "Lib/test/mathdata/cmath_testcases.txt",
+      "sha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 9757,
+          "markdownSha256": "4311768fa4fcc91ad5b13ffe88ffaaec808b493d980954aae81b6b1946b539f8",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/mathdata/formatfloat_testcases.txt",
+      "sha256": "220712cfdcb43c8f5d292b5226a036a0453f958379594d6a89b8c29fde14a4af"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9100000262260437,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "multiple unambiguous Markdown/GFM structures",
+            "explicit": false,
+            "format": "markdown"
+          },
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.markdown-gfm",
+            "format": "markdown",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 200,
+                "byteStart": 120,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 200,
+                "byteStart": 119,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 200,
+                "byteStart": 118,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 490,
+                "byteStart": 378,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 490,
+                "byteStart": 377,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 490,
+                "byteStart": 376,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 703,
+                "byteStart": 634,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 703,
+                "byteStart": 633,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 703,
+                "byteStart": 632,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 742,
+                "byteStart": 706,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 742,
+                "byteStart": 705,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 742,
+                "byteStart": 704,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 911,
+                "byteStart": 832,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 911,
+                "byteStart": 831,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 911,
+                "byteStart": 830,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1053,
+                "byteStart": 1003,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1053,
+                "byteStart": 1002,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1053,
+                "byteStart": 1001,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1179,
+                "byteStart": 1108,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1179,
+                "byteStart": 1107,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1179,
+                "byteStart": 1106,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1317,
+                "byteStart": 1261,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1317,
+                "byteStart": 1260,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1317,
+                "byteStart": 1259,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1524,
+                "byteStart": 1394,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1524,
+                "byteStart": 1393,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1524,
+                "byteStart": 1392,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1728,
+                "byteStart": 1651,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1728,
+                "byteStart": 1650,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 1728,
+                "byteStart": 1649,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2079,
+                "byteStart": 1891,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2079,
+                "byteStart": 1890,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2079,
+                "byteStart": 1889,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2676,
+                "byteStart": 2132,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2676,
+                "byteStart": 2131,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2676,
+                "byteStart": 2130,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2872,
+                "byteStart": 2795,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2872,
+                "byteStart": 2794,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 2872,
+                "byteStart": 2793,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 3181,
+                "byteStart": 2875,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 3181,
+                "byteStart": 2874,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            },
+            {
+              "code": "markdown.blockquotePreservedAsCode",
+              "locator": {
+                "bounds": null,
+                "byteEnd": 3181,
+                "byteStart": 2873,
+                "cell": null,
+                "page": null,
+                "part": null,
+                "sheet": null,
+                "slide": null,
+                "time": null
+              },
+              "message": "blockquote was preserved as a non-executable Markdown code container",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 3226,
+          "markdownSha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
+          "providers": [
+            "builtin.converter.markdown-gfm"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "markdown"
+      },
+      "path": "Lib/test/mathdata/ieee754.txt",
+      "sha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 337,
+          "markdownSha256": "d43f4e6a76eeecf4b4511f596d7339f797c9dfe3ad7c35411a5779e24ad633ea",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/test_doctest/test_doctest.txt",
+      "sha256": "18c36b3fe82930c2519a9da6e8fde3093187af0cdf0e7ef9966f42362634452b"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "outcome": "notApplicable"
+            }
+          }
+        ],
+        "result": {
+          "error": "no converter is registered for text",
+          "errorCode": "noConverter"
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/test_doctest/test_doctest2.txt",
+      "sha256": "f0c95d104cb12cc84a2d304a21e35c6e9a661ee8a31452529d3865cbd75f3a08"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 98,
+          "markdownSha256": "cf57f4e29442b7556ecee79675ad3d7aaf5e717e23a5fb871148c961fc7d534e",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/test_doctest/test_doctest3.txt",
+      "sha256": "9ca124139afe89cc8eb7a6c3bb2abd85d8abdbb90f1b696dcfb09b305ff88e1d"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 266,
+          "markdownSha256": "aeb06a18abab343a58959a8dfff7ea10cce1ce7ed33ad05ecd6a2fe2d5c4c0d4",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "Lib/test/test_doctest/test_doctest4.txt",
+      "sha256": "d8eb10ff8837b339686ae5aa2e0072a9de6abddf691b87dd415b56f395d8852b"
+    },
+    {
+      "kind": "txt",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9100000262260437,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "multiple unambiguous Markdown/GFM structures",
+            "explicit": false,
+            "format": "markdown"
+          },
+          {
+            "confidence": 0.550000011920929,
+            "detector_id": "builtin.detector.hints",
+            "detector_priority": 100,
+            "diagnostics": [],
+            "evidence": "filename extension",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.markdown-gfm",
+            "format": "markdown",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          },
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 2717,
+          "markdownSha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
+          "providers": [
+            "builtin.converter.markdown-gfm"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "markdown"
+      },
+      "path": "Lib/test/tokenizedata/tokenize_tests.txt",
+      "sha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "error": "malformed input (html): HTML contains no visible document content",
+          "errorCode": "malformed"
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/index.html",
+      "sha256": "7faa8ea77d1d45c978ab3d908e564b27887b503c81a88942db48c6ad09007abf"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 534,
+          "markdownSha256": "261020f45d33de70432bd53942d9a5f66359174d6ee8bca9f3bf0bc2371cc299",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/delegatetest.html",
+      "sha256": "54b5a3eaf58a4c60a11d34e371a4d3489c05db063d8ee41447653b0c27ec7099"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 553,
+          "markdownSha256": "4e38f4c9ed7d24b29cb51d004655579165c764d94741f29b19885b87a6c83c11",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/hovertest.html",
+      "sha256": "4de98423d583e67d48c0331219c5ad510670fdf4af4278c3a8b5ea32f4e44f82"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 306,
+          "markdownSha256": "391154db594039242dcc2cd0c7c1d76ecfbc1cc187828a93fa96b6a44d9a6470",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/absolute.html",
+      "sha256": "1f5f7620b20bfe8c4d13513c9effaae8bebb51dcfa7965ac2eb4e3a032e6d699"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "error": "malformed input (html): HTML contains no visible document content",
+          "errorCode": "malformed"
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/body.html",
+      "sha256": "a338b2ed941f93e97feef3dbb910731dc1e937631b9ce05975f2ccf106acfe9e"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 174,
+          "markdownSha256": "eff15c4e2e3de417824249723b3320a55a90f20f7defe13d9ab04e413776c073",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/boxes.html",
+      "sha256": "83ef2a963c3d3e1830bc442a711d874a962795053c51155acc6404b3349bc0d6"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 47,
+          "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/fixed.html",
+      "sha256": "d343088196c2ffb70caecfad8227cec87aa0fe5ac35c75898a416ad0b76196a6"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 176,
+          "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/relative.html",
+      "sha256": "c415f44ae578f67ea598c767029324146663f550e70be31d7337c6621eb1f16d"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 47,
+          "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/scroll.html",
+      "sha256": "340d2e9ffb0bdf5ee8857a658234ac1e3323dcfa59b9b735c4702f1cca4dfb02"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 176,
+          "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/static.html",
+      "sha256": "eec52a528a91e6f0265351bdf4f22308ad221f8d1d925be1f9bc384ad4514152"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.parseRecovered",
+              "locator": null,
+              "message": "HTML5 parser recovered from 1 syntax error(s)",
+              "severity": "warning"
+            },
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 171,
+          "markdownSha256": "488e0c269256ef37cf6cc7aa7e29d5a46f60df94a9026f122d9e4dfc721264a3",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/offset/table.html",
+      "sha256": "4b8bcd56db857cbcdb534fabf8df67046b396f873e016c12c56dda08ab60c416"
+    },
+    {
+      "kind": "html",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9599999785423279,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "HTML root markup",
+            "explicit": false,
+            "format": "html"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.html",
+            "format": "html",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [
+            {
+              "code": "html.sourceLocationUnavailable",
+              "locator": null,
+              "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+              "severity": "warning"
+            },
+            {
+              "code": "html.mainContentFallback",
+              "locator": null,
+              "message": "no non-empty explicit main-content region; used visible body content",
+              "severity": "warning"
+            }
+          ],
+          "markdownBytes": 160,
+          "markdownSha256": "74c19aff59fa33e6d8cf4cb8a070a1d680b62c3b9bfb91e8b391c811cecf58e0",
+          "providers": [
+            "builtin.converter.html"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "html"
+      },
+      "path": "test/data/selector/html5_selector.html",
+      "sha256": "3f0f89aedb19c60fdde3e35258e6ee2b2224442d43f34a7f883c2e679728a7b8"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 63635,
+          "markdownSha256": "136fa4bb95286a22f7b5a52cb1d869f1d56c4d8f16cfe4f020b6e28ef1182b67",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/core.js",
+      "sha256": "91534143930d07f1a38a23e456d402484d3abe85694f4bd48968b5792b1f9691"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 126545,
+          "markdownSha256": "579031bba613e0f70352dd3186e91969e0f271ce59fe1843cc367d9beae99242",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/manipulation.js",
+      "sha256": "9d85fee05495c9bc7ab6e14cbb791ea9306ba69e3dc2de12b44048db93011a4e"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.9100000262260437,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "multiple unambiguous Markdown/GFM structures",
+            "explicit": false,
+            "format": "markdown"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.markdown-gfm",
+            "format": "markdown",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 118865,
+          "markdownSha256": "4a50d927d7e34848320c38d7c034dc9ce5783b7387e3668fd7a1f6c49e68b060",
+          "providers": [
+            "builtin.converter.markdown-gfm"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "markdown"
+      },
+      "path": "test/unit/selector.js",
+      "sha256": "4a50d927d7e34848320c38d7c034dc9ce5783b7387e3668fd7a1f6c49e68b060"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 83420,
+          "markdownSha256": "85d6f9e51015576a60b213b848646ed41fae76d83e388684d9452a2c15787ed5",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/attributes.js",
+      "sha256": "6aa2b9d730bd32032c4ca9881d574eb2d87bbc1b0a6f79326870e52d3f59aacc"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 75693,
+          "markdownSha256": "41108907b6f5879a463b4be875580f4241cb1f987f9577302ae84de1836c0bf4",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/css.js",
+      "sha256": "61d17d13468c89eb978842a6605dda57892977b2ef1659aee0201681f13c6557"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 37871,
+          "markdownSha256": "5f26e99e6c31e6f7fe77b06baacfcdea1a60db128231cd141b7b7b8f702df4f1",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/data.js",
+      "sha256": "9394f8ee5aeea28221b35c6e203f2dfb49b3393539a2d92048d1db2835038b6e"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 115629,
+          "markdownSha256": "961a3e56539f3f918f6070c9f7ff4e40d575ec10963c065ce5e959f779726c0f",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/event.js",
+      "sha256": "bdd9bf7286ef599274ece945315fce235f8fb6dcd7423bc24dd04e1a281c7f0e"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 58352,
+          "markdownSha256": "f1da2ca0c51d7c1ac0e79d4e9059e596157c42b8dd4a8ff968566f38d1518b1c",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/traversing.js",
+      "sha256": "1b7fbb4ac877a45726183c8661ab3ca345e5cbd3789b8d5220525ff1fa5d7211"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 135847,
+          "markdownSha256": "10454aa9fadd1f86821eb1e52c9a7f98cb1b02b5d1d7a979212f504b71e64dda",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/ajax.js",
+      "sha256": "9e246d60eaf69c6a88936b12d49f745fd06e7da3e9d12a438f28b1cf41760de5"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 9189,
+          "markdownSha256": "6a8ccd77c2c05792ff18b16c8afc0019b0611e87c0cb5167e35a2f9c0d830d4d",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/animation.js",
+      "sha256": "e0ea07d85dc3de1c9ea920859169d34202b0773a84e368e5f53f1fc47debac62"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 35925,
+          "markdownSha256": "ab8dab9e7ff954fde7f5dea9f9723cf0d55fe4b23f0bc387ad813c655e28533a",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/deferred.js",
+      "sha256": "c1aa93f428a366bc1759c7f5b5eb71efc13bbdce3062196fefca3986de6cfcde"
+    },
+    {
+      "kind": "js",
+      "observation": {
+        "candidates": [
+          {
+            "confidence": 0.8799999952316284,
+            "detector_id": "builtin.detector.content",
+            "detector_priority": 200,
+            "diagnostics": [],
+            "evidence": "plain-text safety and encoding thresholds",
+            "explicit": false,
+            "format": "text"
+          }
+        ],
+        "options": {
+          "ai": {
+            "audio_transcription": "off",
+            "formula_repair": "off",
+            "image_description": "off",
+            "layout_repair": "off",
+            "markdown_postprocess": "off",
+            "table_repair": "off",
+            "vision_ocr": "off"
+          },
+          "archive": {
+            "zip_charset": null
+          },
+          "asr": {
+            "chinese_script": "preserve",
+            "language": null,
+            "max_duration_ms": null,
+            "max_native_memory_bytes": 943718400,
+            "max_segments": 100000,
+            "max_threads": 4
+          },
+          "delimited_text": {
+            "header": "auto",
+            "ragged_rows": "strict"
+          },
+          "diarization": {
+            "enabled": false,
+            "expected_speakers": null,
+            "max_speakers": 16
+          },
+          "error_policy": "best-effort",
+          "limits": {
+            "max_archive_compression_ratio": 100,
+            "max_archive_depth": 16,
+            "max_archive_entries": 100000,
+            "max_archive_entry_bytes": 268435456,
+            "max_asset_bytes": 268435456,
+            "max_decompressed_bytes": 1073741824,
+            "max_feed_entries": 10000,
+            "max_feed_html_bytes": 67108864,
+            "max_feed_text_bytes": 67108864,
+            "max_field_bytes": 16777216,
+            "max_input_bytes": 536870912,
+            "max_memory_bytes": 2147483648,
+            "max_nesting_depth": 256,
+            "max_pages": 10000,
+            "max_pdf_layout_comparisons": 12000000,
+            "max_pdf_page_objects": 100000,
+            "max_pdf_total_objects": 10000000,
+            "max_table_cells": 1000000,
+            "max_table_columns": 16384,
+            "max_table_rows": 100000,
+            "max_temporary_bytes": 4294967296,
+            "max_total_asset_bytes": 1073741824
+          },
+          "network": {
+            "allowed_hosts": [],
+            "deny_private_networks": true,
+            "enabled": false,
+            "max_redirects": 3
+          },
+          "ocr": {
+            "minimum_confidence": 0.699999988079071,
+            "policy": "off"
+          },
+          "output": {
+            "asset_directory_suffix": "_assets",
+            "asset_mode": "extract",
+            "asset_uri_prefix": null,
+            "flavor": "gfm",
+            "include_provenance": true
+          },
+          "text": {
+            "charset": null,
+            "decoding_mode": "strict"
+          }
+        },
+        "probes": [
+          {
+            "converter": "builtin.converter.text",
+            "format": "text",
+            "probe": {
+              "confidence": 1.0,
+              "outcome": "match"
+            }
+          }
+        ],
+        "result": {
+          "diagnostics": [],
+          "markdownBytes": 15983,
+          "markdownSha256": "7b65338c48d31275480e36d109084adcea7586649d97d9de57b03de93dba093f",
+          "providers": [
+            "builtin.converter.text"
+          ],
+          "validIr": true
+        },
+        "selectedFormat": "text"
+      },
+      "path": "test/unit/serialize.js",
+      "sha256": "c7d2f443f0f92678854928aeb23a6344945244d991dd2b523e714ec6c2f9cd3c"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceRevision": "26aaf8325ed31ce72921c84f0239574718d72257",
+  "helperSha256": "8e6baf7c84b6c6f920663ece7146c5d58d705117ddb58caad47cabe42011dd2c",
+  "manifestSha256": "1b5a0fc7ab3047c88f7eabee45554d726d0071cacec7544cf881bb5574f39309"
+}

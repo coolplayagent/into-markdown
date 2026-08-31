@@ -352,9 +352,44 @@ fn corrupt_crc(bytes: &mut [u8], target: &str) {
 }
 
 #[test]
+fn unsupported_members_are_reported_and_renamed_documents_keep_their_identity() {
+    let pptx = std::fs::read(crate::test_fixture_root().join("small/pptx/normal.pptx")).unwrap();
+    let bytes = archive(
+        &[
+            ("source.js", b"const value = '<article><p>wrong</p></article>';"),
+            ("slides.md", pptx.as_slice()),
+            ("kept.txt", b"kept text"),
+        ],
+        false,
+    );
+    let result =
+        convert(bytes.clone(), ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    result.document.validate().unwrap();
+    assert!(result.markdown.contains("Corpus"));
+    assert!(result.markdown.contains("kept text"));
+    assert!(!result.markdown.contains("wrong"));
+    assert!(result.diagnostics.iter().any(|item| item.code == "zip.entry.failed"
+        && item.locator.as_ref().and_then(|loc| loc.part.as_deref()) == Some("source.js")));
+    let mut options = ConversionOptions::default();
+    options.error_policy = crate::ErrorPolicy::Strict;
+    let strict = convert(bytes, options, ExecutionOptions::default()).unwrap();
+    assert!(strict.markdown.contains("Corpus"));
+    assert!(strict.diagnostics.iter().any(|item| item.code == "zip.entry.failed"
+        && item.locator.as_ref().and_then(|loc| loc.part.as_deref()) == Some("source.js")));
+}
+
+#[test]
 fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
     for signature in [b"Rar!\x1a\x07\x00".as_slice(), b"Rar!\x1a\x07\x01\x00".as_slice()] {
-        for name in ["input.rar", "input.txt", "input.zip", "input.bin", "input.drawio"] {
+        for name in [
+            "input.rar",
+            "input.txt",
+            "input.zip",
+            "input.bin",
+            "input.drawio",
+            "input.md",
+            "input.js",
+        ] {
             let request = ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
             let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
             assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");
@@ -379,16 +414,33 @@ fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
         assert_eq!(error.code(), ErrorCode::Malformed);
         assert!(error.to_string().contains("truncated"));
     }
-    for name in ["plain.txt", "plain.rar"] {
-        let request =
-            ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some(name)));
-        assert!(
-            block_on(default_engine().unwrap().convert(request))
-                .unwrap()
-                .markdown
-                .contains("ordinary Rar")
-        );
-    }
+    let mut plain =
+        ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some("plain.rar")));
+    assert_eq!(
+        block_on(default_engine().unwrap().convert(plain.clone())).unwrap_err().code(),
+        ErrorCode::Unsupported
+    );
+    plain.hint.format = Some(InputFormat::Text);
+    assert!(
+        block_on(default_engine().unwrap().convert(plain))
+            .unwrap()
+            .markdown
+            .contains("ordinary Rar")
+    );
+    let request =
+        ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some("plain.txt")));
+    assert!(
+        block_on(default_engine().unwrap().convert(request))
+            .unwrap()
+            .markdown
+            .contains("ordinary Rar")
+    );
+    let mut forced =
+        ConversionRequest::new(InputRef::bytes(b"Rar!\x1a\x07\x00".to_vec(), Some("actual.rar")));
+    forced.hint.format = Some(InputFormat::Json);
+    let error = block_on(default_engine().unwrap().convert(forced)).unwrap_err();
+    assert_ne!(error.reason_code(), "archiveExtractionRequired");
+    assert_eq!(error.code(), ErrorCode::Malformed);
     let only = archive(&[("only.rar", b"Rar!\x1a\x07\x00")], false);
     assert_eq!(
         convert(only, ConversionOptions::default(), ExecutionOptions::default())
@@ -455,5 +507,31 @@ fn recoverable_rar_retains_the_same_terminal_diagnostic() {
         let error = block_on(engine.convert_recoverable(request, &store, &token)).unwrap_err();
         assert_eq!(error.code(), ErrorCode::Unsupported);
         assert_eq!(error.reason_code(), "archiveExtractionRequired");
+    }
+}
+
+#[test]
+fn generic_zip_identity_overrides_document_package_suffixes() {
+    let bytes = archive(&[("body.txt", b"generic ZIP body")], false);
+    for name in [
+        "renamed.docx",
+        "renamed.pptx",
+        "renamed.xlsx",
+        "renamed.epub",
+        "renamed.odt",
+        "renamed.rar",
+        "renamed.py",
+        "renamed",
+    ] {
+        let mut request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+        request.options.ocr.policy = crate::OcrPolicy::Off;
+        let context =
+            crate::ExecutionContext::new(request.execution.clone(), request.options.limits.clone());
+        let result =
+            block_on(default_engine().unwrap().convert_with_context(request, context.clone()))
+                .unwrap();
+        assert_eq!(context.detected_format(), Some(InputFormat::Zip), "{name}");
+        assert!(result.markdown.contains("generic ZIP body"));
+        result.document.validate().unwrap();
     }
 }

@@ -28,6 +28,13 @@ FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E�
 
 快速门禁提供早期反馈，正式发布与本地专项验收分别记录实际构建、平台和运行证据。
 
+## 格式准入与 HTML 回归
+
+格式检测、解析、API 和 CLI 能力路由的本地专项包含受影响四个库、CLI/stdin/批量、
+Web 能力路由及固定提交的 36 个公开 TXT/HTML/JS 样本、两种错误策略。执行命令、
+样本来源、基线候选/probe/实际路由，以及本地、历史 CI 和安装产物状态见
+[#339 证据](evidence/issue-339.md)。PR 继续遵循上述四个 fast job 的统一边界。
+
 ## 可执行文档契约
 
 `bazel test //tools/docs-check:docs_check_test` 从构建出的真实 `into-md` 递归发现公共命令，

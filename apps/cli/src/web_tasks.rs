@@ -2677,7 +2677,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 "task input or persisted request changed after authentication".into(),
             ));
         }
-        let execution = ExecutionOptions {
+        let mut execution = ExecutionOptions {
             cancellation: job.cancellation.clone(),
             timeout: Some(deadline.saturating_duration_since(Instant::now())),
             progress_listener: Some(Arc::new(EventProgressListener {
@@ -2685,6 +2685,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 id: job.id.clone(),
             })),
         };
+        let input = InputRef::bytes(Arc::<[u8]>::from(bytes), Some(persisted.name.clone()));
         let routed_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
             let services = shared.media_services.assemble(&persisted.options).map_err(|error| {
                 WebTaskError::Conversion {
@@ -2701,9 +2702,10 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 }
             })?)
         } else {
+            let needs = detected_web_capabilities(&shared.engine, &input, &persisted, &execution)?;
             shared
                 .media_services
-                .assemble_conversion(&persisted.options, web_invocation_capabilities(&persisted))
+                .assemble_conversion(&persisted.options, needs)
                 .map_err(|error| WebTaskError::Conversion {
                     code: error.code().into(),
                     reason_code: Some(error.reason_code().into()),
@@ -2718,10 +2720,8 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 })?
         };
         let engine = routed_engine.as_ref().unwrap_or(&shared.engine);
-        let mut request = ConversionRequest::new(InputRef::bytes(
-            Arc::<[u8]>::from(bytes),
-            Some(persisted.name.clone()),
-        ));
+        execution.timeout = Some(deadline.saturating_duration_since(Instant::now()));
+        let mut request = ConversionRequest::new(input);
         request.hint = persisted.hint;
         request.options = persisted.options;
         request.execution = execution;
@@ -2819,28 +2819,27 @@ fn validate_web_result_delivery(
     Ok(())
 }
 
-fn web_invocation_capabilities(
+fn detected_web_capabilities(
+    engine: &into_markdown::Engine,
+    input: &InputRef,
     request: &PersistedRequest,
-) -> crate::services::InvocationCapabilities {
-    let format = request.hint.format.or_else(|| {
-        request.hint.extension.as_deref().and_then(InputFormat::from_extension).or_else(|| {
-            Path::new(&request.name)
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .and_then(InputFormat::from_extension)
-        })
-    });
-    crate::services::InvocationCapabilities {
-        ocr: request.options.ocr.policy != OcrPolicy::Off
-            || request.options.ai.vision_ocr != AiMode::Off,
-        transcription: matches!(format, Some(InputFormat::Audio | InputFormat::Video))
-            || request.options.ai.audio_transcription != AiMode::Off,
-        diarization: request.options.diarization.enabled,
-        legacy_office: matches!(
-            format,
-            Some(InputFormat::Doc | InputFormat::Xls | InputFormat::Ppt)
-        ),
-    }
+    execution: &ExecutionOptions,
+) -> Result<crate::services::InvocationCapabilities, WebTaskError> {
+    let detected = futures::executor::block_on(engine.detect(into_markdown::DetectionRequest {
+        input: input.clone(),
+        hint: request.hint.clone(),
+        options: request.options.clone(),
+        execution: execution.clone(),
+    }))
+    .map_err(|error| WebTaskError::Conversion {
+        code: error.code().as_str().into(),
+        reason_code: Some(error.reason_code().into()),
+        stage: "detection".into(),
+    })?;
+    Ok(crate::services::InvocationCapabilities::for_format(
+        detected.candidates.first().map(|candidate| candidate.format),
+        &request.options,
+    ))
 }
 
 fn promote_published_success(
@@ -5203,28 +5202,26 @@ mod tests {
     mod empty_result_tests;
 
     #[test]
-    fn durable_web_requests_assemble_capabilities_from_options_and_filename() {
-        let mut request = PersistedRequest {
+    fn durable_web_requests_use_content_identity_for_capability_assembly() {
+        let request = PersistedRequest {
             schema_version: 1,
             workflow: WebWorkflow::Conversion,
-            name: "scan.jpg".into(),
+            name: "renamed.md".into(),
             hint: FormatHint::default(),
             batch_id: None,
             options: ConversionOptions::default(),
         };
-        let image = web_invocation_capabilities(&request);
-        assert!(image.ocr);
-        assert!(!image.legacy_office);
-
-        request.name = "archive.DOC".into();
-        let legacy = web_invocation_capabilities(&request);
-        assert!(legacy.legacy_office);
-
-        request.options.ocr.policy = OcrPolicy::Off;
-        request.name = "meeting.webm".into();
-        let media = web_invocation_capabilities(&request);
-        assert!(!media.ocr);
-        assert!(media.transcription);
+        let engine = into_markdown::default_engine().unwrap();
+        for (bytes, media) in
+            [(b"\x89PNG\r\n\x1a\n".as_slice(), false), (b"RIFF\0\0\0\0WAVE", true)]
+        {
+            let input = InputRef::bytes(bytes.to_vec(), Some(request.name.clone()));
+            let needs =
+                detected_web_capabilities(&engine, &input, &request, &ExecutionOptions::default())
+                    .unwrap();
+            assert_eq!(needs.transcription, media);
+            assert_eq!(needs.ocr, !media);
+        }
     }
 
     #[test]

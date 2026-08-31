@@ -31,15 +31,11 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5170,
+      "lines": 5105,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
           "lines": 165
-        },
-        {
-          "symbol": "run_conversion",
-          "lines": 105
         },
         {
           "symbol": "run_plugins",
@@ -159,7 +155,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4525,
+      "lines": 4524,
       "functions": [
         {
           "symbol": "impl Upload::finish",
@@ -798,11 +794,11 @@
     },
     {
       "path": "crates/converters/src/lib.rs",
-      "lines": 2707,
+      "lines": 2632,
       "functions": [
         {
           "symbol": "structured_text_candidate",
-          "lines": 152
+          "lines": 122
         }
       ],
       "allowances": [
@@ -1747,7 +1743,7 @@
     },
     {
       "path": "crates/core/src/spi.rs",
-      "lines": 1625,
+      "lines": 1613,
       "functions": [
         {
           "symbol": "estimate_validation_working_set",
@@ -2461,7 +2457,7 @@
       "functions": [
         {
           "symbol": "WorkbenchPage",
-          "lines": 193
+          "lines": 188
         }
       ],
       "allowances": []

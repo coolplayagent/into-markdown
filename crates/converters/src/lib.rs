@@ -2,11 +2,12 @@
 //!
 //! Built-in source resolvers, format detectors, and converters.
 
+mod admission;
 mod core_catalog;
 mod detection;
 pub use detection::ContentFormatDetector;
 #[cfg(test)]
-use detection::detect_content;
+use detection::{detect_content, detect_zip};
 mod core_catalog_authority;
 mod delimited;
 mod docx;
@@ -773,7 +774,7 @@ impl FormatDetector for HintFormatDetector {
                 .as_deref()
                 .or_else(|| hint.filename.as_deref().and_then(extension_of))
                 .or_else(|| input.metadata.name.as_deref().and_then(extension_of));
-            if let Some(format) = extension.and_then(InputFormat::from_extension) {
+            if let Some(format) = extension.and_then(admission::format_from_extension) {
                 evidence.entry(format).or_default().push("filename extension");
             }
             let media_type = hint.media_type.as_deref().or(input.metadata.media_type.as_deref());
@@ -785,7 +786,8 @@ impl FormatDetector for HintFormatDetector {
             if hint.charset.is_some() && !delimited_hint {
                 evidence.entry(InputFormat::Text).or_default().push("character encoding hint");
             }
-            let conflict = evidence.len() > 1;
+            let conflict =
+                evidence.len() > 1 || admission::hint_mime_conflict(extension, media_type);
             Ok(evidence
                 .into_iter()
                 .map(|(format, reasons)| {
@@ -830,6 +832,21 @@ impl FormatDetector for HintFormatDetector {
                     }
                 })
                 .collect())
+        })
+    }
+    fn detect_with_authority<'a>(
+        &'a self,
+        input: &'a ResolvedInput,
+        hint: &'a FormatHint,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<into_markdown_core::FormatDetection, ConversionError>> {
+        Box::pin(async move {
+            Ok(into_markdown_core::FormatDetection {
+                candidates: self.detect(input, hint, context).await?,
+                authority: into_markdown_core::DetectionAuthority::Hint,
+                compatible_hints: Vec::new(),
+                unsupported_reason: None,
+            })
         })
     }
 }
@@ -1084,14 +1101,28 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
 }
 
+#[cfg(test)]
+fn structured_for_test(
+    bytes: &[u8],
+    context: &ExecutionContext,
+) -> Result<Option<FormatCandidate>, ConversionError> {
+    structured_text_candidate(
+        bytes,
+        context,
+        &mut into_markdown_core::DetectionAuthority::Heuristic,
+    )
+}
+
 #[allow(clippy::too_many_lines)]
 fn structured_text_candidate(
     bytes: &[u8],
     context: &ExecutionContext,
+    authority: &mut into_markdown_core::DetectionAuthority,
 ) -> Result<Option<FormatCandidate>, ConversionError> {
     if let Some(json) = json_payload(bytes) {
         let summary = scan_json(json, context)?;
         if summary.status == JsonScanStatus::Complete {
+            *authority = into_markdown_core::DetectionAuthority::StructuredText;
             return Ok(Some(if summary.notebook {
                 FormatCandidate::new(InputFormat::Ipynb, 0.99, "Jupyter notebook JSON structure")
             } else {
@@ -1118,44 +1149,8 @@ fn structured_text_candidate(
         )));
     }
 
-    if let Some(decoded) = structured::decode_xml_for_detection(bytes, context)? {
-        match decoded {
-            structured::XmlDetectionText::Decoded(decoded) => {
-                let text = decoded.trim_start();
-                if let Some(root) = xml_root_name(text) {
-                    return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
-                        FormatCandidate::new(
-                            InputFormat::Xml,
-                            0.92,
-                            format!("complete UTF-16 XML {root} root element"),
-                        )
-                    } else {
-                        FormatCandidate::new(
-                            InputFormat::Xml,
-                            0.50,
-                            format!("incomplete UTF-16 XML {root} root element"),
-                        )
-                        .with_diagnostic(
-                            "incomplete XML evidence does not override a filename extension",
-                        )
-                    }));
-                }
-                if strong_xml_prefix(text) {
-                    return Ok(Some(FormatCandidate::new(
-                        InputFormat::Xml,
-                        0.90,
-                        "UTF-16 XML declaration or paired markup",
-                    )));
-                }
-            }
-            structured::XmlDetectionText::InvalidUtf16 => {
-                return Ok(Some(FormatCandidate::new(
-                    InputFormat::Xml,
-                    0.50,
-                    "UTF-16 XML signature with invalid encoded content",
-                )));
-            }
-        }
+    if let Some(candidate) = admission::utf16_xml_candidate(bytes, context, authority)? {
+        return Ok(Some(candidate));
     }
 
     let Some((prefix, _)) = bounded_utf8_prefix(bytes, TEXT_INSPECTION_BYTE_LIMIT) else {
@@ -1178,7 +1173,7 @@ fn structured_text_candidate(
         return Ok(Some(FormatCandidate::new(InputFormat::Html, 0.96, "HTML/XHTML root element")));
     }
     if text.starts_with("<?xml") {
-        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+        return Ok(Some(if admission::complete_xml(bytes, context, authority)? {
             FormatCandidate::new(InputFormat::Xml, 0.92, "complete XML declaration")
         } else {
             FormatCandidate::new(InputFormat::Xml, 0.50, "incomplete XML declaration")
@@ -1202,7 +1197,7 @@ fn structured_text_candidate(
         )));
     }
     if let Some(root) = root {
-        return Ok(Some(if structured::xml_complete_for_detection(bytes, context)? {
+        return Ok(Some(if admission::complete_xml(bytes, context, authority)? {
             FormatCandidate::new(
                 InputFormat::Xml,
                 0.92,
@@ -1238,7 +1233,11 @@ fn structured_text_candidate(
     let Ok(delimited_text) = std::str::from_utf8(delimited_bytes) else {
         return Ok(None);
     };
-    delimited::detected_candidate(delimited_text, context)
+    let candidate = delimited::detected_candidate(delimited_text, context)?;
+    if candidate.is_some() {
+        *authority = into_markdown_core::DetectionAuthority::StructuredText;
+    }
+    Ok(candidate)
 }
 
 fn strong_json_prefix(json: &[u8]) -> bool {
@@ -2024,70 +2023,6 @@ fn xml_root_name(mut text: &str) -> Option<&str> {
     .then_some(local)
 }
 
-fn detect_zip(bytes: &[u8]) -> Vec<FormatCandidate> {
-    let mut candidates = vec![FormatCandidate::new(InputFormat::Zip, 0.90, "ZIP magic bytes")];
-    let entry_count = match zip_preflight(bytes) {
-        Ok(entry_count) if entry_count <= ZIP_INSPECTION_ENTRY_LIMIT => entry_count,
-        Ok(entry_count) => {
-            candidates[0].diagnostics.push(format!(
-                "ZIP inspection stopped before archive construction: {entry_count} entries exceed the {ZIP_INSPECTION_ENTRY_LIMIT} entry limit"
-            ));
-            return candidates;
-        }
-        Err(diagnostic) => {
-            candidates[0].diagnostics.push(diagnostic);
-            return candidates;
-        }
-    };
-    let mut archive = match zip::ZipArchive::new(Cursor::new(bytes)) {
-        Ok(archive) => archive,
-        Err(error) => {
-            candidates[0]
-                .diagnostics
-                .push(format!("ZIP directory could not be inspected: {error}"));
-            return candidates;
-        }
-    };
-    if archive.len() != entry_count {
-        candidates[0].diagnostics.push(format!(
-            "ZIP entry count changed after validated EOCD preflight: {entry_count} != {}",
-            archive.len()
-        ));
-        return candidates;
-    }
-
-    let mut names = Vec::with_capacity(archive.len());
-    let mut name_bytes = 0_usize;
-    for index in 0..archive.len() {
-        match archive.by_index(index) {
-            Ok(entry) => {
-                name_bytes = name_bytes.saturating_add(entry.name().len());
-                if name_bytes > ZIP_NAME_READ_LIMIT {
-                    candidates[0].diagnostics.push(format!(
-                        "ZIP inspection stopped: entry names exceed the {ZIP_NAME_READ_LIMIT} byte limit"
-                    ));
-                    return candidates;
-                }
-                names.push(entry.name().replace('\\', "/"));
-            }
-            Err(error) => candidates[0]
-                .diagnostics
-                .push(format!("ZIP entry {index} could not be inspected: {error}")),
-        }
-    }
-    let specialized = inspect_zip_package(&mut archive, &names, &mut candidates[0].diagnostics);
-    if specialized.len() == 1 {
-        let (format, evidence) = specialized[0];
-        candidates.push(FormatCandidate::new(format, 0.99, evidence));
-    } else if specialized.len() > 1 {
-        candidates[0].diagnostics.push(format!(
-            "conflicting package structures detected: {}",
-            specialized.iter().map(|(format, _)| format.as_str()).collect::<Vec<_>>().join(",")
-        ));
-    }
-    candidates
-}
-
 fn inspect_zip_package(
     archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
     names: &[String],
@@ -2709,7 +2644,7 @@ fn detect_ole(bytes: &[u8]) -> Vec<FormatCandidate> {
     };
     let mut candidates = Vec::new();
     for (format, stream) in streams {
-        if directory_names.iter().any(|name| name == stream) {
+        if directory_names.iter().any(|name| name.eq_ignore_ascii_case(stream)) {
             candidates.push(FormatCandidate::new(
                 format,
                 0.98,
@@ -2929,7 +2864,7 @@ mod tests {
     }
 
     fn structured(bytes: &[u8]) -> Option<FormatCandidate> {
-        structured_text_candidate(bytes, &execution_context()).unwrap()
+        structured_for_test(bytes, &execution_context()).unwrap()
     }
 
     #[test]

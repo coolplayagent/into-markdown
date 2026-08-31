@@ -190,7 +190,7 @@ pub(crate) fn sniff_text(
     if bytes.is_empty() {
         return Ok(Some(0.80));
     }
-    if super::structured_text_candidate(bytes, context)?.is_some() {
+    if super::admission::structured_candidate(bytes, context)?.is_some() {
         return Ok(None);
     }
     sniff_unstructured_text(bytes, context)

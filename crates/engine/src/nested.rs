@@ -1,7 +1,7 @@
 use into_markdown_core::{
-    BoxFuture, ConversionError, Converter, ConverterOutput, ExecutionContext, FormatCandidate,
-    FormatDetector, InputFormat, NestedConversionRequest, NestedConversionService, ProbeOutcome,
-    Services,
+    BoxFuture, ConversionError, Converter, ConverterOutput, DetectionAuthority, ExecutionContext,
+    FormatCandidate, FormatDetector, InputFormat, NestedConversionRequest, NestedConversionService,
+    ProbeOutcome, Services,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
@@ -158,30 +158,73 @@ pub(crate) async fn detect_formats(
     hint: &into_markdown_core::FormatHint,
     context: &ExecutionContext,
 ) -> Result<Vec<FormatCandidate>, ConversionError> {
-    let mut best: BTreeMap<InputFormat, FormatCandidate> = BTreeMap::new();
-    if let Some(format) = hint.format {
-        best.insert(format, FormatCandidate::explicit(format));
-    }
+    let mut observed = Vec::new();
+    let mut unsupported = None;
+    let mut compatible_hints = Vec::new();
     for detector in detectors {
-        for mut candidate in context.run(detector.detect(input, hint, context)).await?? {
+        let detection = context.run(detector.detect_with_authority(input, hint, context)).await??;
+        compatible_hints.extend(detection.compatible_hints);
+        if unsupported.is_none() {
+            unsupported = detection.unsupported_reason;
+        }
+        for mut candidate in detection.candidates {
             candidate.explicit = false;
             candidate.confidence = normalize_confidence(candidate.confidence);
             candidate.detector_id = detector.id().into();
             candidate.detector_priority = detector.priority();
-            let replace = best.get(&candidate.format).is_none_or(|existing| {
-                candidate.explicit && !existing.explicit
-                    || candidate.explicit == existing.explicit
-                        && (candidate.confidence > existing.confidence
-                            || candidate.confidence.total_cmp(&existing.confidence)
-                                == std::cmp::Ordering::Equal
-                                && (candidate.detector_priority > existing.detector_priority
-                                    || candidate.detector_priority == existing.detector_priority
-                                        && candidate.detector_id < existing.detector_id))
-            });
-            if replace {
-                best.insert(candidate.format, candidate);
-            }
+            observed.push((detection.authority, candidate));
         }
+    }
+    let signature = observed.iter().any(|(authority, _)| {
+        matches!(authority, DetectionAuthority::Signature | DetectionAuthority::Container)
+    });
+    let accepted = observed.iter().any(|(authority, _)| *authority != DetectionAuthority::Hint);
+    if !accepted
+        && hint.format.is_none()
+        && let Some(detail) = unsupported.take()
+    {
+        return Err(ConversionError::Unsupported { detail });
+    }
+    let conflicting_hints: Vec<_> = if signature {
+        observed
+            .iter()
+            .filter(|(authority, candidate)| {
+                *authority == DetectionAuthority::Hint
+                    && !compatible_hints.contains(&candidate.format)
+                    && !observed.iter().any(|(other, identity)| {
+                        matches!(
+                            other,
+                            DetectionAuthority::Signature | DetectionAuthority::Container
+                        ) && identity.format == candidate.format
+                    })
+            })
+            .map(|(_, candidate)| candidate.format.as_str())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let conflict = (!conflicting_hints.is_empty()).then(|| {
+        format!(
+            "content signature takes precedence over conflicting format hints: {}",
+            conflicting_hints.join(",")
+        )
+    });
+    let mut best: BTreeMap<InputFormat, FormatCandidate> = BTreeMap::new();
+    if let Some(format) = hint.format {
+        best.insert(format, FormatCandidate::explicit(format));
+    }
+    for (authority, mut candidate) in observed {
+        if signature
+            && !matches!(authority, DetectionAuthority::Signature | DetectionAuthority::Container)
+            && !compatible_hints.contains(&candidate.format)
+            || unsupported.is_some() && authority == DetectionAuthority::Hint
+        {
+            continue;
+        }
+        if let Some(conflict) = &conflict {
+            candidate.diagnostics.push(conflict.clone());
+        }
+        merge_candidate(&mut best, candidate);
     }
     let mut candidates = best.into_values().collect::<Vec<_>>();
     candidates.sort_by(|left, right| {
@@ -198,4 +241,23 @@ pub(crate) async fn detect_formats(
 
 fn normalize_confidence(confidence: f32) -> f32 {
     if confidence.is_finite() { confidence.clamp(0.0, 1.0) } else { 0.0 }
+}
+
+fn merge_candidate(best: &mut BTreeMap<InputFormat, FormatCandidate>, candidate: FormatCandidate) {
+    let Some(existing) = best.get_mut(&candidate.format) else {
+        best.insert(candidate.format, candidate);
+        return;
+    };
+    let replace = !existing.explicit
+        && (candidate.confidence > existing.confidence
+            || candidate.confidence.total_cmp(&existing.confidence) == std::cmp::Ordering::Equal
+                && (candidate.detector_priority > existing.detector_priority
+                    || candidate.detector_priority == existing.detector_priority
+                        && candidate.detector_id < existing.detector_id));
+    let other = if replace { std::mem::replace(existing, candidate) } else { candidate };
+    for diagnostic in other.diagnostics {
+        if !existing.diagnostics.contains(&diagnostic) {
+            existing.diagnostics.push(diagnostic);
+        }
+    }
 }
