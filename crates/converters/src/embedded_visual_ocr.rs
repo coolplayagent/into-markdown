@@ -15,6 +15,7 @@ use std::io::Cursor;
 mod candidate_index;
 mod geometry;
 mod jpeg_input;
+mod memory_plan;
 mod node_budget;
 mod pdf_placement;
 mod runtime;
@@ -369,22 +370,17 @@ fn plan_enrichment(
     }
 
     node_budget::NodeBudget::new(count_document_nodes(&output.document.blocks, context)?)?;
-    let mut provider_working_peak = 0_u64;
+    let mut recognition_working_peak = 0_u64;
     // Only consult provider plans after every knowable input count and envelope
     // bound has passed, so a provider cannot observe a request that preflight
     // must reject.
-    // Account hash/map work once per eligible AssetId, but normalization and
-    // provider output once per unique byte identity.
+    // Retained outputs accumulate across byte identities. Normalization stays
+    // alive during recognition, then drops before the next serial image.
     for group in &grouping.groups {
         context.checkpoint()?;
         let candidate = &candidates[group.representative];
         let (width, height) = candidate.dimensions;
-        let normalized_peak = u64::from(width)
-            .checked_mul(u64::from(height))
-            .and_then(|pixels| pixels.checked_mul(32))
-            .and_then(|bytes| bytes.checked_add(64 * 1024))
-            .ok_or_else(|| resource("max_memory_bytes", "normalization plan overflow"))?;
-        checked_add(&mut total, normalized_peak, "normalization working-set plan overflow")?;
+        let normalized_peak = memory_plan::normalization_working_set(width, height)?;
         let (provider_bound, provider_working) = match services.ocr.as_deref() {
             Some(engine) => {
                 match engine.planned_normalized_png_output(width, height, options, context) {
@@ -405,7 +401,8 @@ fn plan_enrichment(
                 });
             }
         };
-        provider_working_peak = provider_working_peak.max(provider_working);
+        recognition_working_peak = recognition_working_peak
+            .max(memory_plan::recognition_working_set(normalized_peak, provider_working)?);
         // Provider ceilings bound retained memory, not the number of nodes a
         // picture will actually produce. Recognition admits its real nodes,
         // including every reference copy, before retaining or cloning them.
@@ -422,7 +419,7 @@ fn plan_enrichment(
             "OCR output plan overflow",
         )?;
     }
-    checked_add(&mut total, provider_working_peak, "OCR provider working-set plan overflow")?;
+    checked_add(&mut total, recognition_working_peak, "OCR recognition working-set plan overflow")?;
     let (occupied_id_bytes, collision_scratch) =
         planned_node_id_working_set(&output.document.blocks, context)?;
     checked_add(&mut total, occupied_id_bytes, "occupied OCR node ID plan overflow")?;
@@ -2049,6 +2046,62 @@ mod tests {
         assert_eq!(blocks.len(), 128);
         drop(enriched);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn serial_images_reserve_peak_normalization_plus_overlapping_provider_work() {
+        let working = 32 * 1024 * 1024;
+        let ocr = source_bound_ocr_with_working_plan(false, 64 * 1024, working);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let mut source = output();
+        for (index, asset) in source.assets.iter_mut().enumerate() {
+            let pixels = RgbaImage::from_pixel(1024, 1024, Rgba([index as u8, 2, 3, 255]));
+            let mut encoded = Cursor::new(Vec::new());
+            DynamicImage::ImageRgba8(pixels).write_to(&mut encoded, ImageFormat::Png).unwrap();
+            asset.bytes = encoded.into_inner();
+        }
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = OcrPolicy::Always;
+        options.limits.max_memory_bytes = 80 * 1024 * 1024;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let EnrichmentPlan::Reserve(plan) =
+            plan_enrichment(&source, InputFormat::Docx, &options, &services, &context).unwrap()
+        else {
+            panic!("active plan expected")
+        };
+        // Each image needs about 32 MiB for normalization while the provider's
+        // 32 MiB workspace coexists. Serial images must not require 96 MiB.
+        assert!(plan >= 64 * 1024 * 1024);
+        let reservation = context.reserve_memory(plan).unwrap();
+        assert_eq!(ocr.plans.load(Ordering::SeqCst), 2);
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
+        drop(reservation);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+
+        let low_context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            into_markdown_core::ResourceLimits {
+                max_memory_bytes: plan - 1,
+                ..options.limits.clone()
+            },
+        );
+        assert!(matches!(
+            low_context.reserve_memory(plan),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert_eq!(low_context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn normalization_and_provider_working_sum_overflow_is_rejected() {
+        assert!(matches!(
+            memory_plan::recognition_working_set(64 * 1024, u64::MAX),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
+        assert!(matches!(
+            memory_plan::normalization_working_set(u32::MAX, u32::MAX),
+            Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        ));
     }
 
     #[test]
