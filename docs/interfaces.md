@@ -61,6 +61,7 @@ Rust `ResourceLimits` 和请求 JSON 的 `options.limits` 共用
 及 `max_pdf_layout_comparisons: u64`（12,000,000）。省略字段使用默认值，显式零值
 失败。单页对象最高 10,000,000；Web 请求以默认值作为各字段上限。累计对象数检查
 溢出，扫描超限错误附预算名称、实际值、上限和页码。最终 IR 限制独立生效。
+版面比较预算按每次整份 PDF 版面重建计数，原生提取和 OCR 重建分别应用。
 
 PDFium 边界保留严格便捷接口 `TextPage::plan_links` / `PlannedLinks::materialize`。
 调用方可用 `plan_link_extraction(LinkPolicy, checkpoint)` 规划带策略的链接提取，

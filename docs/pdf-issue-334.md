@@ -62,8 +62,15 @@ Markdown 内容哈希；每项失败日志单独保存。安装产物省略 `--p
 - 本地源码构建：Accenture 29 页成功，71,237 字节 Markdown，并输出图片资产；
   600 页摘录成功，976,524 字节 Markdown。每页 anchor、正文、链接与资产有内容断言。
 - PDFium 原生边界、转换器及 API、配置/Web 和发布工具测试有独立日志。
-- `.github/workflows/pdf-resilience.yml` 在四个平台运行原生与公开样本回归，包含
-  Windows 中文路径，上传 JSON/日志；执行结果需以具体 CI run 为准。
+- 源码提交 `bb7ba26c9c2ebcb3f8823c6fb9059654011dfa40` 的
+  [PDF resilience CI](https://github.com/coolplayagent/into-markdown/actions/runs/33387006064)
+  在 macOS ARM64、Windows x86_64、Linux x86_64/ARM64 全部通过。每个平台执行原生
+  测试和 10 项 CLI 黑盒，包含公开样本与 Windows 中文路径，上传 JSON/日志。
+  [PR fast gate](https://github.com/coolplayagent/into-markdown/actions/runs/33387006015)
+  的四平台检查也全部通过。
+- 四平台公开样本输出一致：Accenture Markdown SHA-256 为
+  `2818330c01a8a443e782a1897d64e5304421a06871c2bfe8241f5979a4b8fa01`，600 页摘录为
+  `3dc43deebd466a72a2d588392a2c4cd67f80b13979ad2a5be3ae5a4ce123fd31`。
 - 发布流程的 `native_acceptance.py` 对四平台实际压缩包解出的可执行文件调用同一离线
   合成回归，另写 `pdf-regression.json`；`build_only=true` 验证构建不发布版本。
   安装产物通过状态需以具体构建 run 的证据为准。

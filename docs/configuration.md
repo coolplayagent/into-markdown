@@ -241,8 +241,9 @@ Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL�
 
 `conversion.limits.max_pdf_page_objects` 限制单页原始对象数，默认 100,000，
 取值为 1–10,000,000；`max_pdf_total_objects` 限制同一 PDF 累计对象数，默认
-10,000,000，使用检查溢出的 `u64` 累加。`max_pdf_layout_comparisons` 限制整份
-PDF 的版面比较次数，默认 12,000,000。后两项必须为正数。旧配置省略这些字段时
+10,000,000，使用检查溢出的 `u64` 累加。`max_pdf_layout_comparisons` 限制每次整份
+PDF 版面重建的比较次数，默认 12,000,000；原生提取和 OCR 重建各自计数。
+后两项必须为正数。旧配置省略这些字段时
 使用默认值，CLI 参数覆盖配置；`config get conversion.limits.<字段>` 可查询配置值。
 Web 请求允许降低预算，并以上述默认值为上限。
 
