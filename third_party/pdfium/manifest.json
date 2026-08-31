@@ -13,7 +13,7 @@
     "FPDFText_LoadPage", "FPDFText_ClosePage", "FPDFText_CountChars", "FPDFText_GetText",
     "FPDFText_GetUnicode", "FPDFText_GetCharBox", "FPDFText_GetFontSize",
     "FPDFText_GetFontInfo", "FPDFText_GetCharAngle",
-    "FPDF_GetPageWidthF", "FPDF_GetPageHeightF", "FPDFPage_GetRotation",
+    "FPDF_GetPageWidthF", "FPDF_GetPageHeightF", "FPDF_GetPageBoundingBox", "FPDFPage_GetRotation",
     "FPDFPage_CountObjects", "FPDFPage_GetObject", "FPDFPageObj_GetType",
     "FPDFPageObj_GetBounds",
     "FPDFLink_Enumerate", "FPDFLink_GetAnnotRect", "FPDFLink_GetAction",

@@ -7,6 +7,7 @@ mod coverage;
 mod error;
 mod geometry;
 mod ir;
+mod links;
 mod pages;
 mod runtime;
 mod stream;

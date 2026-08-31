@@ -218,6 +218,9 @@ markdown-postprocess
 --max-archive-entries <N>
 --max-depth <N>
 --max-pages <N>
+--max-pdf-page-objects <N>
+--max-pdf-total-objects <N>
+--max-pdf-layout-comparisons <N>
 --max-asset-size <SIZE>
 --max-total-asset-size <SIZE>
 --max-memory-size <SIZE|auto>
@@ -233,6 +236,10 @@ markdown-postprocess
   DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
   目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
+- PDF 单页原始对象默认上限 100,000，单份 PDF 累计原始对象默认上限 10,000,000，
+  版面比较默认上限 12,000,000。对应 `--max-pdf-page-objects`、
+  `--max-pdf-total-objects`、`--max-pdf-layout-comparisons`；均拒绝零值，单页最多
+  10,000,000。最终 IR、资产、页数、内存和执行时间继续独立限制。
 - 本地 CLI 默认使用 `auto` 共享内存预算：物理内存小于 8 GiB、8–16 GiB、16–32 GiB、
   32 GiB 及以上分别取 1、2、4、8 GiB。预算覆盖整个批处理，不随 `--jobs` 倍增；显式
   数值覆盖自动值。

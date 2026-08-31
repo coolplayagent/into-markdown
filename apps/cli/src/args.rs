@@ -265,6 +265,18 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "N")]
     pub max_pages: Option<u32>,
 
+    /// Maximum raw PDF objects on one page (default: 100000).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=10_000_000))]
+    pub max_pdf_page_objects: Option<u32>,
+
+    /// Maximum cumulative raw page objects in one PDF (default: 10000000).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_pdf_total_objects: Option<u64>,
+
+    /// Maximum comparisons per PDF layout pass (default: 12000000).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_pdf_layout_comparisons: Option<u64>,
+
     /// Maximum retained asset bytes.
     #[arg(long, value_name = "SIZE", value_parser = parse_byte_size)]
     pub max_asset_size: Option<u64>,

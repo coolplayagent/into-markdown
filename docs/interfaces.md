@@ -54,6 +54,26 @@ HTML 转换器同样复用文本 decoder、compact byte mapping 与 `ExecutionCo
 或系统 Office，也不调用 `Services`、`SourceResolver`、网络或子进程；宏、ActiveX、外部工作簿
 和嵌入式可执行对象不会执行。
 
+## PDF 提取与预算
+
+Rust `ResourceLimits` 和请求 JSON 的 `options.limits` 共用
+`max_pdf_page_objects: u32`（100,000）、`max_pdf_total_objects: u64`（10,000,000）
+及 `max_pdf_layout_comparisons: u64`（12,000,000）。省略字段使用默认值，显式零值
+失败。单页对象最高 10,000,000；Web 请求以默认值作为各字段上限。累计对象数检查
+溢出，扫描超限错误附预算名称、实际值、上限和页码。最终 IR 限制独立生效。
+版面比较预算按每次整份 PDF 版面重建计数，原生提取和 OCR 重建分别应用。
+
+PDFium 边界保留严格便捷接口 `TextPage::plan_links` / `PlannedLinks::materialize`。
+调用方可用 `plan_link_extraction(LinkPolicy, checkpoint)` 规划带策略的链接提取，
+先为 `allocation_bytes()` 预留内存，再用 `materialize_with_checkpoint` 得到
+`LinkExtraction { links, diagnostics }`。规划和物化使用相同枚举与分类，检查扫描数、
+有效结果数、诊断数、URI 分配及分类/几何变化；无进度、失效句柄和资源错误不会降级。
+`LinkIdentity` 保留注释或网页来源及原始序号，网页链接还保留矩形序号。
+
+Core 的 `best-effort` 只恢复不可用链接矩形，使用 `pdf.linkOmitted` 和页面 locator
+记录省略；`strict` 对无法恢复的矩形失败。有限倒序和部分越界矩形在两种策略下均
+规范化并保留。其他 PDF 对象继续执行原有几何校验。
+
 ## 可选服务
 
 `OcrEngine`、`Transcriber`、`AiProvider` 和 `TensorRuntime` 都是对象安全的

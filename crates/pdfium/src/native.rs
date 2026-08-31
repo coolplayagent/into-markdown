@@ -1,7 +1,8 @@
 use crate::{
     Backend, Character, CharacterAllocationPlan, Error, ImageAllocationPlan, ImageBitmap,
-    ImageObject, Limits, Link, LinkAllocationPlan, LinkTarget, PATH_SCAN_CHECKPOINT_OBJECTS,
-    PageInfo, PathBoundsAllocationPlan, PdfRect, PixelFormat,
+    ImageObject, Limits, Link, LinkAllocationPlan, LinkDiagnostic, LinkExtraction, LinkIdentity,
+    LinkIssueReason, LinkPolicy, LinkRequest, LinkTarget, PATH_SCAN_CHECKPOINT_OBJECTS, PageInfo,
+    PathBoundsAllocationPlan, PdfRect, PixelFormat,
 };
 use libloading::Library;
 use object::read::elf::Dyn as _;
@@ -15,6 +16,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod links;
 mod runtime_path;
 use runtime_path::contains_link_or_reparse;
 
@@ -122,6 +124,7 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDFText_GetFontInfo",
     "FPDFText_GetCharAngle",
     "FPDF_GetPageWidthF",
+    "FPDF_GetPageBoundingBox",
     "FPDF_GetPageHeightF",
     "FPDFPage_GetRotation",
     "FPDFPage_CountObjects",
@@ -481,6 +484,7 @@ pub(crate) struct Native {
     text_font_info: GetFontInfo,
     text_char_angle: GetFloat,
     page_width: GetPageFloat,
+    page_bounds: GetAnnotRect,
     page_height: GetPageFloat,
     page_rotation: Count,
     object_count: Count,
@@ -563,6 +567,7 @@ impl Native {
             text_font_info: symbol!("FPDFText_GetFontInfo", GetFontInfo),
             text_char_angle: symbol!("FPDFText_GetCharAngle", GetFloat),
             page_width: symbol!("FPDF_GetPageWidthF", GetPageFloat),
+            page_bounds: symbol!("FPDF_GetPageBoundingBox", GetAnnotRect),
             page_height: symbol!("FPDF_GetPageHeightF", GetPageFloat),
             page_rotation: symbol!("FPDFPage_GetRotation", Count),
             object_count: symbol!("FPDFPage_CountObjects", Count),
@@ -801,37 +806,6 @@ fn character_angle(radians: f32) -> Result<f32, Error> {
     Ok(degrees)
 }
 
-fn ensure_link_capacity(
-    output: &FixedOutput<Link>,
-    maximum: u32,
-    planned: u32,
-) -> Result<(), Error> {
-    if output.len() >= usize::try_from(planned).unwrap_or(usize::MAX) {
-        return Err(invalid("links", "materialized link count exceeded preflight plan"));
-    }
-    if output.len() >= usize::try_from(maximum).unwrap_or(usize::MAX) {
-        return Err(Error::ResourceLimit {
-            limit: "max_links_per_page",
-            actual: u64::try_from(output.len()).unwrap_or(u64::MAX).saturating_add(1),
-            maximum: u64::from(maximum),
-        });
-    }
-    Ok(())
-}
-
-fn push_annotation_link(
-    output: &mut FixedOutput<Link>,
-    bounds: PdfRect,
-    target: Option<LinkTarget>,
-    maximum: u32,
-    planned: u32,
-) -> Result<(), Error> {
-    let Some(target) = target else { return Ok(()) };
-    ensure_link_capacity(output, maximum, planned)?;
-    output.push(Link { bounds, target }, "links")?;
-    Ok(())
-}
-
 fn check_link_plan_bytes(
     current_target_bytes: u64,
     additional_target_bytes: u64,
@@ -846,20 +820,6 @@ fn check_link_plan_bytes(
         return Err(invalid(operation, "native URI size exceeded preflight plan"));
     }
     Ok(())
-}
-
-fn fixed_clone_string(
-    value: &str,
-    capacity: usize,
-    operation: &'static str,
-) -> Result<String, Error> {
-    if value.len() > capacity {
-        return Err(invalid(operation, "string length exceeded fixed allocation plan"));
-    }
-    let mut output = zeroed_boxed_bytes(capacity, operation)?.into_vec();
-    output[..value.len()].copy_from_slice(value.as_bytes());
-    output.truncate(value.len());
-    String::from_utf8(output).map_err(|_| invalid(operation, "string is not valid UTF-8"))
 }
 
 fn bounded_native_bytes<F>(
@@ -1274,320 +1234,21 @@ impl Backend for Native {
     fn page_object_count(&self, page: usize) -> Result<u32, Error> {
         nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })
     }
-    #[allow(clippy::too_many_lines)]
     fn links(
         &self,
-        document: usize,
-        page: usize,
-        text: usize,
-        limits: Limits,
+        request: LinkRequest,
         plan: LinkAllocationPlan,
-    ) -> Result<Vec<Link>, Error> {
-        let planned_links = plan.count;
-        let mut target_bytes = 0_u64;
-        let mut output = FixedOutput::new(
-            usize::try_from(plan.vector_capacity)
-                .map_err(|_| invalid("links", "planned count does not fit usize"))?,
-            "links",
-        )?;
-        let mut position = 0_i32;
-        let mut attempts = 0_u32;
-        let maximum_attempts = limits.max_links_per_page.saturating_add(1);
-        loop {
-            if attempts >= maximum_attempts {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: u64::from(attempts).saturating_add(1),
-                    maximum: u64::from(maximum_attempts),
-                });
-            }
-            let previous_position = position;
-            let mut link = std::ptr::null_mut();
-            let found =
-                unsafe { (self.enumerate_link)(page as Handle, &raw mut position, &raw mut link) };
-            attempts = attempts.saturating_add(1);
-            if found == 0 {
-                break;
-            }
-            if position <= previous_position {
-                return Err(invalid("enumerate_link", "enumeration position did not advance"));
-            }
-            if link.is_null() {
-                return Err(invalid("enumerate_link", "null link handle"));
-            }
-            let mut rect = FsRectF::default();
-            if unsafe { (self.link_rect)(link, &raw mut rect) } == 0 {
-                return Err(self.error("link_rect"));
-            }
-            let bounds = finite_rect("link_rect", rect.left, rect.bottom, rect.right, rect.top)?;
-            let action = unsafe { (self.link_action)(link) };
-            let target = if !action.is_null() && unsafe { (self.action_type)(action) } == 3 {
-                let needed = unsafe {
-                    (self.action_uri)(document as Handle, action, std::ptr::null_mut(), 0)
-                };
-                let bytes = checked_link_length(needed, limits.max_link_bytes, "action_uri")?;
-                check_link_plan_bytes(target_bytes, bytes, bytes, plan, "action_uri")?;
-                target_bytes = target_bytes
-                    .checked_add(bytes)
-                    .ok_or_else(|| invalid("links", "target allocation overflow"))?;
-                Some(LinkTarget::ExternalUri(self.action_uri_with_length(
-                    document,
-                    action,
-                    needed,
-                    limits.max_link_bytes,
-                )?))
-            } else {
-                let destination = unsafe { (self.link_dest)(document as Handle, link) };
-                if destination.is_null() {
-                    None
-                } else {
-                    let index = unsafe { (self.dest_page_index)(document as Handle, destination) };
-                    Some(LinkTarget::InternalPage {
-                        page_index: nonnegative("dest_page_index", index)?,
-                    })
-                }
-            };
-            push_annotation_link(
-                &mut output,
-                bounds,
-                target,
-                limits.max_links_per_page,
-                planned_links,
-            )?;
-        }
-        let web = unsafe { (self.load_web_links)(text as Handle) };
-        if web.is_null() {
-            return Err(self.error("load_web_links"));
-        }
-        let web = WebLinksGuard { raw: web, close: self.close_web_links };
-        let count = nonnegative("web_link_count", unsafe { (self.web_link_count)(web.raw) })?;
-        if count > limits.max_links_per_page {
-            return Err(Error::ResourceLimit {
-                limit: "max_links_per_page",
-                actual: u64::from(count),
-                maximum: u64::from(limits.max_links_per_page),
-            });
-        }
-        for index in 0..count {
-            let rect_count = nonnegative("web_link_rect_count", unsafe {
-                (self.web_link_rect_count)(
-                    web.raw,
-                    c_int::try_from(index)
-                        .map_err(|_| invalid("web_links", "index exceeds C int"))?,
-                )
-            })?;
-            if rect_count > limits.max_links_per_page {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: u64::from(rect_count),
-                    maximum: u64::from(limits.max_links_per_page),
-                });
-            }
-            let index_c =
-                c_int::try_from(index).map_err(|_| invalid("web_uri", "index exceeds C int"))?;
-            let needed = unsafe { (self.web_link_url)(web.raw, index_c, std::ptr::null_mut(), 0) };
-            if needed <= 0 {
-                return Err(self.error("web_uri"));
-            }
-            let units = u64::try_from(needed).map_err(|_| invalid("web_uri", "negative length"))?;
-            let native_bytes =
-                units.checked_mul(2).ok_or_else(|| invalid("web_uri", "length overflow"))?;
-            if native_bytes > u64::from(limits.max_link_bytes) {
-                return Err(Error::ResourceLimit {
-                    limit: "max_link_bytes",
-                    actual: native_bytes,
-                    maximum: u64::from(limits.max_link_bytes),
-                });
-            }
-            let utf8_bound =
-                units.checked_mul(3).ok_or_else(|| invalid("web_uri", "UTF-8 bound overflow"))?;
-            let retained = utf8_bound
-                .checked_mul(u64::from(rect_count))
-                .ok_or_else(|| invalid("links", "target allocation overflow"))?;
-            let temporary = native_bytes
-                .checked_add(utf8_bound)
-                .ok_or_else(|| invalid("links", "temporary allocation overflow"))?;
-            check_link_plan_bytes(target_bytes, retained, temporary, plan, "web_uri")?;
-            target_bytes = target_bytes
-                .checked_add(retained)
-                .ok_or_else(|| invalid("links", "target allocation overflow"))?;
-            let uri = self.web_uri_with_length(web.raw, index, needed, limits.max_link_bytes)?;
-            for rect_index in 0..rect_count {
-                ensure_link_capacity(&output, limits.max_links_per_page, planned_links)?;
-                let (mut left, mut top, mut right, mut bottom) = (0.0, 0.0, 0.0, 0.0);
-                let link_index = c_int::try_from(index)
-                    .map_err(|_| invalid("web_link_rect", "link index exceeds C int"))?;
-                let rect_index = c_int::try_from(rect_index)
-                    .map_err(|_| invalid("web_link_rect", "rect index exceeds C int"))?;
-                if unsafe {
-                    (self.web_link_rect)(
-                        web.raw,
-                        link_index,
-                        rect_index,
-                        &raw mut left,
-                        &raw mut top,
-                        &raw mut right,
-                        &raw mut bottom,
-                    )
-                } == 0
-                {
-                    return Err(self.error("web_link_rect"));
-                }
-                output.push(
-                    Link {
-                        bounds: finite_rect("web_link_rect", left, bottom, right, top)?,
-                        target: LinkTarget::ExternalUri(fixed_clone_string(
-                            &uri,
-                            uri.capacity(),
-                            "web_link_uri",
-                        )?),
-                    },
-                    "links",
-                )?;
-            }
-        }
-        if output.len() != usize::try_from(planned_links).unwrap_or(usize::MAX) {
-            return Err(invalid("links", "materialized link count changed after preflight"));
-        }
-        output.into_vec("links")
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<LinkExtraction, Error> {
+        self.extract_links(request, plan, checkpoint)
     }
-    #[allow(clippy::too_many_lines)]
     fn link_allocation_bytes(
         &self,
-        document: usize,
-        page: usize,
-        text: usize,
-        limits: Limits,
+        request: LinkRequest,
+        policy: LinkPolicy,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<LinkAllocationPlan, Error> {
-        let mut links = 0_u64;
-        let mut target_bytes = 0_u64;
-        let mut maximum_temporary = 0_u64;
-        let mut position = 0_i32;
-        let mut attempts = 0_u32;
-        let maximum_attempts = limits.max_links_per_page.saturating_add(1);
-        loop {
-            if attempts >= maximum_attempts {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: u64::from(attempts).saturating_add(1),
-                    maximum: u64::from(maximum_attempts),
-                });
-            }
-            let previous_position = position;
-            let mut link = std::ptr::null_mut();
-            let found =
-                unsafe { (self.enumerate_link)(page as Handle, &raw mut position, &raw mut link) };
-            attempts = attempts.saturating_add(1);
-            if found == 0 {
-                break;
-            }
-            if position <= previous_position || link.is_null() {
-                return Err(invalid("enumerate_link", "invalid enumeration progress or handle"));
-            }
-            let action = unsafe { (self.link_action)(link) };
-            if !action.is_null() && unsafe { (self.action_type)(action) } == 3 {
-                let needed = unsafe {
-                    (self.action_uri)(document as Handle, action, std::ptr::null_mut(), 0)
-                };
-                let bytes = checked_link_length(needed, limits.max_link_bytes, "action_uri")?;
-                target_bytes = target_bytes
-                    .checked_add(bytes)
-                    .ok_or_else(|| invalid("link_plan", "allocation overflow"))?;
-                maximum_temporary = maximum_temporary.max(bytes);
-            } else {
-                let destination = unsafe { (self.link_dest)(document as Handle, link) };
-                if destination.is_null() {
-                    continue;
-                }
-            }
-            links = links.checked_add(1).ok_or_else(|| invalid("link_plan", "count overflow"))?;
-            if links > u64::from(limits.max_links_per_page) {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: links,
-                    maximum: u64::from(limits.max_links_per_page),
-                });
-            }
-        }
-        let web = unsafe { (self.load_web_links)(text as Handle) };
-        if web.is_null() {
-            return Err(self.error("load_web_links"));
-        }
-        let web = WebLinksGuard { raw: web, close: self.close_web_links };
-        let count = nonnegative("web_link_count", unsafe { (self.web_link_count)(web.raw) })?;
-        if count > limits.max_links_per_page {
-            return Err(Error::ResourceLimit {
-                limit: "max_links_per_page",
-                actual: u64::from(count),
-                maximum: u64::from(limits.max_links_per_page),
-            });
-        }
-        for index in 0..count {
-            let index_c =
-                c_int::try_from(index).map_err(|_| invalid("web_uri", "index exceeds C int"))?;
-            let needed = unsafe { (self.web_link_url)(web.raw, index_c, std::ptr::null_mut(), 0) };
-            if needed <= 0 {
-                return Err(self.error("web_uri"));
-            }
-            let units = u64::try_from(needed).map_err(|_| invalid("web_uri", "negative length"))?;
-            let native_bytes =
-                units.checked_mul(2).ok_or_else(|| invalid("web_uri", "length overflow"))?;
-            if native_bytes > u64::from(limits.max_link_bytes) {
-                return Err(Error::ResourceLimit {
-                    limit: "max_link_bytes",
-                    actual: native_bytes,
-                    maximum: u64::from(limits.max_link_bytes),
-                });
-            }
-            let utf8_bound =
-                units.checked_mul(3).ok_or_else(|| invalid("web_uri", "UTF-8 bound overflow"))?;
-            maximum_temporary = maximum_temporary.max(
-                native_bytes
-                    .checked_add(utf8_bound)
-                    .ok_or_else(|| invalid("link_plan", "allocation overflow"))?,
-            );
-            let rects = nonnegative("web_link_rect_count", unsafe {
-                (self.web_link_rect_count)(web.raw, index_c)
-            })?;
-            if rects > limits.max_links_per_page {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: u64::from(rects),
-                    maximum: u64::from(limits.max_links_per_page),
-                });
-            }
-            links = links
-                .checked_add(u64::from(rects))
-                .ok_or_else(|| invalid("link_plan", "count overflow"))?;
-            if links > u64::from(limits.max_links_per_page) {
-                return Err(Error::ResourceLimit {
-                    limit: "max_links_per_page",
-                    actual: links,
-                    maximum: u64::from(limits.max_links_per_page),
-                });
-            }
-            target_bytes = target_bytes
-                .checked_add(
-                    utf8_bound
-                        .checked_mul(u64::from(rects))
-                        .ok_or_else(|| invalid("link_plan", "allocation overflow"))?,
-                )
-                .ok_or_else(|| invalid("link_plan", "allocation overflow"))?;
-        }
-        let link_capacity = links;
-        let bytes = link_capacity
-            .checked_mul(u64::try_from(std::mem::size_of::<Link>()).unwrap_or(u64::MAX))
-            .and_then(|value| value.checked_add(target_bytes))
-            .and_then(|value| value.checked_add(maximum_temporary))
-            .ok_or_else(|| invalid("link_plan", "allocation overflow"))?;
-        Ok(LinkAllocationPlan {
-            bytes,
-            count: u32::try_from(links)
-                .map_err(|_| invalid("link_plan", "count does not fit u32"))?,
-            target_bytes,
-            maximum_temporary_bytes: maximum_temporary,
-            vector_capacity: link_capacity,
-        })
+        self.plan_link_scan(request, policy, checkpoint)
     }
     fn image_objects(
         &self,
@@ -2515,7 +2176,7 @@ mod tests {
             count: 1,
             target_bytes: 8,
             maximum_temporary_bytes: 8,
-            vector_capacity: 1,
+            ..LinkAllocationPlan::default()
         };
         let copies = std::cell::Cell::new(0_u32);
         let result = check_link_plan_bytes(0, 64, 64, plan, "action_uri").map(|()| {
@@ -2526,13 +2187,6 @@ mod tests {
         assert_eq!(copies.get(), 0);
 
         check_link_plan_bytes(0, 8, 8, plan, "action_uri").unwrap();
-    }
-
-    #[test]
-    fn null_destination_annotation_does_not_consume_planned_capacity() {
-        let mut output = FixedOutput::new(0, "links").unwrap();
-        push_annotation_link(&mut output, PdfRect::default(), None, 1, 0).unwrap();
-        assert_eq!(output.len(), 0);
     }
 
     #[test]

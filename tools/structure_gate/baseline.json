@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "apps/cli/src/admin.rs",
-      "lines": 1286,
+      "lines": 1225,
       "functions": [
         {
           "symbol": "apply_inner",
@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5554,
+      "lines": 5526,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -59,15 +59,11 @@
     },
     {
       "path": "apps/cli/src/config.rs",
-      "lines": 1846,
+      "lines": 1805,
       "functions": [
         {
           "symbol": "load_with_global",
           "lines": 103
-        },
-        {
-          "symbol": "resolve_conversion_options",
-          "lines": 116
         }
       ],
       "allowances": []
@@ -163,7 +159,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4567,
+      "lines": 4526,
       "functions": [
         {
           "symbol": "impl Upload::finish",
@@ -196,10 +192,6 @@
         {
           "symbol": "run_job::<closure_expression>#2",
           "lines": 136
-        },
-        {
-          "symbol": "validate_web_task_request",
-          "lines": 119
         }
       ],
       "allowances": [
@@ -1134,7 +1126,7 @@
       "functions": [
         {
           "symbol": "impl PdfOutput::extract_page",
-          "lines": 342
+          "lines": 268
         }
       ],
       "allowances": [
@@ -2022,19 +2014,11 @@
     },
     {
       "path": "crates/pdfium/src/native.rs",
-      "lines": 2205,
+      "lines": 1869,
       "functions": [
         {
           "symbol": "impl Backend for Native::characters",
           "lines": 123
-        },
-        {
-          "symbol": "impl Backend for Native::link_allocation_bytes",
-          "lines": 137
-        },
-        {
-          "symbol": "impl Backend for Native::links",
-          "lines": 176
         },
         {
           "symbol": "validated_snapshot_with_hook",
@@ -2044,14 +2028,6 @@
       "allowances": [
         {
           "key": "item|impl Backend for Native::characters|too_many_lines",
-          "count": 1
-        },
-        {
-          "key": "item|impl Backend for Native::link_allocation_bytes|too_many_lines",
-          "count": 1
-        },
-        {
-          "key": "item|impl Backend for Native::links|too_many_lines",
           "count": 1
         },
         {
@@ -2277,7 +2253,7 @@
     },
     {
       "path": "tools/license-check/src/lib.rs",
-      "lines": 3989,
+      "lines": 3940,
       "functions": [
         {
           "symbol": "pdfium_expected_targets",
