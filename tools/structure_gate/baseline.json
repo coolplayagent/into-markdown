@@ -794,7 +794,7 @@
     },
     {
       "path": "crates/converters/src/lib.rs",
-      "lines": 2735,
+      "lines": 2745,
       "functions": [
         {
           "symbol": "structured_text_candidate",
@@ -2249,7 +2249,7 @@
     },
     {
       "path": "tools/license-check/src/lib.rs",
-      "lines": 3940,
+      "lines": 3879,
       "functions": [
         {
           "symbol": "pdfium_expected_targets",
@@ -2308,7 +2308,7 @@
     },
     {
       "path": "tools/license-check/src/release.rs",
-      "lines": 1056,
+      "lines": 1045,
       "functions": [],
       "allowances": []
     },
