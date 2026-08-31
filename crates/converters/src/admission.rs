@@ -18,12 +18,22 @@ pub(super) fn format_from_extension(extension: &str) -> Option<InputFormat> {
     })
 }
 
-pub(super) fn binary_candidates(bytes: &[u8]) -> Option<Vec<FormatCandidate>> {
+pub(super) fn binary_candidates(
+    bytes: &[u8],
+    compatible_hints: &mut Vec<InputFormat>,
+) -> Option<Vec<FormatCandidate>> {
+    if let Some(signature) = into_markdown_core::RarSignature::detect(bytes) {
+        return Some(vec![FormatCandidate::new(
+            InputFormat::Rar,
+            1.0,
+            format!("RAR signature: {signature:?}"),
+        )]);
+    }
     if bytes.starts_with(b"PK\x03\x04")
         || bytes.starts_with(b"PK\x05\x06")
         || bytes.starts_with(b"PK\x07\x08")
     {
-        return Some(super::detect_zip(bytes));
+        return Some(super::detection::detect_zip_with_hints(bytes, compatible_hints));
     }
     if bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
         return Some(super::detect_ole(bytes));
@@ -37,8 +47,9 @@ pub(super) fn detect(
     context: &ExecutionContext,
 ) -> Result<FormatDetection, ConversionError> {
     context.checkpoint()?;
-    if let Some(candidates) = binary_candidates(&input.bytes) {
-        return Ok(binary_detection(input, hint, candidates));
+    let mut compatible_hints = Vec::new();
+    if let Some(candidates) = binary_candidates(&input.bytes, &mut compatible_hints) {
+        return Ok(binary_detection(input, hint, candidates, compatible_hints));
     }
     let extension = input_extension(input, hint);
     let media_type = hint.media_type.as_deref().or(input.metadata.media_type.as_deref());
@@ -48,8 +59,12 @@ pub(super) fn detect(
         });
     let unsupported = hint.format.is_none()
         && match extension {
-            Some(extension) => format_from_extension(extension).is_none(),
-            None => concrete_mime.is_some_and(|mime| format_from_media_type(mime).is_none()),
+            Some(extension) => {
+                format_from_extension(extension).is_none_or(|format| !format_supported(format))
+            }
+            None => concrete_mime.is_some_and(|mime| {
+                format_from_media_type(mime).is_none_or(|format| !format_supported(format))
+            }),
         };
     if unsupported {
         return Ok(FormatDetection {
@@ -64,7 +79,7 @@ pub(super) fn detect(
         });
     }
     let mut authority = DetectionAuthority::Heuristic;
-    let candidates = super::detect_text(&input.bytes, context, &mut authority)?;
+    let candidates = super::detection::detect_text(&input.bytes, context, &mut authority)?;
     Ok(FormatDetection {
         candidates,
         authority,
@@ -137,22 +152,11 @@ fn binary_detection(
     input: &ResolvedInput,
     hint: &FormatHint,
     candidates: Vec<FormatCandidate>,
+    mut compatible_hints: Vec<InputFormat>,
 ) -> FormatDetection {
-    let compatible_hints = if candidates.len() == 1 && candidates[0].format == InputFormat::Zip {
-        vec![
-            InputFormat::Docx,
-            InputFormat::Pptx,
-            InputFormat::Xlsx,
-            InputFormat::Odt,
-            InputFormat::Ods,
-            InputFormat::Odp,
-            InputFormat::Epub,
-        ]
-    } else if input.bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
-        candidates.iter().map(|candidate| candidate.format).collect()
-    } else {
-        Vec::new()
-    };
+    if input.bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1") {
+        compatible_hints = candidates.iter().map(|candidate| candidate.format).collect();
+    }
     let candidates_are_package = candidates.iter().any(|candidate| {
         matches!(
             candidate.format,
@@ -214,4 +218,38 @@ fn unsupported_detail(input: &ResolvedInput, hint: &FormatHint, reason: &str) ->
         input_extension(input, hint),
         hint.media_type.as_deref().or(input.metadata.media_type.as_deref()),
     )
+}
+
+fn format_supported(format: InputFormat) -> bool {
+    super::core_format_catalog().iter().any(|entry| {
+        entry.descriptor.format == format
+            && entry.descriptor.status == super::FormatStatus::Available
+    })
+}
+
+/// Incomplete container inspection retains document hints for parser-specific safety errors.
+pub(super) fn zip_package_hints() -> Vec<InputFormat> {
+    vec![
+        InputFormat::Docx,
+        InputFormat::Pptx,
+        InputFormat::Xlsx,
+        InputFormat::Odt,
+        InputFormat::Ods,
+        InputFormat::Odp,
+        InputFormat::Epub,
+    ]
+}
+
+/// A completely inspected generic archive must not be mistaken for a document package.
+pub(super) fn zip_package_hint_matches(format: InputFormat, names: &[String]) -> bool {
+    names.iter().any(|name| match format {
+        InputFormat::Docx => name == "[Content_Types].xml" || name.starts_with("word/"),
+        InputFormat::Pptx => name == "[Content_Types].xml" || name.starts_with("ppt/"),
+        InputFormat::Xlsx => name == "[Content_Types].xml" || name.starts_with("xl/"),
+        InputFormat::Epub => name == "mimetype" || name == "META-INF/container.xml",
+        InputFormat::Odt | InputFormat::Ods | InputFormat::Odp => {
+            name == "mimetype" || name == "content.xml" || name == "META-INF/manifest.xml"
+        }
+        _ => false,
+    })
 }

@@ -43,9 +43,10 @@ export interface ArtifactPreview { text: string; truncated: boolean; contentType
 export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
 export interface TaskRecord {
+  failure?: TaskFailure | null;
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
-  pinned: boolean; artifactGeneration: number; failure?: TaskFailure | null;
+  pinned: boolean; artifactGeneration: number;
   displayName?: string | null; format?: InputFormat | null; batchId?: string | null;
   workflow: "conversion" | "meetingTranscript";
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
@@ -62,8 +63,8 @@ export interface TaskEvent {
   execution?: { stage: string; basisPoints: number; completedUnits: number | null;
     totalUnits: number | null; message: string | null };
 }
-export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "drawio" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
-const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "drawio", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
+export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "drawio" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "rar" | "outlook-msg";
+const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "drawio", "feed", "ipynb", "image", "audio", "video", "zip", "rar", "outlook-msg"]);
 export type OcrPolicy = "off" | "auto" | "always";
 export type AiMode = "off" | "fallback" | "prefer" | "only";
 export type AssetMode = "extract" | "embed" | "omit";
@@ -116,7 +117,7 @@ function safeText(value: unknown, limit: number): value is string {
 }
 function isFormatAdmin(value: unknown): value is FormatAdmin {
   return isObject(value) && safeText(value.format, 64) && safeText(value.family, 64)
-    && ["available", "planned"].includes(String(value.status))
+    && ["available", "planned", "unsupported"].includes(String(value.status))
     && ["core", "optional_runtime", "plugin"].includes(String(value.source))
     && Array.isArray(value.extensions) && value.extensions.length <= 32
     && value.extensions.every((item) => typeof item === "string" && /^[a-z0-9][a-z0-9+-]{0,31}$/.test(item))
@@ -266,9 +267,9 @@ function isArtifact(value: unknown): value is ArtifactReference {
     && (value.mediaType === undefined || value.mediaType === null || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
 }
 function isTaskFailure(value: unknown): value is TaskFailure {
-  const code = (value: unknown) => shortString(value, 128) && /^[A-Za-z0-9._-]+$/.test(value);
+  const code = (item: unknown) => typeof item === "string" && /^[a-zA-Z0-9]{1,64}$/.test(item);
   return isObject(value) && value.schemaVersion === 1 && code(value.code) && code(value.stage)
-    && typeof value.retryable === "boolean" && (value.reasonCode == null || code(value.reasonCode));
+    && (value.reasonCode == null || typeof value.reasonCode === "string" && /^[a-zA-Z0-9_]{1,64}$/.test(value.reasonCode)) && typeof value.retryable === "boolean";
 }
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)

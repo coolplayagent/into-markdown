@@ -4,6 +4,10 @@
 
 mod admission;
 mod core_catalog;
+mod detection;
+pub use detection::ContentFormatDetector;
+#[cfg(test)]
+use detection::{detect_content, detect_zip};
 mod core_catalog_authority;
 mod delimited;
 mod docx;
@@ -799,7 +803,9 @@ impl FormatDetector for HintFormatDetector {
                                 | InputFormat::Odp
                                 | InputFormat::Epub
                         );
-                    let confidence = if format == InputFormat::Drawio {
+                    let confidence = if format == InputFormat::Rar {
+                        0.05
+                    } else if format == InputFormat::Drawio {
                         1.0
                     } else if strong_package_hint
                         || matches!(
@@ -845,44 +851,6 @@ impl FormatDetector for HintFormatDetector {
     }
 }
 
-/// Detector for file signatures and bounded inspection of ZIP/OLE containers.
-#[derive(Debug, Default)]
-pub struct ContentFormatDetector;
-
-impl FormatDetector for ContentFormatDetector {
-    fn id(&self) -> &'static str {
-        "builtin.detector.content"
-    }
-
-    fn priority(&self) -> i32 {
-        200
-    }
-
-    fn detect<'a>(
-        &'a self,
-        input: &'a ResolvedInput,
-        hint: &'a FormatHint,
-        context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
-        Box::pin(async move {
-            let result = admission::detect(input, hint, context)?;
-            if let Some(detail) = result.unsupported_reason {
-                return Err(ConversionError::Unsupported { detail });
-            }
-            Ok(result.candidates)
-        })
-    }
-
-    fn detect_with_authority<'a>(
-        &'a self,
-        input: &'a ResolvedInput,
-        hint: &'a FormatHint,
-        context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<into_markdown_core::FormatDetection, ConversionError>> {
-        Box::pin(async move { admission::detect(input, hint, context) })
-    }
-}
-
 const ZIP_INSPECTION_ENTRY_LIMIT: usize = 4096;
 const ZIP_MIMETYPE_READ_LIMIT: u64 = 128;
 const ZIP_NAME_READ_LIMIT: usize = 1024 * 1024;
@@ -893,41 +861,6 @@ const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 const JSON_SCAN_DEPTH_LIMIT: usize = 4096;
 const JSON_SCAN_CHECKPOINT_BYTES: usize = 4096;
-
-#[cfg(test)]
-fn detect_content(
-    bytes: &[u8],
-    context: &ExecutionContext,
-) -> Result<Vec<FormatCandidate>, ConversionError> {
-    if let Some(candidates) = admission::binary_candidates(bytes) {
-        return Ok(candidates);
-    }
-    detect_text(bytes, context, &mut into_markdown_core::DetectionAuthority::Heuristic)
-}
-
-fn detect_text(
-    bytes: &[u8],
-    context: &ExecutionContext,
-    authority: &mut into_markdown_core::DetectionAuthority,
-) -> Result<Vec<FormatCandidate>, ConversionError> {
-    if drawio::evidence(bytes, context)? {
-        *authority = into_markdown_core::DetectionAuthority::StructuredText;
-        return Ok(vec![FormatCandidate::new(InputFormat::Drawio, 0.99, "Drawio graph root")]);
-    }
-    if let Some(candidate) = structured_text_candidate(bytes, context, authority)? {
-        return Ok(vec![candidate]);
-    }
-    Ok(text::sniff_unstructured_text(bytes, context)?
-        .map(|confidence| {
-            FormatCandidate::new(
-                InputFormat::Text,
-                confidence,
-                "plain-text safety and encoding thresholds",
-            )
-        })
-        .into_iter()
-        .collect())
-}
 
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
     let (format, confidence, evidence) = if pdf::has_pdf_header(bytes) {
@@ -2088,70 +2021,6 @@ fn xml_root_name(mut text: &str) -> Option<&str> {
             .chars()
             .all(|value| value.is_ascii_alphanumeric() || matches!(value, '_' | '-' | '.')))
     .then_some(local)
-}
-
-fn detect_zip(bytes: &[u8]) -> Vec<FormatCandidate> {
-    let mut candidates = vec![FormatCandidate::new(InputFormat::Zip, 0.90, "ZIP magic bytes")];
-    let entry_count = match zip_preflight(bytes) {
-        Ok(entry_count) if entry_count <= ZIP_INSPECTION_ENTRY_LIMIT => entry_count,
-        Ok(entry_count) => {
-            candidates[0].diagnostics.push(format!(
-                "ZIP inspection stopped before archive construction: {entry_count} entries exceed the {ZIP_INSPECTION_ENTRY_LIMIT} entry limit"
-            ));
-            return candidates;
-        }
-        Err(diagnostic) => {
-            candidates[0].diagnostics.push(diagnostic);
-            return candidates;
-        }
-    };
-    let mut archive = match zip::ZipArchive::new(Cursor::new(bytes)) {
-        Ok(archive) => archive,
-        Err(error) => {
-            candidates[0]
-                .diagnostics
-                .push(format!("ZIP directory could not be inspected: {error}"));
-            return candidates;
-        }
-    };
-    if archive.len() != entry_count {
-        candidates[0].diagnostics.push(format!(
-            "ZIP entry count changed after validated EOCD preflight: {entry_count} != {}",
-            archive.len()
-        ));
-        return candidates;
-    }
-
-    let mut names = Vec::with_capacity(archive.len());
-    let mut name_bytes = 0_usize;
-    for index in 0..archive.len() {
-        match archive.by_index(index) {
-            Ok(entry) => {
-                name_bytes = name_bytes.saturating_add(entry.name().len());
-                if name_bytes > ZIP_NAME_READ_LIMIT {
-                    candidates[0].diagnostics.push(format!(
-                        "ZIP inspection stopped: entry names exceed the {ZIP_NAME_READ_LIMIT} byte limit"
-                    ));
-                    return candidates;
-                }
-                names.push(entry.name().replace('\\', "/"));
-            }
-            Err(error) => candidates[0]
-                .diagnostics
-                .push(format!("ZIP entry {index} could not be inspected: {error}")),
-        }
-    }
-    let specialized = inspect_zip_package(&mut archive, &names, &mut candidates[0].diagnostics);
-    if specialized.len() == 1 {
-        let (format, evidence) = specialized[0];
-        candidates.push(FormatCandidate::new(format, 0.99, evidence));
-    } else if specialized.len() > 1 {
-        candidates[0].diagnostics.push(format!(
-            "conflicting package structures detected: {}",
-            specialized.iter().map(|(format, _)| format.as_str()).collect::<Vec<_>>().join(",")
-        ));
-    }
-    candidates
 }
 
 fn inspect_zip_package(

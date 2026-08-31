@@ -173,7 +173,13 @@ fn large_central_directory_is_budgeted_before_the_zip_constructor() {
 #[test]
 fn exact_raw_metadata_budget_allows_a_small_archive_constructor() {
     let small = stored(&[("small.txt", b"small")]);
-    let exact = super::raw_central::planned_memory(&small).unwrap();
+    let measured_options = ConversionOptions::default();
+    let measured =
+        ExecutionContext::new(ExecutionOptions::default(), measured_options.limits.clone());
+    let mut budget = ArchiveBudget::new(&measured_options, &measured);
+    drop(Archive::open(&small, 1, &mut budget).unwrap());
+    let exact = measured.resource_usage().shared_lease_peak_bytes;
+    assert_eq!(measured.reserved_memory_bytes(), 0);
     let mut options = ConversionOptions::default();
     options.limits.max_memory_bytes = exact;
     reset_constructor_calls();

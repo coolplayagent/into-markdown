@@ -58,6 +58,7 @@ filegroup(
     srcs = glob([
         "CONTRIBUTING*.md",
         "docs/**/*",
+        "tools/archive-compat/samples.json",
         "LICENSE",
         "NOTICE",
         "README.en.md",

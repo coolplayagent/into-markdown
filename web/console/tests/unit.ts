@@ -13,6 +13,8 @@ import { requestMicrophone, requestSystemAudio } from "../src/meeting-page";
 import { JsonTree, SafeMarkdownPreview } from "../src/preview";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
+import { archiveMembers } from "../src/archive-diagnostics";
+import { supportsFileName, taskFailureLabel } from "../src/task-ui";
 import styles from "../src/styles.css";
 
 const token = "A".repeat(43);
@@ -1108,6 +1110,14 @@ test("ErrorBoundary contains provider render errors and focuses its fallback hea
   const reload = [...window.document.querySelectorAll("button")].find((button) => button.textContent === "Reload");
   assert.ok(reload?.matches("button"));
   root.unmount();
+});
+
+nodeTest("RAR upload and safe failure reasons preserve extraction guidance", () => {
+  assert.equal(supportsFileName("报告.rar"), true);
+  const task = { diagnostics: [{ code: "conversionFailed" }], failure: { schemaVersion: 1, code: "unsupported", reasonCode: "archiveExtractionRequired", stage: "conversion", retryable: false } } as TaskRecord;
+  assert.equal(taskFailureLabel(task, (key) => key), "archiveExtractionRequired");
+  assert.deepEqual(archiveMembers(JSON.stringify({ diagnostics: [{ code: "zip.entry.archiveExtractionRequired", locator: { part: "中文.zip!/归档.rar" }, message: "ignored provider text" }] })), ["中文.zip!/归档.rar"]);
+  assert.deepEqual(archiveMembers('{"diagnostics":[{"code":"zip.entry.archiveExtractionRequired","locator":{"part":false}}]}'), []);
 });
 
 test("Drawio uploads and detected task formats share the workbench contract", async () => {

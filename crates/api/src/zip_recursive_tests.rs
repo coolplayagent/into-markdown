@@ -377,3 +377,161 @@ fn unsupported_members_are_reported_and_renamed_documents_keep_their_identity() 
     assert!(strict.diagnostics.iter().any(|item| item.code == "zip.entry.failed"
         && item.locator.as_ref().and_then(|loc| loc.part.as_deref()) == Some("source.js")));
 }
+
+#[test]
+fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
+    for signature in [b"Rar!\x1a\x07\x00".as_slice(), b"Rar!\x1a\x07\x01\x00".as_slice()] {
+        for name in [
+            "input.rar",
+            "input.txt",
+            "input.zip",
+            "input.bin",
+            "input.drawio",
+            "input.md",
+            "input.js",
+        ] {
+            let request = ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
+            let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");
+            assert!(error.to_string().contains("extract"));
+            assert_eq!(error.reason_code(), "archiveExtractionRequired");
+            let result = convert(
+                archive(&[(name, signature), ("报告（保留）.txt", "正文完整".as_bytes())], false),
+                ConversionOptions::default(),
+                ExecutionOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+            assert!(result.markdown.contains("正文完整"));
+            assert!(result.diagnostics.iter().any(|d| d.message.contains("extract")
+                && d.locator.as_ref().and_then(|l| l.part.as_deref()) == Some(name)));
+        }
+    }
+    for signature in [b"Rar!\x1a".as_slice(), b"Rar!\x1a\x07\x01".as_slice()] {
+        let request =
+            ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some("truncated.rar")));
+        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+        assert!(error.to_string().contains("truncated"));
+    }
+    let mut plain =
+        ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some("plain.rar")));
+    assert_eq!(
+        block_on(default_engine().unwrap().convert(plain.clone())).unwrap_err().code(),
+        ErrorCode::Unsupported
+    );
+    plain.hint.format = Some(InputFormat::Text);
+    assert!(
+        block_on(default_engine().unwrap().convert(plain))
+            .unwrap()
+            .markdown
+            .contains("ordinary Rar")
+    );
+    let request =
+        ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some("plain.txt")));
+    assert!(
+        block_on(default_engine().unwrap().convert(request))
+            .unwrap()
+            .markdown
+            .contains("ordinary Rar")
+    );
+    let mut forced =
+        ConversionRequest::new(InputRef::bytes(b"Rar!\x1a\x07\x00".to_vec(), Some("actual.rar")));
+    forced.hint.format = Some(InputFormat::Json);
+    let error = block_on(default_engine().unwrap().convert(forced)).unwrap_err();
+    assert_ne!(error.reason_code(), "archiveExtractionRequired");
+    assert_eq!(error.code(), ErrorCode::Malformed);
+    let only = archive(&[("only.rar", b"Rar!\x1a\x07\x00")], false);
+    assert_eq!(
+        convert(only, ConversionOptions::default(), ExecutionOptions::default())
+            .unwrap_err()
+            .code(),
+        ErrorCode::Unsupported
+    );
+}
+
+#[test]
+fn unicode_archive_names_survive_provenance_and_unsafe_aliases_fail() {
+    for name in ["目录/报告（最终）.txt", "café.txt", "e\u{301}.txt", "straße.txt", "😀.txt"]
+    {
+        let result = convert(
+            archive(&[(name, b"kept body")], false),
+            ConversionOptions::default(),
+            ExecutionOptions::default(),
+        )
+        .unwrap();
+        assert!(result.markdown.contains("kept body"));
+        assert!(
+            result
+                .document
+                .blocks
+                .iter()
+                .any(|node| node.provenance.locator.part.as_deref() == Some(name))
+        );
+    }
+    for (a, b) in [
+        ("café.txt", "cafe\u{301}.txt"),
+        ("straße.txt", "STRASSE.txt"),
+        ("x", "x/y.txt"),
+        ("A/x.txt", "a/y.txt"),
+    ] {
+        for entries in [
+            [(a, b"a".as_slice()), (b, b"b".as_slice())],
+            [(b, b"b".as_slice()), (a, b"a".as_slice())],
+        ] {
+            assert_eq!(
+                convert(
+                    archive(&entries, false),
+                    ConversionOptions::default(),
+                    ExecutionOptions::default()
+                )
+                .unwrap_err()
+                .code(),
+                ErrorCode::Malformed
+            );
+        }
+    }
+}
+
+#[test]
+fn recoverable_rar_retains_the_same_terminal_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::RecoveryStore::open(directory.path().join("recovery")).unwrap();
+    let token = store.create_token().unwrap();
+    let engine = default_engine().unwrap();
+    for _ in 0..2 {
+        let request = ConversionRequest::new(InputRef::bytes(
+            b"Rar!\x1a\x07\x01\x00".to_vec(),
+            Some("renamed.zip"),
+        ));
+        let error = block_on(engine.convert_recoverable(request, &store, &token)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Unsupported);
+        assert_eq!(error.reason_code(), "archiveExtractionRequired");
+    }
+}
+
+#[test]
+fn generic_zip_identity_overrides_document_package_suffixes() {
+    let bytes = archive(&[("body.txt", b"generic ZIP body")], false);
+    for name in [
+        "renamed.docx",
+        "renamed.pptx",
+        "renamed.xlsx",
+        "renamed.epub",
+        "renamed.odt",
+        "renamed.rar",
+        "renamed.py",
+        "renamed",
+    ] {
+        let mut request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+        request.options.ocr.policy = crate::OcrPolicy::Off;
+        let context =
+            crate::ExecutionContext::new(request.execution.clone(), request.options.limits.clone());
+        let result =
+            block_on(default_engine().unwrap().convert_with_context(request, context.clone()))
+                .unwrap();
+        assert_eq!(context.detected_format(), Some(InputFormat::Zip), "{name}");
+        assert!(result.markdown.contains("generic ZIP body"));
+        result.document.validate().unwrap();
+    }
+}

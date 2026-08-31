@@ -226,3 +226,11 @@ fn validate_authority(
         }
     }
 }
+
+pub(crate) fn available_formats() -> std::collections::BTreeSet<&'static str> {
+    into_markdown_converters::core_formats()
+        .iter()
+        .filter(|descriptor| descriptor.status == into_markdown_converters::FormatStatus::Available)
+        .map(|descriptor| descriptor.format.as_str())
+        .collect()
+}

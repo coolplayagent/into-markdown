@@ -36,6 +36,7 @@ pub(super) fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
         "text/markdown" => InputFormat::Markdown,
         "text/plain" => InputFormat::Text,
         "application/zip" => InputFormat::Zip,
+        "application/vnd.rar" | "application/x-rar-compressed" => InputFormat::Rar,
         "image/png" | "image/jpeg" | "image/tiff" | "image/webp" | "image/bmp"
         | "image/x-ms-bmp" => InputFormat::Image,
         "audio/wav" | "audio/x-wav" | "audio/vnd.wave" | "audio/mpeg" | "audio/mp4"

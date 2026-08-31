@@ -31,6 +31,8 @@ pub(super) fn validate(limits: &ResourceLimits) -> Result<(), WebTaskError> {
         || limits.max_archive_entry_bytes > 256 * 1024 * 1024
         || limits.max_archive_compression_ratio == 0
         || limits.max_archive_compression_ratio > 100
+        || limits.max_presentation_xml_events == 0
+        || limits.max_presentation_xml_events > 2_000_000
         || limits.max_nesting_depth == 0
         || limits.max_nesting_depth > 256
         || limits.max_table_rows == 0

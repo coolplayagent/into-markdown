@@ -1,5 +1,7 @@
+use caseless::Caseless as _;
 use into_markdown_core::ConversionError;
-use std::collections::BTreeSet;
+use into_markdown_core::{ExecutionContext, ResourceReservation};
+use std::collections::BTreeMap;
 use unicode_normalization::UnicodeNormalization as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,14 +10,22 @@ pub(super) enum EntryKind {
     Directory,
 }
 
-#[derive(Default)]
-pub(super) struct EntryPolicy {
-    aliases: BTreeSet<String>,
-    files: BTreeSet<String>,
-    directories: BTreeSet<String>,
+struct PathEntry {
+    original: String,
+    kind: Option<EntryKind>,
 }
 
-impl EntryPolicy {
+pub(super) struct EntryPolicy<'a> {
+    paths: BTreeMap<String, PathEntry>,
+    memory: ResourceReservation,
+    context: &'a ExecutionContext,
+}
+
+impl<'a> EntryPolicy<'a> {
+    pub(super) fn new(context: &'a ExecutionContext) -> Result<Self, ConversionError> {
+        Ok(Self { paths: BTreeMap::new(), memory: context.reserve_memory(0)?, context })
+    }
+
     pub(super) fn accept(
         &mut self,
         decoded_name: &str,
@@ -23,41 +33,63 @@ impl EntryPolicy {
         directory: bool,
     ) -> Result<(String, EntryKind), ConversionError> {
         let kind = validate_type(decoded_name, unix_mode, directory)?;
+        // Unicode normalization can expand input; acquire temporary capacity before processing it.
+        let scratch_bytes = u64::try_from(decoded_name.len())
+            .unwrap_or(u64::MAX)
+            .checked_mul(128)
+            .ok_or_else(|| memory_limit("ZIP name normalization plan overflow"))?;
+        let _scratch = self.context.reserve_memory(scratch_bytes)?;
         let name = canonical_name(decoded_name, kind)?;
-        let alias = alias_key(&name)?;
-        if !self.aliases.insert(alias) {
-            return Err(malformed(&name, "duplicate or Unicode/case alias entry name"));
+        let mut original = String::new();
+        let mut key = String::new();
+        let count = name.split('/').count();
+        if count > usize::from(self.context.resource_limits().max_nesting_depth) {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_nesting_depth",
+                detail: format!(
+                    "ZIP member {name:?}: {count} path components exceed {}",
+                    self.context.resource_limits().max_nesting_depth
+                ),
+            });
         }
-        let mut prefix = String::new();
-        prefix.try_reserve_exact(name.len()).map_err(|error| {
-            memory_limit(format!("reserve canonical prefix for {name:?}: {error}"))
-        })?;
-        let mut components = name.split('/').peekable();
-        while let Some(component) = components.next() {
-            if !prefix.is_empty() {
-                prefix.push('/');
+        for (index, component) in name.split('/').enumerate() {
+            self.context.checkpoint()?;
+            if index != 0 {
+                original.push('/');
+                key.push('/');
             }
-            prefix.push_str(component);
-            if components.peek().is_some() && self.files.contains(&alias_key(&prefix)?) {
-                return Err(malformed(&name, "entry descends through another file"));
-            }
-        }
-        let key = alias_key(&name)?;
-        match kind {
-            EntryKind::File => {
-                if self.directories.contains(&key)
-                    || self.directories.iter().any(|path| descends_from(path, &key))
-                    || self.files.iter().any(|path| descends_from(path, &key))
-                {
-                    return Err(malformed(&name, "file conflicts with an archive path prefix"));
+            original.push_str(component);
+            key.push_str(&alias_key(component));
+            let last = index + 1 == count;
+            if let Some(existing) = self.paths.get_mut(&key) {
+                if existing.original != original {
+                    return Err(malformed(
+                        &name,
+                        format!("Unicode/case alias conflicts with {:?}", existing.original),
+                    ));
                 }
-                self.files.insert(key);
-            }
-            EntryKind::Directory => {
-                if self.files.contains(&key) {
-                    return Err(malformed(&name, "directory conflicts with an archive file"));
+                if last {
+                    if existing.kind.is_some() || kind == EntryKind::File {
+                        return Err(malformed(
+                            &name,
+                            "duplicate entry or file/directory prefix conflict",
+                        ));
+                    }
+                    existing.kind = Some(kind);
+                } else if existing.kind == Some(EntryKind::File) {
+                    return Err(malformed(&name, "entry descends through another file"));
                 }
-                self.directories.insert(key);
+            } else {
+                let bytes = key
+                    .len()
+                    .checked_add(original.len())
+                    .and_then(|n| n.checked_add(256))
+                    .ok_or_else(|| memory_limit("ZIP path index plan overflow"))?;
+                self.memory.grow(u64::try_from(bytes).unwrap_or(u64::MAX))?;
+                self.paths.insert(
+                    key.clone(),
+                    PathEntry { original: original.clone(), kind: last.then_some(kind) },
+                );
             }
         }
         Ok((name, kind))
@@ -112,7 +144,7 @@ fn canonical_name(name: &str, kind: EntryKind) -> Result<String, ConversionError
             return Err(malformed(name, "entry path contains an empty or dot component"));
         }
         if component.trim_end_matches([' ', '.']) != component
-            || !portable_component(component)
+            || !safe_component(component)
             || is_windows_device(component)
         {
             return Err(malformed(name, "entry path contains a reserved platform component"));
@@ -129,47 +161,29 @@ pub(crate) fn portable_identity(name: &str, directory: bool) -> Result<String, C
     canonical_name(name, if directory { EntryKind::Directory } else { EntryKind::File })
 }
 
-/// Admit only names whose cross-platform alias behavior is provable without
-/// claiming Unicode full case folding. Compatibility spellings, combining
-/// sequences, non-ASCII case mappings, punctuation, and format characters are
-/// rejected. Normalized case-less letter/digit scripts (including CJK) remain
-/// usable.
-fn portable_component(component: &str) -> bool {
-    if component.nfkc().ne(component.chars()) {
-        return false;
-    }
-    component.chars().all(|character| {
-        if character.is_ascii() {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '-' | '_' | '.' | ' ' | '(' | ')' | '[' | ']')
-        } else {
-            character.is_alphanumeric()
-                && character.to_lowercase().eq(std::iter::once(character))
-                && character.to_uppercase().eq(std::iter::once(character))
-        }
-    })
+/// Logical names remain exact; compatibility aliases are checked separately.
+fn safe_component(component: &str) -> bool {
+    let normalized: String = component.nfkc().collect();
+    !normalized.is_empty()
+        && !matches!(normalized.as_str(), "." | "..")
+        && normalized.trim_end_matches([' ', '.']) == normalized
+        && !normalized.chars().any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | ':' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+        && !is_windows_device(&normalized)
 }
 
 fn is_windows_device(component: &str) -> bool {
     let stem = component.split('.').next().unwrap_or(component).trim_end_matches([' ', '.']);
     let bytes = stem.as_bytes();
-    ["con", "prn", "aux", "nul"].iter().any(|name| stem.eq_ignore_ascii_case(name))
+    ["con", "prn", "aux", "nul", "conin$", "conout$"]
+        .iter()
+        .any(|name| stem.eq_ignore_ascii_case(name))
         || bytes.len() == 4
             && ([b"com", b"lpt"].iter().any(|prefix| bytes[..3].eq_ignore_ascii_case(*prefix))
                 && matches!(bytes[3], b'1'..=b'9'))
 }
 
-fn alias_key(name: &str) -> Result<String, ConversionError> {
-    let mut alias = String::new();
-    alias
-        .try_reserve_exact(name.len())
-        .map_err(|error| memory_limit(format!("reserve portable alias for {name:?}: {error}")))?;
-    alias.extend(name.chars().map(|character| character.to_ascii_lowercase()));
-    Ok(alias)
-}
-
-fn descends_from(path: &str, prefix: &str) -> bool {
-    path.strip_prefix(prefix).is_some_and(|suffix| suffix.starts_with('/'))
+fn alias_key(name: &str) -> String {
+    name.chars().nfd().default_case_fold().nfkd().default_case_fold().nfkd().collect()
 }
 
 fn malformed(name: &str, detail: impl Into<String>) -> ConversionError {
@@ -186,39 +200,91 @@ fn memory_limit(detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use into_markdown_core::{ConversionOptions, ExecutionOptions};
 
-    fn accept(policy: &mut EntryPolicy, name: &str) -> Result<(), ConversionError> {
+    fn context() -> ExecutionContext {
+        ExecutionContext::new(ExecutionOptions::default(), ConversionOptions::default().limits)
+    }
+    fn accept(policy: &mut EntryPolicy<'_>, name: &str) -> Result<(), ConversionError> {
         policy.accept(name, Some(0o100_644), false).map(|_| ())
     }
 
     #[test]
-    fn portable_policy_accepts_normalized_caseless_scripts_and_ascii() {
-        let mut policy = EntryPolicy::default();
-        accept(&mut policy, "目录/报告.txt").unwrap();
-        accept(&mut policy, "かな/文書.md").unwrap();
-        accept(&mut policy, "A File [1].TXT").unwrap();
+    fn unicode_names_are_preserved_and_aliases_are_rejected_in_both_orders() {
+        for name in [
+            "目录/报告（最终）.txt",
+            "かな/文書.md",
+            "café.txt",
+            "e\u{301}.txt",
+            "straße.txt",
+            "Ａ.txt",
+            "😀.txt",
+        ] {
+            let context = context();
+            let mut policy = EntryPolicy::new(&context).unwrap();
+            assert_eq!(policy.accept(name, None, false).unwrap().0, name);
+            drop(policy);
+            assert_eq!(context.reserved_memory_bytes(), 0);
+        }
+        for (a, b) in [
+            ("A.txt", "a.TXT"),
+            ("Ａ.txt", "a.txt"),
+            ("é.txt", "e\u{301}.txt"),
+            ("straße.txt", "STRASSE.TXT"),
+            ("οσ.txt", "ος.txt"),
+            ("报告（1）.txt", "报告(1).txt"),
+            ("A/x.txt", "a/y.txt"),
+            ("x", "x/y.txt"),
+            ("x", "x/y/z.txt"),
+        ] {
+            for (first, second) in [(a, b), (b, a)] {
+                let context = context();
+                let mut policy = EntryPolicy::new(&context).unwrap();
+                accept(&mut policy, first).unwrap();
+                assert!(accept(&mut policy, second).is_err(), "accepted {first:?} and {second:?}");
+            }
+        }
     }
 
     #[test]
-    fn aliases_and_unprovable_unicode_names_are_rejected() {
-        let mut aliases = EntryPolicy::default();
-        accept(&mut aliases, "A.txt").unwrap();
-        assert!(accept(&mut aliases, "a.TXT").is_err());
-
+    fn dangerous_names_and_types_remain_rejected() {
         for name in [
             "/absolute.txt",
+            "../a",
+            "a/../b",
+            "a//b",
             "C:drive.txt",
             "dir\\escape.txt",
-            "straße.txt",
-            "οσ.txt",
-            "ος.txt",
-            "İ.txt",
-            "ı.txt",
-            "Ａ.txt",
-            "Ⓐ.txt",
-            "e\u{301}.txt",
+            "a：b",
+            "a／b",
+            "．．/a",
+            "a. ",
+            "NUL.txt",
+            "COM¹.txt",
+            "ＣＯＮ",
+            "conin$",
+            "a\u{202e}txt",
         ] {
-            assert!(accept(&mut EntryPolicy::default(), name).is_err(), "accepted {name:?}");
+            let context = context();
+            assert!(
+                accept(&mut EntryPolicy::new(&context).unwrap(), name).is_err(),
+                "accepted {name:?}"
+            );
         }
+        for mode in [0o120_777, 0o020_644, 0o010_644] {
+            let context = context();
+            assert!(
+                EntryPolicy::new(&context).unwrap().accept("safe.txt", Some(mode), false).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_directory_can_follow_its_implicit_prefix_once() {
+        let context = context();
+        let mut policy = EntryPolicy::new(&context).unwrap();
+        accept(&mut policy, "dir/a.txt").unwrap();
+        policy.accept("dir/", None, true).unwrap();
+        assert!(policy.accept("dir/", None, true).is_err());
     }
 }

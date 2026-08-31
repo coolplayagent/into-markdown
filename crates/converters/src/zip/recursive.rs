@@ -72,7 +72,9 @@ impl RecursiveConverter<'_> {
                         continue;
                     }
                 };
-                if is_explicit_zip(&entry) {
+                if is_explicit_zip(&entry)
+                    && into_markdown_core::RarSignature::detect(&data.bytes).is_none()
+                {
                     let next_depth =
                         depth.checked_add(1).ok_or_else(|| ConversionError::ResourceLimit {
                             limit: "max_archive_depth",

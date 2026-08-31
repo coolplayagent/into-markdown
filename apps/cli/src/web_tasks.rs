@@ -4204,10 +4204,9 @@ fn load_task_failure(shared: &Shared, id: &TaskId) -> Result<Option<WebTaskFailu
         || failure.reason_code.as_ref().is_some_and(|value| value.len() > 64)
         || failure.stage.len() > 64
         || !failure.code.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        || failure
-            .reason_code
-            .as_ref()
-            .is_some_and(|value| !value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        || failure.reason_code.as_ref().is_some_and(|value| {
+            !value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
         || !failure.stage.bytes().all(|byte| byte.is_ascii_alphanumeric())
     {
         return Err(WebTaskError::Unsafe("task failure record is incompatible".into()));
@@ -5291,6 +5290,26 @@ mod tests {
             decode_web_task_request(&vec![b' '; 16 * 1024 + 1]),
             Err(WebTaskError::Limit(_))
         ));
+    }
+
+    #[test]
+    fn presentation_budget_web_profile_bounds_and_omitted_default() {
+        let mut value = serde_json::to_value(WebTaskRequest::default()).unwrap();
+        value["options"]["limits"].as_object_mut().unwrap().remove("max_presentation_xml_events");
+        assert_eq!(
+            decode_web_task_request(&serde_json::to_vec(&value).unwrap())
+                .unwrap()
+                .options
+                .limits
+                .max_presentation_xml_events,
+            2_000_000
+        );
+        for maximum in [0, 2_000_001] {
+            value["options"]["limits"]["max_presentation_xml_events"] = maximum.into();
+            assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
+        value["options"]["limits"]["max_presentation_xml_events"] = 100.into();
+        assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_ok());
     }
 
     #[test]

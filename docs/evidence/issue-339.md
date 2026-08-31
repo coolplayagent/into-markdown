@@ -15,7 +15,10 @@
 固定对照基线：`26aaf8325ed31ce72921c84f0239574718d72257`。实现分支随后集成
 `172277d9e0f72226f7a22a9fd79652890f9541f5` 的 Draw.io 支持，复用其 MIME 模块，
 并同步 `0ae0ddfe3ecefb92a1e959f0055187b49b6b57e0` 的统一 CI 策略。
-#338 的 RAR 识别与归档解析属于独立 PR；本项通过共同检测入口执行支持检查。
+#338 的 RAR 识别与归档解析已随主线 `d04d41e6ce5c1359e32eb5c3c81c9debf3d6567c` 集成。
+本项复用其错误边界，不新增 RAR 解析器；目录中标记 `Unsupported` 的格式参与统一拒绝判断。
+已完整检查且含成员的普通 ZIP 按 ZIP 路由，包括改名为 Office/EPUB/ODF 的输入；
+空容器、存在文档包标记或检查不完整时保留兼容候选，继续由解析器报告损坏、加密或资源错误。
 
 ## 公开语料：36 个原始文件
 
@@ -113,7 +116,12 @@ probe 报告记录 API 默认选项，OCR off。运行时及可选服务另由�
   四平台通过；专项 CI [33396806728](https://github.com/coolplayagent/into-markdown/actions/runs/33396806728)
   四平台通过，逐平台执行72个语料策略用例。这些已完成结果保留为历史证据；专项工作流已按 #349 删除。最终 PR 只运行四个 fast job，精确 head 状态见 PR。
 - 当前构建验证：[33396591314](https://github.com/coolplayagent/into-markdown/actions/runs/33396591314)，
-  `build_only=true`、版本 0.0.4、unsigned；等待构建与安装产物验收。没有发布或替换用户安装。
+  `build_only=true`、版本 0.0.4、unsigned；六个构建/汇总任务全部通过。
+  来源提交为 `c521b861fb96939474dc6fac89d0f61782283985`，早于本次 #338 整合。
+  macOS 包的材料摘要、成员清单、模式和架构校验通过；[安装包语料](issue-339-installed-corpus.json)
+  72/72、[安装包二进制改名与能力矩阵](issue-339-installed-matrix.json) 56/56。
+  矩阵实际调用内置 PDFium/图片 OCR，缺失 ASR 插件返回 `componentUnavailable`。
+  该批证据保留对应来源，最终整合版本另行验证。没有发布或替换用户安装。
 
 全量 CLI 测试在固定基线也复现以下三项既有失败，不能计为通过：
 `empty_source_and_empty_content_share_the_web_terminal_contract`，
@@ -149,3 +157,5 @@ artifact acceptance have separate statuses; known baseline CLI failures are reta
 Following #349, the issue-specific workflow was removed and the existing four fast jobs remain
 the only PR CI entrypoints. Completed historical runs remain evidence; the explicit installed-artifact
 request authorizes the build-only official release workflow linked above.
+
+The #338 RAR/ZIP changes are integrated from `d04d41e6ce5c1359e32eb5c3c81c9debf3d6567c`. Catalog status participates in admission; valid RAR keeps extraction guidance, while plain text with an unsupported `.rar` suffix requires an explicit supported format. Fully inspected nonempty generic ZIP archives override misleading document-package suffixes.

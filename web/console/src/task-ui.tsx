@@ -43,7 +43,7 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, InputFormat>> = {
   html: "html", htm: "html", csv: "csv", tsv: "tsv", json: "json", xml: "xml",
   drawio: "drawio", rss: "feed", atom: "feed", ipynb: "ipynb",
   png: "image", jpg: "image", jpeg: "image", tif: "image", tiff: "image", webp: "image", bmp: "image",
-  zip: "zip", msg: "outlook-msg",
+  zip: "zip", rar: "rar", msg: "outlook-msg",
   wav: "audio", mp3: "audio", m4a: "audio", flac: "audio", ogg: "audio",
   mp4: "video", mkv: "video", webm: "video", avi: "video", mov: "video",
 };
@@ -72,7 +72,7 @@ function fileExtension(name: string): string {
 }
 
 export function supportsFileName(name: string, hint: InputFormat | null = null): boolean {
-  return hint !== null ? WORKBENCH_FORMATS.has(hint) : WORKBENCH_FORMATS.has(FORMAT_BY_EXTENSION[fileExtension(name)]!);
+  return hint !== null ? WORKBENCH_FORMATS.has(hint) : (fileExtension(name) === "rar" || WORKBENCH_FORMATS.has(FORMAT_BY_EXTENSION[fileExtension(name)]!));
 }
 
 export function formatForName(name: string, hint: InputFormat | null = null): string {
@@ -81,6 +81,7 @@ export function formatForName(name: string, hint: InputFormat | null = null): st
 }
 
 const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
+  archiveExtractionRequired: "archiveExtractionRequired",
   unsupported: "unsupportedFormatFailure",
   noConverter: "unsupportedFormatFailure",
   malformed: "malformedInputFailure",
@@ -106,12 +107,13 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
   unreachable: "unreachableFailure",
 };
 
-export function taskFailureCode(task: TaskRecord): string {
-  return task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed";
-}
-
 export function diagnosticLabel(code: string, t: (key: MessageKey) => string): string {
   return t(DIAGNOSTIC_MESSAGES[code] ?? "conversionFailedReason");
+}
+
+export function taskFailureLabel(task: TaskRecord, t: (key: MessageKey) => string): string {
+  const reason = task.failure?.reasonCode;
+  return diagnosticLabel(reason && DIAGNOSTIC_MESSAGES[reason] ? reason : task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed", t);
 }
 
 export function executionStageLabel(stage: string, locale: Locale): string {
@@ -134,7 +136,7 @@ export function iconForFormat(format: string): LucideIcon {
   if (["xls", "xlsx", "ods", "csv", "tsv"].includes(format)) return FileSpreadsheet;
   if (format === "image") return FileImage;
   if (format === "audio" || format === "video") return FileAudio;
-  if (["zip", "epub", "outlook-msg"].includes(format)) return Archive;
+  if (["zip", "rar", "epub", "outlook-msg"].includes(format)) return Archive;
   if (format === "json" || format === "ipynb") return FileJson;
   return File;
 }

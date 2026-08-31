@@ -508,3 +508,44 @@ fn xhtml_nested_style_aliases_keep_valid_ir() {
         assert!(result.markdown.replace("\\-", "-").contains("epub-styled"));
     }
 }
+
+#[test]
+fn unicode_archive_names_preserve_epub_spine_navigation_and_assets() {
+    let names = [
+        ("one.xhtml", "章节（第一）.xhtml"),
+        ("two.xhtml", "cafe\u{301}.xhtml"),
+        ("cover.png", "封面（彩色）.png"),
+    ];
+    let replace = |bytes: &[u8]| {
+        let mut value = String::from_utf8(bytes.to_vec()).unwrap();
+        for (old, new) in names {
+            value = value.replace(old, new);
+        }
+        value.into_bytes()
+    };
+    let package = replace(epub3_package());
+    let nav = replace(nav3());
+    let one = replace(chapter_one());
+    let two = replace(chapter_two());
+    let result = convert(epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", &package),
+        ("OPS/nav.xhtml", &nav),
+        ("OPS/text/章节（第一）.xhtml", &one),
+        ("OPS/text/cafe\u{301}.xhtml", &two),
+        ("OPS/images/封面（彩色）.png", PNG),
+        (
+            "OPS/text/extra.xhtml",
+            b"<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>",
+        ),
+        ("OPS/styles/book.css", b"body{}"),
+    ]))
+    .unwrap();
+    assert!(result.markdown.contains("Alpha"));
+    assert!(result.markdown.contains("Omega"));
+    assert_eq!(result.assets.len(), 1);
+    assert_eq!(result.assets[0].filename.as_deref(), Some("封面（彩色）.png"));
+    let mut links = Vec::new();
+    collect_links(&result.document.blocks, &mut links, &mut Vec::new());
+    assert!(links.iter().any(|target| target == "OPS/text/cafe\u{301}.xhtml#target"));
+}

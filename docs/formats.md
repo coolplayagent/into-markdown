@@ -15,6 +15,7 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
 | 音视频 | Audio；Video（经受认证 FFmpeg 解码并由语音能力插件转写） |
 | 容器与消息 | ZIP；Outlook MSG |
+| 可识别、需先解压 | RAR4/RAR5（`unsupported`） |
 | 受控输入基础 | HTTP(S) SourceResolver（默认离线，须显式网络授权） |
 
 每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
@@ -531,3 +532,18 @@ CRLF、LF、CR 都作为源换行处理。单个换行保留为段内显式换�
 只有在格式规范允许时，容器变体才共享解析器。启用宏的 Office 文档仅作为内容包
 解析，宏代码永远不会被加载或执行。除非显式启用网络访问，否则远程格式保持
 不可用状态。
+
+## 归档名称与 RAR 检测
+
+ZIP 与 EPUB 保留解码后的逻辑名称，用于成员查找、标题、引用和来源定位。中文、全角括号、
+重音及组合字符均可使用；兼容归一化和完整大小写折叠仅用于冲突与安全检查。所有清单
+成员在读取正文前完成校验，包括目录、别名、文件与目录前缀、路径穿越、设备名及链接
+文件。归档成员在内存读取，资产继续通过内容寻址安全层落盘。
+
+RAR4/5 依据[官方签名](https://www.rarlab.com/technote.htm)识别，扩展名和 MIME 作为提示。
+完整签名返回 `unsupported` 并建议先解压；截断签名返回损坏诊断。混合 ZIP 保留可转换
+成员，并在对应成员的诊断中报告 RAR；目录与 Web 格式列表将其显示为“可识别，请先解压后转换”。
+
+含成员的普通 ZIP 在完整目录检查后按 ZIP 路由，即使后缀为 DOCX、PPTX、XLSX、EPUB 或 ODF。空容器、具有文档包标记或目录检查不完整的容器保留兼容候选，以维持损坏、加密和资源限制错误。格式目录中的 `Unsupported` 状态同样参与准入；真实 RAR 沿用先解压提示，普通文本使用 `.rar` 后缀返回 `unsupported`，显式格式仍执行所选解析器。
+
+A fully inspected nonempty generic ZIP routes to ZIP even with an Office, EPUB, or ODF suffix. Empty containers, package markers or incomplete directory inspection retain compatible candidates for parser-specific damage, encryption, and resource errors. Catalog entries marked `Unsupported` participate in admission: real RAR retains extraction guidance, while plain text named `.rar` returns `unsupported`; an explicit format still selects its parser.

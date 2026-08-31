@@ -17,6 +17,7 @@ pub(super) fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut Co
     assign!(max_archive_entry_size, max_archive_entry_bytes);
     assign!(max_archive_compression_ratio, max_archive_compression_ratio);
     assign!(max_depth, max_nesting_depth);
+    assign!(max_presentation_xml_events, max_presentation_xml_events);
     assign!(max_pages, max_pages);
     assign!(max_pdf_page_objects, max_pdf_page_objects);
     assign!(max_pdf_total_objects, max_pdf_total_objects);
