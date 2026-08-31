@@ -2,7 +2,7 @@
 
 运行时的权威列表以 `into-md formats` 输出为准。PDF、DOC/DOCX/DOCM、ODT/ODS/ODP、
 PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX、XLS/XLSX/XLSM/XLSB、EPUB、RTF、ZIP、TXT、
-Markdown、HTML、CSV、TSV、JSON、XML、RSS/Atom、IPYNB、Outlook MSG，以及
+Markdown、HTML、CSV、TSV、JSON、XML、Drawio、RSS/Atom、IPYNB、Outlook MSG，以及
 PNG/JPEG/TIFF/WebP/BMP 图片以及 Audio/Video 状态为 `available`。DOC/PPT/XLS 是 Core 原生
 格式；Audio/Video 要求完整语音能力插件。能力缺失时返回
 `componentUnavailable`。YouTube、Wikipedia/MediaWiki 等站点适配器不是格式 catalog 条目，
@@ -11,7 +11,7 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 | 类别 | 格式 |
 | --- | --- |
 | 文档 | PDF；DOC/DOCX/DOCM；PPT/PPS/POT/PPTX/PPTM/PPSX/PPSM/POTX；XLS/XLSX/XLSM/XLSB；ODT/ODS/ODP；RTF；EPUB |
-| 文本与数据 | TXT；Markdown；HTML；CSV/TSV；JSON；XML；RSS/Atom；IPYNB |
+| 文本与数据 | TXT；Markdown；HTML；CSV/TSV；JSON；XML；Drawio；RSS/Atom；IPYNB |
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
 | 音视频 | Audio；Video（经受认证 FFmpeg 解码并由语音能力插件转写） |
 | 容器与消息 | ZIP；Outlook MSG |
@@ -19,6 +19,38 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 
 每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
 `into-md formats --json` 实时发现后逐项校验。
+
+## Drawio
+
+`drawio` 接受 `.drawio`、根元素为 `mxfile` / `mxGraphModel` 的 XML，以及显式
+`--format drawio`。自动检测优先识别这些根元素；`--format xml` 保留通用 XML 输出。
+`.drawio` 内容缺少图模型时返回 `malformed`，避免静默输出属性转储。
+
+支持 UTF-8 裸模型、多页文件、内嵌未压缩模型和 Base64 → raw Deflate → URI 解码的页面。
+全部页面按源顺序输出标题、层级节点列表与连接表；列表保留图层、分组、原始 ID、父引用和
+`p页:c单元` 身份，连接表保留起终点、箭头方向、文字及附加标签的来源身份。
+无标签对象使用可追踪占位名称；自由端点保留坐标，自连接、环和多重连接完整输出。
+`object` / `UserObject` 标签与自定义字段占位符受同一预算约束。深层分组在 IR 深度边界处
+展开完整祖先身份路径。原始模型的无标签根单元 `0` 作为结构锚点处理。
+
+HTML 标签复用受预算的安全 HTML 解析路径，保留中文、实体、换行及 IR 可表达的样式。
+安全链接和图片 URI 作为引用保留；全程离线，不访问图中资源。Mermaid、图形渲染以及
+PNG/SVG 内嵌编辑模型提取在本格式范围之外。
+
+`strict` 拒绝重复/缺失 ID、非法父关系、失效引用和损坏页；`best-effort` 按源序区分
+重复 ID、保留歧义引用候选、断开成环父关系并保留原始引用，输出就近诊断。
+外层 XML 可认证时允许跳过损坏页；外层无法解析、DTD、安全错误、资源超限、取消和超时终止请求。
+来源使用页和单元序号；未压缩模型记录真实字节区间，压缩单元记录原始编码载荷区间。
+
+输入、累计解码/解压字节、页数、字段、XML/分组深度、表格和内存复用请求限制；
+扫描另限累计 1,000,000 个事件/属性、单元素 4,096 个属性、100,000 个单元，
+并遵循统一 IR 节点与 inline 上限。中间解码载荷计入累计解压预算，逐页释放临时对象。
+文件、stdin、内存、批量及 ZIP 内条目通过同一转换器，CLI/API/Web 与安装能力目录同步。
+
+实现参考 [diagram-design 的 drawio_extract.py](https://github.com/cathrynlavery/diagram-design/blob/cc2f51f3fd215536cbfc0cf376ea3b513478e9cb/skills/diagram-design/scripts/drawio_extract.py)，
+固定版本 `cc2f51f3fd215536cbfc0cf376ea3b513478e9cb`，Copyright (c) 2025 Cathryn Lavery，MIT。
+许可正文与移植来源进入第三方审计及安装包。仓库自建样本见 `fixtures/small/drawio`；
+#331 报告的原始 20 个文件尚未取得，当前测试不代表这些文件已通过验收。
 
 ## 图片
 

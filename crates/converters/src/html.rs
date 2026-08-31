@@ -2844,6 +2844,8 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             if !value.is_empty() {
                 self.reserve_vector(&mut output, 1)?;
                 self.constructed(FeedHtmlObjectKind::Inline);
+                marks.sort_unstable();
+                marks.dedup();
                 output.push(Inline::Text { value, marks });
             }
             return Ok(output);
@@ -2932,18 +2934,7 @@ impl<'a, 'budget> Builder<'a, 'budget> {
                 _ => {}
             }
         }
-        let mut children = Vec::new();
-        self.reserve_vector(&mut children, self.nodes[id].children.len())?;
-        children.extend_from_slice(&self.nodes[id].children);
-        for child in children {
-            let mut child_marks = Vec::new();
-            self.reserve_vector(&mut child_marks, marks.len())?;
-            child_marks.extend_from_slice(&marks);
-            let built = self.inline_node(child, child_marks)?;
-            self.reserve_vector(&mut output, built.len())?;
-            output.extend(built);
-        }
-        Ok(output)
+        self.inline_children_with_marks(id, &marks)
     }
 
     fn inline_children_with_marks(

@@ -60,6 +60,7 @@ CORE_MATERIAL_RELATIVES = tuple(
         "licenses/npm/npm-release.spdx.json",
         "licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt",
         *(f"licenses/pdfium/{name}" for name in PDFIUM_LICENSE_FILES),
     )
 )
@@ -406,6 +407,7 @@ def _validated_cores(
         "licenses/npm/npm-release.spdx.json": ROOT / "third_party/licenses/npm-release.spdx.json",
         "licenses/npm/lucide-ISC-MIT.txt": ROOT / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt": ROOT / "third_party/licenses/diagram-design-MIT.txt",
     }
     for target, _asset in TARGET_LAYOUTS:
         for member in AUTHORITY_MATERIALS:

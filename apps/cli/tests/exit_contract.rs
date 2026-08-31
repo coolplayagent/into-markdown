@@ -786,3 +786,50 @@ fn excessive_txt_inlines_exit_as_resource_limit_not_internal() {
     assert!(stderr.contains("resourceLimit"));
     assert!(!stderr.contains("internal"));
 }
+
+#[test]
+fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
+    let source = br#"<mxGraphModel><root><mxCell id="a" vertex="1" value="Start"/><mxCell id="b" vertex="1" value="End"/><mxCell id="e" edge="1" source="a" target="b" value="Continue"/></root></mxGraphModel>"#;
+    let result = run_with_stdin(
+        &["-", "--no-config", "--format", "drawio", "--emit", "result-json"],
+        source,
+    );
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let dto: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(dto.to_string().contains("drawio"));
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("图.drawio");
+    std::fs::write(&file, source).unwrap();
+    let output = Command::new(binary()).arg(&file).args(["--no-config"]).output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("## Connections"));
+    let xml = Command::new(binary())
+        .arg(&file)
+        .args(["--no-config", "--format", "xml"])
+        .output()
+        .unwrap();
+    assert!(xml.status.success());
+    assert!(String::from_utf8_lossy(&xml.stdout).contains("xml-attribute"));
+    let second = dir.path().join("second.xml");
+    std::fs::write(&second, source).unwrap();
+    let batch_dir = dir.path().join("converted");
+    let batch = Command::new(binary())
+        .arg(&file)
+        .arg(&second)
+        .args(["--no-config", "--output-dir"])
+        .arg(&batch_dir)
+        .output()
+        .unwrap();
+    assert!(batch.status.success(), "{}", String::from_utf8_lossy(&batch.stderr));
+    for name in ["图.md", "second.md"] {
+        assert!(std::fs::read_to_string(batch_dir.join(name)).unwrap().contains("## Connections"));
+    }
+    std::fs::write(&file, b"<ordinary/>").unwrap();
+    let bad = Command::new(binary())
+        .arg(&file)
+        .args(["--no-config", "--log-format", "json"])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("malformed"));
+}

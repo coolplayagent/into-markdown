@@ -325,6 +325,8 @@ mod tests {
         fs::create_dir_all(install.join("bin")).unwrap();
         fs::create_dir_all(rust.parent().unwrap()).unwrap();
         for fixture in [
+            "drawio/normal.drawio",
+            "drawio/compressed.drawio",
             "text/normal.txt",
             "docx/normal.docx",
             "docx/corrupt.docx",
@@ -419,7 +421,10 @@ mod tests {
         let missing_library_request = request.clone();
         let formats = serde_json::to_vec(&authority.entries).unwrap();
         let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.asr","status":"missing","detail":"run into-md setup media"}]"#.to_vec();
+        let diagram = "# Page 1\n\n## Nodes\n\n- Main — 1 \\[p1:c2\\]; parent: 0; layer\n    \n    - Start 中文 — a \\[p1:c3\\]; parent: 1\n    - End — b \\[p1:c4\\]; parent: 1\n\n## Connections\n\n| <strong>Connection</strong> | <strong>Source</strong> | <strong>Target</strong> | <strong>Direction</strong> | <strong>Label</strong> |\n| --- | --- | --- | --- | --- |\n| e \\[p1:c5\\]; parent: 1 | a \\[p1:c3\\] | b \\[p1:c4\\] | source → target | Continue |\n".as_bytes().to_vec();
         let markdown = [
+            diagram.clone(),
+            diagram,
             b"Alpha \xe4\xb8\xad\xe6\x96\x87 line  \nSecond line\n".to_vec(),
             b"Corpus Alpha \xe4\xb8\xad\xe6\x96\x87\n".to_vec(),
             b"# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n".to_vec(),

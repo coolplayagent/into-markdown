@@ -24,6 +24,17 @@
       "obligations": "The request-accounted Suzuki-Abe scanner is adapted from imageproc src/contours.rs at crates.io checksum 2393fb7808960751a52e8a154f67e7dd3f8a2ef9bd80d1553078a7b4e8ed3f0d. Preserve Copyright (c) 2015 PistonDevelopers and third_party/licenses/imageproc-MIT.txt in source distributions."
     },
     {
+      "id": "diagram-design-drawio-adaptation",
+      "kind": "embedded-source",
+      "status": "reviewed",
+      "included_in_release": true,
+      "release_eligible": true,
+      "version": "cc2f51f3fd215536cbfc0cf376ea3b513478e9cb",
+      "source": "https://github.com/cathrynlavery/diagram-design/blob/cc2f51f3fd215536cbfc0cf376ea3b513478e9cb/skills/diagram-design/scripts/drawio_extract.py",
+      "license": "MIT",
+      "obligations": "The ordered Drawio page/cell/edge extraction pipeline is adapted in Rust. Preserve Copyright (c) 2025 Cathryn Lavery and third_party/licenses/diagram-design-MIT.txt in source and installed artifacts. Request budgets, source provenance, full output, and recovery are independently integrated with the repository contracts."
+    },
+    {
       "id": "clipper2-rust",
       "kind": "rust-library",
       "status": "reviewed",

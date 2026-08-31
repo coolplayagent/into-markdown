@@ -126,6 +126,7 @@ fn covers_component(
     }
     let authority_path = match component.id.as_str() {
         "opencc-transcript-character-table" => "LICENSE",
+        "diagram-design-drawio-adaptation" => "third_party/licenses/diagram-design-MIT.txt",
         "imageproc-contour-adaptation" => "third_party/licenses/imageproc-MIT.txt",
         "clipper2-rust" => "third_party/licenses/BSL-1.0.txt",
         "calamine" => "third_party/licenses/calamine-MIT.txt",
@@ -293,4 +294,83 @@ fn exact_pdfium_bundle(repository: &Path, projection: &ArchiveProjection) -> boo
                         == Some(item.sha256.as_str())
             })
     })
+}
+
+pub(crate) fn embedded_only(id: &str) -> bool {
+    id.starts_with("cargo:")
+        || id.starts_with("npm:")
+        || matches!(
+            id,
+            "opencc-transcript-character-table"
+                | "imageproc-contour-adaptation"
+                | "diagram-design-drawio-adaptation"
+                | "clipper2-rust"
+                | "calamine"
+        )
+}
+
+pub(crate) fn validate_release_file_collection(
+    root_build: &str,
+    npm_license_files: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    let Some(name_offset) = root_build.find("name = \"release_license_files\"") else {
+        errors.push("root BUILD has no release_license_files authority".to_owned());
+        return;
+    };
+    let Some(srcs_relative) = root_build[name_offset..].find("srcs = [") else {
+        errors.push("release_license_files has no literal srcs list".to_owned());
+        return;
+    };
+    let list_start = name_offset + srcs_relative + "srcs = [".len();
+    let Some(list_length) = root_build[list_start..].find(']') else {
+        errors.push("release_license_files srcs list is unterminated".to_owned());
+        return;
+    };
+    let mut actual = BTreeSet::new();
+    for line in root_build[list_start..list_start + list_length].lines() {
+        let entry = line.trim().trim_end_matches(',');
+        if entry.is_empty() {
+            continue;
+        }
+        let Some(label) = entry.strip_prefix('"').and_then(|value| value.strip_suffix('"')) else {
+            errors.push("release_license_files must contain only literal labels".to_owned());
+            continue;
+        };
+        let Some(path) = release_label_path(label) else {
+            errors.push(format!("release_license_files contains invalid label {label}"));
+            continue;
+        };
+        if !actual.insert(path.clone()) {
+            errors.push(format!("release_license_files duplicates {path}"));
+        }
+    }
+
+    let mut expected = BTreeSet::from([
+        "LICENSE".to_owned(),
+        "NOTICE".to_owned(),
+        "THIRD_PARTY_NOTICES.md".to_owned(),
+        "third_party/licenses/npm-release.spdx.json".to_owned(),
+        "third_party/licenses/diagram-design-MIT.txt".to_owned(),
+    ]);
+    expected.extend(npm_license_files.iter().map(|path| (*path).to_owned()));
+    for path in expected.difference(&actual) {
+        errors.push(format!("release_license_files is missing required {path}"));
+    }
+    for path in actual.difference(&expected) {
+        errors.push(format!("release_license_files has unmanaged entry {path}"));
+    }
+}
+
+fn release_label_path(label: &str) -> Option<String> {
+    if let Some(absolute) = label.strip_prefix("//") {
+        let (package, target) = absolute.split_once(':')?;
+        if package.is_empty() || target.is_empty() {
+            return None;
+        }
+        let path = format!("{package}/{target}");
+        crate::is_safe_relative_path(&path).then_some(path)
+    } else {
+        crate::is_safe_relative_path(label).then(|| label.to_owned())
+    }
 }

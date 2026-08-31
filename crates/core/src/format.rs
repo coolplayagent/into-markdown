@@ -44,6 +44,8 @@ pub enum InputFormat {
     Json,
     /// XML data.
     Xml,
+    /// Drawio diagrams with text, groups and connections.
+    Drawio,
     /// RSS or Atom feed.
     Feed,
     /// Jupyter notebook.
@@ -88,6 +90,7 @@ impl InputFormat {
             Self::Tsv => "tsv",
             Self::Json => "json",
             Self::Xml => "xml",
+            Self::Drawio => "drawio",
             Self::Feed => "feed",
             Self::Ipynb => "ipynb",
             Self::Image => "image",
@@ -124,6 +127,7 @@ impl InputFormat {
             "tsv" => Self::Tsv,
             "json" => Self::Json,
             "xml" => Self::Xml,
+            "drawio" => Self::Drawio,
             "rss" | "atom" => Self::Feed,
             "ipynb" => Self::Ipynb,
             "png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" => Self::Image,

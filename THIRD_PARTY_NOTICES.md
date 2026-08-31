@@ -159,3 +159,10 @@ are planned, unknown, incomplete, or denied. Packaging must copy `LICENSE`,
 the archive. The audit does not inspect a completed archive, prove that every
 file in it was inventoried, replace legal review, or synthesize upstream
 copyright notices.
+
+The Drawio page/cell/edge extraction pipeline in `crates/converters/src/drawio/`
+is adapted from Cathryn Lavery's `diagram-design` `drawio_extract.py`,
+commit `cc2f51f3fd215536cbfc0cf376ea3b513478e9cb`, Copyright (c) 2025 Cathryn Lavery, MIT.
+The complete permission and warranty text is in `third_party/licenses/diagram-design-MIT.txt`.
+Fixtures and regression tests are repository-authored Apache-2.0 material; no upstream tests
+or user diagrams are copied. Source and installed artifact inventories retain this attribution.
