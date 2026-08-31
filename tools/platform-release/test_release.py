@@ -368,12 +368,6 @@ class PlatformReleaseTests(unittest.TestCase):
         ).read_text(encoding="utf-8"))
         self.assertNotIn("tools/ffmpeg-build-audit.sh", workflow)
         self.assertNotIn("release-ffmpeg-lgpl", workflow)
-        audit = (ROOT / ".github/workflows/ffmpeg-artifact-audit.yml").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("tools/ffmpeg-build-audit.sh", audit)
-        self.assertIn("tools/ffmpeg_runtime.py package", audit)
-        self.assertIn("ffmpeg-runtime-candidate-${{ matrix.target }}", audit)
 
     def test_release_records_actionable_phase_timings(self) -> None:
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(

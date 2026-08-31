@@ -52,6 +52,22 @@ bazel test //tools/docs-check:docs_check_test
 并执行真实 TXT、stdin 和每种可用格式的 dry-run。新增或修改公共命令、格式时，必须同步更新
 [`docs/cli-examples.md`](docs/cli-examples.md) 和对应英文文档。
 
+## CI 变更约束
+
+- CI 只允许 `.github/workflows/pr-fast-gate.yml` 现有四个 job：Linux x86_64
+  （共享测试与 Web）、Linux ARM64 Core、Windows x86_64 Core、macOS ARM64 Core。
+- 保持四个 job 的名称、runner、五分钟超时和 `pull_request` 触发方式。UT 可以加入现有
+  job；共享 UT 优先放入 Linux x86_64，平台相关 UT 放入对应 job。耗时专项、完整构建和
+  真实运行时矩阵通过本地命令按需验证，保持 fast gate 的时间边界。
+- 禁止新增 workflow、job/task、matrix 平台或组合，以及手动、定时或其他自动 CI 触发入口；
+  禁止通过脚本或复用工作流间接派发额外 CI。禁止删除、跳过或放宽白名单校验来容纳新任务。
+- 工作流目录只保留 `pr-fast-gate.yml` 和仅手动触发的正式发布流程
+  `platform-modular-release.yml`。发布流程由用户明确要求发版或安装产物验收时调用。
+- 四个 job 已有的 `pr_fast_gate.py` 调用会执行 `ci_workflow_policy.py`，拒绝额外工作流、
+  job、矩阵、runner/name 漂移及发布自动触发。校验使用固定的 YAML 块布局，调整 UT 时
+  保持工作流控制结构。修改白名单或发布触发边界须先获得用户明确批准；交付前运行
+  `python3 -m unittest tools.platform-release.test_pr_fast_gate`，并整体检查工作流及调用脚本。
+
 ## 插件与发布改动
 
 进程插件和 WASI 插件分别遵守 `process-v1` 与 `wasi-v1` 的隔离契约；开发、签名和生命周期

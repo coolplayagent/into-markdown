@@ -47,6 +47,9 @@ Accenture 的 best-effort 完整保留正文和有效链接；strict 在倒序�
 
 ## 复跑与证据分层
 
+PDF 专项回归通过下述本地命令按需复跑。独立的 `PDF resilience` CI 工作流已移除，
+回归工具和既有发布流程中的 PDF 验收保留；下文 CI 链接仅记录修复当时的历史验证结果。
+
 ```sh
 cargo build --locked -p into-markdown-cli
 python3 -m pip install pypdf==6.10.0
