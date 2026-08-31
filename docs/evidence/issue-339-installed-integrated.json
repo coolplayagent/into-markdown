@@ -1,0 +1,14 @@
+{
+  "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+  "binaryVersion": "into-md 0.0.4",
+  "target": "aarch64-apple-darwin",
+  "runId": 33401363606,
+  "coreArchiveSha256": "fbf155bb03451967f5122b118a8e8e0db8ad9952eea8028a1bd8443482ce89e1",
+  "binarySha256": "ef2e1f0f1419a597910cf52132740a3bd896b1f13878cb3630ea679af63555be",
+  "artifactZipSha256": "b328cd907f3dfe959911caf543f399f8c5eaeefbaa5aca06194c6935a9f3e348",
+  "archiveVerification": "passed: inventory, modes, architecture, digests and independent release material authority",
+  "verifierSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+  "releasePublished": false,
+  "existingInstallationReplaced": false,
+  "initialVerification": "current #341 checkout correctly rejected the older npm license hash; rerun with the archive source checkout passed"
+}

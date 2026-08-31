@@ -116,6 +116,20 @@
       "sha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
       "expectedOutcome": "converted",
       "licenseUrl": "https://github.com/apache/poi/blob/87cdef57b0f714369c391e625180a59507a24576/legal/LICENSE"
+    },
+    {
+      "name": "markitdown-masterformat.pdf",
+      "format": "pdf",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/masterformat_partial_numbering.pdf",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/masterformat_partial_numbering.pdf",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE",
+      "bytes": 2114,
+      "sha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "expectedOutcome": "converted"
     }
   ]
 }

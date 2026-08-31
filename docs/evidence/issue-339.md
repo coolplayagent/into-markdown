@@ -16,7 +16,8 @@
 `172277d9e0f72226f7a22a9fd79652890f9541f5` 的 Draw.io 支持，复用其 MIME 模块，
 并同步 `0ae0ddfe3ecefb92a1e959f0055187b49b6b57e0` 的统一 CI 策略。
 #338 的 RAR 识别与归档解析已随主线 `d04d41e6ce5c1359e32eb5c3c81c9debf3d6567c` 集成。
-本项复用其错误边界，不新增 RAR 解析器；目录中标记 `Unsupported` 的格式参与统一拒绝判断。
+随后集成 #341 主线 `dd1120b38e3b0dfabcf745c5d059633ce6d2d2cf` 的渲染与预览修复。
+本项复用归档错误边界，不新增 RAR 解析器；目录中标记 `Unsupported` 的格式参与统一拒绝判断。
 已完整检查且含成员的普通 ZIP 按 ZIP 路由，包括改名为 Office/EPUB/ODF 的输入；
 空容器、存在文档包标记或检查不完整时保留兼容候选，继续由解析器报告损坏、加密或资源错误。
 
@@ -108,36 +109,48 @@ probe 报告记录 API 默认选项，OCR off。运行时及可选服务另由�
 
 本地、CI、安装产物分别记录；[本地命令、日志摘要与运行时哈希](issue-339-validation.json)可供复核。最终结果见本节更新及 [PR #346](https://github.com/coolplayagent/into-markdown/pull/346)。
 
-- 本地当前主线隔离构建：Core/Engine/Converter/API 925 项通过、19 项按既有条件忽略；
-  CLI exit contract 18 项通过（含 Draw.io）。公开语料 72/72 满足预期。
-- 本地 Bazel：Core、Engine、Converter、API、Web typecheck/workbench、文档契约与发布契约 8 个目标通过。
-- 本地原生 PDF：固定 PDFium 下准入测试 10 项通过，包含单独启用的 PDF 回归。
-- 本地 Clippy：受影响四个库执行 `--no-deps --lib -- -D warnings` 通过；
-  非枚举顺序的嵌套样式专项通过，防止排序去重改变用户要求的首次出现顺序。
-- 本地 Web 浏览器：真实 PPT 改名 `.bin` 正常转换，页面、讲者备注、图片引用保留；
-  `.py` 被接受上传后在任务行就近显示格式错误；HTML 预览实际产生粗体、斜体，空链接保留标签而无空 anchor。
-- 平台发布契约：82 项执行，81 通过、1 项按既有条件跳过。生产 Web 的 SPDX 与实际 JavaScript
-  资产摘要绑定，CSS、bootstrap、Rust include 与 manifest 同步。
-- 策略收敛前的快速 CI：[33396806735](https://github.com/coolplayagent/into-markdown/actions/runs/33396806735)
-  四平台通过；专项 CI [33396806728](https://github.com/coolplayagent/into-markdown/actions/runs/33396806728)
-  四平台通过，逐平台执行72个语料策略用例。这些已完成结果保留为历史证据；专项工作流已按 #349 删除。最终 PR 只运行四个 fast job；整合提交 `d1f91b59d3b25ce27eafc793086f39ef94350e4f` 的
-  [四项 fast checks](https://github.com/coolplayagent/into-markdown/actions/runs/33401315417) 全部通过。
-- 当前构建验证：[33396591314](https://github.com/coolplayagent/into-markdown/actions/runs/33396591314)，
-  `build_only=true`、版本 0.0.4、unsigned；六个构建/汇总任务全部通过。
-  来源提交为 `c521b861fb96939474dc6fac89d0f61782283985`，早于本次 #338 整合。
-  macOS 包的材料摘要、成员清单、模式和架构校验通过；[安装包语料](issue-339-installed-corpus.json)
-  72/72、[安装包二进制改名与能力矩阵](issue-339-installed-matrix.json) 56/56。
-  矩阵实际调用内置 PDFium/图片 OCR，缺失 ASR 插件返回 `componentUnavailable`。
-  该批证据保留对应来源；[整合版本安装验收构建](https://github.com/coolplayagent/into-markdown/actions/runs/33401363606)
-  固定在 `d1f91b59d3b25ce27eafc793086f39ef94350e4f`，正在执行。没有发布或替换用户安装。
+- 本地整合构建：生产代码 `89ffce9642c8eb82f2f133f2ebc847734c77f87b`，测试修正提交
+  `973f6891982776d891971da6d54dc70f3c60a78e`。Core/Engine/Converter/API/Renderer
+  **968 项通过、19 项既有忽略**；CLI **334 通过、1 项既有忽略**；CLI exit contract **18/18**。
+  合入 #341 前的三项 CLI 失败已消失，历史基线和日志摘要保留在验证 JSON。
+- 本地 Bazel **10 个目标通过**：Core、Engine、Converter、API、Renderer、Web
+  typecheck/workbench/preview、文档契约、发布契约。受影响五个库 Clippy、Cargo fmt、许可证
+  检查通过。结构门禁 **590 文件、0 违规**；发布契约 **81 通过、1 跳过**；CI 白名单 **14/14**。
+- 本地原生 PDF：固定 PDFium 下准入测试 **10/10**，含启用的 PDF 回归。
+  合入 #341 后重建 CLI 的[公开语料](issue-339-local-main341-corpus.json) **72/72**，
+  [二进制矩阵](issue-339-local-main341-matrix.json) **120/120**，使用固定外部 PDFium、OCR off。
+- [Web 实际操作记录](issue-339-web.json)分别验证安装包和合入 #341 后的本地构建：四种后缀均可上传，
+  改名 PPT 保留页面、正文、备注和图片引用；`.py` 与 RAR 错误就近显示；HTML 保留语义粗体、斜体，
+  空链接标签没有空 anchor。观察到的 PPT 图片引用在预览中显示为 Markdown 文字；本项记录引用与资产保留，
+  不将这次检查写成图片显示成功。安装包使用 OCR auto，本地源码构建使用 OCR off。
+- 当前已验证的[四项 fast checks](https://github.com/coolplayagent/into-markdown/actions/runs/33405357492)
+  对应 `973f689`，全部通过。最终证据提交仍执行同一四项门禁，结果由 PR checks 保留。
+  `.github/workflows/` 相对最新主线没有改动；#349 删除的专项入口保持删除。
+- [正式安装验收构建](https://github.com/coolplayagent/into-markdown/actions/runs/33401363606)
+  固定源码 `d1f91b59d3b25ce27eafc793086f39ef94350e4f`，版本 **0.0.4**、unsigned、build-only；
+  四平台构建、Windows 黑盒与汇总共 **6 项全部通过**。
+  [macOS 材料、架构与摘要检查](issue-339-installed-integrated.json)通过，
+  [安装包语料](issue-339-installed-integrated-corpus.json) **72/72**，
+  [安装包矩阵](issue-339-installed-integrated-matrix.json) **122/122**。
+  矩阵含 120 个改名用例和 2 个能力用例，实际调用内置 PDFium/OCR，缺失 ASR 保留
+  `componentUnavailable`。其中两份公开原件共 12 个变体保留基线解析错误；预期错误按断言验收，
+  与成功转换分别记录。其他公开二进制原件验证路由、正文和资产等价。
+- 安装包已包含 #338 和本项格式/HTML 修复，**早于 #341**；含 #341 的最终组合版本仅完成上述
+  本地源码构建验收，**未重新构建并验证安装包**。材料校验先在较新源码上准确报告静态许可证摘要不匹配，
+  随后在安装包对应的固定提交校验通过。没有发布 release，也没有替换用户已有安装。
 
-全量 CLI 测试在固定基线也复现以下三项既有失败，不能计为通过：
-`empty_source_and_empty_content_share_the_web_terminal_contract`，
-`metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary`，
-`permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary`。
-前者涉及已有 altChunk 占位内容语义；后两者为本机文件系统空间边界差 4096 字节。
-全量 CLI 串行重跑为 331 通过、3 个上述基线失败、1 个既有忽略；slow-upload 退出测试重跑通过。
-上述状态不改变本项准入和合法 IR 断言。
+历史证据保留固定来源：[早期 fast CI](https://github.com/coolplayagent/into-markdown/actions/runs/33396806735)
+和[已完成的旧专项 CI](https://github.com/coolplayagent/into-markdown/actions/runs/33396806728)均四平台通过，
+后者逐平台执行 72 个语料策略用例，其工作流已删除。
+较早的[安装验收构建](https://github.com/coolplayagent/into-markdown/actions/runs/33396591314)
+来源 `c521b861fb96939474dc6fac89d0f61782283985`，保留对应的
+[72/72 语料](issue-339-installed-corpus.json)和[56/56 矩阵](issue-339-installed-matrix.json)，
+不替代上述较新结果。
+
+固定基线曾复现 `empty_source_and_empty_content_share_the_web_terminal_contract`、
+`metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary` 和
+`permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary` 三项 CLI 失败。
+`d1f91b5` 当时为 331 通过、3 失败、1 忽略；合入 #341 后串行重跑为 334 通过、0 失败、1 忽略。
 
 ## English evidence summary
 
@@ -155,15 +168,23 @@ the original report remain unavailable, so their exact trigger conditions are un
 
 Ordered mark deduplication and safe blank-link handling preserve valid HTML IR across shared
 DOCX/Feed/MSG paths; EPUB is tested separately. UTF-16 incomplete XML declarations gain consistent weak candidate priority; baseline probes
-already routed these samples to Text. The reported TXT conversion failure remains unreproduced. Full binary safety,
-explicit charset authority, resource limits, cancellation and timeouts remain enforced.
+already routed these samples to Text. The reported TXT conversion failure remains unreproduced. Automatic text detection retains full-input binary safety. Explicit format/charset authority and existing
+parser checks remain in place, along with resource limits, cancellation and timeouts.
 
 Machine-readable CLI and probe reports above identify actual routes, confidence, options,
 diagnostics and output hashes. Local tests, historical four-platform CI, native-runtime tests and installed
-artifact acceptance have separate statuses; known baseline CLI failures are retained explicitly.
+artifact acceptance have separate statuses. The three historical CLI failures are resolved after integrating #341: 968 library tests and 334 CLI tests pass, with existing conditional skips preserved. Ten Bazel targets, 18 CLI exit contracts, 72 corpus cases and 120 binary cases pass on the combined local source build.
 
 Following #349, the issue-specific workflow was removed and the existing four fast jobs remain
 the only PR CI entrypoints. Completed historical runs remain evidence; the explicit installed-artifact
 request authorizes the build-only official release workflow linked above.
 
 The #338 RAR/ZIP changes are integrated from `d04d41e6ce5c1359e32eb5c3c81c9debf3d6567c`. Catalog status participates in admission; valid RAR keeps extraction guidance, while plain text with an unsupported `.rar` suffix requires an explicit supported format. Fully inspected nonempty generic ZIP archives override misleading document-package suffixes.
+
+The unsigned macOS 0.0.4 package from `d1f91b5` passes source-bound material verification,
+72 corpus cases and 122 binary/runtime cases. It includes #338 and the #339 runtime changes but
+predates #341; a package of the final combined source has not been rebuilt and validated.
+Two of nine public binary originals retain baseline parser errors across twelve renamed variants;
+these are expected-error checks, not successful document conversions. Browser observations are
+recorded separately for the package and the combined local source. No release was published and
+no existing installation was replaced.

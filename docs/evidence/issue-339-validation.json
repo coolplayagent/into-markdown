@@ -1,76 +1,82 @@
 {
   "schemaVersion": 1,
-  "runtimeSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
-  "testSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+  "runtimeSourceRevision": "89ffce9642c8eb82f2f133f2ebc847734c77f87b",
+  "testSourceRevision": "973f6891982776d891971da6d54dc70f3c60a78e",
   "cargoTargetDir": "target/cargo",
   "platform": "aarch64-apple-darwin",
   "gates": [
     {
-      "command": "cargo test --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown --lib",
-      "passed": 925,
+      "command": "cargo test --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown -p into-markdown-render-markdown --lib",
+      "passed": 968,
       "failed": 0,
       "ignored": 19,
-      "logSha256": "27fc077be2b3e369d352255d2755bafd17cf8e59df4d6c633fcb84738c81f7a5"
+      "logSha256": "744118bf0ab762abf0fa09a4e30d6359061a4ce9685a9bd3b33f235f04f429cc"
     },
     {
       "command": "cargo test --locked -p into-markdown-cli --test exit_contract",
       "passed": 18,
       "failed": 0,
       "ignored": 0,
-      "logSha256": "0c3a880bb0a06323df605ff3902fddd8e901a4cedb74c623e9042d4378fdedef"
+      "logSha256": "a7a2807e5641f3810bc1ee0a078d6acf711730ba07611bd5d118779651ee282c"
     },
     {
       "command": "cargo test --locked -p into-markdown-cli --bin into-md -- --test-threads=1",
-      "passed": 331,
-      "failed": 3,
+      "passed": 334,
+      "failed": 0,
       "ignored": 1,
-      "logSha256": "f7a906f4eadabe7128adf42fedc0e5c80aef674c78ded3916aadf6fbd8920de3"
+      "logSha256": "b91924ca73516be95eb640bd0dea46e12d1da42dd7446851e51e7ce5977b03aa"
     },
     {
       "command": "PDFIUM_LIBRARY=<pinned macOS PDFium> cargo test --locked -p into-markdown --lib format_admission_tests -- --include-ignored",
       "passed": 10,
       "failed": 0,
       "ignored": 0,
-      "logSha256": "1d1017b4fd53495743579a0f121d49b529089f567e5d7d6881bf6a3ba9100360"
+      "logSha256": "12062fc322adcc996164baf200779d0d49be50a8e51916c41ed60a29ba1d6f62"
     },
     {
-      "command": "cargo clippy --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown --no-deps --lib -- -D warnings",
+      "command": "cargo clippy --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown -p into-markdown-render-markdown --no-deps --lib -- -D warnings",
       "status": "passed",
-      "logSha256": "353c7dbc7e481685c8a7302dfba2bef18a2ac67913e2b8969c25b4192824f5e0"
+      "logSha256": "b3105f68976e383fa8f21c8496f03ba202842ecabd6b840a485b449e68d60501"
     },
     {
       "command": "cargo run --locked -p license-check --bin license-check",
       "status": "passed",
-      "logSha256": "2e101974904c51528ae8e2493fa2bd812f081fb7465852a48f972215a2ccad3d"
+      "logSha256": "d4cd36b6dfbfd328741c4915bb060c9a45c163b6d52718d1a935d7197435a0ee"
     },
     {
-      "command": "bazel test //crates/core:core_test //crates/engine:engine_test //crates/converters:converters_test //crates/api:api_test //web/console:typecheck //web/console:unit_test_workbench //tools/docs-check:docs_check_test //tools/platform-release:release_test",
-      "passedTargets": 8,
+      "command": "bazel test //crates/core:core_test //crates/render-markdown:render_markdown_test //crates/engine:engine_test //crates/converters:converters_test //crates/api:api_test //web/console:typecheck //web/console:unit_test_workbench //web/console:unit_test_preview //tools/docs-check:docs_check_test //tools/platform-release:release_test",
+      "passedTargets": 10,
       "failedTargets": 0,
-      "logSha256": "4a86185310cad24e1d1950d27bf196dfc83cdc1367974c7e5e415851a3c3a0af"
+      "logSha256": "b816faa0a66e152903563351d815c1e64e38d71f20e10726a3a227969d775542"
     },
     {
       "command": "python3 -m unittest discover -s tools/platform-release -p test_*.py",
       "passed": 81,
       "skipped": 1,
-      "logSha256": "f28b368f440bfd3e1932bb12d972ba83c03d6ab18da0990feb2774304a1c5baa"
+      "logSha256": "416544e8dd2b0083a10aa84213a8b2e26a363e2486e8956967c2adfc34d67cc3"
     },
     {
       "command": "python3 -m unittest tools.platform-release.test_pr_fast_gate",
       "passed": 14,
-      "logSha256": "e30b39ff40421368f77e105e6308ee328d8901dabf581ba183f23621c2c9f2aa"
+      "logSha256": "65e028d9927eea93eda6259d5cea618c53e56cb2cd899853ffdf58495fe731d1"
     },
     {
-      "command": "node web/console/build.mjs <temporary-directory>; compare complete output to checked-in dist",
-      "status": "byte-identical",
-      "logSha256": "ff112c571fed8fcdfb5fec45cf6f7cbdb733bb2f1687ff44f403bb6141f616d9"
-    },
-    {
-      "command": "python -m tools.structure_gate check --base-ref origin/main",
+      "command": "target/issue339/venv/bin/python -m tools.structure_gate check --base-ref origin/main",
       "status": "passed",
-      "files": 577,
+      "files": 590,
       "violations": 0,
-      "logSha256": "2d085b0ee51bc1dd06b37528b09e44d9a7d4707ea7097f6e78c6998f77971a1d"
+      "logSha256": "b30abd06bf18cab210c86668636b826923936032a8430df997b438cedf96c8a2"
+    },
+    {
+      "command": "cargo fmt --all -- --check",
+      "status": "passed"
+    },
+    {
+      "command": "bazel test //tools/docs-check:docs_check_test //tools/platform-release:release_test",
+      "passedTargets": 2,
+      "failedTargets": 0,
+      "note": "Final evidence files materialized and staged",
+      "logSha256": "4fb736605d12890b319cab95538fc6588af37c06ddc09cb931e955ffa1dedca2"
     }
   ],
   "baselineFailures": [
@@ -153,9 +159,10 @@
     ]
   },
   "finalFastCi": {
-    "runId": 33401315417,
-    "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
-    "jobsPassed": 4
+    "runId": 33405357492,
+    "sourceRevision": "973f6891982776d891971da6d54dc70f3c60a78e",
+    "jobsPassed": 4,
+    "note": "Last checked runtime/test commit. Final evidence-only commit reruns the same four PR checks; see PR #346 checks."
   },
   "installedArtifact": {
     "historicalRunId": 33396591314,
@@ -163,6 +170,117 @@
     "historicalCorpus": "72/72",
     "historicalMatrix": "56/56",
     "integratedRunId": 33401363606,
-    "integratedStatus": "building"
+    "integratedStatus": "passed",
+    "integratedSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+    "integratedCorpus": "72/72",
+    "integratedMatrix": "122/122",
+    "integratedJobsPassed": 6,
+    "report": "issue-339-installed-integrated.json",
+    "finalCombinedSourceArtifact": "not rebuilt or validated after main #341; local source validation is separate",
+    "releasePublished": false,
+    "existingInstallationReplaced": false
+  },
+  "historicalIntegratedValidation": {
+    "runtimeSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+    "testSourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+    "gates": [
+      {
+        "command": "cargo test --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown --lib",
+        "passed": 925,
+        "failed": 0,
+        "ignored": 19,
+        "logSha256": "27fc077be2b3e369d352255d2755bafd17cf8e59df4d6c633fcb84738c81f7a5"
+      },
+      {
+        "command": "cargo test --locked -p into-markdown-cli --test exit_contract",
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0,
+        "logSha256": "0c3a880bb0a06323df605ff3902fddd8e901a4cedb74c623e9042d4378fdedef"
+      },
+      {
+        "command": "cargo test --locked -p into-markdown-cli --bin into-md -- --test-threads=1",
+        "passed": 331,
+        "failed": 3,
+        "ignored": 1,
+        "logSha256": "f7a906f4eadabe7128adf42fedc0e5c80aef674c78ded3916aadf6fbd8920de3"
+      },
+      {
+        "command": "PDFIUM_LIBRARY=<pinned macOS PDFium> cargo test --locked -p into-markdown --lib format_admission_tests -- --include-ignored",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "logSha256": "1d1017b4fd53495743579a0f121d49b529089f567e5d7d6881bf6a3ba9100360"
+      },
+      {
+        "command": "cargo clippy --locked -p into-markdown-core -p into-markdown-engine -p into-markdown-converters -p into-markdown --no-deps --lib -- -D warnings",
+        "status": "passed",
+        "logSha256": "353c7dbc7e481685c8a7302dfba2bef18a2ac67913e2b8969c25b4192824f5e0"
+      },
+      {
+        "command": "cargo run --locked -p license-check --bin license-check",
+        "status": "passed",
+        "logSha256": "2e101974904c51528ae8e2493fa2bd812f081fb7465852a48f972215a2ccad3d"
+      },
+      {
+        "command": "bazel test //crates/core:core_test //crates/engine:engine_test //crates/converters:converters_test //crates/api:api_test //web/console:typecheck //web/console:unit_test_workbench //tools/docs-check:docs_check_test //tools/platform-release:release_test",
+        "passedTargets": 8,
+        "failedTargets": 0,
+        "logSha256": "4a86185310cad24e1d1950d27bf196dfc83cdc1367974c7e5e415851a3c3a0af"
+      },
+      {
+        "command": "python3 -m unittest discover -s tools/platform-release -p test_*.py",
+        "passed": 81,
+        "skipped": 1,
+        "logSha256": "f28b368f440bfd3e1932bb12d972ba83c03d6ab18da0990feb2774304a1c5baa"
+      },
+      {
+        "command": "python3 -m unittest tools.platform-release.test_pr_fast_gate",
+        "passed": 14,
+        "logSha256": "e30b39ff40421368f77e105e6308ee328d8901dabf581ba183f23621c2c9f2aa"
+      },
+      {
+        "command": "node web/console/build.mjs <temporary-directory>; compare complete output to checked-in dist",
+        "status": "byte-identical",
+        "logSha256": "ff112c571fed8fcdfb5fec45cf6f7cbdb733bb2f1687ff44f403bb6141f616d9"
+      },
+      {
+        "command": "python -m tools.structure_gate check --base-ref origin/main",
+        "status": "passed",
+        "files": 577,
+        "violations": 0,
+        "logSha256": "2d085b0ee51bc1dd06b37528b09e44d9a7d4707ea7097f6e78c6998f77971a1d"
+      }
+    ],
+    "baselineFailures": [
+      "empty_source_and_empty_content_share_the_web_terminal_contract",
+      "metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary",
+      "permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary"
+    ],
+    "finalFastCi": {
+      "runId": 33401315417,
+      "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+      "jobsPassed": 4
+    }
+  },
+  "baselineFailuresStatus": "Historical failures reproduced on the pinned baseline; all three pass after main #341 integration.",
+  "finalLocalCorpus": {
+    "report": "issue-339-local-main341-corpus.json",
+    "passed": 72,
+    "total": 72
+  },
+  "finalLocalBinaryMatrix": {
+    "report": "issue-339-local-main341-matrix.json",
+    "passed": 120,
+    "total": 120,
+    "profile": "pinned external PDFium; OCR off"
+  },
+  "browserEvidence": "issue-339-web.json",
+  "publicBinaryExpectedErrors": {
+    "manifest": "issue-339-binary-manifest.json",
+    "originals": 9,
+    "existingParserBoundaries": 2,
+    "renamedExpectedErrorCases": 12,
+    "baselineReport": "issue-339-public-binary-baseline.json"
   }
 }
