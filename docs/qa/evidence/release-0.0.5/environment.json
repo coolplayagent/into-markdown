@@ -1,0 +1,101 @@
+{
+  "recordedAt": "2026-08-31T16:30:30.099272+00:00",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "machine": "AMD64",
+  "cpuLogical": 20,
+  "cpuPhysical": 14,
+  "physicalMemoryBytes": 34104328192,
+  "nodeVersion": "v24.13.0",
+  "pythonVersion": "3.13.12",
+  "datasetManifestSha256": "51c235c3369f86809bb0abcf1dd21275f4f2a5cf47b88f6b6ca998d9076ca5ab",
+  "baselineBinarySha256": "35d819ec76238814715204988fc97aff4fde014657ea103640d917b22e2f1c39",
+  "baselineVersion": {
+    "name": "into-md",
+    "version": "0.0.4",
+    "targetOs": "windows",
+    "targetArch": "x86_64",
+    "rustEdition": "2024"
+  },
+  "candidateSourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "releaseRun": 33431291081,
+  "competitors": {
+    "anydoc": {
+      "commit": "42bf1c5ecdde9eb0d96d6bd75a9e6698cf93b14c",
+      "origin": "https://github.com/firecrawl/anydoc.git",
+      "installedVersion": "0.2.4",
+      "sourceTag": "v0.2.4",
+      "npmIntegrity": {
+        "node_modules/@firecrawl/anydoc": "sha512-rfJxa5L+nhoqR5yodcRZoGDLaSfxMTpBuhVj1gSacfW4ZGjBt4cjfErXwaKjPYrpWRTPIBye2sh36UhqgOP1Og==",
+        "node_modules/@firecrawl/anydoc-win32-x64-msvc": "sha512-E7d14hy5kZNsMNnHiutU6r9yr53LrKXSsMSFtl0QhU/1KWuvRnjhQEuMiuW4YbsMcPlEaK10WtBVF86g9OMW6A=="
+      },
+      "installedFileSha256": {
+        "@firecrawl\\anydoc\\anydoc.js": "0203401be69a3d64dc45e45c3d0c4340afd97a4417ae40f76c4393d033e97b59",
+        "@firecrawl\\anydoc\\cli.js": "cc50a40f8710fc365230fb56625340f012b9ddd02315078e2947199f70652bd5",
+        "@firecrawl\\anydoc\\index.js": "8a9d648382a789edbddd9207d7a2d4002963a862e5818e8ce9e981c2e6df7cf2",
+        "@firecrawl\\anydoc-win32-x64-msvc\\anydoc.win32-x64-msvc.node": "2883dbec5426f5e438489fef6186e3ced2b6ee1cb5deeb6524342eaf57635d19"
+      }
+    },
+    "markitdown": {
+      "commit": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "origin": "https://github.com/microsoft/markitdown.git",
+      "installedVersion": "0.1.7",
+      "sourceTag": "v0.1.7",
+      "installedPythonFileSha256": {
+        "markitdown/__about__.py": "7f1e3640ef07c2cf70a4654d9c2406546cdcf878bf249db5d688ae7f5904c9d9",
+        "markitdown/__init__.py": "ba28afb90c25691ee46a7868b565369b04e5073484fc1e224d7ead4d8ed9f533",
+        "markitdown/__main__.py": "f759cbf40824426107b527127b7a79b6efb613fc85f0c162d4a24cad7789d7ef",
+        "markitdown/_base_converter.py": "3b9cfbe86bc2af4f7f23042e60eaccf5e8d9df866d8a35a77d00672eab5202e6",
+        "markitdown/_exceptions.py": "8ed1398aa1ca4b7885c4f0c3fe12e2f4555fb681cb73ab10cb79f3079d24870a",
+        "markitdown/_markitdown.py": "3f0e691dc253a9f329dc0a630983dc2ea5bc1c1f9814d71ea50a66c7451a0dd2",
+        "markitdown/_stream_info.py": "039bce7e9d0c5e62a6ed55ac6133e7fa530d7025a2ed8372e35538b072f6dbdf",
+        "markitdown/_uri_utils.py": "9ef5e35d6bd2dad17e11893b717c410b2ee2df04c60997b555ecfff12535cce7",
+        "markitdown/converter_utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "markitdown/converter_utils/docx/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "markitdown/converter_utils/docx/math/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "markitdown/converter_utils/docx/math/latex_dict.py": "3260a856eb9b41296bc072bf8af17a764fb292e139fbd413d47636d6cb2d6a30",
+        "markitdown/converter_utils/docx/math/omml.py": "ddf2eabe047408b05f843a480be3e746265fe7b699f47824122d1af066460e06",
+        "markitdown/converter_utils/docx/pre_process.py": "eebc5a25bec6f5fecd0d253b3ef94e0423ebda7ba68c09ed6ad709c65f73f8d2",
+        "markitdown/converters/__init__.py": "1d7d42f6451e50709f2d741a5814602c4611d4393b9ed44962e8b2eb55b1531e",
+        "markitdown/converters/_audio_converter.py": "02f266e6fb689bcdcb261f9314e2b15cd5f74a735accc93ff69b64ad8c99e975",
+        "markitdown/converters/_bing_serp_converter.py": "dcb3a9f400fdde461ae9463bbeeb76181d5e6929c0a018e361c398f75f331e3f",
+        "markitdown/converters/_csv_converter.py": "b796945fb1a449d8199d46b84627cac951f43e40472ba09df8384a6269e111df",
+        "markitdown/converters/_cu_converter.py": "90368b23c0d0ca8bb0d2fc007c86100de630857bd2934d5a9254402095b039c6",
+        "markitdown/converters/_doc_intel_converter.py": "4e2675f18f3be6437130d04b91e962aaa3cc5198e5c9372d24e6241b57977be8",
+        "markitdown/converters/_docx_converter.py": "badb0e3bed10b37b6df9f5847ff9ee2761c51185dc0efd315803e9c63ae62459",
+        "markitdown/converters/_epub_converter.py": "2e2751d46d7bc59743572a4e253780f508b4a19587e2f8e6a37165a8d2aa4cc2",
+        "markitdown/converters/_exiftool.py": "5f43a283a31e072a33872734f8b82e82174c834d2f3720e65b7036c21a6665eb",
+        "markitdown/converters/_html_converter.py": "07bcb80d3370528ffcb222e8b0ca0032bcbc8205a636980937eb6f9f2a6a448d",
+        "markitdown/converters/_image_converter.py": "481fa76914c9c5216aa68f7095a27d11bd5961c129525bc8c307521f6476c20c",
+        "markitdown/converters/_ipynb_converter.py": "32ae36fe7f395dbc5c0a3fd3f09b62f2e7c96dba77362530c4f325a7f19ab70e",
+        "markitdown/converters/_llm_caption.py": "1f59673a3214b0f02bb669b6c883166fd39f9b6fbcb0e3f777d1eb184e92b4bc",
+        "markitdown/converters/_markdownify.py": "58d85e6e9b6c53698f1847627b3fe33562fde2f88ffb810142c5583f3819fae2",
+        "markitdown/converters/_outlook_msg_converter.py": "a644fb9591a451beeb22f0fa283921241ef0681f7885f2b39c26a7e897d48491",
+        "markitdown/converters/_pdf_converter.py": "8a48783a111f8c240ab87320921455e879a5f6753421a6cc472e6d2b89bf2c92",
+        "markitdown/converters/_plain_text_converter.py": "591077d5c51905345a3ad7f21a639d37458e9ef16eebb87cc1102f7f92eba59c",
+        "markitdown/converters/_pptx_converter.py": "541d567b756919716f48b4173d6324c302d4ee5d12dbfaa50a572449f90d220c",
+        "markitdown/converters/_rss_converter.py": "00bf56c318de8dd5a39de90b845ac6771a0348a7efebe39dd8c2e5736ac45c8d",
+        "markitdown/converters/_transcribe_audio.py": "770592c681a6881d93f72ff2cbd59465f00b35825172acf4eb34504fd365a206",
+        "markitdown/converters/_wikipedia_converter.py": "9ea1b94f6304d1aed4b677b35338f932f9e29b4d712b138062c3227746209b38",
+        "markitdown/converters/_xlsx_converter.py": "e8c3a4beb34b69c86a17c3ee673927421b3d6c514dcb8eb0c55123dc4af04f8c",
+        "markitdown/converters/_youtube_converter.py": "e58680df90de1dc04e3b92881ac9773b260b50a76f8f522dbc8e9c7a44cef478",
+        "markitdown/converters/_zip_converter.py": "63486d6505ad24addef3dd5ab280e52e6b8b1825a498961478c31c4f318bdef0"
+      }
+    }
+  },
+  "candidateBinarySha256": "009cdc29fb0dd4a4d3604d50c40512fbb19b664d65522d4d4b71e458a5bc6d87",
+  "candidateArchiveSha256": "a9b1e979dcaaa692eb1876d97ad6b9c2e4adb422df343b327185fa5de96d6b35",
+  "candidateVersion": {
+    "name": "into-md",
+    "version": "0.0.5",
+    "targetOs": "windows",
+    "targetArch": "x86_64",
+    "rustEdition": "2024"
+  },
+  "cpuModel": "Intel Core i5-13600KF",
+  "baselineArchiveSha256": "f09d6153892708fb9b0157135108009cfe8b68ca94753aed7b351b00997fcc92",
+  "baselineSourceRevision": "a66287de6978ff3e1a94e1b45f2b0809051eea41",
+  "baselinePublishedArchiveBytes": 33679885,
+  "baselinePublishedArchiveDigestVerified": true,
+  "finalCandidateInstalledAt": "2026-08-31T19:59:57.249878+00:00",
+  "publicInputManifestSha256": "9f8a5ff56dc06c25a4b7f842503c0ad923e3dbc16567572247e3960c668347e1"
+}

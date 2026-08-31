@@ -1,0 +1,16 @@
+{
+  "runId": 33431291081,
+  "sourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "fixPullRequests": [
+    351,
+    352
+  ],
+  "testedSourceRevision": "0ba9a8d9c5467b457068f0af9192939733e6c051",
+  "testedTreeIdenticalToReleaseSource": true,
+  "tests": {
+    "passed": 802,
+    "existingIgnored": 19,
+    "fastGateJobs": 4,
+    "workflowPolicyTests": 14
+  }
+}

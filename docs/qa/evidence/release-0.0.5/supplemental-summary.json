@@ -1,0 +1,400 @@
+{
+  "pairedTimings": [
+    {
+      "id": "806cb0da70456d03",
+      "ocr": "off",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 1062.9200000039418,
+        "medianProcessingMs": 903.6497999999999,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 53.36328125
+      },
+      "0.0.5": {
+        "medianWallMs": 1060.6590999959735,
+        "medianProcessingMs": 901.7477,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 53.1171875
+      },
+      "candidateToBaselineProcessingRatio": 0.9978950916605084
+    },
+    {
+      "id": "468c69e44f4774f5",
+      "ocr": "off",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 1966.4994999984629,
+        "medianProcessingMs": 1793.546,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 34.94140625
+      },
+      "0.0.5": {
+        "medianWallMs": 1943.9682999945944,
+        "medianProcessingMs": 1784.8953000000001,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 34.90625
+      },
+      "candidateToBaselineProcessingRatio": 0.9951767615661935
+    },
+    {
+      "id": "cc54715a4a47401e",
+      "ocr": "off",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 2379.936199999065,
+        "medianProcessingMs": 2227.447,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 99.359375
+      },
+      "0.0.5": {
+        "medianWallMs": 2393.5622999997577,
+        "medianProcessingMs": 2223.718,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 101.1171875
+      },
+      "candidateToBaselineProcessingRatio": 0.9983258860929125
+    },
+    {
+      "id": "735a9c7e40f49351",
+      "ocr": "auto",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 1744.5537999956287,
+        "medianProcessingMs": 1586.1116,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 224.890625
+      },
+      "0.0.5": {
+        "medianWallMs": 1729.2413000031956,
+        "medianProcessingMs": 1575.9765,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 240.1484375
+      },
+      "candidateToBaselineProcessingRatio": 0.9936100965404957
+    },
+    {
+      "id": "3c05f4ee2ffbf99c",
+      "ocr": "auto",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 547.7406999998493,
+        "medianProcessingMs": 395.9803,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 128.1328125
+      },
+      "0.0.5": {
+        "medianWallMs": 544.8506000029738,
+        "medianProcessingMs": 390.4402,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 128.37109375
+      },
+      "candidateToBaselineProcessingRatio": 0.9860091524755146
+    },
+    {
+      "id": "77447bb1944b2c95",
+      "ocr": "auto",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 686.4493999964907,
+        "medianProcessingMs": 527.9955,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 161.98828125
+      },
+      "0.0.5": {
+        "medianWallMs": 697.6409000053536,
+        "medianProcessingMs": 528.7668,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 154.6796875
+      },
+      "candidateToBaselineProcessingRatio": 1.0014608079046128
+    },
+    {
+      "id": "4cf7e205361d7051",
+      "ocr": "auto",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 694.308699996327,
+        "medianProcessingMs": 533.6911,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 160.125
+      },
+      "0.0.5": {
+        "medianWallMs": 695.0007000050391,
+        "medianProcessingMs": 531.2058,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 153.4375
+      },
+      "candidateToBaselineProcessingRatio": 0.9953431863488073
+    },
+    {
+      "id": "0e49f9f38550fe04",
+      "ocr": "auto",
+      "repeats": 3,
+      "0.0.4": {
+        "medianWallMs": 415.34690000116825,
+        "medianProcessingMs": 205.70649999999998,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 32.6640625
+      },
+      "0.0.5": {
+        "medianWallMs": 2660.0266999957967,
+        "medianProcessingMs": 2441.4001000000003,
+        "statuses": [
+          "success",
+          "success",
+          "success"
+        ],
+        "peakRssMiB": 194.5078125
+      },
+      "candidateToBaselineProcessingRatio": 11.868366337475969
+    }
+  ],
+  "concurrency": [
+    {
+      "version": "0.0.4",
+      "jobs": 1,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5613.480599997274,
+      "peakRssMiB": 213.5,
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "jobs": 1,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5949.355199998536,
+      "peakRssMiB": 229.046875,
+      "termination": null
+    },
+    {
+      "version": "0.0.4",
+      "jobs": 4,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5563.800200005062,
+      "peakRssMiB": 218.16015625,
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "jobs": 4,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5857.3092000006,
+      "peakRssMiB": 213.84375,
+      "termination": null
+    }
+  ],
+  "fixedMemory": [
+    {
+      "version": "0.0.4",
+      "ocr": "off",
+      "jobs": 1,
+      "memoryBudgetBytes": 4294967296,
+      "inputs": 3,
+      "success": 3,
+      "wallMs": 5279.089099996781,
+      "peakRssMiB": 95.10546875,
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "ocr": "off",
+      "jobs": 1,
+      "memoryBudgetBytes": 4294967296,
+      "inputs": 3,
+      "success": 3,
+      "wallMs": 5324.165899997752,
+      "peakRssMiB": 79.16015625,
+      "termination": null
+    },
+    {
+      "version": "0.0.4",
+      "ocr": "auto",
+      "jobs": 1,
+      "memoryBudgetBytes": 4294967296,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5605.558900002507,
+      "peakRssMiB": 208.55859375,
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "ocr": "auto",
+      "jobs": 1,
+      "memoryBudgetBytes": 4294967296,
+      "inputs": 5,
+      "success": 5,
+      "wallMs": 5967.800999998872,
+      "peakRssMiB": 204.69921875,
+      "termination": null
+    }
+  ],
+  "extendedDeadline": [
+    {
+      "version": "0.0.4",
+      "id": "1840a79bdc5f6acf",
+      "timeoutMs": 600000,
+      "wallMs": 7073.81290000194,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        223161
+      ],
+      "baselineNativeTextTrigramRetention": 1.0,
+      "peakRssMiB": 148.46484375,
+      "resourceUsage": {
+        "sharedLeaseBudgetBytes": 4294967296,
+        "sharedLeasePeakBytes": 4294967296,
+        "ocr": {
+          "recognizedRegions": 0,
+          "recognizedChars": 0
+        }
+      },
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "id": "1840a79bdc5f6acf",
+      "timeoutMs": 600000,
+      "wallMs": 148244.86920000345,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        232363
+      ],
+      "baselineNativeTextTrigramRetention": 0.9910087103118853,
+      "peakRssMiB": 544.1171875,
+      "resourceUsage": {
+        "memory": {
+          "totalBytes": 34104328192,
+          "availableBytes": 23662993408,
+          "systemReserveBytes": 4263041024,
+          "autoBudgetBytes": 17052164096,
+          "effectiveBudgetBytes": 17052164096,
+          "automatic": true
+        },
+        "ocrRuntime": {
+          "requests": 141,
+          "recognitionMemoryRefusals": 0,
+          "workerBudgetMinBytes": 805306368,
+          "workerBudgetMaxBytes": 805306368
+        },
+        "sharedLeaseBudgetBytes": 17052164096,
+        "sharedLeasePeakBytes": 17052164096,
+        "ocr": {
+          "recognizedRegions": 492,
+          "recognizedChars": 8689
+        }
+      },
+      "termination": null
+    }
+  ],
+  "kmlBoundary": [
+    {
+      "case": "kml-0.0.4-automatic",
+      "exitCode": 0,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        1293688
+      ],
+      "errorCodes": [
+        null
+      ]
+    },
+    {
+      "case": "kml-0.0.5-automatic",
+      "exitCode": 10,
+      "statuses": [
+        "failed"
+      ],
+      "outputBytes": [
+        0
+      ],
+      "errorCodes": [
+        "unsupported"
+      ]
+    },
+    {
+      "case": "kml-0.0.5-explicit-xml",
+      "exitCode": 0,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        1293688
+      ],
+      "errorCodes": [
+        null
+      ]
+    }
+  ],
+  "method": "3 alternating version pairs per representative input; separate from the full-scan totals. Concurrency, fixed-4-GiB and extended-600-second runs are single observations, not full-corpus or statistical scaling benchmarks. The longer deadline never replaces the full-scan timeout outcome."
+}

@@ -1,0 +1,2502 @@
+{
+  "into-0.0.4-off": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "success": 1825,
+      "failed": 449,
+      "empty": 11
+    },
+    "wallSeconds": 528.8756292000108,
+    "peakRssMiB": 1524.984375,
+    "terminatedGroups": 0,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 824,
+    "qualityScored": 716,
+    "qualityMedian": 99.67883344155129,
+    "qualityP10": 77.1264367816092,
+    "coverageAdjustedQualityMean": 91.61194846404132,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.22015340000143624,
+        "peakRssMiB": 12.546875
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.17399199999999837,
+        "peakRssMiB": 11.84375
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 7,
+          "failed": 2
+        },
+        "wallSeconds": 68.82350329999826,
+        "peakRssMiB": 1074.4140625
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 107,
+          "success": 114
+        },
+        "wallSeconds": 9.817427900001348,
+        "peakRssMiB": 21.92578125
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.4443987000013294,
+        "peakRssMiB": 13.203125
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "success": 207,
+          "failed": 32,
+          "empty": 11
+        },
+        "wallSeconds": 17.66977219999535,
+        "peakRssMiB": 46.65234375
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "failed": 3,
+          "success": 4
+        },
+        "wallSeconds": 9.078343900000618,
+        "peakRssMiB": 149.72265625
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.10219149999829824,
+        "peakRssMiB": 11.26953125
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "success": 20,
+          "failed": 15
+        },
+        "wallSeconds": 1.6999488000001293,
+        "peakRssMiB": 13.390625
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.6837831000011647,
+        "peakRssMiB": 30.03125
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "success": 13,
+          "failed": 1
+        },
+        "wallSeconds": 0.9892213000021002,
+        "peakRssMiB": 15.5859375
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "success": 94,
+          "failed": 2
+        },
+        "wallSeconds": 7.133661000003485,
+        "peakRssMiB": 13.05078125
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "failed": 8
+        },
+        "wallSeconds": 0.1009531000017887,
+        "peakRssMiB": 11.32421875
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.29211320000104024,
+        "peakRssMiB": 12.15234375
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10146759999770438,
+        "peakRssMiB": 11.1484375
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.1001429999996617,
+        "peakRssMiB": 12.109375
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "failed": 27
+        },
+        "wallSeconds": 0.249811800000316,
+        "peakRssMiB": 11.46484375
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.30237100000158534,
+        "peakRssMiB": 24.3125
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "success": 50,
+          "failed": 5
+        },
+        "wallSeconds": 3.9254532999984804,
+        "peakRssMiB": 17.76953125
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "success": 9
+        },
+        "wallSeconds": 0.9715930000020307,
+        "peakRssMiB": 26.6640625
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 0.7323743000015384,
+        "peakRssMiB": 30.73828125
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "success": 17,
+          "failed": 3
+        },
+        "wallSeconds": 2.0012022000009893,
+        "peakRssMiB": 138.0859375
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.10358279999854858,
+        "peakRssMiB": 11.31640625
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "success": 100,
+          "failed": 8
+        },
+        "wallSeconds": 52.89502510000602,
+        "peakRssMiB": 340.61328125
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "success": 6
+        },
+        "wallSeconds": 0.5826281000008748,
+        "peakRssMiB": 12.62890625
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.17534929999965243,
+        "peakRssMiB": 11.91796875
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.17355110000062268,
+        "peakRssMiB": 12.48046875
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.18660970000200905,
+        "peakRssMiB": 11.94921875
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24653120000220952,
+        "peakRssMiB": 13.66015625
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24807330000112415,
+        "peakRssMiB": 12.859375
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 70,
+          "success": 130
+        },
+        "wallSeconds": 11.394869899992045,
+        "peakRssMiB": 27.1171875
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.43672800000058487,
+        "peakRssMiB": 13.37890625
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "success": 146,
+          "failed": 13
+        },
+        "wallSeconds": 53.41078370000105,
+        "peakRssMiB": 233.24609375
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "failed": 2,
+          "success": 1
+        },
+        "wallSeconds": 0.1732131999997364,
+        "peakRssMiB": 12.73828125
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 25,
+          "failed": 19
+        },
+        "wallSeconds": 2.0391264999998384,
+        "peakRssMiB": 12.8125
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 1,
+          "success": 2
+        },
+        "wallSeconds": 1.438372000000527,
+        "peakRssMiB": 72.00390625
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.2756777000031434,
+        "peakRssMiB": 31.20703125
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "success": 14,
+          "failed": 2
+        },
+        "wallSeconds": 1.0686234999993758,
+        "peakRssMiB": 12.46875
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10101679999934277,
+        "peakRssMiB": 11.23828125
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.09925479999947129,
+        "peakRssMiB": 11.16015625
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.29414319999705185,
+        "peakRssMiB": 12.37890625
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "success": 412,
+          "failed": 40
+        },
+        "wallSeconds": 33.58209709999937,
+        "peakRssMiB": 48.51171875
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.1272917000023881,
+        "peakRssMiB": 12.05859375
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 13,
+          "failed": 2
+        },
+        "wallSeconds": 1.3852620999969076,
+        "peakRssMiB": 29.8359375
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "success": 367,
+          "failed": 39
+        },
+        "wallSeconds": 80.1985523000003,
+        "peakRssMiB": 779.546875
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "success": 27,
+          "failed": 2
+        },
+        "wallSeconds": 2.3043784000001324,
+        "peakRssMiB": 27.609375
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "failed": 9,
+          "success": 8
+        },
+        "wallSeconds": 160.32100809999974,
+        "peakRssMiB": 1524.984375
+      }
+    }
+  },
+  "into-0.0.5-off": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "success": 1827,
+      "failed": 447,
+      "empty": 11
+    },
+    "wallSeconds": 509.8631809999752,
+    "peakRssMiB": 1531.61328125,
+    "terminatedGroups": 0,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 824,
+    "qualityScored": 716,
+    "qualityMedian": 99.67883344155129,
+    "qualityP10": 77.08333333333334,
+    "coverageAdjustedQualityMean": 91.60786046467521,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.2171970000017609,
+        "peakRssMiB": 12.51171875
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.14772480000101496,
+        "peakRssMiB": 11.76953125
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 7,
+          "failed": 2
+        },
+        "wallSeconds": 63.20050089999859,
+        "peakRssMiB": 1083.48046875
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 107,
+          "success": 114
+        },
+        "wallSeconds": 10.151018199991086,
+        "peakRssMiB": 21.88671875
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.45958059999975376,
+        "peakRssMiB": 13.16796875
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "success": 207,
+          "failed": 32,
+          "empty": 11
+        },
+        "wallSeconds": 18.120628099990427,
+        "peakRssMiB": 48.2890625
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "failed": 3,
+          "success": 4
+        },
+        "wallSeconds": 8.65520529999776,
+        "peakRssMiB": 148.9140625
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.09951119999823277,
+        "peakRssMiB": 11.3828125
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "success": 20,
+          "failed": 15
+        },
+        "wallSeconds": 1.715476999997918,
+        "peakRssMiB": 13.375
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.7038435000031313,
+        "peakRssMiB": 29.9921875
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "success": 13,
+          "failed": 1
+        },
+        "wallSeconds": 1.0370977999991737,
+        "peakRssMiB": 12.234375
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "success": 94,
+          "failed": 2
+        },
+        "wallSeconds": 7.21489670000301,
+        "peakRssMiB": 12.265625
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "failed": 8
+        },
+        "wallSeconds": 0.09998470000209636,
+        "peakRssMiB": 11.43359375
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.3225592000017059,
+        "peakRssMiB": 12.1953125
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10824649999995017,
+        "peakRssMiB": 11.21875
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.0989263999981631,
+        "peakRssMiB": 11.31640625
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "failed": 27
+        },
+        "wallSeconds": 0.2535429000017757,
+        "peakRssMiB": 11.375
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.3004240000009304,
+        "peakRssMiB": 21.41015625
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "success": 50,
+          "failed": 5
+        },
+        "wallSeconds": 4.0862879999949655,
+        "peakRssMiB": 17.73046875
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "success": 9
+        },
+        "wallSeconds": 1.0201018000007025,
+        "peakRssMiB": 26.640625
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 0.7624565999976767,
+        "peakRssMiB": 32.9140625
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "success": 17,
+          "failed": 3
+        },
+        "wallSeconds": 2.0568069000000833,
+        "peakRssMiB": 136.8515625
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.10070859999905224,
+        "peakRssMiB": 11.36328125
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "success": 100,
+          "failed": 8
+        },
+        "wallSeconds": 52.41429999998945,
+        "peakRssMiB": 512.42578125
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "success": 6
+        },
+        "wallSeconds": 0.5562350000000151,
+        "peakRssMiB": 12.1796875
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.14908380000269972,
+        "peakRssMiB": 11.8828125
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.17509770000106073,
+        "peakRssMiB": 12.77734375
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.14765859999897657,
+        "peakRssMiB": 11.89453125
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24220099999729428,
+        "peakRssMiB": 12.91015625
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24283930000092369,
+        "peakRssMiB": 12.87109375
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 70,
+          "success": 130
+        },
+        "wallSeconds": 11.452651999996306,
+        "peakRssMiB": 25.59765625
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.4811900999993668,
+        "peakRssMiB": 13.39453125
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "success": 146,
+          "failed": 13
+        },
+        "wallSeconds": 50.53076080000028,
+        "peakRssMiB": 234.11328125
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "failed": 2,
+          "success": 1
+        },
+        "wallSeconds": 0.17121460000271327,
+        "peakRssMiB": 12.70703125
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 25,
+          "failed": 19
+        },
+        "wallSeconds": 2.1695405000027677,
+        "peakRssMiB": 13.13671875
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 1,
+          "success": 2
+        },
+        "wallSeconds": 1.3654547999976785,
+        "peakRssMiB": 63.546875
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.2930175000001327,
+        "peakRssMiB": 30.40625
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "success": 14,
+          "failed": 2
+        },
+        "wallSeconds": 1.1313398999991477,
+        "peakRssMiB": 12.59765625
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10156780000033905,
+        "peakRssMiB": 11.25390625
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.09846269999979995,
+        "peakRssMiB": 12.00390625
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.3387184999992314,
+        "peakRssMiB": 12.45703125
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "success": 412,
+          "failed": 40
+        },
+        "wallSeconds": 34.35045250001349,
+        "peakRssMiB": 56.22265625
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.12353880000227946,
+        "peakRssMiB": 12.23828125
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 13,
+          "failed": 2
+        },
+        "wallSeconds": 1.4193501000008837,
+        "peakRssMiB": 29.796875
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "success": 367,
+          "failed": 39
+        },
+        "wallSeconds": 78.91769859999113,
+        "peakRssMiB": 737.515625
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "success": 27,
+          "failed": 2
+        },
+        "wallSeconds": 2.2792580999994243,
+        "peakRssMiB": 28.171875
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "success": 10,
+          "failed": 7
+        },
+        "wallSeconds": 149.7788216000008,
+        "peakRssMiB": 1531.61328125
+      }
+    }
+  },
+  "into-0.0.4-auto": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "success": 1818,
+      "failed": 456,
+      "empty": 11
+    },
+    "wallSeconds": 2635.108648699981,
+    "peakRssMiB": 1520.48046875,
+    "terminatedGroups": 0,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 821,
+    "qualityScored": 714,
+    "qualityMedian": 99.67883344155129,
+    "qualityP10": 77.1264367816092,
+    "coverageAdjustedQualityMean": 91.39556715912143,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24536900000020978,
+        "peakRssMiB": 12.55078125
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.9714869000017643,
+        "peakRssMiB": 176.04296875
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 7,
+          "failed": 2
+        },
+        "wallSeconds": 69.3579874999923,
+        "peakRssMiB": 1061.671875
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 107,
+          "success": 114
+        },
+        "wallSeconds": 10.169024899998476,
+        "peakRssMiB": 17.61328125
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 1.4289455999969505,
+        "peakRssMiB": 167.12109375
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "success": 207,
+          "failed": 32,
+          "empty": 11
+        },
+        "wallSeconds": 59.440304699997796,
+        "peakRssMiB": 251.18359375
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "failed": 3,
+          "success": 4
+        },
+        "wallSeconds": 11.24634540000261,
+        "peakRssMiB": 398.33984375
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.10116909999851487,
+        "peakRssMiB": 11.2421875
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "success": 20,
+          "failed": 15
+        },
+        "wallSeconds": 1.8315876000015123,
+        "peakRssMiB": 13.41015625
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.9067179999983637,
+        "peakRssMiB": 36.01953125
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "success": 13,
+          "failed": 1
+        },
+        "wallSeconds": 7.54042930000287,
+        "peakRssMiB": 225.41796875
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "success": 94,
+          "failed": 2
+        },
+        "wallSeconds": 7.449863900001219,
+        "peakRssMiB": 12.71875
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "failed": 8
+        },
+        "wallSeconds": 0.09999339999922086,
+        "peakRssMiB": 11.25390625
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.3186277000022528,
+        "peakRssMiB": 12.1328125
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10410799999954179,
+        "peakRssMiB": 12.01171875
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.10955590000230586,
+        "peakRssMiB": 11.31640625
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "failed": 27
+        },
+        "wallSeconds": 0.26180010000098264,
+        "peakRssMiB": 11.33984375
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.280358799995156,
+        "peakRssMiB": 23.828125
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "success": 50,
+          "failed": 5
+        },
+        "wallSeconds": 21.9803854999991,
+        "peakRssMiB": 150.5625
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "success": 8,
+          "failed": 1
+        },
+        "wallSeconds": 33.25566590000017,
+        "peakRssMiB": 300.71875
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 1.2189766999981657,
+        "peakRssMiB": 155.5625
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "success": 17,
+          "failed": 3
+        },
+        "wallSeconds": 18.754926699999487,
+        "peakRssMiB": 201.9921875
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.10017080000034184,
+        "peakRssMiB": 11.30859375
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "success": 95,
+          "failed": 13
+        },
+        "wallSeconds": 1764.8028602000086,
+        "peakRssMiB": 591.7265625
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "success": 6
+        },
+        "wallSeconds": 15.782625200001348,
+        "peakRssMiB": 290.69140625
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.17222509999919566,
+        "peakRssMiB": 11.93359375
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.18229580000115675,
+        "peakRssMiB": 13.4375
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.178287899998395,
+        "peakRssMiB": 11.94140625
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24590990000069723,
+        "peakRssMiB": 13.3671875
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.2694091999983357,
+        "peakRssMiB": 12.921875
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 70,
+          "success": 130
+        },
+        "wallSeconds": 11.733597399994323,
+        "peakRssMiB": 29.15625
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 1.2324328000031528,
+        "peakRssMiB": 149.65234375
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "success": 145,
+          "failed": 14
+        },
+        "wallSeconds": 262.1142901000021,
+        "peakRssMiB": 420.34765625
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "failed": 2,
+          "success": 1
+        },
+        "wallSeconds": 0.17612000000008265,
+        "peakRssMiB": 12.73828125
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 25,
+          "failed": 19
+        },
+        "wallSeconds": 2.214984900001582,
+        "peakRssMiB": 13.11328125
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 1,
+          "success": 2
+        },
+        "wallSeconds": 5.9328295000013895,
+        "peakRssMiB": 467.31640625
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.2941452999984904,
+        "peakRssMiB": 30.32421875
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "success": 14,
+          "failed": 2
+        },
+        "wallSeconds": 1.1144705999977305,
+        "peakRssMiB": 12.5078125
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10348380000141333,
+        "peakRssMiB": 11.296875
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10215170000083162,
+        "peakRssMiB": 11.13671875
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 3.800165599997854,
+        "peakRssMiB": 161.9296875
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "success": 412,
+          "failed": 40
+        },
+        "wallSeconds": 33.86427649999314,
+        "peakRssMiB": 58.2578125
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.14852519999840297,
+        "peakRssMiB": 12.21484375
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 13,
+          "failed": 2
+        },
+        "wallSeconds": 4.098870399997395,
+        "peakRssMiB": 176.15234375
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "success": 367,
+          "failed": 39
+        },
+        "wallSeconds": 124.49853499999153,
+        "peakRssMiB": 828.77734375
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "success": 27,
+          "failed": 2
+        },
+        "wallSeconds": 2.354912000002514,
+        "peakRssMiB": 29.12890625
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "failed": 9,
+          "success": 8
+        },
+        "wallSeconds": 152.51744320000216,
+        "peakRssMiB": 1520.48046875
+      }
+    }
+  },
+  "into-0.0.5-auto": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "success": 1819,
+      "failed": 455,
+      "empty": 11
+    },
+    "wallSeconds": 3325.802170499963,
+    "peakRssMiB": 1542.9765625,
+    "terminatedGroups": 0,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 820,
+    "qualityScored": 713,
+    "qualityMedian": 99.69509019598598,
+    "qualityP10": 77.23056311003748,
+    "coverageAdjustedQualityMean": 91.41733456800822,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.22088179999991553,
+        "peakRssMiB": 12.546875
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.9845433000009507,
+        "peakRssMiB": 176.55078125
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 7,
+          "failed": 2
+        },
+        "wallSeconds": 63.236472599997796,
+        "peakRssMiB": 1061.5078125
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 107,
+          "success": 114
+        },
+        "wallSeconds": 9.990132099996117,
+        "peakRssMiB": 22.03125
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 1.459525099999155,
+        "peakRssMiB": 168.23828125
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "success": 207,
+          "failed": 32,
+          "empty": 11
+        },
+        "wallSeconds": 60.644344399996044,
+        "peakRssMiB": 236.953125
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "failed": 4,
+          "success": 3
+        },
+        "wallSeconds": 196.04068600000392,
+        "peakRssMiB": 550.5234375
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.09848989999954938,
+        "peakRssMiB": 11.3203125
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "success": 20,
+          "failed": 15
+        },
+        "wallSeconds": 1.7386090999971202,
+        "peakRssMiB": 13.43359375
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 21.183909800001857,
+        "peakRssMiB": 369.8359375
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "success": 13,
+          "failed": 1
+        },
+        "wallSeconds": 8.201818199999252,
+        "peakRssMiB": 205.0234375
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "success": 94,
+          "failed": 2
+        },
+        "wallSeconds": 7.233819699995365,
+        "peakRssMiB": 12.2890625
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "failed": 8
+        },
+        "wallSeconds": 0.10461159999977099,
+        "peakRssMiB": 11.38671875
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.3399948999976914,
+        "peakRssMiB": 12.23046875
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.10122409999894444,
+        "peakRssMiB": 11.23046875
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.11073820000092383,
+        "peakRssMiB": 11.41796875
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "failed": 27
+        },
+        "wallSeconds": 0.25632199999745353,
+        "peakRssMiB": 11.37890625
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.2983010000025388,
+        "peakRssMiB": 21.8125
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "success": 50,
+          "failed": 5
+        },
+        "wallSeconds": 22.019459500002995,
+        "peakRssMiB": 150.70703125
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "success": 8,
+          "failed": 1
+        },
+        "wallSeconds": 33.306831000001694,
+        "peakRssMiB": 302.0234375
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 1.2482815999974264,
+        "peakRssMiB": 154.12109375
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "success": 17,
+          "failed": 3
+        },
+        "wallSeconds": 18.962048900004447,
+        "peakRssMiB": 198.10546875
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.09970869999960996,
+        "peakRssMiB": 11.39453125
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "success": 95,
+          "failed": 13
+        },
+        "wallSeconds": 1738.1237273999905,
+        "peakRssMiB": 635.19140625
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "success": 6
+        },
+        "wallSeconds": 15.815951799995673,
+        "peakRssMiB": 291.640625
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.15002829999866663,
+        "peakRssMiB": 11.85546875
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.15223640000476735,
+        "peakRssMiB": 12.6171875
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.1508356999984244,
+        "peakRssMiB": 11.9609375
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24526809999952093,
+        "peakRssMiB": 12.93359375
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.24272780000319472,
+        "peakRssMiB": 12.8984375
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 70,
+          "success": 130
+        },
+        "wallSeconds": 10.926415099987935,
+        "peakRssMiB": 29.23828125
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 1.212044899999455,
+        "peakRssMiB": 135.5859375
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "success": 145,
+          "failed": 14
+        },
+        "wallSeconds": 772.391148499999,
+        "peakRssMiB": 503.7734375
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "failed": 2,
+          "success": 1
+        },
+        "wallSeconds": 0.17088459999649785,
+        "peakRssMiB": 12.7734375
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 25,
+          "failed": 19
+        },
+        "wallSeconds": 2.846011900001031,
+        "peakRssMiB": 173.68359375
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 1,
+          "success": 2
+        },
+        "wallSeconds": 5.735935099997732,
+        "peakRssMiB": 468.0390625
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.2673871000006329,
+        "peakRssMiB": 29.9140625
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "success": 14,
+          "failed": 2
+        },
+        "wallSeconds": 1.1056938000037917,
+        "peakRssMiB": 12.47265625
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.09967460000189021,
+        "peakRssMiB": 11.08203125
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.09950840000237804,
+        "peakRssMiB": 11.2109375
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 3.898146599996835,
+        "peakRssMiB": 167.03515625
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "success": 412,
+          "failed": 40
+        },
+        "wallSeconds": 33.134746799987624,
+        "peakRssMiB": 50.5390625
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.12322990000393474,
+        "peakRssMiB": 12.25
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 13,
+          "failed": 2
+        },
+        "wallSeconds": 4.175364499998977,
+        "peakRssMiB": 179.09375
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "success": 367,
+          "failed": 39
+        },
+        "wallSeconds": 125.14584920000198,
+        "peakRssMiB": 782.30859375
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "success": 27,
+          "failed": 2
+        },
+        "wallSeconds": 2.3752201999959652,
+        "peakRssMiB": 28.39453125
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "success": 10,
+          "failed": 7
+        },
+        "wallSeconds": 159.33338030000596,
+        "peakRssMiB": 1542.9765625
+      }
+    }
+  },
+  "anydoc": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "failed": 568,
+      "success": 1512,
+      "empty": 205
+    },
+    "wallSeconds": 163.57142810000005,
+    "peakRssMiB": 12292.3828125,
+    "terminatedGroups": 2,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 726,
+    "qualityScored": 701,
+    "qualityMedian": 92.41379310344828,
+    "qualityP10": 70.37480063795853,
+    "coverageAdjustedQualityMean": 85.42309695985571,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.22450300000127754,
+        "peakRssMiB": 36.2734375
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.05292929999995977,
+        "peakRssMiB": 35.33203125
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 9
+        },
+        "wallSeconds": 20.369685399997252,
+        "peakRssMiB": 7060.98828125
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 39,
+          "success": 162,
+          "empty": 20
+        },
+        "wallSeconds": 1.1999755000069854,
+        "peakRssMiB": 57.078125
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.07633220000207075,
+        "peakRssMiB": 35.34765625
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "failed": 29,
+          "success": 191,
+          "empty": 30
+        },
+        "wallSeconds": 1.7195669000029739,
+        "peakRssMiB": 236.8125
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 0.5484182999971381,
+        "peakRssMiB": 216.7421875
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.0538446999998996,
+        "peakRssMiB": 36.18359375
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "failed": 35
+        },
+        "wallSeconds": 0.16360500000519096,
+        "peakRssMiB": 36.3984375
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "failed": 5
+        },
+        "wallSeconds": 0.11527349999596481,
+        "peakRssMiB": 35.09375
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "failed": 14
+        },
+        "wallSeconds": 0.05286100000012084,
+        "peakRssMiB": 34.625
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "failed": 96
+        },
+        "wallSeconds": 0.31191369999578455,
+        "peakRssMiB": 35.35546875
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "failed": 8
+        },
+        "wallSeconds": 0.05174510000142618,
+        "peakRssMiB": 35.09375
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.051765899999736575,
+        "peakRssMiB": 34.72265625
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.05141439999715658,
+        "peakRssMiB": 35.453125
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.05135270000027958,
+        "peakRssMiB": 35.40625
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "failed": 27
+        },
+        "wallSeconds": 0.11274459999913233,
+        "peakRssMiB": 35.0625
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.10558209999726387,
+        "peakRssMiB": 35.515625
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "failed": 55
+        },
+        "wallSeconds": 0.20818969999891124,
+        "peakRssMiB": 36.640625
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "empty": 2,
+          "success": 7
+        },
+        "wallSeconds": 0.09886120000010123,
+        "peakRssMiB": 43.6640625
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "success": 6,
+          "empty": 1
+        },
+        "wallSeconds": 0.10022870000102557,
+        "peakRssMiB": 42.08203125
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "failed": 2,
+          "success": 18
+        },
+        "wallSeconds": 0.3994831999989401,
+        "peakRssMiB": 131.61328125
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.05261690000043018,
+        "peakRssMiB": 35.87109375
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "failed": 57,
+          "success": 51
+        },
+        "wallSeconds": 113.34360590000506,
+        "peakRssMiB": 365.234375
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "failed": 6
+        },
+        "wallSeconds": 0.05194050000136485,
+        "peakRssMiB": 35.09765625
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.051349900000786874,
+        "peakRssMiB": 34.71875
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "empty": 1
+        },
+        "wallSeconds": 0.0520725999995193,
+        "peakRssMiB": 35.21875
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.0516563999990467,
+        "peakRssMiB": 35.18359375
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.05211979999876348,
+        "peakRssMiB": 34.86328125
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 0.052218400000128895,
+        "peakRssMiB": 34.25390625
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 24,
+          "success": 154,
+          "empty": 22
+        },
+        "wallSeconds": 1.0381536999993841,
+        "peakRssMiB": 50.671875
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 0.05203809999875375,
+        "peakRssMiB": 34.734375
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "failed": 12,
+          "empty": 18,
+          "success": 129
+        },
+        "wallSeconds": 2.578810999999405,
+        "peakRssMiB": 392.3125
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.05161500000031083,
+        "peakRssMiB": 35.21875
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 39,
+          "empty": 5
+        },
+        "wallSeconds": 0.22941780000110157,
+        "peakRssMiB": 40.0625
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.10268749999886495,
+        "peakRssMiB": 35.3984375
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.05173279999871738,
+        "peakRssMiB": 35.08984375
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.07505369999853428,
+        "peakRssMiB": 33.12890625
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.051105300000926945,
+        "peakRssMiB": 35.3515625
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.052414499998121755,
+        "peakRssMiB": 34.33203125
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.051790000001346925,
+        "peakRssMiB": 35.25
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "failed": 26,
+          "empty": 57,
+          "success": 369
+        },
+        "wallSeconds": 3.210347099997307,
+        "peakRssMiB": 106.328125
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "success": 11,
+          "failed": 3,
+          "empty": 2
+        },
+        "wallSeconds": 0.07527000000118278,
+        "peakRssMiB": 34.93359375
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 11,
+          "empty": 4
+        },
+        "wallSeconds": 0.19535730000279727,
+        "peakRssMiB": 64.6171875
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "failed": 31,
+          "success": 332,
+          "empty": 43
+        },
+        "wallSeconds": 15.533931300000404,
+        "peakRssMiB": 12292.3828125
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "failed": 29
+        },
+        "wallSeconds": 0.11106410000138567,
+        "peakRssMiB": 36.2265625
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "failed": 17
+        },
+        "wallSeconds": 0.2827823999978136,
+        "peakRssMiB": 307.6171875
+      }
+    }
+  },
+  "markitdown": {
+    "complete": true,
+    "inputs": 2285,
+    "counts": {
+      "success": 1469,
+      "failed": 682,
+      "empty": 134
+    },
+    "wallSeconds": 1644.7295615999974,
+    "peakRssMiB": 12377.13671875,
+    "terminatedGroups": 6,
+    "independentValidCohort": 845,
+    "independentValidNonempty": 785,
+    "qualityScored": 700,
+    "qualityMedian": 94.5,
+    "qualityP10": 67.11671424229625,
+    "coverageAdjustedQualityMean": 85.12042204918404,
+    "formats": {
+      "atom": {
+        "inputs": 2,
+        "counts": {
+          "success": 2
+        },
+        "wallSeconds": 2.9704751999997825,
+        "peakRssMiB": 129.6796875
+      },
+      "bmp": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.9470021000015549,
+        "peakRssMiB": 128.77734375
+      },
+      "csv": {
+        "inputs": 9,
+        "counts": {
+          "success": 9
+        },
+        "wallSeconds": 11.946455900000728,
+        "peakRssMiB": 2766.12890625
+      },
+      "doc": {
+        "inputs": 221,
+        "counts": {
+          "failed": 220,
+          "success": 1
+        },
+        "wallSeconds": 14.452844200008258,
+        "peakRssMiB": 130.2109375
+      },
+      "docm": {
+        "inputs": 5,
+        "counts": {
+          "failed": 1,
+          "success": 4
+        },
+        "wallSeconds": 1.1429973999984213,
+        "peakRssMiB": 141.80859375
+      },
+      "docx": {
+        "inputs": 250,
+        "counts": {
+          "failed": 32,
+          "success": 187,
+          "empty": 31
+        },
+        "wallSeconds": 52.670518499995524,
+        "peakRssMiB": 777.60546875
+      },
+      "epub": {
+        "inputs": 7,
+        "counts": {
+          "success": 7
+        },
+        "wallSeconds": 5.19904680000036,
+        "peakRssMiB": 138.4765625
+      },
+      "flac": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.9410175000011805,
+        "peakRssMiB": 128.64453125
+      },
+      "html": {
+        "inputs": 35,
+        "counts": {
+          "success": 33,
+          "empty": 2
+        },
+        "wallSeconds": 3.2405054999981076,
+        "peakRssMiB": 133.23046875
+      },
+      "ipynb": {
+        "inputs": 5,
+        "counts": {
+          "success": 4,
+          "failed": 1
+        },
+        "wallSeconds": 1.8676102999997966,
+        "peakRssMiB": 131.3984375
+      },
+      "jpg": {
+        "inputs": 14,
+        "counts": {
+          "empty": 14
+        },
+        "wallSeconds": 0.9426551999968069,
+        "peakRssMiB": 128.8515625
+      },
+      "json": {
+        "inputs": 96,
+        "counts": {
+          "success": 96
+        },
+        "wallSeconds": 5.810171499993885,
+        "peakRssMiB": 129.3984375
+      },
+      "m4a": {
+        "inputs": 8,
+        "counts": {
+          "empty": 8
+        },
+        "wallSeconds": 0.952572300000611,
+        "peakRssMiB": 128.6015625
+      },
+      "md": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.9510439000005135,
+        "peakRssMiB": 131.546875
+      },
+      "mkv": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.9270400999994308,
+        "peakRssMiB": 128.765625
+      },
+      "mov": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.9558660000002419,
+        "peakRssMiB": 129.16015625
+      },
+      "mp3": {
+        "inputs": 27,
+        "counts": {
+          "empty": 27
+        },
+        "wallSeconds": 1.9516110000004119,
+        "peakRssMiB": 131.25
+      },
+      "mp4": {
+        "inputs": 9,
+        "counts": {
+          "empty": 9
+        },
+        "wallSeconds": 1.8903536000034364,
+        "peakRssMiB": 128.64453125
+      },
+      "msg": {
+        "inputs": 55,
+        "counts": {
+          "failed": 55
+        },
+        "wallSeconds": 3.8487690999972983,
+        "peakRssMiB": 131.59765625
+      },
+      "odp": {
+        "inputs": 9,
+        "counts": {
+          "failed": 9
+        },
+        "wallSeconds": 0.9293551999980991,
+        "peakRssMiB": 128.63671875
+      },
+      "ods": {
+        "inputs": 7,
+        "counts": {
+          "failed": 7
+        },
+        "wallSeconds": 0.9492439999994531,
+        "peakRssMiB": 128.84375
+      },
+      "odt": {
+        "inputs": 20,
+        "counts": {
+          "success": 1,
+          "failed": 19
+        },
+        "wallSeconds": 1.8920175999992352,
+        "peakRssMiB": 129.19140625
+      },
+      "ogg": {
+        "inputs": 4,
+        "counts": {
+          "failed": 4
+        },
+        "wallSeconds": 0.9219030999993265,
+        "peakRssMiB": 128.44921875
+      },
+      "pdf": {
+        "inputs": 108,
+        "counts": {
+          "empty": 36,
+          "success": 67,
+          "failed": 5
+        },
+        "wallSeconds": 314.9999117999905,
+        "peakRssMiB": 332.20703125
+      },
+      "png": {
+        "inputs": 6,
+        "counts": {
+          "empty": 6
+        },
+        "wallSeconds": 1.0062265999986266,
+        "peakRssMiB": 128.94921875
+      },
+      "pot": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.97823359999893,
+        "peakRssMiB": 128.39453125
+      },
+      "potx": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.9562960000002931,
+        "peakRssMiB": 130.37890625
+      },
+      "pps": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.92389650000041,
+        "peakRssMiB": 129.046875
+      },
+      "ppsm": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.9504694999995991,
+        "peakRssMiB": 131.50390625
+      },
+      "ppsx": {
+        "inputs": 2,
+        "counts": {
+          "failed": 2
+        },
+        "wallSeconds": 0.9477182999980869,
+        "peakRssMiB": 131.9765625
+      },
+      "ppt": {
+        "inputs": 200,
+        "counts": {
+          "failed": 200
+        },
+        "wallSeconds": 12.547871300001134,
+        "peakRssMiB": 131.6796875
+      },
+      "pptm": {
+        "inputs": 5,
+        "counts": {
+          "success": 5
+        },
+        "wallSeconds": 1.0933096000007936,
+        "peakRssMiB": 135.3828125
+      },
+      "pptx": {
+        "inputs": 159,
+        "counts": {
+          "failed": 14,
+          "success": 145
+        },
+        "wallSeconds": 26.480453999996826,
+        "peakRssMiB": 461.3359375
+      },
+      "rss": {
+        "inputs": 3,
+        "counts": {
+          "success": 3
+        },
+        "wallSeconds": 0.9518529000015405,
+        "peakRssMiB": 130.21484375
+      },
+      "rtf": {
+        "inputs": 44,
+        "counts": {
+          "success": 43,
+          "failed": 1
+        },
+        "wallSeconds": 3.0662451999996847,
+        "peakRssMiB": 132.44140625
+      },
+      "tif": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 1.8787720000036643,
+        "peakRssMiB": 128.703125
+      },
+      "tsv": {
+        "inputs": 1,
+        "counts": {
+          "success": 1
+        },
+        "wallSeconds": 0.9522794999975304,
+        "peakRssMiB": 130.73828125
+      },
+      "txt": {
+        "inputs": 16,
+        "counts": {
+          "success": 16
+        },
+        "wallSeconds": 1.0550583000003826,
+        "peakRssMiB": 132.73828125
+      },
+      "wav": {
+        "inputs": 1,
+        "counts": {
+          "empty": 1
+        },
+        "wallSeconds": 0.9227855000026466,
+        "peakRssMiB": 128.33203125
+      },
+      "webm": {
+        "inputs": 1,
+        "counts": {
+          "failed": 1
+        },
+        "wallSeconds": 0.9212739000031434,
+        "peakRssMiB": 128.5234375
+      },
+      "webp": {
+        "inputs": 3,
+        "counts": {
+          "failed": 3
+        },
+        "wallSeconds": 0.9479319999991276,
+        "peakRssMiB": 128.8828125
+      },
+      "xls": {
+        "inputs": 452,
+        "counts": {
+          "failed": 28,
+          "success": 424
+        },
+        "wallSeconds": 550.1435820000152,
+        "peakRssMiB": 12288.9609375
+      },
+      "xlsb": {
+        "inputs": 16,
+        "counts": {
+          "failed": 16
+        },
+        "wallSeconds": 0.9942483000013453,
+        "peakRssMiB": 129.05078125
+      },
+      "xlsm": {
+        "inputs": 15,
+        "counts": {
+          "success": 15
+        },
+        "wallSeconds": 3.6565496000002895,
+        "peakRssMiB": 222.4765625
+      },
+      "xlsx": {
+        "inputs": 406,
+        "counts": {
+          "failed": 43,
+          "success": 363
+        },
+        "wallSeconds": 430.79313209999594,
+        "peakRssMiB": 12377.13671875
+      },
+      "xml": {
+        "inputs": 29,
+        "counts": {
+          "success": 29
+        },
+        "wallSeconds": 2.146170499996515,
+        "peakRssMiB": 141.51953125
+      },
+      "zip": {
+        "inputs": 17,
+        "counts": {
+          "failed": 6,
+          "success": 11
+        },
+        "wallSeconds": 167.1142166000027,
+        "peakRssMiB": 2951.21484375
+      }
+    }
+  }
+}

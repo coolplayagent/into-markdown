@@ -1,0 +1,71 @@
+{
+  "scope": "Documented behavior changes are separated from accidental parser/recognition bugs; no global resource bound was weakened to improve benchmark scores.",
+  "status": "complete",
+  "conclusion": "No unexplained material regression remains in the final 0.0.5 release candidate after the two OCR fixes and full-corpus remeasurement.",
+  "off": {
+    "successLost": 0,
+    "successGainedIds": [
+      "gbk.zip",
+      "testZipEntryNameCharsetShiftSJIS.zip"
+    ],
+    "largeOutputReductionsReviewed": 44,
+    "equivalentTextAfterMarkupAndEmptyNotesNormalization": 43,
+    "remainingReduction": {
+      "id": "9e305ce381ae60fb",
+      "reason": "Unknown KML suffix is rejected by the shared admission policy from #339/#346; the ZIP preserves its convertible CSV member and exposes a member-level unsupported diagnostic. Explicit XML selection remains available after extraction.",
+      "sourceContract": "crates/api/src/format_admission_tests.rs: unsupported_suffixes_cannot_become_text_or_structured_documents; docs/evidence/issue-339.md",
+      "supplementalCheck": {
+        "0.0.4Automatic": "success",
+        "0.0.5Automatic": "unsupported",
+        "0.0.5ExplicitXml": "success"
+      }
+    }
+  },
+  "auto": {
+    "successGained": 2,
+    "successLost": 1,
+    "successLostReview": {
+      "id": "1840a79bdc5f6acf",
+      "classification": "benchmark deadline boundary after newly executed OCR, not a resource preflight refusal",
+      "fullScanDeadlineSeconds": 120,
+      "requestsBeforeDeadline": 110,
+      "sameDeadlineFollowupSeconds": 600,
+      "followupStatus": "success",
+      "followupWallSeconds": 148.2448692,
+      "followupOcrRequests": 141,
+      "followupRecognizedRegions": 492,
+      "followupRecognizedChars": 8689,
+      "followupRecognitionMemoryRefusals": 0,
+      "baselineNativeTextTrigramRetention": 0.9910087103118853
+    },
+    "timeOver2xReviewed": 16,
+    "timeOver2xClassification": {
+      "previouslyRejectedOrSkippedEmbeddedOcr": 15,
+      "notebookNewEmbeddedImageOcr": 1,
+      "unexplained": 0
+    },
+    "ocrContributionRows": 68,
+    "ocrContributionReviewRequired": 0,
+    "minimumMeasuredRetentionOfBaselineExtraTrigrams": 0.9854014598540146
+  },
+  "fixedRegressions": [
+    {
+      "affectedInputs": 18,
+      "errorCode": "documentNodes",
+      "classification": "over-conservative theoretical-node preflight bug",
+      "fixPullRequest": "https://github.com/coolplayagent/into-markdown/pull/351",
+      "finalUnder120Seconds": 17,
+      "remaining120SecondTimeout": "1840a79bdc5f6acf",
+      "remaining600SecondStatus": "success"
+    },
+    {
+      "affectedInput": "1840a79bdc5f6acf",
+      "errorCode": "max_memory_bytes",
+      "classification": "serial image normalization workspaces were incorrectly accumulated",
+      "fixPullRequest": "https://github.com/coolplayagent/into-markdown/pull/352",
+      "final600SecondStatus": "success",
+      "recognitionMemoryRefusals": 0
+    }
+  ],
+  "resourcePolicy": "The 100000 actual-node cap, retained-output/copy accounting, logical memory budgets, benchmark deadlines, external 12 GiB RSS limit, and fatal resource-error semantics remain enforced."
+}

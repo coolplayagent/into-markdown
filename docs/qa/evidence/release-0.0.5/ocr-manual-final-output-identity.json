@@ -1,0 +1,82 @@
+[
+  {
+    "tool": "into-0.0.5-off",
+    "id": "735a9c7e40f49351",
+    "status": "success",
+    "bytes": 45,
+    "sha256": "e305ff5b617fbb375bcba3340ee8b0eed452c649fa8458244c97cd913e927399",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-off",
+    "id": "3c05f4ee2ffbf99c",
+    "status": "success",
+    "bytes": 45,
+    "sha256": "e305ff5b617fbb375bcba3340ee8b0eed452c649fa8458244c97cd913e927399",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-off",
+    "id": "3d692a59957d1ee1",
+    "status": "success",
+    "bytes": 45,
+    "sha256": "e305ff5b617fbb375bcba3340ee8b0eed452c649fa8458244c97cd913e927399",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-off",
+    "id": "1ba759e5479f0898",
+    "status": "failed",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-off",
+    "id": "71eb5c58b160b785",
+    "status": "success",
+    "bytes": 45,
+    "sha256": "e305ff5b617fbb375bcba3340ee8b0eed452c649fa8458244c97cd913e927399",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-auto",
+    "id": "735a9c7e40f49351",
+    "status": "success",
+    "bytes": 71,
+    "sha256": "2e17d8afe395d5dcca9bed7489a77245e7ae6578cc7579b9e9a317ee0da5c0ff",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-auto",
+    "id": "3c05f4ee2ffbf99c",
+    "status": "success",
+    "bytes": 69,
+    "sha256": "41820867f31e5a1ad9b6e237c45a136c35f3ab3aa4d63fae7959fe050370061f",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-auto",
+    "id": "3d692a59957d1ee1",
+    "status": "success",
+    "bytes": 1052,
+    "sha256": "89aceb86574f6ec993cdad28034cc46a9717d305e9d9180dec48b35338bf0e70",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-auto",
+    "id": "1ba759e5479f0898",
+    "status": "failed",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "matchesPreviouslyReviewedCandidate": true
+  },
+  {
+    "tool": "into-0.0.5-auto",
+    "id": "71eb5c58b160b785",
+    "status": "success",
+    "bytes": 45,
+    "sha256": "e305ff5b617fbb375bcba3340ee8b0eed452c649fa8458244c97cd913e927399",
+    "matchesPreviouslyReviewedCandidate": true
+  }
+]

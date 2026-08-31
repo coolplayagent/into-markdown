@@ -1,0 +1,26 @@
+{
+  "into-0.0.4-off": [
+    {
+      "budgetBytes": 4294967296,
+      "reports": 203
+    }
+  ],
+  "into-0.0.5-off": [
+    {
+      "budgetBytes": 17052164096,
+      "reports": 202
+    }
+  ],
+  "into-0.0.4-auto": [
+    {
+      "budgetBytes": 4294967296,
+      "reports": 202
+    }
+  ],
+  "into-0.0.5-auto": [
+    {
+      "budgetBytes": 17052164096,
+      "reports": 202
+    }
+  ]
+}

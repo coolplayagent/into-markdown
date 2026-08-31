@@ -1,0 +1,40 @@
+{
+  "inputCount": 2285,
+  "inputBytes": 1979990949,
+  "allOriginalInputHashesVerified": true,
+  "allSixResultSetsComplete": true,
+  "counts": {
+    "into-0.0.4-off": {
+      "success": 1825,
+      "failed": 449,
+      "empty": 11
+    },
+    "into-0.0.5-off": {
+      "success": 1827,
+      "failed": 447,
+      "empty": 11
+    },
+    "into-0.0.4-auto": {
+      "success": 1818,
+      "failed": 456,
+      "empty": 11
+    },
+    "into-0.0.5-auto": {
+      "success": 1819,
+      "failed": 455,
+      "empty": 11
+    },
+    "anydoc": {
+      "failed": 568,
+      "success": 1512,
+      "empty": 205
+    },
+    "markitdown": {
+      "success": 1469,
+      "failed": 682,
+      "empty": 134
+    }
+  },
+  "baselineBinarySha256": "35d819ec76238814715204988fc97aff4fde014657ea103640d917b22e2f1c39",
+  "candidateBinarySha256": "009cdc29fb0dd4a4d3604d50c40512fbb19b664d65522d4d4b71e458a5bc6d87"
+}
