@@ -1,0 +1,1649 @@
+{
+  "off": [
+    {
+      "id": "4a2208ad556199aa",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_override_list_numbering.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3.7807,
+      "afterMs": 3.8712999999999997,
+      "beforeBytes": 2401,
+      "afterBytes": 969,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b6a17c6973e5dbd3",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-06-amortized-analysis.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 37.167899999999996,
+      "afterMs": 37.5072,
+      "beforeBytes": 12590,
+      "afterBytes": 5811,
+      "beforeError": "presentation.hiddenSlideSkipped",
+      "afterError": "presentation.hiddenSlideSkipped",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "4be338329a686ace",
+      "path": "office/apache-poi/test-data/slideshow/OverlappingRelations.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 4.8001,
+      "afterMs": 4.9079,
+      "beforeBytes": 421,
+      "afterBytes": 189,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "1382799d5598e677",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-integration-tests/src/test/resources/test-documents/testZipEntryNameCharsetShiftSJIS.zip",
+      "flags": [
+        "success-gained"
+      ],
+      "beforeStatus": "failed",
+      "afterStatus": "success",
+      "beforeMs": null,
+      "afterMs": 0.44020000000000004,
+      "beforeBytes": 0,
+      "afterBytes": 109,
+      "beforeError": "malformed",
+      "afterError": null
+    },
+    {
+      "id": "345e98fb12e3c5f7",
+      "path": "office/apache-poi/test-data/slideshow/bug64693.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 4.8404,
+      "afterMs": 5.0632,
+      "beforeBytes": 344,
+      "afterBytes": 112,
+      "beforeError": "office.relationshipOmitted",
+      "afterError": "office.relationshipOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "18a4a784da9f8253",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-10-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 92.8375,
+      "afterMs": 93.5107,
+      "beforeBytes": 9888,
+      "afterBytes": 5422,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "71ba91a4f872216e",
+      "path": "office/apache-poi/test-data/slideshow/SampleShow.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.9769,
+      "afterMs": 2.8829,
+      "beforeBytes": 708,
+      "afterBytes": 398,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "a31635c0bae05b52",
+      "path": "office/apache-poi/test-data/slideshow/45541_Footer.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 18.9063,
+      "afterMs": 18.523,
+      "beforeBytes": 4472,
+      "afterBytes": 2673,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "f1fb504b5a239e9e",
+      "path": "office/apache-poi/test-data/slideshow/2411-Performance_Up.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 90.3623,
+      "afterMs": 89.8373,
+      "beforeBytes": 19543,
+      "afterBytes": 9690,
+      "beforeError": "presentation.hiddenSlideSkipped",
+      "afterError": "presentation.hiddenSlideSkipped",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "954be7f802868a1e",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-12-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 191.4076,
+      "afterMs": 190.9265,
+      "beforeBytes": 68414,
+      "afterBytes": 24447,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "84d44edbbb23863a",
+      "path": "office/apache-poi/test-data/slideshow/45545_Comment.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 19.1814,
+      "afterMs": 19.3007,
+      "beforeBytes": 4629,
+      "afterBytes": 2659,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "d674bf7d7951c275",
+      "path": "office/apache-poi/test-data/slideshow/aptia.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 13.116900000000001,
+      "afterMs": 13.1378,
+      "beforeBytes": 4578,
+      "afterBytes": 2740,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "d94d47d91dda4156",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-09-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 167.43099999999998,
+      "afterMs": 169.11870000000002,
+      "beforeBytes": 15638,
+      "afterBytes": 7394,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "f811869082e33938",
+      "path": "office/apache-poi/test-data/openxml4j/at.pzp.www_uploads_media_PP_Scheinecker-jdk6error.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 57.0751,
+      "afterMs": 55.6171,
+      "beforeBytes": 20616,
+      "afterBytes": 9643,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "77b667719260497d",
+      "path": "office/apache-poi/test-data/slideshow/WithMaster.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.7777000000000003,
+      "afterMs": 2.8827000000000003,
+      "beforeBytes": 233,
+      "afterBytes": 117,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "c32dc4e53a9435c9",
+      "path": "office/apache-poi/test-data/document/Numbering.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.4016,
+      "afterMs": 1.2863,
+      "beforeBytes": 713,
+      "afterBytes": 298,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "30c7305eacc31b33",
+      "path": "office/apache-poi/test-data/document/Bug55142.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1034,
+      "afterMs": 1.1549,
+      "beforeBytes": 583,
+      "afterBytes": 341,
+      "beforeError": "word.glossaryContentOmitted",
+      "afterError": "word.glossaryContentOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "9e305ce381ae60fb",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-integration-tests/src/test/resources/test-documents/testTika4424.zip",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 182.9549,
+      "afterMs": 14.1585,
+      "beforeBytes": 1326957,
+      "afterBytes": 33152,
+      "beforeError": null,
+      "afterError": "zip.entry.failed",
+      "normalizedTextEqualIgnoringEmptyNotes": false
+    },
+    {
+      "id": "51440eb0226c6ea1",
+      "path": "office/apache-poi/test-data/slideshow/sample.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.9355,
+      "afterMs": 3.0765,
+      "beforeBytes": 564,
+      "afterBytes": 178,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "de363c5606e4ee24",
+      "path": "office/apache-poi/test-data/slideshow/ececapstonespring2012.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 23.267,
+      "afterMs": 22.5538,
+      "beforeBytes": 9897,
+      "afterBytes": 4609,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "eaeaf2136f367399",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/test_embedded_zip.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 6.5337,
+      "afterMs": 6.6663,
+      "beforeBytes": 2199,
+      "afterBytes": 1193,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "853fc4d9dc6219fc",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-08-search.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 465.6576,
+      "afterMs": 464.7774,
+      "beforeBytes": 100149,
+      "afterBytes": 47373,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "8396338b2390f80b",
+      "path": "office/apache-poi/test-data/slideshow/bug62513.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 28.483,
+      "afterMs": 29.18,
+      "beforeBytes": 10565,
+      "afterBytes": 5512,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "63a96e9e196754bc",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-08-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 157.27640000000002,
+      "afterMs": 155.6288,
+      "beforeBytes": 19974,
+      "afterBytes": 7136,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "4fa26edfd2b7e6c7",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-09-sort.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 242.4972,
+      "afterMs": 244.71200000000002,
+      "beforeBytes": 68085,
+      "afterBytes": 28806,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "ac98fd6c1af2ef32",
+      "path": "office/apache-poi/test-data/slideshow/ae.ac.uaeu.faculty_nafaachbili_GeomLec1.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 22.226599999999998,
+      "afterMs": 22.2745,
+      "beforeBytes": 6060,
+      "afterBytes": 3311,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "250da7913b429710",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-11-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 126.5716,
+      "afterMs": 125.79960000000001,
+      "beforeBytes": 14520,
+      "afterBytes": 6360,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "f9ccfb885fb4fb61",
+      "path": "office/apache-poi/test-data/document/ComplexNumberedLists.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1459000000000001,
+      "afterMs": 1.1819,
+      "beforeBytes": 753,
+      "afterBytes": 345,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "2eb39584b95ad089",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_numbered_list.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.8143000000000002,
+      "afterMs": 2.7418,
+      "beforeBytes": 2481,
+      "afterBytes": 1363,
+      "beforeError": "word.unsupportedWrapperOmitted",
+      "afterError": "word.unsupportedWrapperOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "6058a7d6f32cb78f",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-01-introduction.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 65.9565,
+      "afterMs": 65.8938,
+      "beforeBytes": 24467,
+      "afterBytes": 10272,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "523881ccb8238fae",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testRTFBoldItalic.rtf",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 0.4957,
+      "afterMs": 0.3898,
+      "beforeBytes": 321,
+      "afterBytes": 155,
+      "beforeError": "rtf.unknownControlIgnored",
+      "afterError": "rtf.unknownControlIgnored",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "c404c70962fb78a1",
+      "path": "office/apache-poi/test-data/slideshow/45541_Header.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 19.5364,
+      "afterMs": 19.004,
+      "beforeBytes": 4914,
+      "afterBytes": 2673,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "57fce1485895c72a",
+      "path": "office/apache-poi/test-data/slideshow/layouts.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 11.888,
+      "afterMs": 12.0721,
+      "beforeBytes": 4128,
+      "afterBytes": 1619,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "ede7cbf87b7c5c3f",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-05-greedy.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 176.09140000000002,
+      "afterMs": 175.5322,
+      "beforeBytes": 61271,
+      "afterBytes": 24276,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "0cd634310fd96e99",
+      "path": "office/apache-poi/test-data/document/NumberingWOverrides.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3.7971,
+      "afterMs": 4.162599999999999,
+      "beforeBytes": 252,
+      "afterBytes": 95,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "df72063f2c9ee460",
+      "path": "office/apache-poi/test-data/xmldsign/signed.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1977,
+      "afterMs": 1.1139999999999999,
+      "beforeBytes": 1148,
+      "afterBytes": 636,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b5bb094535830da3",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-07-randomized.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 168.86499999999998,
+      "afterMs": 168.9829,
+      "beforeBytes": 73511,
+      "afterBytes": 23853,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "d95af5039ff4e90a",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-02-mathematics.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 154.6195,
+      "afterMs": 154.51889999999997,
+      "beforeBytes": 11847,
+      "afterBytes": 4359,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "97ed884ac2ff77ee",
+      "path": "office/apache-poi/test-data/slideshow/KEY02.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 9.2665,
+      "afterMs": 9.305900000000001,
+      "beforeBytes": 256,
+      "afterBytes": 135,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "08b9c7aba51df1fa",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-04-array-string.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 211.2779,
+      "afterMs": 211.4237,
+      "beforeBytes": 37379,
+      "afterBytes": 19693,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b8bfe5dd085c41cc",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testPPTX_overlappingRelations.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 4.402900000000001,
+      "afterMs": 4.3286,
+      "beforeBytes": 421,
+      "afterBytes": 189,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "fcc2418acd84e3a1",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-04-dynamic-programming.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 226.04840000000002,
+      "afterMs": 221.1669,
+      "beforeBytes": 94549,
+      "afterBytes": 34551,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "117c831cea01ad47",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-pkg-module/src/test/resources/test-documents/gbk.zip",
+      "flags": [
+        "success-gained"
+      ],
+      "beforeStatus": "failed",
+      "afterStatus": "success",
+      "beforeMs": null,
+      "afterMs": 0.6733,
+      "beforeBytes": 0,
+      "afterBytes": 161,
+      "beforeError": "malformed",
+      "afterError": null
+    },
+    {
+      "id": "f5d00fd5dee041be",
+      "path": "office/apache-poi/test-data/slideshow/ArtisticEffectSample.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5.7078,
+      "afterMs": 6.1239,
+      "beforeBytes": 343,
+      "afterBytes": 158,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "2bb43d4c698edaec",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-03-divide-conquer.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 306.0213,
+      "afterMs": 306.6731,
+      "beforeBytes": 59734,
+      "afterBytes": 23872,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "fbfc6b1bdbc2081f",
+      "path": "office/apache-poi/test-data/slideshow/backgrounds.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5.1757,
+      "afterMs": 5.1218,
+      "beforeBytes": 457,
+      "afterBytes": 225,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    }
+  ],
+  "auto": [
+    {
+      "id": "4a2208ad556199aa",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_override_list_numbering.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3.6830000000000003,
+      "afterMs": 3.6751,
+      "beforeBytes": 2401,
+      "afterBytes": 969,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b6a17c6973e5dbd3",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-06-amortized-analysis.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 6057.802299999999,
+      "afterMs": 6081.7716,
+      "beforeBytes": 13284,
+      "afterBytes": 6505,
+      "beforeError": "presentation.hiddenSlideSkipped",
+      "afterError": "presentation.hiddenSlideSkipped",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "4be338329a686ace",
+      "path": "office/apache-poi/test-data/slideshow/OverlappingRelations.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5.1298,
+      "afterMs": 4.8203,
+      "beforeBytes": 421,
+      "afterBytes": 189,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "1382799d5598e677",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-integration-tests/src/test/resources/test-documents/testZipEntryNameCharsetShiftSJIS.zip",
+      "flags": [
+        "success-gained"
+      ],
+      "beforeStatus": "failed",
+      "afterStatus": "success",
+      "beforeMs": null,
+      "afterMs": 0.3736,
+      "beforeBytes": 0,
+      "afterBytes": 109,
+      "beforeError": "malformed",
+      "afterError": null
+    },
+    {
+      "id": "345e98fb12e3c5f7",
+      "path": "office/apache-poi/test-data/slideshow/bug64693.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5.472099999999999,
+      "afterMs": 5.4403999999999995,
+      "beforeBytes": 344,
+      "afterBytes": 112,
+      "beforeError": "office.relationshipOmitted",
+      "afterError": "office.relationshipOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "71ba91a4f872216e",
+      "path": "office/apache-poi/test-data/slideshow/SampleShow.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.9439,
+      "afterMs": 2.9678,
+      "beforeBytes": 708,
+      "afterBytes": 398,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "a31635c0bae05b52",
+      "path": "office/apache-poi/test-data/slideshow/45541_Footer.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 18.8638,
+      "afterMs": 18.5166,
+      "beforeBytes": 4472,
+      "afterBytes": 2673,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "458636d2c0b4701e",
+      "path": "multimedia/simplified-chinese/ecnu-ai-case-library/ecnu-ai-case-09.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 936.1783,
+      "afterMs": 55530.927599999995,
+      "beforeBytes": 9396,
+      "afterBytes": 15713,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 3262
+    },
+    {
+      "id": "f1fb504b5a239e9e",
+      "path": "office/apache-poi/test-data/slideshow/2411-Performance_Up.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 8035.866499999999,
+      "afterMs": 7960.8109,
+      "beforeBytes": 22821,
+      "afterBytes": 12968,
+      "beforeError": "presentation.hiddenSlideSkipped",
+      "afterError": "presentation.hiddenSlideSkipped",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "954be7f802868a1e",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-12-unknown.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 4092.8259000000003,
+      "afterMs": 4075.654,
+      "beforeBytes": 69306,
+      "afterBytes": 25339,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "84d44edbbb23863a",
+      "path": "office/apache-poi/test-data/slideshow/45545_Comment.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 19.0652,
+      "afterMs": 18.909599999999998,
+      "beforeBytes": 4629,
+      "afterBytes": 2659,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "d674bf7d7951c275",
+      "path": "office/apache-poi/test-data/slideshow/aptia.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 534.9765,
+      "afterMs": 745.5674,
+      "beforeBytes": 4578,
+      "afterBytes": 2740,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "1840a79bdc5f6acf",
+      "path": "ebooks/internet-archive/wonderful-wizard-of-oz.epub",
+      "flags": [
+        "success-lost"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "failed",
+      "beforeMs": 7470.1328,
+      "afterMs": null,
+      "beforeBytes": 223161,
+      "afterBytes": 0,
+      "beforeError": "epub.spine.missingItemOmitted",
+      "afterError": "timeout"
+    },
+    {
+      "id": "d94d47d91dda4156",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-09-unknown.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 180.9703,
+      "afterMs": 35457.9289,
+      "beforeBytes": 15638,
+      "afterBytes": 15309,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 2782
+    },
+    {
+      "id": "f811869082e33938",
+      "path": "office/apache-poi/test-data/openxml4j/at.pzp.www_uploads_media_PP_Scheinecker-jdk6error.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5823.245800000001,
+      "afterMs": 5971.7241,
+      "beforeBytes": 20616,
+      "afterBytes": 9643,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "77b667719260497d",
+      "path": "office/apache-poi/test-data/slideshow/WithMaster.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.7635,
+      "afterMs": 2.6497,
+      "beforeBytes": 233,
+      "afterBytes": 117,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "c32dc4e53a9435c9",
+      "path": "office/apache-poi/test-data/document/Numbering.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.4021000000000001,
+      "afterMs": 1.237,
+      "beforeBytes": 713,
+      "afterBytes": 298,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "30c7305eacc31b33",
+      "path": "office/apache-poi/test-data/document/Bug55142.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1337000000000002,
+      "afterMs": 1.3531000000000002,
+      "beforeBytes": 583,
+      "afterBytes": 341,
+      "beforeError": "word.glossaryContentOmitted",
+      "afterError": "word.glossaryContentOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "9e305ce381ae60fb",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-integration-tests/src/test/resources/test-documents/testTika4424.zip",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 195.7944,
+      "afterMs": 17.1025,
+      "beforeBytes": 1326957,
+      "afterBytes": 33152,
+      "beforeError": null,
+      "afterError": "zip.entry.failed",
+      "normalizedTextEqualIgnoringEmptyNotes": false
+    },
+    {
+      "id": "51440eb0226c6ea1",
+      "path": "office/apache-poi/test-data/slideshow/sample.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3.2448,
+      "afterMs": 2.9391,
+      "beforeBytes": 564,
+      "afterBytes": 178,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "de363c5606e4ee24",
+      "path": "office/apache-poi/test-data/slideshow/ececapstonespring2012.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5975.1173,
+      "afterMs": 5956.9227,
+      "beforeBytes": 11492,
+      "afterBytes": 6204,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "853fc4d9dc6219fc",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-08-search.pptx",
+      "flags": [
+        "time-over-2x",
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 475.1811,
+      "afterMs": 12049.846300000001,
+      "beforeBytes": 100149,
+      "afterBytes": 48975,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 561
+    },
+    {
+      "id": "8396338b2390f80b",
+      "path": "office/apache-poi/test-data/slideshow/bug62513.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 650.309,
+      "afterMs": 703.8225,
+      "beforeBytes": 10634,
+      "afterBytes": 5581,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "63a96e9e196754bc",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-08-unknown.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 161.2237,
+      "afterMs": 44957.2105,
+      "beforeBytes": 19974,
+      "afterBytes": 16055,
+      "beforeError": "presentation.optionalOcrSkipped",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 3179
+    },
+    {
+      "id": "4fa26edfd2b7e6c7",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-09-sort.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3602.6734,
+      "afterMs": 3585.0441,
+      "beforeBytes": 68840,
+      "afterBytes": 29561,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "806cb0da70456d03",
+      "path": "office/public-presentations/mit-ocw-ai-101-fall-2021.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1070.0269,
+      "afterMs": 14521.0942,
+      "beforeBytes": 13563,
+      "afterBytes": 11935,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 1410
+    },
+    {
+      "id": "7d6b299b98d17f40",
+      "path": "ebooks/internet-archive/what-to-draw.epub",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 548.0875,
+      "afterMs": 48820.0913,
+      "beforeBytes": 15773,
+      "afterBytes": 15982,
+      "beforeError": "epub.spine.missingItemOmitted",
+      "afterError": "epub.spine.missingItemOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 664
+    },
+    {
+      "id": "ac98fd6c1af2ef32",
+      "path": "office/apache-poi/test-data/slideshow/ae.ac.uaeu.faculty_nafaachbili_GeomLec1.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1230.9160000000002,
+      "afterMs": 1298.5267000000001,
+      "beforeBytes": 6071,
+      "afterBytes": 3322,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "250da7913b429710",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-11-unknown.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 192.1272,
+      "afterMs": 24264.6074,
+      "beforeBytes": 14520,
+      "afterBytes": 14404,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 4984
+    },
+    {
+      "id": "f9ccfb885fb4fb61",
+      "path": "office/apache-poi/test-data/document/ComplexNumberedLists.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1013,
+      "afterMs": 1.1704,
+      "beforeBytes": 753,
+      "afterBytes": 345,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "2eb39584b95ad089",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWORD_numbered_list.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 2.7266,
+      "afterMs": 2.8571999999999997,
+      "beforeBytes": 2481,
+      "afterBytes": 1363,
+      "beforeError": "word.unsupportedWrapperOmitted",
+      "afterError": "word.unsupportedWrapperOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "6f59cb84e4d49db1",
+      "path": "office/apache-poi/test-data/slideshow/ca.ubc.cs.people_~emhill_presentations_HowWeRefactor.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 276.8271,
+      "afterMs": 7703.5972,
+      "beforeBytes": 15514,
+      "afterBytes": 32538,
+      "beforeError": "presentation.optionalOcrSkipped",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 13720
+    },
+    {
+      "id": "6058a7d6f32cb78f",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-01-introduction.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5692.5904,
+      "afterMs": 5692.9749,
+      "beforeBytes": 24794,
+      "afterBytes": 10599,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "9a361a1a6c007788",
+      "path": "pdf/stanford-cs161/Lecture8-lowquality.pdf",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 10593.5017,
+      "afterMs": 54780.8145,
+      "beforeBytes": 20554,
+      "afterBytes": 20673,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 62
+    },
+    {
+      "id": "a8ae9bf028326e96",
+      "path": "office/public-presentations/stanford-cs224w-01-intro.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 20598.286900000003,
+      "afterMs": 92770.6397,
+      "beforeBytes": 44417,
+      "afterBytes": 45204,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 13136
+    },
+    {
+      "id": "523881ccb8238fae",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testRTFBoldItalic.rtf",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 0.3892,
+      "afterMs": 0.4208,
+      "beforeBytes": 321,
+      "afterBytes": 155,
+      "beforeError": "rtf.unknownControlIgnored",
+      "afterError": "rtf.unknownControlIgnored",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "c404c70962fb78a1",
+      "path": "office/apache-poi/test-data/slideshow/45541_Header.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 19.8892,
+      "afterMs": 18.9855,
+      "beforeBytes": 4914,
+      "afterBytes": 2673,
+      "beforeError": "presentation.graphicPlaceholder",
+      "afterError": "presentation.graphicPlaceholder",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "57fce1485895c72a",
+      "path": "office/apache-poi/test-data/slideshow/layouts.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 624.9441,
+      "afterMs": 679.0538,
+      "beforeBytes": 4128,
+      "afterBytes": 1619,
+      "beforeError": "ocr.lowConfidence",
+      "afterError": "ocr.lowConfidence",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "418b77c094f9a73b",
+      "path": "office/apache-poi/test-data/integration/stress022.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 109.94239999999999,
+      "afterMs": 14170.701599999999,
+      "beforeBytes": 34731,
+      "afterBytes": 27270,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 176
+    },
+    {
+      "id": "ede7cbf87b7c5c3f",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-05-greedy.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 6997.1978,
+      "afterMs": 7005.9613,
+      "beforeBytes": 62102,
+      "afterBytes": 25107,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "0cd634310fd96e99",
+      "path": "office/apache-poi/test-data/document/NumberingWOverrides.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 3.8251,
+      "afterMs": 4.6442000000000005,
+      "beforeBytes": 252,
+      "afterBytes": 95,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "0e49f9f38550fe04",
+      "path": "notebooks/microsoft-ai-oxford-pets.ipynb",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 212.07770000000002,
+      "afterMs": 2282.4852,
+      "beforeBytes": 6455,
+      "afterBytes": 6735,
+      "beforeError": "markdown.blockquotePreservedAsCode",
+      "afterError": "markdown.blockquotePreservedAsCode",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 198
+    },
+    {
+      "id": "df72063f2c9ee460",
+      "path": "office/apache-poi/test-data/xmldsign/signed.docx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1.1306,
+      "afterMs": 1.0987,
+      "beforeBytes": 1148,
+      "afterBytes": 636,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b5bb094535830da3",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-07-randomized.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 11359.1278,
+      "afterMs": 12022.496000000001,
+      "beforeBytes": 76215,
+      "afterBytes": 26557,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "e5ee7e53d65ec5b6",
+      "path": "ebooks/internet-archive/newton-principia.epub",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 513.9348,
+      "afterMs": 24556.5059,
+      "beforeBytes": 1496586,
+      "afterBytes": 1489361,
+      "beforeError": "epub.spine.missingItemOmitted",
+      "afterError": "epub.spine.missingItemOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false
+    },
+    {
+      "id": "6fabfe2838e653aa",
+      "path": "office/public-presentations/stanford-cs161-lecture11.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 13749.6772,
+      "afterMs": 58524.6134,
+      "beforeBytes": 66640,
+      "afterBytes": 50563,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 4059
+    },
+    {
+      "id": "d95af5039ff4e90a",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-02-mathematics.pptx",
+      "flags": [
+        "time-over-2x"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 164.0991,
+      "afterMs": 48476.992000000006,
+      "beforeBytes": 11847,
+      "afterBytes": 9264,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 1781
+    },
+    {
+      "id": "97ed884ac2ff77ee",
+      "path": "office/apache-poi/test-data/slideshow/KEY02.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 9.9582,
+      "afterMs": 9.385599999999998,
+      "beforeBytes": 256,
+      "afterBytes": 135,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "08b9c7aba51df1fa",
+      "path": "office/simplified-chinese/seu-courseware/data-structures-04-array-string.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 8473.8796,
+      "afterMs": 8214.268,
+      "beforeBytes": 38139,
+      "afterBytes": 20453,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "b8bfe5dd085c41cc",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testPPTX_overlappingRelations.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 4.3447,
+      "afterMs": 4.4793,
+      "beforeBytes": 421,
+      "afterBytes": 189,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "fcc2418acd84e3a1",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-04-dynamic-programming.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 5151.1674,
+      "afterMs": 5109.892699999999,
+      "beforeBytes": 95899,
+      "afterBytes": 35901,
+      "beforeError": "presentation.unsupportedMediaOmitted",
+      "afterError": "presentation.unsupportedMediaOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "117c831cea01ad47",
+      "path": "mixed/apache-tika/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-pkg-module/src/test/resources/test-documents/gbk.zip",
+      "flags": [
+        "success-gained"
+      ],
+      "beforeStatus": "failed",
+      "afterStatus": "success",
+      "beforeMs": null,
+      "afterMs": 0.6517,
+      "beforeBytes": 0,
+      "afterBytes": 161,
+      "beforeError": "malformed",
+      "afterError": null
+    },
+    {
+      "id": "f5d00fd5dee041be",
+      "path": "office/apache-poi/test-data/slideshow/ArtisticEffectSample.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 6.011299999999999,
+      "afterMs": 5.8309,
+      "beforeBytes": 343,
+      "afterBytes": 158,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    },
+    {
+      "id": "2bb43d4c698edaec",
+      "path": "office/simplified-chinese/seu-courseware/algorithms-03-divide-conquer.pptx",
+      "flags": [
+        "time-over-2x",
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 312.3458,
+      "afterMs": 48691.306300000004,
+      "beforeBytes": 59734,
+      "afterBytes": 29024,
+      "beforeError": "office.extensionOmitted",
+      "afterError": "office.extensionOmitted",
+      "normalizedTextEqualIgnoringEmptyNotes": false,
+      "diffHeuristic": "SequenceMatcher with popular-token suppression; normalized equality remains exact",
+      "changedAlphanumericCharacters": 1890
+    },
+    {
+      "id": "fbfc6b1bdbc2081f",
+      "path": "office/apache-poi/test-data/slideshow/backgrounds.pptx",
+      "flags": [
+        "output-bytes-down-40pct"
+      ],
+      "beforeStatus": "success",
+      "afterStatus": "success",
+      "beforeMs": 1182.437,
+      "afterMs": 1399.3043,
+      "beforeBytes": 457,
+      "afterBytes": 225,
+      "beforeError": null,
+      "afterError": null,
+      "normalizedTextEqualIgnoringEmptyNotes": true
+    }
+  ]
+}

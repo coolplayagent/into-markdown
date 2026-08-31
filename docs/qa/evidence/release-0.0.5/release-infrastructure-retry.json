@@ -1,0 +1,11 @@
+{
+  "runId": 33431291081,
+  "sourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "firstAttemptJobId": 99616996780,
+  "firstAttemptConclusion": "cancelled",
+  "bootstrapSeconds": 781,
+  "buildStepSeconds": 987,
+  "jobTimeoutMinutes": 30,
+  "reason": "Linux x86_64 container bootstrap consumed about 13 minutes; two release compilations completed, then the job reached its existing 30-minute timeout.",
+  "action": "Rerun only Linux x86_64 and dependent validation jobs; preserve successful native artifacts and ongoing Windows measurements. No workflow, runner, timeout or gate change."
+}

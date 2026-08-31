@@ -1,0 +1,74 @@
+{
+  "verified": true,
+  "releaseRun": 33431291081,
+  "sourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "windowsArchiveSha256": "a9b1e979dcaaa692eb1876d97ad6b9c2e4adb422df343b327185fa5de96d6b35",
+  "windowsBinarySha256": "009cdc29fb0dd4a4d3604d50c40512fbb19b664d65522d4d4b71e458a5bc6d87",
+  "observedDraft": true,
+  "nativeBuildAndValidationJobs": 6,
+  "allNativeBuildAndValidationJobsPassed": true,
+  "downloadCount": 10,
+  "allNineProductDigestsMatchAudit": true,
+  "nativeTargets": [
+    "aarch64-apple-darwin",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu"
+  ],
+  "coreAndSkillBlackBoxPlatforms": [
+    "linux-x86_64",
+    "windows-x86_64"
+  ],
+  "assets": [
+    {
+      "name": "into-markdown-0.0.5-audit.zip",
+      "size": 118669632,
+      "digest": "sha256:cae2e891b46c34eb4930ab3e99872fb263a06daec0c4d68d3de325e2d183c8ae"
+    },
+    {
+      "name": "into-markdown-skill.zip",
+      "size": 114624590,
+      "digest": "sha256:4fecb04415556c90835734c5cc5190d5be29f38771b16b16fdf0e103d7b04259"
+    },
+    {
+      "name": "into-md-linux-arm64.zip",
+      "size": 39052018,
+      "digest": "sha256:3004cbad1daa15ca2db6d5d2df92867439c894e58507055be888fe439203b517"
+    },
+    {
+      "name": "into-md-linux-x86_64.zip",
+      "size": 41458110,
+      "digest": "sha256:d1f6ef5fc1c4fb730bf926b77ea9d83d5e8fc8a0897d0a735afe86a9e4d07753"
+    },
+    {
+      "name": "into-md-macos-arm64.zip",
+      "size": 40051673,
+      "digest": "sha256:9081299ad3fedf819a3360d02a3f09ecfa8a26cf421bc03168efdd7e0dd8209d"
+    },
+    {
+      "name": "into-md-windows-x86_64.zip",
+      "size": 33775306,
+      "digest": "sha256:a9b1e979dcaaa692eb1876d97ad6b9c2e4adb422df343b327185fa5de96d6b35"
+    },
+    {
+      "name": "official.media.whisper-aarch64-apple-darwin.imp",
+      "size": 581010529,
+      "digest": "sha256:215a6e4ca27ef1800a5ddc9e7e162dc98161ebd21ceba6ecaf0354ead77f1a07"
+    },
+    {
+      "name": "official.media.whisper-aarch64-unknown-linux-gnu.imp",
+      "size": 561991722,
+      "digest": "sha256:51bceca3a07b2e3d5e96e02fb049a8940d947633b4b67ffef0d78b6496c29b72"
+    },
+    {
+      "name": "official.media.whisper-x86_64-pc-windows-msvc.imp",
+      "size": 559983564,
+      "digest": "sha256:86156ad5913059cb64acb991cbdeb4518b28d8eea65937b28430075075b2674e"
+    },
+    {
+      "name": "official.media.whisper-x86_64-unknown-linux-gnu.imp",
+      "size": 582346438,
+      "digest": "sha256:1c45b913abf0bce025a5b043a06e5758ad4fe12bfdf5858e42e0c7a826be940d"
+    }
+  ]
+}

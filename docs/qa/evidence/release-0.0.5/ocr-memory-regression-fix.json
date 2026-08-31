@@ -1,0 +1,88 @@
+{
+  "pullRequest": "https://github.com/coolplayagent/into-markdown/pull/352",
+  "sourceId": "1840a79bdc5f6acf",
+  "previousSourceRevision": "1387d09547a7dce0927715bd1a315636793ddfbd",
+  "previousError": "resourceLimit: resource limit exceeded (max_memory_bytes): 122906731 + 24649394852 exceeds 17052164096",
+  "previousOcrRequests": 0,
+  "uniqueImages": 155,
+  "summedNormalizationGiB": 13.994707226753235,
+  "maxSingleNormalizationGiB": 0.24129104614257812,
+  "cause": "Serial image normalization workspaces were incorrectly summed. Each normalized image is dropped after recognition; retained contributions contain no image pixels.",
+  "fix": "Reserve the maximum per-image sum of normalization and overlapping provider work; continue accumulating all retained outputs, copies, native content and indexes. Budgets and fatal resource-error semantics are unchanged.",
+  "finalSourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "finalResult": {
+    "id": "1840a79bdc5f6acf",
+    "relativePath": "ebooks/internet-archive/wonderful-wizard-of-oz.epub",
+    "baselineStatus": "success",
+    "initialCandidateStatus": "failed",
+    "initialCandidateError": "documentNodes",
+    "finalStatus": "failed",
+    "finalError": "timeout",
+    "finalOutputBytes": 0,
+    "baselineNativeOutputBytes": 223161,
+    "baselineNativeTextTrigramRetention": null
+  },
+  "extendedDeadlineResults": [
+    {
+      "version": "0.0.4",
+      "id": "1840a79bdc5f6acf",
+      "timeoutMs": 600000,
+      "wallMs": 7073.81290000194,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        223161
+      ],
+      "baselineNativeTextTrigramRetention": 1.0,
+      "peakRssMiB": 148.46484375,
+      "resourceUsage": {
+        "sharedLeaseBudgetBytes": 4294967296,
+        "sharedLeasePeakBytes": 4294967296,
+        "ocr": {
+          "recognizedRegions": 0,
+          "recognizedChars": 0
+        }
+      },
+      "termination": null
+    },
+    {
+      "version": "0.0.5",
+      "id": "1840a79bdc5f6acf",
+      "timeoutMs": 600000,
+      "wallMs": 148244.86920000345,
+      "statuses": [
+        "success"
+      ],
+      "outputBytes": [
+        232363
+      ],
+      "baselineNativeTextTrigramRetention": 0.9910087103118853,
+      "peakRssMiB": 544.1171875,
+      "resourceUsage": {
+        "memory": {
+          "totalBytes": 34104328192,
+          "availableBytes": 23662993408,
+          "systemReserveBytes": 4263041024,
+          "autoBudgetBytes": 17052164096,
+          "effectiveBudgetBytes": 17052164096,
+          "automatic": true
+        },
+        "ocrRuntime": {
+          "requests": 141,
+          "recognitionMemoryRefusals": 0,
+          "workerBudgetMinBytes": 805306368,
+          "workerBudgetMaxBytes": 805306368
+        },
+        "sharedLeaseBudgetBytes": 17052164096,
+        "sharedLeasePeakBytes": 17052164096,
+        "ocr": {
+          "recognizedRegions": 492,
+          "recognizedChars": 8689
+        }
+      },
+      "termination": null
+    }
+  ],
+  "deadlineNote": "The full scan preserves its 120-second timeout outcome; same-600-second follow-up for both versions is separate evidence and does not replace it."
+}

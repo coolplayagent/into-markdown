@@ -1,0 +1,34 @@
+{
+  "sourceId": "0e49f9f38550fe04",
+  "method": "Follow-up visual inspection of original embedded PNGs after timing and output differences were flagged; not a predeclared gold reference.",
+  "finding": "0.0.4 auto emitted unavailable OCR diagnostics and matched off byte-for-byte. 0.0.5 auto keeps the native text and adds 280 UTF-8 bytes of pet labels and plot labels. Original plot confirms Training, Test and Epoch; Accuracy is omitted and 1.0 is recognized as 10. Original pet labels are already clipped in the embedded image; recognition reading order is imperfect.",
+  "classification": "additional OCR work, not equivalent-work performance regression",
+  "finalSourceRevision": "527fa5281c127a93b3d712afcc403540703182e0",
+  "finalOutputsIdenticalToVisuallyReviewedCandidate": true,
+  "outputIdentities": {
+    "into-0.0.4-off": {
+      "status": "success",
+      "bytes": 6455,
+      "sha256": "9d2d75449e01636bec27b464e3691dbb765d079e48dd396dc1cf7a9b7c2f66c2",
+      "processingMs": 109.0899
+    },
+    "into-0.0.4-auto": {
+      "status": "success",
+      "bytes": 6455,
+      "sha256": "9d2d75449e01636bec27b464e3691dbb765d079e48dd396dc1cf7a9b7c2f66c2",
+      "processingMs": 212.07770000000002
+    },
+    "into-0.0.5-off": {
+      "status": "success",
+      "bytes": 6455,
+      "sha256": "9d2d75449e01636bec27b464e3691dbb765d079e48dd396dc1cf7a9b7c2f66c2",
+      "processingMs": 109.3355
+    },
+    "into-0.0.5-auto": {
+      "status": "success",
+      "bytes": 6735,
+      "sha256": "30ed70e618e1cd255ebe959123f75740dc7135c37ccd1b3783e9d4b01b54dbca",
+      "processingMs": 2282.4852
+    }
+  }
+}

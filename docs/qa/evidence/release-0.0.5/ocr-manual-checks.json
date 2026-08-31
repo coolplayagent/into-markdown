@@ -1,0 +1,315 @@
+{
+  "method": "Direct visual inspection before examining converter outputs. Phrase presence is a limited check, not full-document OCR accuracy.",
+  "checks": [
+    {
+      "tool": "into-0.0.4-off",
+      "id": "735a9c7e40f49351",
+      "status": "success",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.4-off",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "success",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.4-off",
+      "id": "3d692a59957d1ee1",
+      "status": "success",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.4-off",
+      "id": "1ba759e5479f0898",
+      "status": "failed",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "malformed"
+    },
+    {
+      "tool": "into-0.0.4-off",
+      "id": "71eb5c58b160b785",
+      "status": "success",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.5-off",
+      "id": "735a9c7e40f49351",
+      "status": "success",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.5-off",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "success",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.5-off",
+      "id": "3d692a59957d1ee1",
+      "status": "success",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.5-off",
+      "id": "1ba759e5479f0898",
+      "status": "failed",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "malformed"
+    },
+    {
+      "tool": "into-0.0.5-off",
+      "id": "71eb5c58b160b785",
+      "status": "success",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.4-auto",
+      "id": "735a9c7e40f49351",
+      "status": "success",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 2,
+      "matchedPhraseIndices": [
+        0,
+        1
+      ],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "into-0.0.4-auto",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "success",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 1,
+      "matchedPhraseIndices": [
+        0
+      ],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.4-auto",
+      "id": "3d692a59957d1ee1",
+      "status": "success",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "into-0.0.4-auto",
+      "id": "1ba759e5479f0898",
+      "status": "failed",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "malformed"
+    },
+    {
+      "tool": "into-0.0.4-auto",
+      "id": "71eb5c58b160b785",
+      "status": "success",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "into-0.0.5-auto",
+      "id": "735a9c7e40f49351",
+      "status": "success",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 2,
+      "matchedPhraseIndices": [
+        0,
+        1
+      ],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "into-0.0.5-auto",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "success",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 1,
+      "matchedPhraseIndices": [
+        0
+      ],
+      "errorCode": null
+    },
+    {
+      "tool": "into-0.0.5-auto",
+      "id": "3d692a59957d1ee1",
+      "status": "success",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "into-0.0.5-auto",
+      "id": "1ba759e5479f0898",
+      "status": "failed",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "malformed"
+    },
+    {
+      "tool": "into-0.0.5-auto",
+      "id": "71eb5c58b160b785",
+      "status": "success",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "ocr.lowConfidence"
+    },
+    {
+      "tool": "anydoc",
+      "id": "735a9c7e40f49351",
+      "status": "failed",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "unsupported"
+    },
+    {
+      "tool": "anydoc",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "failed",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "unsupported"
+    },
+    {
+      "tool": "anydoc",
+      "id": "3d692a59957d1ee1",
+      "status": "failed",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "unsupported"
+    },
+    {
+      "tool": "anydoc",
+      "id": "1ba759e5479f0898",
+      "status": "failed",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "unsupported"
+    },
+    {
+      "tool": "anydoc",
+      "id": "71eb5c58b160b785",
+      "status": "failed",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": "unsupported"
+    },
+    {
+      "tool": "markitdown",
+      "id": "735a9c7e40f49351",
+      "status": "empty",
+      "referenceKind": "complete visible text",
+      "expectedPhraseCount": 2,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "markitdown",
+      "id": "3c05f4ee2ffbf99c",
+      "status": "empty",
+      "referenceKind": "complete visible text; horizontal gaps",
+      "expectedPhraseCount": 1,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "markitdown",
+      "id": "3d692a59957d1ee1",
+      "status": "empty",
+      "referenceKind": "manually transcribed phrase subset; +10 degree rotation",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "markitdown",
+      "id": "1ba759e5479f0898",
+      "status": "empty",
+      "referenceKind": "manually transcribed sign headings; Chinese/English; traditional Chinese variants inspected manually",
+      "expectedPhraseCount": 4,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    },
+    {
+      "tool": "markitdown",
+      "id": "71eb5c58b160b785",
+      "status": "empty",
+      "referenceKind": "negative control: landscape photograph with no legible text despite filename",
+      "expectedPhraseCount": 0,
+      "matchedPhraseCount": 0,
+      "matchedPhraseIndices": [],
+      "errorCode": null
+    }
+  ]
+}

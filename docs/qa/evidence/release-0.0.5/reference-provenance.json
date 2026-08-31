@@ -1,0 +1,30 @@
+{
+  "referenceCount": 722,
+  "validityRecords": 845,
+  "source": "References and validity records reused only when full source SHA-256 matches; no measured Markdown output is used as a reference.",
+  "extractors": {
+    "docx_pptx_xlsx": "defusedxml over source OOXML parts; raw XML text/cached cell values",
+    "xls": "xlrd row_values",
+    "csv": "csv.reader; utf-8-sig, gb18030, cp1252 decoding attempts",
+    "epub": "HTMLParser over HTML/XHTML members sorted by file name",
+    "pdf": "pypdfium2 text extraction"
+  },
+  "limits": [
+    "References are text/structure proxies, not semantic or rendered gold labels.",
+    "PDF references and Into Markdown share PDFium; correlated extraction mistakes are possible.",
+    "OOXML XML order and EPUB file-name order do not guarantee visual reading order or spine order.",
+    "Raw cached spreadsheet values can differ from displayed formatting.",
+    "Some reference extractors cap accumulated character counts; quality scoring excludes Markdown outputs over 32 MiB."
+  ],
+  "generatorScripts": [
+    {
+      "historicalPath": "scripts/benchmark.py",
+      "sha256": "e79b40b753c3bcc85a82770612a4176458826018926899eacbf65b5630d77bb7"
+    },
+    {
+      "historicalPath": "scripts/augment_oracles.py",
+      "sha256": "3d3098c40f8e4c8e39de39769eb3df79221a5d128bdede583bf4be5caa9a824d"
+    }
+  ],
+  "privatePreservation": "Full references are in benchmark-evidence.zip/oracles; original generator scripts are preserved in historical-benchmark-metadata.zip. Restricted reference text is not published."
+}
