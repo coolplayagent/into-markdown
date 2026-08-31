@@ -18,6 +18,8 @@ import re
 import sys
 import tomllib
 
+from ci_workflow_policy import WorkflowPolicyError, validate_workflows
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SUPPORTED = {
@@ -135,6 +137,7 @@ def validate_workflow_split(target: str) -> None:
 def validate(target: str, *, system: str | None = None, machine: str | None = None) -> None:
     require(target in SUPPORTED, f"unsupported PR gate target: {target}")
     validate_host(target, system or platform.system(), machine or platform.machine())
+    validate_workflows(ROOT)
     validate_feature_chain()
     validate_target_authority(target)
     validate_workflow_split(target)
@@ -146,7 +149,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         validate(args.target)
-    except ContractError as error:
+    except (ContractError, WorkflowPolicyError) as error:
         print(f"PR gate contract failed: {error}", file=sys.stderr)
         return 1
     print(f"PR gate contract passed for native {args.target}")
