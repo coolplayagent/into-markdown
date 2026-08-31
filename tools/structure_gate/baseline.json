@@ -464,11 +464,11 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1314,
+      "lines": 1316,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 215
+          "lines": 217
         },
         {
           "symbol": "plan_enrichment",

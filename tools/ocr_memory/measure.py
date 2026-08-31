@@ -42,7 +42,10 @@ def sample_processes(process):
                         if index < len(arguments) and arguments[index].isdigit():
                             row[field] = int(arguments[index])
             rows.append(row)
-        except psutil.Error:
+        # macOS can return SystemError from proc_cmdline when the sampled
+        # worker exits during the syscall. A missing sample is not a product
+        # failure and must not abandon the owned conversion process.
+        except (psutil.Error, SystemError):
             pass
     return rows
 

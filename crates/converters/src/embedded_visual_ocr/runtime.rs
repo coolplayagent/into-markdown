@@ -3,6 +3,43 @@
 use super::*;
 use into_markdown_core::{ErrorPolicy, Inline, ProvenanceKind};
 
+pub(super) fn require_scanned_pages(
+    references: &mut [VisualRef],
+    diagnostics: &[Diagnostic],
+    format: InputFormat,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    if format == InputFormat::Pdf {
+        for diagnostic in diagnostics {
+            context.checkpoint()?;
+            if diagnostic.code == "pdf.scannedPage"
+                && let Some(page) = diagnostic.locator.as_ref().and_then(|locator| locator.page)
+            {
+                // Use the parser's coverage/native-text classification. A page
+                // number or short footer cannot replace the scanned body.
+                for reference in references.iter_mut() {
+                    context.checkpoint()?;
+                    if reference.provenance.locator.page == Some(page) {
+                        reference.optional = false;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn locate_omission(diagnostic: &mut Diagnostic, reference_index: usize) {
+    if diagnostic.code == "ocr.optionalRecognitionMemorySkipped"
+        && let Some(locator) = &mut diagnostic.locator
+        && locator.part.is_none()
+    {
+        // A logical image reference identifies HTML nodes whose parser cannot
+        // supply a source part or byte span. Preserve all available page geometry.
+        locator.part = Some(format!("document/image/{}", reference_index + 1));
+    }
+}
+
 pub(super) fn has_native_body(
     nodes: &[BlockNode],
     image: &Provenance,
@@ -176,6 +213,25 @@ fn notebook_unit(part: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn omitted_images_without_source_parts_have_distinct_logical_references() {
+        let mut diagnostic = Diagnostic {
+            code: "ocr.optionalRecognitionMemorySkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "private allowance".into(),
+            locator: Some(SourceLocator { page: Some(2), ..Default::default() }),
+        };
+        let mut second = diagnostic.clone();
+        locate_omission(&mut diagnostic, 1);
+        locate_omission(&mut second, 2);
+        assert_eq!(diagnostic.locator.as_ref().unwrap().part.as_deref(), Some("document/image/2"));
+        assert_eq!(second.locator.as_ref().unwrap().part.as_deref(), Some("document/image/3"));
+        assert_eq!(second.locator.as_ref().unwrap().page, Some(2));
+        assert_eq!(second.locator.as_ref().unwrap().byte_start, None);
+        locate_omission(&mut second, 3);
+        assert_eq!(second.locator.as_ref().unwrap().part.as_deref(), Some("document/image/3"));
+    }
 
     #[test]
     fn parser_control_markers_cannot_authorize_optional_ocr() {

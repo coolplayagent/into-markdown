@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "apache/poi": [
+      {
+        "url": "https://raw.githubusercontent.com/apache/poi/87cdef57b0f714369c391e625180a59507a24576/legal/LICENSE",
+        "revision": "87cdef57b0f714369c391e625180a59507a24576",
+        "sha256": "6e7c918e5a49f677c1b85a9eb2d035cd85c217fc42af6b4a336964a434001a9c",
+        "bytes": 14416
+      },
+      {
+        "url": "https://raw.githubusercontent.com/apache/poi/87cdef57b0f714369c391e625180a59507a24576/legal/NOTICE",
+        "revision": "87cdef57b0f714369c391e625180a59507a24576",
+        "sha256": "a89ff8b670bcacd3e98ebee64979e0569181c7942e9ad795f4222b25e5637a61",
+        "bytes": 1571
+      }
+    ],
+    "apache/tika": [
+      {
+        "url": "https://raw.githubusercontent.com/apache/tika/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7/LICENSE.txt",
+        "revision": "b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+        "sha256": "ad5f4c4d0d4a04ac264ee55539191e1d36eb5d43ff63bbfc2cf97d541dc7ce8c",
+        "bytes": 32149
+      },
+      {
+        "url": "https://raw.githubusercontent.com/apache/tika/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7/NOTICE.txt",
+        "revision": "b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+        "sha256": "407c430392d86b3eca6df93f62d9c07625f1968f4ed0bd68d817e00da44945aa",
+        "bytes": 848
+      }
+    ],
+    "LibreOffice/core": [
+      {
+        "url": "https://raw.githubusercontent.com/LibreOffice/core/8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9/COPYING",
+        "revision": "8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9",
+        "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+        "bytes": 35147
+      },
+      {
+        "url": "https://raw.githubusercontent.com/LibreOffice/core/8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9/COPYING.LGPL",
+        "revision": "8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9",
+        "sha256": "a853c2ffec17057872340eee242ae4d96cbf2b520ae27d903e1b2fef1a5f9d1c",
+        "bytes": 7639
+      },
+      {
+        "url": "https://raw.githubusercontent.com/LibreOffice/core/8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9/COPYING.MPL",
+        "revision": "8ce6cb1318efd10d9912a0d4f8dccb9b54dc8bb9",
+        "sha256": "1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5",
+        "bytes": 16725
+      }
+    ],
+    "jupyter/nbconvert": [
+      {
+        "url": "https://raw.githubusercontent.com/jupyter/nbconvert/78ed30837a607deab7cf0a12dca072bf3f63417a/LICENSE",
+        "revision": "78ed30837a607deab7cf0a12dca072bf3f63417a",
+        "sha256": "5ca74e4d2eeb9330b0d129c25f874d3544a13413bc62ae8d367819100d095072",
+        "bytes": 1588
+      }
+    ],
+    "w3c/epub-tests": [
+      {
+        "url": "https://raw.githubusercontent.com/w3c/epub-tests/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+        "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+        "sha256": "3b4399ee9710e14b0aa5372a4cfdff3e1eb35201735f9596cec0a3c00e9baddd",
+        "bytes": 428
+      }
+    ]
+  }
+}

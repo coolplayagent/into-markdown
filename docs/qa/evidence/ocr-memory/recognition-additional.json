@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "samples": [
+    {
+      "kind": "doc",
+      "extension": "doc",
+      "url": "https://raw.githubusercontent.com/apache/tika/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWPSAttachment.doc",
+      "repository": "apache/tika",
+      "revision": "b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWPSAttachment.doc",
+      "size": 222720,
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/apache/tika/tree/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+      "redistribution": "external-download-only",
+      "sha256": "f59f67ea70ed5565211e5bfc4deeb75d1481837f38a76bae212a905c32b19591",
+      "embeddedRasterEntries": 1,
+      "archiveEntries": 49,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/doc/f59f67ea70ed5565.doc"
+    },
+    {
+      "kind": "xls",
+      "extension": "xls",
+      "url": "https://raw.githubusercontent.com/apache/tika/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7/tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWPSAttachment.xls",
+      "repository": "apache/tika",
+      "revision": "b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+      "sourcePath": "tika-parsers/tika-parsers-standard/tika-parsers-standard-modules/tika-parser-microsoft-module/src/test/resources/test-documents/testWPSAttachment.xls",
+      "size": 229888,
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/apache/tika/tree/b6103ab2e4a33c836c1e2eb1357e0c8d7c4f8fb7",
+      "redistribution": "external-download-only",
+      "sha256": "d96a564495fe65b273ade75023497a01a992493693896bf49f81c7586dd78507",
+      "embeddedRasterEntries": 1,
+      "archiveEntries": 49,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/xls/d96a564495fe65b2.xls"
+    },
+    {
+      "kind": "ipynb",
+      "extension": "ipynb",
+      "url": "https://raw.githubusercontent.com/jupyter/nbconvert/78ed30837a607deab7cf0a12dca072bf3f63417a/tests/exporters/files/attachment.ipynb",
+      "repository": "jupyter/nbconvert",
+      "revision": "78ed30837a607deab7cf0a12dca072bf3f63417a",
+      "sourcePath": "tests/exporters/files/attachment.ipynb",
+      "size": 45585,
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/jupyter/nbconvert/tree/78ed30837a607deab7cf0a12dca072bf3f63417a",
+      "redistribution": "external-download-only",
+      "sha256": "51ae8d8de92a030cda35422316dd7882dde395f7a329867b43fcc9dcf731568d",
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/ipynb/51ae8d8de92a030c.ipynb"
+    }
+  ],
+  "acquisitionFailures": []
+}

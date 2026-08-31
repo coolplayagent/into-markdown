@@ -29,12 +29,19 @@ def inline_text(value, native):
 def content(result):
     units = defaultdict(list)
     ocr_units = []
+    ocr_inlines = []
 
     def visit(value):
         if isinstance(value, list):
             for item in value:
                 visit(item)
         elif isinstance(value, dict):
+            if value.get('type') == 'sourceText':
+                data = value.get('data', {})
+                origin = data.get('provenance', {})
+                if origin.get('kind') == 'localOcr':
+                    ocr_inlines.append({'locator': origin.get('locator'),
+                        'characters': len(data.get('value', '')), 'sha256': digest(data)})
             if 'block' in value and 'provenance' in value:
                 block, origin = value['block'], value['provenance']
                 data, kind = block.get('data', {}), block.get('type')
@@ -63,7 +70,9 @@ def content(result):
                        'sha256': hashlib.sha256(raw).hexdigest(), 'externalUri': item.get('externalUri')})
     return {'nativeUnits': [{'locator': json.loads(key), 'characters': sum(map(len, texts)),
                              'sha256': digest(texts)} for key, texts in sorted(units.items())],
-            'assetInventory': assets, 'ocrBlocks': ocr_units,
+            # Block and inline views may overlap. Use the runtime's merged
+            # region/character counters for totals, never sum these inventories.
+            'assetInventory': assets, 'ocrBlocks': ocr_units, 'ocrInlines': ocr_inlines,
             'diagnostics': result.get('diagnostics', []),
             'documentSha256': digest(result.get('document')),
             'markdownSha256': hashlib.sha256(result['markdown'].encode()).hexdigest()}

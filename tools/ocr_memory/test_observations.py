@@ -27,6 +27,8 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(observed['nativeUnits'][0]['characters'], len('native'))
         self.assertEqual(len(observed['ocrBlocks']), 1)
         self.assertEqual(observed['ocrBlocks'][0]['locator'], {'page': 2})
+        self.assertEqual(len(observed['ocrInlines']), 1)
+        self.assertEqual(observed['ocrInlines'][0]['characters'], len('inlined OCR'))
         self.assertEqual(observed['assetInventory'][0]['bytes'], 14)
 
 

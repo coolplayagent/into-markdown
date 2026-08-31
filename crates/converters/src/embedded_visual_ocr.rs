@@ -753,6 +753,7 @@ async fn enrich(
     }
     let mut references = Vec::new();
     collect_references(&output.document.blocks, &mut references, input_format, context)?;
+    runtime::require_scanned_pages(&mut references, &output.diagnostics, input_format, context)?;
     if references.is_empty() {
         return Ok(output);
     }
@@ -943,6 +944,7 @@ async fn enrich(
                 }
                 let mut diagnostic = diagnostic.clone();
                 diagnostic.locator = Some(remapped_locator(&reference.provenance.locator));
+                runtime::locate_omission(&mut diagnostic, reference_index);
                 output.diagnostics.push(diagnostic);
             }
         }

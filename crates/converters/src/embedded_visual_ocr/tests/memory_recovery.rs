@@ -211,3 +211,24 @@ fn text_on_another_page_does_not_authorize_shared_asset_omission() {
     assert!(block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).is_err());
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
+
+#[test]
+fn scanned_pdf_page_with_native_footer_still_requires_ocr() {
+    let mut source = mixed_output(true);
+    let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else { unreachable!() };
+    blocks[0].block = Block::Paragraph(vec![Inline::Text { value: "2".into(), marks: vec![] }]);
+    source.diagnostics.push(Diagnostic {
+        code: "pdf.scannedPage".into(),
+        severity: DiagnosticSeverity::Info,
+        message: "parser classified image coverage and native text".into(),
+        locator: Some(SourceLocator { page: Some(2), ..Default::default() }),
+    });
+    let services = Services { ocr: Some(engine(refusal())), ..Default::default() };
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let error =
+        block_on(enrich(source, InputFormat::Pdf, &options, &services, &context)).unwrap_err();
+    assert!(matches!(error, ConversionError::OcrRecognitionMemory { .. }));
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.reserved_temporary_bytes(), 0);
+}

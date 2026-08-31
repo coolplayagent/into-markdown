@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "samples": [
+    {
+      "kind": "rtf",
+      "extension": "rtf",
+      "repository": "microsoft/markitdown",
+      "revision": "9dc0d6579b8739c9d0671ff205e071e3053c7df1",
+      "sourcePath": "packages/markitdown-sample-plugin/tests/test_files/test.rtf",
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/microsoft/markitdown/blob/9dc0d6579b8739c9d0671ff205e071e3053c7df1/LICENSE",
+      "redistribution": "external-download-only",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/9dc0d6579b8739c9d0671ff205e071e3053c7df1/packages/markitdown-sample-plugin/tests/test_files/test.rtf",
+      "sha256": "ddc45f07b1e5e18c93291afd5f4daeda55e704eb4d00843a7c8b530942e29eca",
+      "size": 51180,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/rtf/ddc45f07b1e5e18c.rtf"
+    },
+    {
+      "kind": "xls",
+      "extension": "xls",
+      "repository": "microsoft/markitdown",
+      "revision": "9dc0d6579b8739c9d0671ff205e071e3053c7df1",
+      "sourcePath": "packages/markitdown/tests/test_files/test.xls",
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/microsoft/markitdown/blob/9dc0d6579b8739c9d0671ff205e071e3053c7df1/LICENSE",
+      "redistribution": "external-download-only",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/9dc0d6579b8739c9d0671ff205e071e3053c7df1/packages/markitdown/tests/test_files/test.xls",
+      "sha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "size": 27648,
+      "embeddedRasterEntries": 0,
+      "archiveEntries": 5,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/xls/17a94b6514e8998f.xls"
+    },
+    {
+      "kind": "zip",
+      "extension": "zip",
+      "repository": "microsoft/markitdown",
+      "revision": "9dc0d6579b8739c9d0671ff205e071e3053c7df1",
+      "sourcePath": "packages/markitdown/tests/test_files/test_files.zip",
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/microsoft/markitdown/blob/9dc0d6579b8739c9d0671ff205e071e3053c7df1/LICENSE",
+      "redistribution": "external-download-only",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/9dc0d6579b8739c9d0671ff205e071e3053c7df1/packages/markitdown/tests/test_files/test_files.zip",
+      "sha256": "fdc6402d0c47d7f2891f9bb46a0389024c63b0aa6325596027519bbe2ded7f05",
+      "size": 744377,
+      "embeddedRasterEntries": 1,
+      "archiveEntries": 7,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/zip/fdc6402d0c47d7f2.zip"
+    },
+    {
+      "kind": "ipynb",
+      "extension": "ipynb",
+      "repository": "microsoft/markitdown",
+      "revision": "9dc0d6579b8739c9d0671ff205e071e3053c7df1",
+      "sourcePath": "packages/markitdown/tests/test_files/test_notebook.ipynb",
+      "sourceClass": "upstream-regression",
+      "rightsUrl": "https://github.com/microsoft/markitdown/blob/9dc0d6579b8739c9d0671ff205e071e3053c7df1/LICENSE",
+      "redistribution": "external-download-only",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/9dc0d6579b8739c9d0671ff205e071e3053c7df1/packages/markitdown/tests/test_files/test_notebook.ipynb",
+      "sha256": "60bc053abcbdb10588c9bdc7d59436a8b09604b1e7d5e57a093ba31e555e1505",
+      "size": 1408,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/ipynb/60bc053abcbdb105.ipynb"
+    }
+  ]
+}
