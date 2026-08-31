@@ -29,6 +29,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Check ratcheting production-code structure
+        env:
+          STRUCTURE_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$STRUCTURE_BASE"
+          python3 -m pip install --disable-pip-version-check --only-binary=:all: -r tools/structure_gate/requirements.txt
+          python3 -m unittest discover -s tools/structure_gate/tests -v
+          python3 -m tools.structure_gate check --base-ref "$STRUCTURE_BASE"
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0

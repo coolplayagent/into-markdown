@@ -1,0 +1,2494 @@
+{
+  "version": 1,
+  "limits": {
+    "file": 1000,
+    "function": 100
+  },
+  "files": [
+    {
+      "path": "apps/cli/src/admin.rs",
+      "lines": 1286,
+      "functions": [
+        {
+          "symbol": "apply_inner",
+          "lines": 453
+        },
+        {
+          "symbol": "snapshot_loaded",
+          "lines": 220
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|apply_inner|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|snapshot_loaded|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "apps/cli/src/app.rs",
+      "lines": 5554,
+      "functions": [
+        {
+          "symbol": "recover_pending_cli_plugin_transaction_at",
+          "lines": 165
+        },
+        {
+          "symbol": "run_conversion",
+          "lines": 105
+        },
+        {
+          "symbol": "run_plugins",
+          "lines": 836
+        },
+        {
+          "symbol": "run_providers",
+          "lines": 108
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|run_providers|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "apps/cli/src/config.rs",
+      "lines": 1846,
+      "functions": [
+        {
+          "symbol": "load_with_global",
+          "lines": 103
+        },
+        {
+          "symbol": "resolve_conversion_options",
+          "lines": 116
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/services.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "resolve_process_capability",
+          "lines": 113
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/transaction/config/atomic_replace.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "atomic_replace_config_in_dir#2",
+          "lines": 131
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/transaction/config/read_recover.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "reconcile_windows_config_transaction",
+          "lines": 101
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/transaction/recovery/cleanup.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "remove_transaction_directory",
+          "lines": 108
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/transaction/stage/prepare.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "finish_static_transaction",
+          "lines": 104
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/transaction/stage/streaming.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "create_dynamic_directories",
+          "lines": 104
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/ui.rs",
+      "lines": 2301,
+      "functions": [
+        {
+          "symbol": "download_artifact",
+          "lines": 130
+        },
+        {
+          "symbol": "serve",
+          "lines": 114
+        },
+        {
+          "symbol": "stage_plugin_package",
+          "lines": 157
+        },
+        {
+          "symbol": "start_capability_check",
+          "lines": 153
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "apps/cli/src/web_tasks.rs",
+      "lines": 4567,
+      "functions": [
+        {
+          "symbol": "impl Upload::finish",
+          "lines": 149
+        },
+        {
+          "symbol": "impl WebTaskBackend::artifact",
+          "lines": 134
+        },
+        {
+          "symbol": "impl WebTaskBackend::open_internal",
+          "lines": 110
+        },
+        {
+          "symbol": "impl WebTaskBackend::recover_record",
+          "lines": 108
+        },
+        {
+          "symbol": "impl WebTaskBackend::relabel_speakers",
+          "lines": 133
+        },
+        {
+          "symbol": "publish_result_named",
+          "lines": 166
+        },
+        {
+          "symbol": "run_job",
+          "lines": 208
+        },
+        {
+          "symbol": "run_job::<closure_expression>#2",
+          "lines": 136
+        },
+        {
+          "symbol": "validate_web_task_request",
+          "lines": 119
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|add_artifact|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|add_json_artifact|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl Upload::finish|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl WebTaskBackend::artifact|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl WebTaskBackend::recover_record|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|publish_result_named|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|publish_result|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|run_job|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/ai/src/openai.rs",
+      "lines": 2238,
+      "functions": [
+        {
+          "symbol": "encode_generation_request",
+          "lines": 150
+        },
+        {
+          "symbol": "parse_responses_text",
+          "lines": 105
+        },
+        {
+          "symbol": "read_response",
+          "lines": 144
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|encode_generation_request|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl OpenAiCompatibleClient::request_models|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl OpenAiCompatibleClient::request_one|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl OpenAiCompatibleClient::request|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_generation_response|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_models_response|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|read_response|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/api/src/ocr_service.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "installed_ocr_service_inner",
+          "lines": 104
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/asr/src/diarization.rs",
+      "lines": 1248,
+      "functions": [
+        {
+          "symbol": "impl LocalSpeakerDiarizer::diarize_inner",
+          "lines": 224
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/asr/src/lib.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "collect_window_segments",
+          "lines": 171
+        },
+        {
+          "symbol": "impl WhisperSmallTranscriber::transcribe_sync",
+          "lines": 214
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|collect_window_segments|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|decode_window|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/fields.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "finish_paragraph",
+          "lines": 179
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|append_word_text|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|finish_paragraph|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|finish_paragraph|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/media.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate_png",
+          "lines": 127
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate_png_data|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|validate_png|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/package.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl Package::open",
+          "lines": 133
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Package::open|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/styles_numbering.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_docx",
+          "lines": 230
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert_docx|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|referenced_annotations|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/tables.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "normalize_vertical_merges",
+          "lines": 102
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/docx/word.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_word_part",
+          "lines": 652
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_word_part|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_word_part|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/docx/xml.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "preflight_xml",
+          "lines": 172
+        },
+        {
+          "symbol": "validate_xml_element",
+          "lines": 177
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|preflight_xml|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_word_content_hierarchy|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_xml_element|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/embedded_visual_ocr.rs",
+      "lines": 1342,
+      "functions": [
+        {
+          "symbol": "enrich",
+          "lines": 256
+        },
+        {
+          "symbol": "plan_enrichment",
+          "lines": 236
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|enrich|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|plan_enrichment|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/container.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "rootfile",
+          "lines": 114
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|rootfile|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/encryption.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse",
+          "lines": 118
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/image.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate",
+          "lines": 107
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/merge.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "assemble",
+          "lines": 174
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|assemble|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|assemble|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/navigation.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_nav",
+          "lines": 240
+        },
+        {
+          "symbol": "parse_ncx",
+          "lines": 145
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_nav|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|parse_ncx|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/package.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse",
+          "lines": 321
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/epub/spine.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert",
+          "lines": 106
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/epub/xhtml.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "prepare",
+          "lines": 225
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|prepare|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/feed.rs",
+      "lines": 2776,
+      "functions": [
+        {
+          "symbol": "append_content",
+          "lines": 132
+        },
+        {
+          "symbol": "build_output",
+          "lines": 278
+        },
+        {
+          "symbol": "close_frame",
+          "lines": 219
+        },
+        {
+          "symbol": "parse_feed",
+          "lines": 298
+        },
+        {
+          "symbol": "serialize_xhtml_inner",
+          "lines": 151
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|append_content|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|append_content|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|build_output|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|close_frame|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|close_frame|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|parse_feed|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|serialize_xhtml_inner|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|serialize_xhtml|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/html.rs",
+      "lines": 3160,
+      "functions": [
+        {
+          "symbol": "impl Builder<'a,'budget>::build_data_image",
+          "lines": 123
+        },
+        {
+          "symbol": "impl Builder<'a,'budget>::inline_node",
+          "lines": 119
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|finish_html_dom|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl Builder<'a,'budget>::build_data_image|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl Builder<'a,'budget>::inline_node|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl Builder<'a,'budget>::new|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/image_converter/envelope/bmp.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate",
+          "lines": 197
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/image_converter/envelope/png.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate",
+          "lines": 102
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/image_converter/envelope/tiff.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate",
+          "lines": 149
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/image_converter/mod.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_image",
+          "lines": 163
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert_image|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/image_converter/ocr.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "recognize_inner",
+          "lines": 148
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|recognize_for_input|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|recognize_inner|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|recognize_inner|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/lib.rs",
+      "lines": 2785,
+      "functions": [
+        {
+          "symbol": "structured_text_candidate",
+          "lines": 152
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|cfb_directory_stream_names|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|structured_text_candidate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/markdown.rs",
+      "lines": 1383,
+      "functions": [
+        {
+          "symbol": "impl Builder<'a>::close",
+          "lines": 294
+        },
+        {
+          "symbol": "impl Builder<'a>::start",
+          "lines": 101
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Builder<'a>::close|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl Builder<'a>::start|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/media.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl Converter for MediaConverter::convert",
+          "lines": 156
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Converter for MediaConverter::convert|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/msg/attachments.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_all",
+          "lines": 101
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/msg/merge.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "assemble",
+          "lines": 155
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|assemble|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/notebook.rs",
+      "lines": 2053,
+      "functions": [
+        {
+          "symbol": "valid_jpeg",
+          "lines": 122
+        },
+        {
+          "symbol": "valid_webp",
+          "lines": 125
+        },
+        {
+          "symbol": "validate_decodable_image",
+          "lines": 109
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|valid_jpeg|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|valid_webp|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/geometry.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|transform_bounds|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/mod.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_odf",
+          "lines": 105
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/odf/package.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl Package::load_reachable_images",
+          "lines": 102
+        },
+        {
+          "symbol": "impl Package::open",
+          "lines": 229
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Package::open|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/profile.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "allowed_profile_attribute",
+          "lines": 128
+        },
+        {
+          "symbol": "allowed_profile_element",
+          "lines": 163
+        },
+        {
+          "symbol": "validate_profile_parent",
+          "lines": 179
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|allowed_profile_attribute|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|allowed_profile_element|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_profile_parent|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/raw_zip.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate_zip_directory_layout",
+          "lines": 258
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate_zip_directory_layout|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/semantic.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_blocks",
+          "lines": 111
+        },
+        {
+          "symbol": "parse_list",
+          "lines": 146
+        },
+        {
+          "symbol": "parse_table",
+          "lines": 136
+        },
+        {
+          "symbol": "parse_table_row",
+          "lines": 210
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_blocks|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_drawing_transformed|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_drawing|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_list|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_list|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|parse_table_row|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_table_row|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|parse_table|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|parse_table|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/styles.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "collect_styles",
+          "lines": 192
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|collect_styles|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/text.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|parse_inlines|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/odf/xml.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_xml",
+          "lines": 116
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_xml|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/pdf/assets.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "encode_bmp",
+          "lines": 125
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|encode_bmp|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/pdf/pages.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl PdfOutput::extract_page",
+          "lines": 342
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl PdfOutput::extract_page|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/charts_notes.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_chart_text",
+          "lines": 133
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_chart_text|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/geometry.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "sort_shapes_for_reading",
+          "lines": 125
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|sort_shapes_for_reading|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/mod.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_presentation",
+          "lines": 305
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert_presentation|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/opc_package.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl Package<'a>::open",
+          "lines": 163
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Package<'a>::open|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/output.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "shapes_to_blocks",
+          "lines": 299
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|build_list_level|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|push_omitted_image|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|shapes_to_blocks|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|shapes_to_blocks|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/raw_zip.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "zip_central_plan",
+          "lines": 101
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|zip_central_plan|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/shape_elements.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "apply_shape_element",
+          "lines": 220
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|apply_shape_element|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/slides.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_shapes",
+          "lines": 599
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_shapes|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/styles.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_master_text_styles",
+          "lines": 238
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_master_text_styles|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/tables.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "table_block",
+          "lines": 126
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|table_block|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|table_block|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/presentation/xml.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "preflight_xml",
+          "lines": 260
+        },
+        {
+          "symbol": "validate_interpreted_element",
+          "lines": 285
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|preflight_xml|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_interpreted_element|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/remote/mediawiki.rs",
+      "lines": 1261,
+      "functions": [
+        {
+          "symbol": "impl JsonShapeScanner<'_>::scan",
+          "lines": 135
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl JsonShapeScanner<'_>::scan|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/rtf/control.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl Parser<'_>::control_word",
+          "lines": 195
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Parser<'_>::control_word|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/structured.rs",
+      "lines": 1695,
+      "functions": [
+        {
+          "symbol": "convert_json",
+          "lines": 178
+        },
+        {
+          "symbol": "convert_xml",
+          "lines": 263
+        },
+        {
+          "symbol": "emit_xml_attributes",
+          "lines": 108
+        },
+        {
+          "symbol": "validate_xml_declaration",
+          "lines": 101
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert_json|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|convert_xml|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|emit_xml_attributes|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/text.rs",
+      "lines": 1632,
+      "functions": [
+        {
+          "symbol": "decode_legacy",
+          "lines": 109
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|finish_legacy_decoder|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/budget.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "extras_retained_memory",
+          "lines": 104
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/workbook/calamine_adapter.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_reader",
+          "lines": 346
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert_reader|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/comments.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_binary_comments",
+          "lines": 164
+        },
+        {
+          "symbol": "parse_comments",
+          "lines": 135
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_binary_comments|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|parse_comments|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/drawing.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_drawing_references",
+          "lines": 307
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_drawing_references|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/hyperlinks.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|safe_hyperlink_target|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/metadata.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_sheet_cell_metadata",
+          "lines": 170
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_sheet_cell_metadata|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/mod.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "extract_sheet_extras",
+          "lines": 214
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|extract_sheet_extras|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/extras/objects.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "extract_drawing_objects",
+          "lines": 128
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|append_chart_title|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|extract_drawing_objects|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|extract_drawing_objects|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/opc/content_types.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_content_types",
+          "lines": 209
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_content_types|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/opc/relationships.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "parse_relationships",
+          "lines": 141
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|parse_relationships|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/orchestrator.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert_workbook",
+          "lines": 105
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/workbook/preflight.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "preflight_package",
+          "lines": 726
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|preflight_package|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/xlsb/formulas.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "validate_xlsb_formula_tokens",
+          "lines": 170
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|validate_xlsb_formula_tokens|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/xlsb/sheet.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "scan_xlsb_sheet",
+          "lines": 246
+        },
+        {
+          "symbol": "validate_xlsb_cell_record",
+          "lines": 105
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|scan_xlsb_sheet|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/xlsb/workbook.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "scan_binary_workbook_surface",
+          "lines": 127
+        },
+        {
+          "symbol": "scan_binary_workbook_surface::<closure_expression>",
+          "lines": 109
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|scan_binary_workbook_surface|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/converters/src/workbook/xlsx/shared_strings.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "read_selected",
+          "lines": 104
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/converters/src/zip/raw_central.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|validate_local|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/core/src/dto.rs",
+      "lines": 2292,
+      "functions": [
+        {
+          "symbol": "impl BundleManifestDto::validate",
+          "lines": 132
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl BundleManifestDto::validate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/core/src/execution.rs",
+      "lines": 1196,
+      "functions": [],
+      "allowances": []
+    },
+    {
+      "path": "crates/core/src/ir.rs",
+      "lines": 1702,
+      "functions": [
+        {
+          "symbol": "preflight_document_value",
+          "lines": 179
+        },
+        {
+          "symbol": "validate_block",
+          "lines": 149
+        },
+        {
+          "symbol": "validate_locator",
+          "lines": 108
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|preflight_document_value|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_block|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_locator|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/core/src/spi.rs",
+      "lines": 1625,
+      "functions": [
+        {
+          "symbol": "estimate_validation_working_set",
+          "lines": 233
+        },
+        {
+          "symbol": "estimate_validation_working_set::visit_nodes",
+          "lines": 114
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|estimate_validation_working_set|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl ConversionResult::from_accounted_parts|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl ConversionResult::from_recovered_accounted_parts|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/engine/src/recovery.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "convert",
+          "lines": 292
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|convert|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/engine/src/recovery/store.rs",
+      "lines": 1384,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|impl RecoveryStore::commit_inner|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl RecoveryStore::commit|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/ffmpeg/src/lib.rs",
+      "lines": 1428,
+      "functions": [
+        {
+          "symbol": "impl FfmpegRuntime::load_inner",
+          "lines": 106
+        },
+        {
+          "symbol": "impl FfmpegRuntime::normalize_with_target",
+          "lines": 283
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl FfmpegRuntime::normalize_with_target|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/http-transport/src/body.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "read_response",
+          "lines": 106
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/http-transport/src/lib.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|impl HttpClient::request_once_to_writer|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|impl HttpClient::request_once|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/layout-quality/src/quality_metrics.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "compare_node",
+          "lines": 101
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/ocr/src/detection.rs",
+      "lines": 1357,
+      "functions": [
+        {
+          "symbol": "postprocess",
+          "lines": 114
+        },
+        {
+          "symbol": "scan_contours",
+          "lines": 138
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/ocr/src/lib.rs",
+      "lines": 2469,
+      "functions": [
+        {
+          "symbol": "impl ModelManager::install_inner",
+          "lines": 105
+        },
+        {
+          "symbol": "impl ModelManifest::validate_against",
+          "lines": 189
+        },
+        {
+          "symbol": "validate_native_downloads",
+          "lines": 107
+        }
+      ],
+      "allowances": [
+        {
+          "key": "file|<file>|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/ocr/src/merge/budget.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "document_inventory",
+          "lines": 116
+        },
+        {
+          "symbol": "impl MergeBudget<'a>::preflight",
+          "lines": 184
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/ocr/src/merge/dedup.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "collect_native_spans",
+          "lines": 112
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/ocr/src/model_archive.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "extract_tar",
+          "lines": 115
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|copy_tar_member|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/ocr/src/recognition/mod.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "impl PpOcrTextRecognizer::recognize",
+          "lines": 113
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/ocr/src/runtime.rs",
+      "lines": 1361,
+      "functions": [],
+      "allowances": []
+    },
+    {
+      "path": "crates/onnxruntime/src/lib.rs",
+      "lines": 1129,
+      "functions": [],
+      "allowances": []
+    },
+    {
+      "path": "crates/onnxruntime/src/worker.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "worker_entry_inner",
+          "lines": 132
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|worker_entry_inner|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/pdf-layout/src/semantics.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "blocks",
+          "lines": 117
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|blocks|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/pdf-layout/src/tables.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|materialize_row|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|materialize_window|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/pdfium/src/native.rs",
+      "lines": 2205,
+      "functions": [
+        {
+          "symbol": "impl Backend for Native::characters",
+          "lines": 123
+        },
+        {
+          "symbol": "impl Backend for Native::link_allocation_bytes",
+          "lines": 137
+        },
+        {
+          "symbol": "impl Backend for Native::links",
+          "lines": 176
+        },
+        {
+          "symbol": "validated_snapshot_with_hook",
+          "lines": 116
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl Backend for Native::characters|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl Backend for Native::link_allocation_bytes|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl Backend for Native::links|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validated_snapshot_with_hook|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/plugin-manager/src/lib.rs",
+      "lines": 3143,
+      "functions": [
+        {
+          "symbol": "impl PluginManager::install_archive_locked",
+          "lines": 133
+        },
+        {
+          "symbol": "impl PluginManager::recover_unlocked",
+          "lines": 127
+        }
+      ],
+      "allowances": [
+        {
+          "key": "file|<file>|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/plugin-wasi/src/lib.rs",
+      "lines": 1514,
+      "functions": [
+        {
+          "symbol": "impl WasiPluginRuntime::run_inner",
+          "lines": 107
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/process-plugin/src/lib.rs",
+      "lines": 1422,
+      "functions": [
+        {
+          "symbol": "copy_runtime_tree",
+          "lines": 120
+        },
+        {
+          "symbol": "impl ProcessPlugin::execute_raw",
+          "lines": 456
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|copy_runtime_tree|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl ProcessPlugin::execute_raw|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|impl ProcessPlugin::execute|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/process-plugin/src/sandbox/unix.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "linux::impl Seccomp::prepare",
+          "lines": 114
+        },
+        {
+          "symbol": "macos::impl Seatbelt::prepare",
+          "lines": 122
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "crates/process-plugin/src/sandbox/windows.rs",
+      "lines": 1347,
+      "functions": [],
+      "allowances": []
+    },
+    {
+      "path": "crates/process-plugin/src/worker.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "serve_raw_with_writer",
+          "lines": 128
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|serve_raw_with_writer|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/render-markdown/src/lib.rs",
+      "lines": 1871,
+      "functions": [
+        {
+          "symbol": "plan_assets",
+          "lines": 131
+        },
+        {
+          "symbol": "planned_render_peak",
+          "lines": 306
+        },
+        {
+          "symbol": "planned_render_peak::nodes",
+          "lines": 170
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|impl RenderContext<'_>::render_block|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|plan_assets|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|planned_render_peak|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "crates/task-store/src/lib.rs",
+      "lines": 2311,
+      "functions": [
+        {
+          "symbol": "migrate",
+          "lines": 124
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|migrate|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/asset-update/src/lib.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "platform::update_assets_with_hook",
+          "lines": 118
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|platform::update_assets_with_hook|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/docx-corpus-evidence.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "classify",
+          "lines": 205
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/installed-smoke/src/cli_cases.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|optional_conversion|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/installed-smoke/src/rust_consumer.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "compile_and_run",
+          "lines": 103
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/legacy_office_perf/corpus.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "xls_corpus_report",
+          "lines": 220
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/legacy_office_perf/oracle.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "verify_xls_oracle",
+          "lines": 103
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/license-check/src/lib.rs",
+      "lines": 3989,
+      "functions": [
+        {
+          "symbol": "pdfium_expected_targets",
+          "lines": 115
+        },
+        {
+          "symbol": "validate_npm_spdx",
+          "lines": 174
+        },
+        {
+          "symbol": "validate_ocr_quality",
+          "lines": 101
+        },
+        {
+          "symbol": "validate_runtime_bundle",
+          "lines": 107
+        },
+        {
+          "symbol": "validate_wasmtime_source",
+          "lines": 137
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|detector_authority_is_exact|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|pdfium_expected_targets|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_npm_spdx|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|validate_wasmtime_source|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/license-check/src/native.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|append_download_integrity|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|validate_runtime|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/license-check/src/release.rs",
+      "lines": 1056,
+      "functions": [],
+      "allowances": []
+    },
+    {
+      "path": "tools/license-check/src/rust.rs",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "load_selected_roots",
+          "lines": 168
+        }
+      ],
+      "allowances": [
+        {
+          "key": "item|load_for_roots|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|load_selected_roots|too_many_lines",
+          "count": 1
+        },
+        {
+          "key": "item|load|too_many_lines",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/license-check/src/sbom.rs",
+      "lines": null,
+      "functions": [],
+      "allowances": [
+        {
+          "key": "item|render_artifact_sbom|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|render_component_sbom|too_many_arguments",
+          "count": 1
+        },
+        {
+          "key": "item|render_sources|too_many_arguments",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "tools/platform-release/platform_acceptance.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "main",
+          "lines": 145
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/portable-release/assemble.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "_validate_speech_manifest",
+          "lines": 129
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/portable-release/native_acceptance.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "audit_archive",
+          "lines": 104
+        },
+        {
+          "symbol": "run_e2e",
+          "lines": 284
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/portable-release/post_release_e2e.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "run_platform",
+          "lines": 333
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "tools/portable-release/release_artifacts.py",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "extract_single_core",
+          "lines": 104
+        },
+        {
+          "symbol": "extract_skill_binary",
+          "lines": 102
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "web/console/src/api.ts",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "createApiClient",
+          "lines": 147
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "web/console/src/meeting-page.tsx",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "MeetingPage",
+          "lines": 402
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "web/console/src/result-page.tsx",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "ResultDialog",
+          "lines": 135
+        }
+      ],
+      "allowances": []
+    },
+    {
+      "path": "web/console/src/workbench-page.tsx",
+      "lines": null,
+      "functions": [
+        {
+          "symbol": "WorkbenchPage",
+          "lines": 193
+        }
+      ],
+      "allowances": []
+    }
+  ]
+}
