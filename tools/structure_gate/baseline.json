@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5434,
+      "lines": 5156,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -818,11 +818,11 @@
     },
     {
       "path": "crates/converters/src/markdown.rs",
-      "lines": 1383,
+      "lines": 1379,
       "functions": [
         {
           "symbol": "impl Builder<'a>::close",
-          "lines": 294
+          "lines": 282
         },
         {
           "symbol": "impl Builder<'a>::start",
@@ -1174,7 +1174,7 @@
       "functions": [
         {
           "symbol": "convert_presentation",
-          "lines": 305
+          "lines": 293
         }
       ],
       "allowances": [
@@ -2134,7 +2134,7 @@
     },
     {
       "path": "crates/render-markdown/src/lib.rs",
-      "lines": 1871,
+      "lines": 1751,
       "functions": [
         {
           "symbol": "plan_assets",
@@ -2142,11 +2142,11 @@
         },
         {
           "symbol": "planned_render_peak",
-          "lines": 306
+          "lines": 303
         },
         {
           "symbol": "planned_render_peak::nodes",
-          "lines": 170
+          "lines": 165
         }
       ],
       "allowances": [

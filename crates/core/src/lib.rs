@@ -21,6 +21,7 @@ mod result_policy;
 pub use resource_usage::{
     BatchOcrUsageDto, BatchResourceUsageDto, MemoryBudgetSnapshotDto, OcrRuntimeUsageDto,
 };
+pub mod speaker_notes;
 mod spi;
 mod stream;
 mod summary;

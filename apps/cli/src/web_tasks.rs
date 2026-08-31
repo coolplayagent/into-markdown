@@ -6498,13 +6498,13 @@ mod tests {
         let mut upload = backend.begin_upload("boundary.txt", None).unwrap();
         upload.write_chunk(b"terminal metadata boundary").unwrap();
         let task = upload.finish().unwrap();
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         let filler = backend
             .owner
             .shared
             .root_handle
             .create_regular_private(std::ffi::OsStr::new("quota-boundary"))
             .unwrap();
+        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         filler.set_len(MAX_DATA_BYTES - before).unwrap();
         filler.sync_all().unwrap();
         reconcile_managed_usage(&backend.owner.shared).unwrap();
@@ -6892,13 +6892,13 @@ mod tests {
             upload.write_chunk(b"bounded metadata settlement").unwrap();
             ids.push(upload.finish().unwrap().id);
         }
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         let filler = backend
             .owner
             .shared
             .root_handle
             .create_regular_private(std::ffi::OsStr::new("metadata-boundary"))
             .unwrap();
+        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         filler.set_len(MAX_DATA_BYTES - before).unwrap();
         filler.sync_all().unwrap();
         reconcile_managed_usage(&backend.owner.shared).unwrap();
@@ -6941,13 +6941,13 @@ mod tests {
             upload.write_chunk(b"must remain recoverable").unwrap();
             ids.push(upload.finish().unwrap().id);
         }
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         let filler = backend
             .owner
             .shared
             .root_handle
             .create_regular_private(std::ffi::OsStr::new("metadata-exhausted"))
             .unwrap();
+        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
         filler.set_len(MAX_GLOBAL_BYTES - STORE_MUTATION_RESERVATION + 1 - before).unwrap();
         filler.sync_all().unwrap();
         reconcile_managed_usage(&backend.owner.shared).unwrap();

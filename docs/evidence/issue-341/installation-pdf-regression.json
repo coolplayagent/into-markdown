@@ -1,0 +1,145 @@
+{
+  "binarySha256": "9585babf8745080eecf498df8d056f11494fb23a871195e95970b4b984a174f9",
+  "cases": [
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--output",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/mixed.md"
+      ],
+      "exitCode": 0,
+      "markdownBytes": 242,
+      "markdownSha256": "3f3574740c8df6727c44e69aa91bfa7bd8c8bea69683c5df6ce615bf97b42cc5",
+      "name": "mixed",
+      "pages": 1,
+      "seconds": 1.627
+    },
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--error-policy",
+        "strict",
+        "--output",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/strict.md"
+      ],
+      "exitCode": 3,
+      "name": "strict",
+      "seconds": 1.118
+    },
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--max-pdf-page-objects",
+        "1",
+        "--output",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/page-budget.md"
+      ],
+      "exitCode": 5,
+      "name": "page-budget",
+      "seconds": 1.542
+    },
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--max-pdf-total-objects",
+        "1",
+        "--output",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/total-budget.md"
+      ],
+      "exitCode": 5,
+      "name": "total-budget",
+      "seconds": 1.107
+    },
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--max-pdf-page-objects",
+        "2",
+        "--max-pdf-total-objects",
+        "2",
+        "--output",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/exact-budget.md"
+      ],
+      "exitCode": 0,
+      "markdownBytes": 242,
+      "markdownSha256": "3f3574740c8df6727c44e69aa91bfa7bd8c8bea69683c5df6ce615bf97b42cc5",
+      "name": "exact-budget",
+      "pages": 1,
+      "seconds": 1.098
+    },
+    {
+      "arguments": [
+        "--no-config",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/中文 链接.pdf",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/第二个.pdf",
+        "--ocr",
+        "off",
+        "--log-format",
+        "json",
+        "--conflict",
+        "overwrite",
+        "--timeout-ms",
+        "600000",
+        "--output-dir",
+        "/private/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-pdf-acceptance-hq41tbnt/results/batch"
+      ],
+      "exitCode": 0,
+      "name": "batch",
+      "seconds": 1.577
+    }
+  ],
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "status": "passed",
+  "version": {
+    "name": "into-md",
+    "rustEdition": "2024",
+    "targetArch": "aarch64",
+    "targetOs": "macos",
+    "version": "0.0.4"
+  }
+}

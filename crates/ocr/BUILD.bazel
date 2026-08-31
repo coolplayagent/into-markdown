@@ -23,6 +23,27 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
 )
 
+# Feature-isolated dependency used by the installed OCR service quality assembly.
+rust_library(
+    name = "ocr_authenticated_read_only_snapshot",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = [
+        "//models:manifest.json",
+        "//models:ppocrv6-tiny-detector-authority.json",
+        "//models:ppocrv6-tiny-detector-onnx-authority.json",
+        "//models:ppocrv6-tiny-recognizer-authority.json",
+        "//models:ppocrv6_tiny_dict.txt",
+        "//third_party/licenses:downloads.json",
+        "//third_party/onnxruntime:manifest.json",
+    ],
+    crate_name = "into_markdown_ocr",
+    edition = "2024",
+    crate_features = ["authenticated-read-only-snapshot"],
+    tags = ["manual"],
+    deps = ["//crates/core"] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
 rust_test(
     name = "ocr_test",
     crate = ":ocr",

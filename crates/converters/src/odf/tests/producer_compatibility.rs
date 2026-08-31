@@ -16,9 +16,7 @@ fn producer_hints_fonts_and_empty_scripts_preserve_body_and_marks() {
     let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
     output.document.validate().unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-    assert!(
-        markdown.contains("before") && markdown.contains("after") && markdown.contains("<strong>")
-    );
+    assert!(markdown.contains("before") && markdown.contains("after") && markdown.contains("**"));
     assert!(output.diagnostics.iter().any(|d| d.code == "odf.layoutMetadata"));
 }
 

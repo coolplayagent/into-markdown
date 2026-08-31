@@ -307,7 +307,7 @@ mod tests {
         let output = convert_docx(&bytes, &ConversionOptions::default(), &context()).unwrap();
         let markdown =
             render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-        assert!(markdown.contains("# <strong>Title</strong>"), "{markdown}");
+        assert!(markdown.contains("# **Title**"), "{markdown}");
         assert!(markdown.contains("[site](<https://example.com>)"));
         assert!(markdown.contains("5."));
         assert!(markdown.contains("[^fn-32]"));

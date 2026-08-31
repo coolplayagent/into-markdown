@@ -28,6 +28,7 @@ const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 const testGroups = {
   preview: new Set([
     "Markdown preview never creates executable or resource-loading DOM",
+    "Markdown native styles preserve nested text, escapes, and inert resources",
     "result dialog provides reading and source views with a closed details drawer",
     "failed results keep the document area stable and expose retry beside the failure",
     "meeting speaker names rerender artifacts through generation CAS without rerunning transcription",
@@ -438,6 +439,22 @@ test("history delete preserves bounded server errors and normalizes network fail
     status: 500, headers: { "content-type": "application/json" },
   }));
   await assert.rejects(oversized.deleteTask(id), (error: unknown) => error instanceof ApiError && error.code === "responseTooLarge");
+});
+
+test("Markdown native styles preserve nested text, escapes, and inert resources", async () => {
+  const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
+  root.render(createElement(SafeMarkdownPreview, { source: "**bold** *italic* ~~deleted~~ ***both*** **outer *inner* tail** *outer **deep** tail* **bold *end*** *italic **end*** ~~**strike**~~ <strong><strong>same</strong> tail</strong> `*literal*` &amp; **中文**\\*plain\\*<br>end\n![图](<目录/图%20.png>)\n<img src='https://evil.invalid/x'>" }));
+  await waitFor(() => window.document.querySelectorAll(".markdown-preview strong").length === 10);
+  assert.equal(window.document.querySelector("strong em")?.textContent, "both");
+  assert.equal(window.document.querySelector("del")?.textContent, "deleted");
+  assert.equal(window.document.querySelector("em strong")?.textContent, "deep");
+  assert.ok(Array.from(window.document.querySelectorAll("strong em")).some((element) => element.textContent === "end"));
+  assert.equal(window.document.querySelector("del strong")?.textContent, "strike");
+  assert.equal(window.document.querySelector("strong strong")?.parentElement?.textContent, "same tail");
+  assert.equal(window.document.querySelector("code")?.textContent, "*literal*");
+  assert.ok(window.document.body.textContent.includes("& 中文*plain*"));
+  assert.equal(window.document.querySelectorAll(".markdown-preview br").length, 1);
+  assert.equal(window.document.querySelector("img,a,script,iframe"), null);
 });
 
 test("Markdown preview never creates executable or resource-loading DOM", async () => {

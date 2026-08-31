@@ -3,7 +3,7 @@ use base64::Engine as _;
 use into_markdown_core::{
     ErrorPolicy, ExecutionOptions, FormatDetector, FormatHint, InputRef, SourceMetadata,
 };
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{fmt::Write as _, io::Write as _, sync::Arc, time::Duration};
 
 const MODEL: &str = r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0" value="Layer"/><mxCell id="g" parent="1" vertex="1" value="Group" style="group"/><UserObject id="a" label="&lt;b&gt;中文&lt;/b&gt;&lt;br&gt;开始"><mxCell vertex="1" parent="g" style="html=1"/></UserObject><mxCell id="b" parent="g" vertex="1"/><mxCell id="e" edge="1" parent="1" source="a" target="b" value="go"/><mxCell id="el" vertex="1" parent="e" value="附加标签"/></root></mxGraphModel>"#;
 
@@ -24,10 +24,13 @@ fn markdown(output: &ConverterOutput) -> String {
 }
 
 fn payload(model: &str) -> String {
-    let encoded: String = model.as_bytes().iter().map(|b| format!("%{b:02X}")).collect();
+    let mut percent_encoded = String::new();
+    for byte in model.as_bytes() {
+        write!(percent_encoded, "%{byte:02X}").unwrap();
+    }
     let mut encoder =
         flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
-    encoder.write_all(encoded.as_bytes()).unwrap();
+    encoder.write_all(percent_encoded.as_bytes()).unwrap();
     base64::engine::general_purpose::STANDARD.encode(encoder.finish().unwrap())
 }
 fn wrapped(model: &str) -> String {
@@ -67,9 +70,10 @@ fn encodings_have_identical_semantics_and_original_source_locations() {
 
 #[test]
 fn all_pages_and_more_than_forty_cells_are_preserved() {
-    let cells: String = (0..60)
-        .map(|i| format!(r#"<mxCell id="n{i}" parent="1" vertex="1" value="node-{i}"/>"#))
-        .collect();
+    let mut cells = String::new();
+    for i in 0..60 {
+        write!(cells, r#"<mxCell id="n{i}" parent="1" vertex="1" value="node-{i}"/>"#).unwrap();
+    }
     let model = format!(
         r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/>{cells}</root></mxGraphModel>"#
     );
@@ -86,8 +90,8 @@ fn all_pages_and_more_than_forty_cells_are_preserved() {
 #[test]
 fn relationship_cycles_self_edges_parallel_edges_and_free_points_survive_strict() {
     let input = MODEL.replace("</root>", r#"<mxCell id="self" edge="1" source="a" target="a"/><mxCell id="back" edge="1" source="b" target="a"/><mxCell id="parallel" edge="1" source="a" target="b"/><mxCell id="free" edge="1"><mxGeometry><mxPoint x="12.5" y="-3" as="sourcePoint"/></mxGeometry></mxCell></root>"#);
-    let mut options = ConversionOptions::default();
-    options.error_policy = ErrorPolicy::Strict;
+    let options =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
     let result = run(&input, &options).unwrap();
     let md = markdown(&result);
     for text in ["self [", "back [", "parallel [", "free endpoint (12.5, -3)"] {
@@ -168,8 +172,8 @@ fn safety_and_resource_errors_never_become_best_effort_success() {
     ] {
         options = ConversionOptions::default();
         match kind {
-            "pages" => options.limits.max_pages = max as u32,
-            "depth" => options.limits.max_nesting_depth = max as u16,
+            "pages" => options.limits.max_pages = u32::try_from(max).unwrap(),
+            "depth" => options.limits.max_nesting_depth = u16::try_from(max).unwrap(),
             "memory" => options.limits.max_memory_bytes = max,
             "field" => options.limits.max_field_bytes = max,
             "decompressed" => options.limits.max_decompressed_bytes = max,
@@ -200,10 +204,7 @@ fn timeout_and_cancellation_release_reservations() {
         ExecutionOptions { timeout: Some(Duration::ZERO), ..ExecutionOptions::default() },
         options.limits.clone(),
     );
-    assert!(matches!(
-        convert(MODEL.as_bytes(), &options, &ctx),
-        Err(ConversionError::Timeout { .. })
-    ));
+    assert!(matches!(convert(MODEL.as_bytes(), &options, &ctx), Err(ConversionError::Timeout)));
     assert_eq!(ctx.reserved_memory_bytes(), 0);
 }
 
@@ -237,10 +238,8 @@ fn detection_distinguishes_xml_and_drawio_roots() {
 fn deep_groups_expand_with_full_paths_within_ir_depth() {
     let mut cells = String::from(r#"<mxCell id="0"/><mxCell id="1" parent="0"/>"#);
     for i in 2..40 {
-        cells.push_str(&format!(
-            r#"<mxCell id="{i}" parent="{}" vertex="1" value="group-{i}"/>"#,
-            i - 1
-        ));
+        write!(cells, r#"<mxCell id="{i}" parent="{}" vertex="1" value="group-{i}"/>"#, i - 1)
+            .unwrap();
     }
     let result = run(
         &format!("<mxGraphModel><root>{cells}</root></mxGraphModel>"),
@@ -272,8 +271,8 @@ fn child_label_descendants_and_parent_candidates_keep_source_identities() {
 #[test]
 fn html_labels_placeholders_entities_and_safe_references_remain_offline() {
     let input = r#"<mxGraphModel><root><object id="a" label="&lt;b&gt;&lt;strong&gt;%name%&lt;/strong&gt;&lt;/b&gt;&lt;br&gt;&amp;amp; &lt;a href='https://example.invalid/doc'&gt;Doc&lt;/a&gt;&lt;img src='https://example.invalid/image.png' alt='图'&gt;&lt;script&gt;EXECUTE&lt;/script&gt;" placeholders="1" name="中文" link="javascript:alert(1)"><mxCell vertex="1" style="html=1"/></object><mxCell id="b" vertex="1" value="A&#10;B &amp; C"/></root></mxGraphModel>"#;
-    let mut options = ConversionOptions::default();
-    options.error_policy = ErrorPolicy::Strict;
+    let options =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
     let result = run(input, &options).unwrap();
     result.document.validate().unwrap();
     let md = markdown(&result);
@@ -308,34 +307,35 @@ fn malformed_page_models_recover_in_source_order() {
     }
 }
 
+fn locators(value: &serde_json::Value, found: &mut Vec<serde_json::Value>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(loc) = map.get("locator") {
+                found.push(loc.clone());
+            }
+            for child in map.values() {
+                locators(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                locators(child, found);
+            }
+        }
+        _ => (),
+    }
+}
+
 #[test]
 fn original_byte_spans_identify_cells_and_encoded_payloads() {
     let input = wrapped(MODEL);
     let result = run(&input, &ConversionOptions::default()).unwrap();
     let dto = serde_json::to_value(&result.document).unwrap();
-    fn locators(value: &serde_json::Value, found: &mut Vec<serde_json::Value>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                if let Some(loc) = map.get("locator") {
-                    found.push(loc.clone());
-                }
-                for child in map.values() {
-                    locators(child, found);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for child in items {
-                    locators(child, found);
-                }
-            }
-            _ => (),
-        }
-    }
     let mut found = Vec::new();
     locators(&dto, &mut found);
     let loc = found.iter().find(|v| v["part"] == "drawio/pages/1/cells/4").unwrap();
-    let raw = &input
-        [loc["byteStart"].as_u64().unwrap() as usize..loc["byteEnd"].as_u64().unwrap() as usize];
+    let raw = &input[usize::try_from(loc["byteStart"].as_u64().unwrap()).unwrap()
+        ..usize::try_from(loc["byteEnd"].as_u64().unwrap()).unwrap()];
     assert!(raw.starts_with("<UserObject id=\"a\""));
     assert!(raw.contains("parent=\"g\""));
     let encoded = payload(MODEL);
@@ -346,17 +346,23 @@ fn original_byte_spans_identify_cells_and_encoded_payloads() {
     locators(&dto, &mut found);
     let loc = found.iter().find(|v| v["part"] == "drawio/pages/1/cells/4").unwrap();
     assert_eq!(
-        &input[loc["byteStart"].as_u64().unwrap() as usize
-            ..loc["byteEnd"].as_u64().unwrap() as usize],
+        &input[usize::try_from(loc["byteStart"].as_u64().unwrap()).unwrap()
+            ..usize::try_from(loc["byteEnd"].as_u64().unwrap()).unwrap()],
         encoded
     );
 }
 
 #[test]
 fn hostile_width_cell_counts_and_bombs_are_fatal_and_release_memory() {
-    let attrs: String = (0..4097).map(|i| format!(" k{i}='v'")).collect();
+    let mut attrs = String::new();
+    for i in 0..4097 {
+        write!(attrs, " k{i}='v'").unwrap();
+    }
     let wide = format!("<mxGraphModel{attrs}><root/></mxGraphModel>");
-    let cells: String = (0..100_001).map(|i| format!("<mxCell id='{i}'/>")).collect();
+    let mut cells = String::new();
+    for i in 0..100_001 {
+        write!(cells, "<mxCell id='{i}'/>").unwrap();
+    }
     let many = format!("<mxGraphModel><root>{cells}</root></mxGraphModel>");
     let bomb = wrapped(&payload(&format!(
         "<mxGraphModel><root>{}</root></mxGraphModel>",
@@ -382,7 +388,10 @@ fn cancellation_during_xml_work_releases_all_page_allocations() {
     let cancel = execution.cancellation.clone();
     let ctx = ExecutionContext::new(execution, options.limits.clone());
     let observer = ctx.clone();
-    let cells: String = (0..80_000).map(|i| format!("<mxCell id='{i}'/>")).collect();
+    let mut cells = String::new();
+    for i in 0..80_000 {
+        write!(cells, "<mxCell id='{i}'/>").unwrap();
+    }
     let source = format!("<mxGraphModel><root>{cells}</root></mxGraphModel>");
     let worker = std::thread::spawn(move || convert(source.as_bytes(), &options, &ctx));
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -413,17 +422,14 @@ fn exact_memory_boundary_and_active_deadline_are_enforced() {
         ExecutionOptions { timeout: Some(Duration::from_millis(5)), ..ExecutionOptions::default() },
         options.limits.clone(),
     );
-    assert!(matches!(
-        convert(large.as_bytes(), &options, &ctx),
-        Err(ConversionError::Timeout { .. })
-    ));
+    assert!(matches!(convert(large.as_bytes(), &options, &ctx), Err(ConversionError::Timeout)));
     assert_eq!(ctx.reserved_memory_bytes(), 0);
 }
 
 #[test]
 fn encoded_payload_truncation_trailing_data_and_invalid_uri_are_rejected() {
-    let mut options = ConversionOptions::default();
-    options.error_policy = ErrorPolicy::Strict;
+    let options =
+        ConversionOptions { error_policy: ErrorPolicy::Strict, ..ConversionOptions::default() };
     let valid = payload(MODEL);
     let mut decoded = base64::engine::general_purpose::STANDARD.decode(&valid).unwrap();
     decoded.push(0);
