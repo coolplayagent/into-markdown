@@ -1,5 +1,8 @@
 {
+  "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+  "capturedAt": "2026-08-31T14:13:50.277Z",
   "source": "pptx/01-1ecab1282a1bfd23.pptx",
+  "consumer": "Chromium 151; pulldown-cmark 0.13.4 generated HTML",
   "images": [
     {
       "complete": true,

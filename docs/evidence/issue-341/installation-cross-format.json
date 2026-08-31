@@ -1,0 +1,226 @@
+{
+  "binarySha256": "9585babf8745080eecf498df8d056f11494fb23a871195e95970b4b984a174f9",
+  "items": [
+    {
+      "name": "drawio",
+      "fixture": "drawio/normal.drawio",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/drawio/normal.drawio",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
+      "actualSha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
+      "status": "passed"
+    },
+    {
+      "name": "drawio-compressed",
+      "fixture": "drawio/compressed.drawio",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/drawio/compressed.drawio",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
+      "actualSha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
+      "status": "passed"
+    },
+    {
+      "name": "text-file",
+      "fixture": "text/normal.txt",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/text/normal.txt",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "7409dc576cbe54a382d7253c5019f173812fb18391f200500af467444d084c55",
+      "actualSha256": "7409dc576cbe54a382d7253c5019f173812fb18391f200500af467444d084c55",
+      "status": "passed"
+    },
+    {
+      "name": "docx",
+      "fixture": "docx/normal.docx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/docx/normal.docx",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "actualSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "status": "passed"
+    },
+    {
+      "name": "epub",
+      "fixture": "epub/normal.epub",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/epub/normal.epub",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6",
+      "actualSha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6",
+      "status": "passed"
+    },
+    {
+      "name": "outlook-msg",
+      "fixture": "msg/normal.msg",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/msg/normal.msg",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db",
+      "actualSha256": "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db",
+      "status": "passed"
+    },
+    {
+      "name": "rtf",
+      "fixture": "rtf/normal.rtf",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/rtf/normal.rtf",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "8629ab8e7dbc3b820d277c15397f9f4fd0d3b660ca3e0902f0960dda8342c889",
+      "actualSha256": "8629ab8e7dbc3b820d277c15397f9f4fd0d3b660ca3e0902f0960dda8342c889",
+      "status": "passed"
+    },
+    {
+      "name": "pptx",
+      "fixture": "pptx/normal.pptx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/pptx/normal.pptx",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "actualSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "status": "passed"
+    },
+    {
+      "name": "xlsx",
+      "fixture": "xlsx/normal.xlsx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/xlsx/normal.xlsx",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "d3872577eb79d4d2812e4a7b1c14f64e3241ba729aa4105be0d2d47c7ffe32a8",
+      "actualSha256": "d3872577eb79d4d2812e4a7b1c14f64e3241ba729aa4105be0d2d47c7ffe32a8",
+      "status": "passed"
+    },
+    {
+      "name": "xlsb",
+      "fixture": "xlsb/normal.xlsb",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/xlsb/normal.xlsb",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee",
+      "actualSha256": "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee",
+      "status": "passed"
+    },
+    {
+      "name": "odt",
+      "fixture": "odt/normal.odt",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odt/normal.odt",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "9599eaa0b53968a54eda9915a7e8e59cf1bc8444786f29ae9fb7dfc3600c3b69",
+      "actualSha256": "9599eaa0b53968a54eda9915a7e8e59cf1bc8444786f29ae9fb7dfc3600c3b69",
+      "status": "passed"
+    },
+    {
+      "name": "ods",
+      "fixture": "ods/normal.ods",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/ods/normal.ods",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "34087e4a175f614e604a67f9755063363d4dda096fccf68f9bd92b7589b93864",
+      "actualSha256": "34087e4a175f614e604a67f9755063363d4dda096fccf68f9bd92b7589b93864",
+      "status": "passed"
+    },
+    {
+      "name": "odp",
+      "fixture": "odp/normal.odp",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/target/issue341/local-release/extracted/into-md",
+        "/Users/yx/projects/document-convert/into-markdown-issue-341/fixtures/small/odp/normal.odp",
+        "--no-config",
+        "--asset-mode",
+        "embed",
+        "--ocr",
+        "off"
+      ],
+      "exitCode": 0,
+      "expectedSha256": "5276964b0d08d9658d89cc450ec2f60dc4689685bdb21d768528d46a2d07cb78",
+      "actualSha256": "5276964b0d08d9658d89cc450ec2f60dc4689685bdb21d768528d46a2d07cb78",
+      "status": "passed"
+    }
+  ]
+}

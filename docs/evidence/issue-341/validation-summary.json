@@ -1,0 +1,337 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-31T14:36:56.133268+00:00",
+  "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+  "host": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "versions": {
+    "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+    "node": "v24.19.0",
+    "python": "Python 3.13.14"
+  },
+  "cargo": {
+    "fullSerialAttempt": {
+      "log": "all-final-serial.log",
+      "exitCode": 101,
+      "passed": {
+        "api": 66,
+        "apiCollectingParity": 7,
+        "cliUnit": 335,
+        "emptyResultContract": 7,
+        "converters": 646,
+        "core": 118,
+        "layoutUnit": 10,
+        "layoutIntegration": 3,
+        "pdfLayout": 43,
+        "licenseUnit": 94,
+        "repositoryLicenseInventory": 1
+      },
+      "failedTargets": [
+        "exit_contract: obsolete HTML header assertion",
+        "plugin_lifecycle: process fixture absent from invocation"
+      ]
+    },
+    "finalReplacementRuns": {
+      "renderer": {
+        "passed": 39,
+        "log": "renderer-reviewed-final.log"
+      },
+      "exit_contract": {
+        "passed": 17,
+        "log": "exit-contract-final.log"
+      },
+      "plugin_lifecycle": {
+        "passed": 2,
+        "log": "plugin-lifecycle-final.log"
+      },
+      "installed_smoke": {
+        "passed": 26,
+        "log": "installed-smoke-reviewed-final.log",
+        "priorAttempt": "installed-smoke-drawio-final.log: 25 pass, grandchild PID publication timed out; unchanged test rerun passed 26/26"
+      }
+    },
+    "ignoredTests": "Existing ignored/runtime-specific tests remain explicit in the full logs; Bazel separately executes selected quality targets."
+  },
+  "web": {
+    "rootUniqueTests": 42,
+    "executionsAcrossSixGroups": 47,
+    "adminTests": 28,
+    "typecheck": "pass",
+    "embeddedAssetVerification": "pass"
+  },
+  "pythonContracts": {
+    "passed": 91,
+    "requiredFastPolicyTests": 14,
+    "postDrawioSmokeUpdate": {
+      "passed": 35,
+      "log": "release-drawio-final.log"
+    }
+  },
+  "fixtures": {
+    "fullByteReproduction": "pass",
+    "legacyOffice": "pass"
+  },
+  "structure": {
+    "files": 584,
+    "violations": 0,
+    "baseRevision": "d04d41e6ce5c1359e32eb5c3c81c9debf3d6567c"
+  },
+  "bazel": {
+    "command": "bazel test --config=macos_arm64 --lockfile_mode=error --distdir=third_party/runtime-assets/models <six explicit quality targets>",
+    "passed": [
+      "//crates/layout-quality:layout_quality_test",
+      "//crates/layout-quality:semantic_layout_quality",
+      "//crates/converters:converters_test",
+      "//crates/pdf-layout:pdf_layout_test",
+      "//crates/converters:pdf_layout_quality"
+    ],
+    "failed": [
+      {
+        "target": "//crates/api:ppocrv6_image_quality",
+        "case": "traditional",
+        "addedErrors": 7,
+        "maximumAddedErrors": 6,
+        "log": "ocr-quality-final.log",
+        "sameEnvironmentMainBaseline": "not executed",
+        "thresholdChanged": false
+      }
+    ]
+  },
+  "ci": {
+    "policy": "four existing PR fast jobs only",
+    "verifiedRun": 33400209276,
+    "conclusion": "four success",
+    "stoppedExtraRuns": [
+      {
+        "id": 33397839557,
+        "kind": "semantic",
+        "conclusion": "cancelled"
+      },
+      {
+        "id": 33397835191,
+        "kind": "build-only installation",
+        "conclusion": "cancelled"
+      }
+    ],
+    "earlierFailedRuns": [
+      33395971121,
+      33394359586,
+      33394356105
+    ],
+    "otherPlatformInstallationArtifacts": "not accepted; extra runs stopped under the updated CI direction"
+  },
+  "localInstallationArtifact": {
+    "status": "passed",
+    "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+    "target": "aarch64-apple-darwin",
+    "version": "0.0.4",
+    "signing": "ad-hoc; local acceptance only",
+    "releasePublished": false,
+    "existingInstallationReplaced": false,
+    "archiveVerification": "passed",
+    "nativeCases": 9,
+    "pdfCases": 6,
+    "crossFormatGoldens": 13,
+    "pathCases": 84,
+    "artifacts": [
+      {
+        "name": "into-md-macos-arm64.zip",
+        "bytes": 39590413,
+        "sha256": "c1a39b228f8f252121a7baaaf27a5f76f64c538ad630e873bf9abc20daffb9d0"
+      },
+      {
+        "name": "official.media.whisper-aarch64-apple-darwin.imp",
+        "bytes": 580962257,
+        "sha256": "980aed83256eadf7924044627b1a80a7f5ebf4a76103a259efefffaf0fe59758"
+      }
+    ],
+    "timings": {
+      "phases": {
+        "final-core-link": {
+          "durationMs": 443147
+        },
+        "helper-provider-build": {
+          "durationMs": 1365536
+        }
+      },
+      "schemaVersion": 1,
+      "target": "aarch64-apple-darwin"
+    },
+    "priorAttempts": [
+      {
+        "log": "local-release/build.log",
+        "result": "stopped own build to integrate main #338; completed using build-after-338.log"
+      },
+      {
+        "log": "local-release/native-acceptance.log",
+        "result": "failed obsolete Drawio HTML golden; updated only expected native-bold output and passed rerun"
+      },
+      {
+        "log": "local-release/path-matrix/report.json",
+        "result": "84 harness invocation failures: --data-dir is only a ui flag; rerun used supported isolated INTO_MARKDOWN_USER_DATA_HOME environment"
+      }
+    ]
+  },
+  "logs": {
+    "all-final-serial.log": {
+      "bytes": 164327,
+      "sha256": "b7eba2c47aa67de4c7f80223f781395874433fb5a9f1fca7522ba6d33c15404e"
+    },
+    "renderer-final.log": {
+      "bytes": 3860,
+      "sha256": "ddf792c0ec49bfcac3ec8cd212d56cf489dfe05be7d9064c3ecf46b22db05cf5"
+    },
+    "exit-contract-final.log": {
+      "bytes": 27686,
+      "sha256": "dc62a62ba946b672885d0320662a5be0ec7ea2f722f56ce42de4d46a9cc4942c"
+    },
+    "plugin-lifecycle-final.log": {
+      "bytes": 262,
+      "sha256": "bde33c58b313696176e055896b301e4580c3b8ae226f93478974b738fdc5ecc5"
+    },
+    "installed-smoke-direct-final.log": {
+      "bytes": 2160,
+      "sha256": "647b7354ae6f4e240d1c6b334032559072f849ccd84ef1786d11ad7c80efa73a"
+    },
+    "clippy-tests-final.log": {
+      "bytes": 1346,
+      "sha256": "1e6240101b4992374573fd604c56dbe4374f5f5650ecbddbee909ed7d0e28e3e"
+    },
+    "web-final-core.log": {
+      "bytes": 4254,
+      "sha256": "63d5e7e363b1e0cdd5427cebc863f22887b361110acfc878c934222f060e2dbf"
+    },
+    "web-final-preview.log": {
+      "bytes": 4315,
+      "sha256": "3e804cc3d52ed48025da84a344867727d3cbac79069c7293d001754dd1e1f5a7"
+    },
+    "web-final-history_actions.log": {
+      "bytes": 4336,
+      "sha256": "e1ee42770c7e79128a611ecc8fe1dc455a793e7c320e57945415035eb3442abd"
+    },
+    "web-final-history_cleanup.log": {
+      "bytes": 4330,
+      "sha256": "91fbfad9de207631c901521c856c23e1f64c6e0b3b9f94a8db9cb03e409830a0"
+    },
+    "web-final-workbench.log": {
+      "bytes": 4244,
+      "sha256": "243d6342d13add3d4723173eaeee0aa6363ee61ddddc11f90e8adfad80190344"
+    },
+    "web-final-accessibility.log": {
+      "bytes": 4320,
+      "sha256": "38c5abf96ff06b7f5708e3886864997324462d65ffe4570f2136225aed47e0c4"
+    },
+    "web-admin-after-338.log": {
+      "bytes": 2804,
+      "sha256": "90b9967bdb94b68223968fa5281e0f8df8a6c39c7e12fba08f8daae35a2374b8"
+    },
+    "web-types-final.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "web-build-final.log": {
+      "bytes": 561,
+      "sha256": "69ce976ed7dfdc6b063406883b466050e40f404fa741b1796c4f3dd682769e3e"
+    },
+    "release-contracts-final.log": {
+      "bytes": 274,
+      "sha256": "de3d9ad43aba0f3dd2f0591e029bad19baf9ad2bf9eb47c7366278f3b207f71d"
+    },
+    "fixture-reproduce-complete.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "structure-338-ratchet.log": {
+      "bytes": 82989,
+      "sha256": "413de0ee3a920a8d6bc4586d688a8baf5f374bdfe35ac3f0df52a7edcc9c7e8b"
+    },
+    "bazel-after-338.log": {
+      "bytes": 10015,
+      "sha256": "50e9494ab882c0a7741594469d5a6089377de623636d3bfa4b5c30fa70b5eca9"
+    },
+    "ocr-quality-final.log": {
+      "bytes": 1022,
+      "sha256": "9126f557628982f61b90899b741fb8b8264a79f5b7c1d05e3b7e86384383252d"
+    },
+    "renderer-reviewed-final.log": {
+      "bytes": 3860,
+      "sha256": "260cea97566d1ee45cd81c8a9b069e2b58f2ffaea53a063b6373bbf51161aa2e"
+    },
+    "clippy-complete-final.log": {
+      "bytes": 207,
+      "sha256": "0a6f84d45802f90bb5184250214fc14181b777382a24dcc54da4bf5b08d90b9b"
+    },
+    "clippy-reviewed-final.log": {
+      "bytes": 1001,
+      "sha256": "b1c8b95c4272dfc99e266cf2cee8a1e23ae862f651a2eeaf32a1879cb5047a6a"
+    },
+    "installed-smoke-reviewed-final.log": {
+      "bytes": 2160,
+      "sha256": "1d7f3305061a3c3dc33f1671849c9af5449737c0ae3facf29814be0c0bea3e9c"
+    },
+    "installed-smoke-drawio-final.log": {
+      "bytes": 3817,
+      "sha256": "26f0f049be91362028e4f12650811cdc7bb4f95283ecac68f1e9574f164534b2"
+    },
+    "release-drawio-final.log": {
+      "bytes": 218,
+      "sha256": "e950d1f4f25694db01c76791ddf470d0cdcf8d52c1be13cef7cf8d2c1a3241cc"
+    },
+    "local-release/build-after-338.log": {
+      "bytes": 122321,
+      "sha256": "43080d5fd064bb1e3db6af250c4e90ff09011084ecf59a0642b6e0cc955e636f"
+    },
+    "local-release/native-acceptance.log": {
+      "bytes": 83,
+      "sha256": "bd4bc3989b380548484e066bf348e61ef8cdabbeee048d47ba7780d0cc618789"
+    },
+    "local-release/native-acceptance-final.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "local-release/verify.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "local-release/path-matrix-final.log": {
+      "bytes": 21,
+      "sha256": "db0486501b616260095e5d3f58124cf305ec5a9d3faa682747020ff414da4d72"
+    },
+    "installed-smoke-clippy-final.log": {
+      "bytes": 4754,
+      "sha256": "0bb25234e334c1d85ac99c1448ba4b64a664a428cf1f76d33ae7294eca2a8f42"
+    },
+    "ci-policy-delivery.log": {
+      "bytes": 113,
+      "sha256": "b287d0d1d60d3c3d4629e9139a735eefeb89b6d695d48d00e70404daa6a8692a"
+    },
+    "structure-delivery.log": {
+      "bytes": 82988,
+      "sha256": "6983c33fb403538144d616b760845e890e983b67f56446bcd193f256f2be0120"
+    }
+  },
+  "originalReportGap": "Original #331 document batch and consumer environment unavailable; public samples do not reproduce the original 1994-image/235-note counts.",
+  "strictClippy": {
+    "status": "pass",
+    "scope": [
+      "into-markdown-core",
+      "into-markdown-render-markdown",
+      "into-markdown-converters",
+      "into-markdown-layout-quality"
+    ],
+    "arguments": "--all-targets --no-deps -- -D warnings",
+    "log": "clippy-complete-final.log",
+    "earlierAttempt": "Two explicit-default lint failures in the added budget test were fixed; both lint and test reruns passed."
+  },
+  "additionalStrictClippy": {
+    "status": "failed",
+    "package": "installed-smoke",
+    "errors": 5,
+    "filesUnchangedFromMain": [
+      "tools/installed-smoke/src/process.rs",
+      "tools/installed-smoke/src/rust_consumer.rs"
+    ],
+    "detail": "macOS conditional unused-mut/unnecessary-wraps and existing needless-borrow; no suppression or production edits",
+    "log": "installed-smoke-clippy-final.log"
+  }
+}

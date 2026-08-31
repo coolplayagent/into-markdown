@@ -17,12 +17,12 @@ const GOLDENS: [(&str, &str, &str); 13] = [
     (
         "drawio",
         "drawio/normal.drawio",
-        "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
     ),
     (
         "drawio-compressed",
         "drawio/compressed.drawio",
-        "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
     ),
     (
         "text-file",

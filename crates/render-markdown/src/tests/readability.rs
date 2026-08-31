@@ -322,3 +322,38 @@ fn native_marks_beside_links_code_and_table_breaks_keep_semantics() {
             .any(|event| matches!(event, Event::Start(Tag::Table(_))))
     );
 }
+
+#[test]
+fn hidden_source_markers_keep_ir_memory_without_rendered_overhead() {
+    use into_markdown_core::{ExecutionOptions, ResourceLimits};
+
+    let make = |label| {
+        document(vec![node(
+            "list",
+            Block::List {
+                kind: ListKind::Ordered,
+                start: 3,
+                items: vec![ListItem {
+                    checked: None,
+                    marker_label: label,
+                    blocks: vec![paragraph("p", "body")],
+                }],
+            },
+        )])
+    };
+    let plain = make(None);
+    let label = "源编号".repeat(4096);
+    let label_bytes = u64::try_from(label.len()).unwrap();
+    let labeled = make(Some(label));
+    let retained =
+        |doc| into_markdown_core::estimate_retained_output(doc, &vec![], &vec![]).unwrap();
+    assert!(retained(&labeled) >= retained(&plain) + label_bytes);
+    assert_eq!(output(&plain), output(&labeled));
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    assert_eq!(
+        planned_render_peak(&plain, &[], &options, &context).unwrap(),
+        planned_render_peak(&labeled, &[], &options, &context).unwrap()
+    );
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}

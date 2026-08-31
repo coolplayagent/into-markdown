@@ -1,0 +1,15 @@
+{
+  "architecture": "arm64",
+  "artifact": "into-md-macos-arm64.zip",
+  "artifactBytes": 39590413,
+  "artifactSha256": "c1a39b228f8f252121a7baaaf27a5f76f64c538ad630e873bf9abc20daffb9d0",
+  "binaryBytes": 71699920,
+  "binarySha256": "9585babf8745080eecf498df8d056f11494fb23a871195e95970b4b984a174f9",
+  "conclusion": "pass",
+  "format": "Mach-O",
+  "member": "into-md",
+  "memberCount": 27,
+  "mode": "0755",
+  "schemaVersion": 1,
+  "target": "aarch64-apple-darwin"
+}

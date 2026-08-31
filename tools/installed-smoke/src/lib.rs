@@ -421,7 +421,7 @@ mod tests {
         let missing_library_request = request.clone();
         let formats = serde_json::to_vec(&authority.entries).unwrap();
         let doctor = br#"[{"id":"runtime.pdfium","status":"missing","detail":"install PDFium"},{"id":"runtime.ocr","status":"missing","detail":"install OCR"},{"id":"runtime.asr","status":"missing","detail":"run into-md setup media"}]"#.to_vec();
-        let diagram = "# Page 1\n\n## Nodes\n\n- Main — 1 \\[p1:c2\\]; parent: 0; layer\n    \n    - Start 中文 — a \\[p1:c3\\]; parent: 1\n    - End — b \\[p1:c4\\]; parent: 1\n\n## Connections\n\n| <strong>Connection</strong> | <strong>Source</strong> | <strong>Target</strong> | <strong>Direction</strong> | <strong>Label</strong> |\n| --- | --- | --- | --- | --- |\n| e \\[p1:c5\\]; parent: 1 | a \\[p1:c3\\] | b \\[p1:c4\\] | source → target | Continue |\n".as_bytes().to_vec();
+        let diagram = "# Page 1\n\n## Nodes\n\n- Main — 1 \\[p1:c2\\]; parent: 0; layer\n    \n    - Start 中文 — a \\[p1:c3\\]; parent: 1\n    - End — b \\[p1:c4\\]; parent: 1\n\n## Connections\n\n| **Connection** | **Source** | **Target** | **Direction** | **Label** |\n| --- | --- | --- | --- | --- |\n| e \\[p1:c5\\]; parent: 1 | a \\[p1:c3\\] | b \\[p1:c4\\] | source → target | Continue |\n".as_bytes().to_vec();
         let markdown = [
             diagram.clone(),
             diagram,
