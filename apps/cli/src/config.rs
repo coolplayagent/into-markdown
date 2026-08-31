@@ -2037,7 +2037,10 @@ mod tests {
         );
         let mut invalid = config;
         invalid.conversion.limits.max_presentation_xml_events = Some(0);
-        assert!(resolve_conversion_options(&invalid.conversion, &mut memory::select(None, None)).is_err());
+        assert!(
+            resolve_conversion_options(&invalid.conversion, &mut memory::select(None, None))
+                .is_err()
+        );
         invalid.conversion.limits.max_presentation_xml_events = None;
         assert_eq!(
             resolve_conversion_options(&invalid.conversion, &mut memory::select(None, None))

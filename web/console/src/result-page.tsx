@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import type { ApiClient, ArtifactPreview, SpeakerLabels, TaskRecord } from "./api";
 import { ArchiveDiagnostics } from "./archive-diagnostics";
-import { OcrOmissions } from "./ocr-omissions";
 import { DismissibleMenu } from "./dismissible-menu";
 import { SafeMarkdownPreview } from "./preview";
 import { useI18n } from "./i18n";
@@ -167,6 +166,5 @@ function ResultCanvas({ api, task, loading, previewError, preview, mode, failure
   return (        <article className="document-canvas">
           {loading ? <div className="preview-loading" role="status"><LoaderCircle className="spin" size={22} aria-hidden="true" />{t("loadingPreview")}</div> : previewError ? <div className="result-empty" role="alert"><CircleAlert size={25} aria-hidden="true" /><h2>{t("previewFailed")}</h2></div> : !preview ? <div className="result-empty" role={failureMessage ? "alert" : undefined}>{failureMessage ? <CircleAlert size={25} aria-hidden="true" /> : <Code2 size={25} aria-hidden="true" />}<h2>{failureMessage ?? t("noMarkdownResult")}</h2>{failureMessage && task?.failure?.retryable !== false && <button type="button" onClick={() => void retry()}><RotateCcw size={16} aria-hidden="true" />{t("retry")}</button>}</div> : <>{preview.truncated && <p className="preview-notice" role="status">{t("previewTruncated")}</p>}{mode === "rendered" ? <SafeMarkdownPreview source={preview.text} /> : <pre className="markdown-source"><code>{preview.text}</code></pre>}</>}
           {task && <ArchiveDiagnostics api={api} task={task} />}
-          {task && <OcrOmissions api={api} task={task} />}
         </article>);
 }

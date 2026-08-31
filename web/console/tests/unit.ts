@@ -14,9 +14,8 @@ import { JsonTree, SafeMarkdownPreview } from "../src/preview";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
 import { archiveMembers } from "../src/archive-diagnostics";
-import { supportsFileName, taskFailureLabel } from "../src/task-ui";
+import { supportsFileName, taskFailureLabel, taskFailureCode } from "../src/task-ui";
 import { parseOcrOmissions } from "../src/ocr-omissions";
-import { taskFailureCode } from "../src/task-ui";
 import styles from "../src/styles.css";
 
 const token = "A".repeat(43);

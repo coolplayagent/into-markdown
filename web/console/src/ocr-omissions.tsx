@@ -1,8 +1,6 @@
-import { useEffect, useState } from "react";
-import type { ApiClient, TaskRecord } from "./api";
 import { useI18n } from "./i18n";
 
-interface Omission { page?: number; slide?: number; sheet?: string; part?: string }
+export interface Omission { page?: number; slide?: number; sheet?: string; part?: string }
 const CODE = "ocr.optionalRecognitionMemorySkipped";
 
 export function parseOcrOmissions(text: string): Omission[] {
@@ -23,26 +21,9 @@ export function parseOcrOmissions(text: string): Omission[] {
   });
 }
 
-export function OcrOmissions({ api, task }: { api: ApiClient; task: TaskRecord }) {
+export function OcrOmissions({ omissions }: { omissions: Omission[] }) {
   const { t } = useI18n();
-  const [omissions, setOmissions] = useState<Omission[]>([]);
-  const [failed, setFailed] = useState(false);
-  const artifact = task.artifacts.find((item) => item.kind === "diagnostics");
-  const key = artifact?.storageKey;
-  const relevant = task.status === "succeeded" && !!key;
-  useEffect(() => {
-    setOmissions([]); setFailed(false);
-    if (!key || !relevant) return;
-    const controller = new AbortController();
-    void api.preview(task.id, key, controller.signal).then((preview) => {
-      if (controller.signal.aborted) return;
-      if (preview.truncated) throw new Error("diagnostics preview truncated");
-      setOmissions(parseOcrOmissions(preview.text));
-    }).catch(() => { if (!controller.signal.aborted) setFailed(true); });
-    return () => controller.abort();
-  }, [api, task.id, key, relevant]);
-  if (!relevant || (!failed && omissions.length === 0)) return null;
-  if (failed) return <p className="preview-notice">{t("ocrOmissionDetailsUnavailable")}</p>;
+  if (omissions.length === 0) return null;
   return <section className="preview-notice" aria-label={t("ocrMemoryOmission")}>
     <p>{t("ocrMemoryOmission")}</p>
     <ul>

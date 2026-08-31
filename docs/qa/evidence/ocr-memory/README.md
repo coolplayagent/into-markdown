@@ -4,6 +4,10 @@
 尚未取得，公开网络样本的结果单独记录。当前文件是验收工作记录；勾选项与最终证据
 必须以所列构建和命令为准。
 
+集成已同步到 `d04d41e`，包含 #334、#330、#338 与 #349。#340 保留主线的 PDF、
+PPTX、归档和 RAR 契约；CI 仅使用现有四个 fast job。本地更新资源时由 Bazel 重算
+扩展锁文件，并保持 Cargo 依赖清单不变。安装产物验收按用户明确要求进行，不发布版本。
+
 ## 样本和复现
 
 `corpus.json` 冻结 17 类各 11 个、共 187 个 SHA-256 不同的网络文件。来源分类明确
@@ -21,6 +25,17 @@ binary SHA 必须独立，恢复执行时校验 binary 与样本集合。每次�
 stdout、stderr、批量报告以及进程树 RSS 采样。正文与资产指纹由 `observations.py`
 独立从结果 DTO 提取，避免将源文档正文复制进验收汇总。
 
+首轮安装包矩阵已生成 1,683 个文件结果（187 × 3 模式 × 3 入口）。当时批量命令
+使用整批 120 秒截止时间，很多文件在等待准入时超时。因此保留该组结果，并在
+`baseline-full-batches` 重跑按文件数扩展截止时间的批量实验。此修正仅影响测量命令。
+恢复执行同时校验完整命令，防止不同配置复用旧记录。
+
+`summarize.py` 从原始结果重新分析 `localOcr` 来源；早期测量器误用 `ocr` 标签而
+漏计 OCR 块，原收据保持原样。修正后的分析单独记录投影脚本和收据哈希。
+`recognition-supplement.json` 和 `recognition-followup.json` 另计 25 和 22 个网络文件。
+原清单中的 `EDB-14503-1.html` 经签名检查为二进制回归样本，不计作有效 HTML；
+补充清单的 `testHTML.html` 提供第 11 个实际 HTML 文件。
+
 `sharedLeasePeakBytes` 是应用租约高水位。`processTreeRssSamplePeakBytes` 是按
 50 ms 目标间隔观测的同一时刻进程树 RSS 总量；受调度影响不保证捕获瞬时峰值。
 `operatingSystemPeakBytes` 标明 wait4.ru_maxrss 或根进程 peak_wset 来源，与进程树
@@ -32,7 +47,8 @@ CLI 的 sysinfo 可用量与测量器的 psutil 可用量采用各自平台定�
 ## 当前本地观察
 
 - 旧版公开 PPTX 的 11 个样本已运行对照，尚未复现原报告 15 个 PPTX 的现象。
-  完整矩阵仍在执行，不能据此声称这些文件都有有效 OCR 贡献。
+  单文件 auto/16GiB 的正文、资产、识别投影与状态一致，不能据此声称这些文件都有
+  有效 OCR 贡献。另以 Tika `testOCR.pptx` 和 `testOCR.docx` 验证到各 20 字识别贡献。
 - 16 GiB 机器在并行开发负载下，sysinfo 可用量曾低于 2 GiB 系统余量；新 auto
   拒绝准入。显式 16GiB 保持原值，provider 请求额度保持认证上限 768 MiB。
 - 本地开发构建的真实 provider 已成功识别清晰图片，贡献 1 个区域、67 个字符；
@@ -44,6 +60,12 @@ CLI 的 sysinfo 可用量与测量器的 psutil 可用量采用各自平台定�
   触发全局资源失败；请求内存与临时租约归零，随后同一上下文的请求成功。
 - Web 的六个分组共 39 项单元测试及类型检查通过，内嵌资源由
   `bazel run //web/console:update_assets` 生成，并同步 Rust 索引和 npm SPDX 哈希。
+- 同步 `d04d41e` 后，转换器 650、Core 120、Engine 80、process-plugin 9、
+  provider-plugin 12 项库测试通过（转换器 16 项忽略），Web 类型检查和六组测试通过。
+  API collecting parity 的 7 项测试在此前的 `0ae0ddf` 集成上通过；最终提交需重跑。
+- 真实 RTF 的旧版 always 返回 `componentUnavailable`，追踪到 CLI 未为 RTF、IPYNB、
+  ZIP 装配 OCR。已补齐入口，17 类路由测试通过，旧 Office auto 路由保持原样。
+- 旧 DOC 中只有控制字符的原生文本不构成可替代正文；新定向测试验证这类内容仍要求 OCR。
 - 完整 CLI 单元测试为 324 成功、5 失败、1 忽略。事务取消清理及慢读写关闭两项
   单独重跑通过；以下三项在未修改的 `d276d8a` 测试程序中也稳定失败，单独记录基线：
   `empty_source_and_empty_content_share_the_web_terminal_contract`（空内容状态），

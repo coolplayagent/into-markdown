@@ -142,23 +142,29 @@ def run(args):
                 label = group[0]['sha256'][:16] if grouping == 'single' else 'all'
                 directory = args.output / mode / grouping / label
                 receipt = directory / 'measurement.json'
+                directory.mkdir(parents=True, exist_ok=True)
+                paths = [str((args.root / item['path']).resolve()) for item in group]
+                # The CLI deadline covers the entire invocation. Give a batch
+                # the same total allowance as its constituent single-file runs.
+                invocation_timeout_ms = 120_000 * len(group)
+                command = [binary, '--no-config', '--log-format', 'json', '--ocr', ocr,
+                    '--max-memory-size', memory, '--error-policy', policy, '--emit', 'result-json',
+                    '--asset-mode', 'embed', '--conflict', 'error',
+                    '--timeout-ms', str(invocation_timeout_ms),
+                    '--report', str((directory / 'report.json').resolve())]
+                if grouping != 'single':
+                    command += ['--jobs', grouping.removeprefix('jobs'),
+                                '--output-dir', str((directory / 'outputs').resolve())]
+                command += paths
                 if receipt.exists():
                     previous = json.loads(receipt.read_text())
                     if previous['binarySha256'] != binary_hash:
                         raise SystemExit('output contains measurements from another binary')
                     if previous['samples'] != [s['sha256'] for s in group]:
                         raise SystemExit('output contains a different sample selection')
+                    if previous['command'] != command:
+                        raise SystemExit('output contains measurements with different invocation settings')
                     continue
-                directory.mkdir(parents=True, exist_ok=True)
-                paths = [str((args.root / item['path']).resolve()) for item in group]
-                command = [binary, '--no-config', '--log-format', 'json', '--ocr', ocr,
-                    '--max-memory-size', memory, '--error-policy', policy, '--emit', 'result-json',
-                    '--asset-mode', 'embed', '--conflict', 'error', '--timeout-ms', '120000',
-                    '--report', str((directory / 'report.json').resolve())]
-                if grouping != 'single':
-                    command += ['--jobs', grouping.removeprefix('jobs'),
-                                '--output-dir', str((directory / 'outputs').resolve())]
-                command += paths
                 dry = subprocess.run(command + ['--dry-run'], capture_output=True, timeout=60)
                 (directory / 'dry-run.log').write_bytes(dry.stdout + dry.stderr)
                 result = measure(command, directory, max(150, len(group) * 125))
