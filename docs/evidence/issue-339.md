@@ -96,9 +96,9 @@ probe 报告记录 API 默认选项，OCR off。运行时及可选服务另由�
 
 ## 验证状态
 
-本地、CI、安装产物分别记录，最终结果见本节更新及 [PR #346](https://github.com/coolplayagent/into-markdown/pull/346)。
+本地、CI、安装产物分别记录；[本地命令、日志摘要与运行时哈希](issue-339-validation.json)可供复核。最终结果见本节更新及 [PR #346](https://github.com/coolplayagent/into-markdown/pull/346)。
 
-- 本地当前主线隔离构建：Core/Engine/Converter/API 914 项通过、19 项按既有条件忽略；
+- 本地当前主线隔离构建：Core/Engine/Converter/API 915 项通过、19 项按既有条件忽略；
   CLI exit contract 18 项通过（含 Draw.io）。公开语料 72/72 满足预期。
 - 本地 Bazel：Core、Engine、Converter、API、Web typecheck/workbench、文档契约 7 个目标通过。
 - 本地原生 PDF：固定 PDFium 下准入测试 9 项通过，包含单独启用的 PDF 回归。
