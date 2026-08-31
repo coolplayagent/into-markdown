@@ -1,67 +1,67 @@
 {
-  "artifactSha256": "206ba304cbb4916ad1db01f25422dd505baad34617e099bd8f61cca020d61566",
+  "artifactSha256": "0757c8b72e6765c20c8bdb3b6dc1ebe90d94e71df864da7845d434eb7bb2ae8f",
   "cases": [
     {
-      "elapsedMs": 2069,
+      "elapsedMs": 10001,
       "exitCode": 0,
       "name": "help",
       "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "stdoutSha256": "b21af8426573a09153f4ff7cbbc1bf65eb24d7fc51552d3484d578ba0af6bdbf"
+      "stdoutSha256": "30bf08081be1500d4ab31ec59bf2e27fbd815ef6c25d110d8259de361ecb8116"
     },
     {
-      "elapsedMs": 13,
+      "elapsedMs": 16,
       "exitCode": 0,
       "name": "version",
       "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stdoutSha256": "f4fb47b74c8ba973f4b0194af6db0f93dd97704d765755e8a7c9f13705d2965f"
     },
     {
-      "elapsedMs": 110,
+      "elapsedMs": 128,
       "exitCode": 0,
       "name": "plain-text",
-      "stderrSha256": "bc2cf61709c98cfda349dcfdf1dc17a444b5d2206ae7b279f98e991516558d53",
+      "stderrSha256": "0bf0657f222c4e1ea3706005a56713bdd2c33fa05972c1182737d0b2bda8d45f",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 85,
+      "elapsedMs": 118,
       "exitCode": 0,
       "name": "drawio-normal",
-      "stderrSha256": "feaf17ca1a5cffe51f8df91ea9430a872107b2d9da0b73496724d6250e92a34f",
+      "stderrSha256": "dd9505551ed3779a8ff96b76b8761891eff119e6b3e88654396b53e55421e759",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 87,
+      "elapsedMs": 110,
       "exitCode": 0,
       "name": "drawio-compressed",
-      "stderrSha256": "15bbd8ad97d55ec4b3a1f57233f5ec5ba73cce4e5c7bb5cb80820f5b103f8da9",
+      "stderrSha256": "99996af3cff921a300a9fd57c22b3862a17ae92847ac8e82215acb5a1e910b28",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 89,
+      "elapsedMs": 102,
       "exitCode": 0,
       "name": "legacy-office-doc",
-      "stderrSha256": "9ae48cf2467c34741cd8b5b2549ca756c44e9e47f390ce002e08b1f8ba5b37e5",
+      "stderrSha256": "f9f1545f72093721708f831e55fb20f2a9ac4771a589da891d387e08f7307686",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 111,
+      "elapsedMs": 125,
       "exitCode": 0,
       "name": "legacy-office-ppt",
-      "stderrSha256": "a9f50efb4cfabbbe495dab4afbf188ecb3b8b3868036b6f3180a129967284aef",
+      "stderrSha256": "dded04cf397dd8c38b199c7d1ebfaec8532ee4162afb48e16342578102ec10b9",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 101,
+      "elapsedMs": 93,
       "exitCode": 0,
       "name": "legacy-office-xls",
-      "stderrSha256": "5142a622f5eca623ee45c27e4a0b00046deb20861b8af1e4c8f9a7fc4b03a83a",
+      "stderrSha256": "584dcda7fd43ec39c490bdea60aa7e4cdd131531bc7ee005da316582cf2c8eb2",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "elapsedMs": 1323,
+      "elapsedMs": 4690,
       "exitCode": 0,
       "name": "real-pdf-macos-var-fallback",
-      "stderrSha256": "d1485b681444064ff16857307fc17ea9f36159463a66afa3e04794da8054d877",
+      "stderrSha256": "6971a4174629ccb8d5be469249f74307c6803036447f29446eb5e91c1b7ac32b",
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   ],

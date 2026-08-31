@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "d377f647c3386a38e7669dca16c0f31d0fa137b1",
+  "sourceCommit": "7ee9b328e3056a035be8f3dfe90f6e1ba117473c",
   "target": "aarch64-apple-darwin",
-  "artifactSha256": "206ba304cbb4916ad1db01f25422dd505baad34617e099bd8f61cca020d61566",
+  "artifactSha256": "0757c8b72e6765c20c8bdb3b6dc1ebe90d94e71df864da7845d434eb7bb2ae8f",
   "cases": [
     {
       "name": "installed-format-catalog",

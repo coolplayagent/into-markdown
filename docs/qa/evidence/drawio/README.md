@@ -57,21 +57,30 @@ Web 使用静态受限缩进类保留层级，沿用严格 CSP 和安全预览�
 
 ![损坏文件的任务内错误](error.png)
 
+## 主线整合复核
+
+合入前已整合最新主线 `26aaf83`，保留 PDF 修复及新增预算字段，重新生成 Web 资产与许可摘要。
+本地完整转换器回归 640 项通过、16 项运行时/性能测试忽略；Drawio 专项 17、license-check 94
+及仓库审计、portable 34、TypeScript 和确定性 Web 校验通过；结构门禁 563 个文件、零违规。
+四平台 [PR 快速门禁](https://github.com/coolplayagent/into-markdown/actions/runs/33392024344) 全部通过。
+
 ## 本地发布安装包验收
 
 2026-08-31 在 macOS ARM64 上通过 `tools/portable-release/assemble.py build`
 完成发布流程，包含固定摘要的运行时、内嵌 OCR、许可材料、原生审计和归档校验。
 使用临时 Ed25519 测试密钥及 ad-hoc codesign；只生成本地产物，未发布 Release，
-验收后已删除临时私钥。构建源码为 `d377f647c3386a38e7669dca16c0f31d0fa137b1`；
-后续提交仅补英文 CLI 示例及本节证据，产品代码保持一致。
+验收后已删除临时私钥。构建源码为 `7ee9b328e3056a035be8f3dfe90f6e1ba117473c`；
+已整合主线 `26aaf83` 的 PDF 修复；后续提交仅更新本节证据，产品代码保持一致。
 
-Core ZIP 大小为 39565128 字节，SHA-256 为
-`206ba304cbb4916ad1db01f25422dd505baad34617e099bd8f61cca020d61566`。
-产物保存在 worktree 的 `target/drawio-local-release/output/release/`。
+Core ZIP 大小为 39561821 字节，SHA-256 为
+`0757c8b72e6765c20c8bdb3b6dc1ebe90d94e71df864da7845d434eb7bb2ae8f`。
+产物保存在 worktree 的 `target/drawio-local-release/output-current/release/`。
 
 - [归档审计](native-audit.json)通过：27 个成员的双向清单、字节摘要、权限及 ARM64 Mach-O 身份一致。
 - [原生 E2E](e2e.json)全部 9 项通过：帮助、版本、TXT、普通及压缩 Drawio、DOC/PPT/XLS，
   以及通过 macOS `/var` 别名和临时运行时回退路径执行的真实 PDF；运行时清理检查通过。
+- 同一安装件的 [PDF 整合回归](pdf-regression.json) 6 项通过，覆盖混合链接、严格策略、
+  单页/总量预算、精确预算边界和批量转换。
 - [Drawio 安装件黑盒](drawio-installed.json)全部 14 项通过：从中文目录解压安装，隔离用户配置、
   缓存及临时目录，覆盖格式目录、普通/压缩/裸模型、stdin、结果 DTO 来源、显式 XML、普通 XML、
   批量、中文 ZIP、损坏输入、输入预算，以及损坏多页的 strict/best-effort。
@@ -83,9 +92,9 @@ Core ZIP 大小为 39565128 字节，SHA-256 为
   损坏文件同时在文件行与所属结果对话框中显示错误；验收后服务及浏览器页已关闭。
 
 ```sh
-python3 tools/portable-release/assemble.py verify --target aarch64-apple-darwin --output target/drawio-local-release/output
-python3 tools/portable-release/native_acceptance.py --target aarch64-apple-darwin --output target/drawio-local-release/output --expected-version 0.0.4
-python3 tools/docs-check/docs_check.py --into-md target/drawio-local-release/installed/图形转换程序/into-md --repository .
+python3 tools/portable-release/assemble.py verify --target aarch64-apple-darwin --output target/drawio-local-release/output-current
+python3 tools/portable-release/native_acceptance.py --target aarch64-apple-darwin --output target/drawio-local-release/output-current --expected-version 0.0.4
+python3 tools/docs-check/docs_check.py --into-md target/drawio-local-release/installed-current/图形转换程序/into-md --repository .
 ```
 
 ![安装件实际层级与连接预览](installed-preview.jpg)
