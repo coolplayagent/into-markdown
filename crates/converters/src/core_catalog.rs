@@ -6,11 +6,12 @@ pub use super::core_catalog_authority::{
     CoreRuntimeAuthorityEntry, FormatDescriptor, FormatStatus, RuntimeRequirement,
 };
 use super::{
-    ContentFormatDetector, DelimitedTextConverter, DocxConverter, EpubConverter, FeedConverter,
-    HintFormatDetector, HtmlConverter, HttpSourceResolver, ImageConverter, LegacyOfficeConverter,
-    LocalFileSourceResolver, MarkdownConverter, MediaConverter, MemorySourceResolver, MsgConverter,
-    NotebookConverter, OdfConverter, PdfConverter, PresentationConverter, RtfConverter,
-    StdinSourceResolver, StructuredDataConverter, TextConverter, WorkbookConverter, ZipConverter,
+    ContentFormatDetector, DelimitedTextConverter, DocxConverter, DrawioConverter, EpubConverter,
+    FeedConverter, HintFormatDetector, HtmlConverter, HttpSourceResolver, ImageConverter,
+    LegacyOfficeConverter, LocalFileSourceResolver, MarkdownConverter, MediaConverter,
+    MemorySourceResolver, MsgConverter, NotebookConverter, OdfConverter, PdfConverter,
+    PresentationConverter, RtfConverter, StdinSourceResolver, StructuredDataConverter,
+    TextConverter, WorkbookConverter, ZipConverter,
 };
 use into_markdown_core::{ConversionError, Converter, FormatDetector, InputFormat, SourceResolver};
 use into_markdown_engine::RegistryBuilder;
@@ -61,6 +62,7 @@ const FORMATS: &[FormatDescriptor] = &[
     format(InputFormat::OutlookMsg, "message", &["msg"]),
     format(InputFormat::Audio, "media", &["wav", "mp3", "m4a", "flac", "ogg"]),
     format(InputFormat::Video, "media", &["mp4", "mkv", "webm", "avi", "mov"]),
+    format(InputFormat::Drawio, "diagram", &["drawio"]),
 ];
 
 const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
@@ -90,6 +92,7 @@ const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(23, None),
     plugin_catalog(24, ASR),
     plugin_catalog(25, ASR),
+    catalog(26, None),
 ];
 
 const fn format(
@@ -150,6 +153,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
         &[InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls],
     ),
     component("builtin.converter.feed", CapabilityKind::Converter, 220, &[InputFormat::Feed]),
+    component("builtin.converter.drawio", CapabilityKind::Converter, 220, &[InputFormat::Drawio]),
     component("builtin.converter.zip", CapabilityKind::Converter, 220, &[InputFormat::Zip]),
     component("builtin.converter.html", CapabilityKind::Converter, 210, &[InputFormat::Html]),
     runtime_converter("builtin.converter.pdfium", 200, &[InputFormat::Pdf], PDFIUM),
@@ -542,6 +546,7 @@ fn register_converter_by_id(
         "builtin.converter.rtf" => Arc::new(RtfConverter),
         "builtin.converter.legacy-office" => Arc::new(LegacyOfficeConverter),
         "builtin.converter.feed" => Arc::new(FeedConverter),
+        "builtin.converter.drawio" => Arc::new(DrawioConverter),
         "builtin.converter.zip" => Arc::new(ZipConverter),
         "builtin.converter.html" => Arc::new(HtmlConverter),
         "builtin.converter.pdfium" => Arc::new(PdfConverter::default()),

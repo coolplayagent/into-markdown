@@ -4,6 +4,7 @@ exports_files([
     "assemble.py",
     "core_archive.py",
     "native_acceptance.py",
+    "drawio_smoke.py",
     "post_release_scenarios.py",
     "release_artifacts.py",
 ])

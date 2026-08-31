@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from drawio_smoke import drawio_cases
+
 import hashlib
 import json
 import os
@@ -61,6 +63,7 @@ CORE_MATERIAL_MEMBERS = (
     "licenses/npm/npm-release.spdx.json",
     "licenses/npm/lucide-ISC-MIT.txt",
     "licenses/npm/react-MIT.txt",
+    "licenses/diagram-design-MIT.txt",
     *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
 )
 
@@ -357,7 +360,7 @@ def run_e2e(
             work,
             environment,
         )
-        cases = [help_case, version_case, text_case]
+        cases = [help_case, version_case, text_case, *drawio_cases(binary, work, environment, run_case, AcceptanceError)]
         if not result.is_file() or "portable release acceptance" not in result.read_text(
             encoding="utf-8"
         ):

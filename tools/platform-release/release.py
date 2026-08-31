@@ -96,6 +96,7 @@ CPU_POLICY = json.loads(
     (ROOT / "tools/platform-release/cpu-policy.json").read_text(encoding="utf-8")
 )
 FIXTURES = [
+    "drawio/normal.drawio", "drawio/compressed.drawio",
     "docx/normal.docx",
     "docx/corrupt.docx",
     "epub/normal.epub",
@@ -697,7 +698,7 @@ def write_core_license_materials(output: pathlib.Path, cache: pathlib.Path, targ
     pdfium = destination / pathlib.Path(target_config["pdfium"]["url"]).name
     copy_file(cache / "pdfium", pdfium)
     result = [material(pdfium, output, "notice-bundle", ["pdfium"], [])]
-    for component, source, spdx in [("opencc-transcript-character-table", "LICENSE", "Apache-2.0"), ("imageproc-contour-adaptation", "third_party/licenses/imageproc-MIT.txt", "MIT"), ("clipper2-rust", "third_party/licenses/BSL-1.0.txt", "BSL-1.0"), ("calamine", "third_party/licenses/calamine-MIT.txt", "MIT")]:
+    for component, source, spdx in [("opencc-transcript-character-table", "LICENSE", "Apache-2.0"), ("imageproc-contour-adaptation", "third_party/licenses/imageproc-MIT.txt", "MIT"), ("diagram-design-drawio-adaptation", "third_party/licenses/diagram-design-MIT.txt", "MIT"), ("clipper2-rust", "third_party/licenses/BSL-1.0.txt", "BSL-1.0"), ("calamine", "third_party/licenses/calamine-MIT.txt", "MIT")]:
         path = destination / f"{component}.txt"
         copy_file(ROOT / source, path)
         result.append(material(path, output, "license-text", [component], [spdx], True))

@@ -61,8 +61,8 @@ export interface TaskEvent {
   execution?: { stage: string; basisPoints: number; completedUnits: number | null;
     totalUnits: number | null; message: string | null };
 }
-export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
-const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
+export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "drawio" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
+const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "drawio", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
 export type OcrPolicy = "off" | "auto" | "always";
 export type AiMode = "off" | "fallback" | "prefer" | "only";
 export type AssetMode = "extract" | "embed" | "omit";

@@ -51,6 +51,7 @@ CORE_MATERIAL_MEMBERS = (
     "licenses/npm/npm-release.spdx.json",
     "licenses/npm/lucide-ISC-MIT.txt",
     "licenses/npm/react-MIT.txt",
+    "licenses/diagram-design-MIT.txt",
     *(f"licenses/pdfium/{path}" for path in PDFIUM_LICENSE_FILES),
 )
 ARCHIVE_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
@@ -338,6 +339,7 @@ def stage_core_archive_materials(
         "licenses/npm/lucide-ISC-MIT.txt": ROOT
         / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt": ROOT / "third_party/licenses/diagram-design-MIT.txt",
         **{
             f"licenses/pdfium/{name}": pdfium_root / pathlib.PurePosixPath(name)
             for name in PDFIUM_LICENSE_FILES
@@ -538,6 +540,7 @@ def _verify_materials(
         "licenses/npm/lucide-ISC-MIT.txt": ROOT
         / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         "licenses/npm/react-MIT.txt": ROOT / "third_party/licenses/npm/react-MIT.txt",
+        "licenses/diagram-design-MIT.txt": ROOT / "third_party/licenses/diagram-design-MIT.txt",
     }
     for name, source in static_materials.items():
         if archive.read(name) != source.read_bytes():

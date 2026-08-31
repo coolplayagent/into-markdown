@@ -25,7 +25,7 @@ export async function listAllTasks(api: ApiClient, signal?: AbortSignal): Promis
 
 export const FORMATS: InputFormat[] = [
   "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf",
-  "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb",
+  "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "drawio", "feed", "ipynb",
   "image", "zip", "outlook-msg",
 ];
 
@@ -41,7 +41,7 @@ const FORMAT_BY_EXTENSION: Readonly<Record<string, InputFormat>> = {
   txt: "text", text: "text", log: "text",
   md: "markdown", markdown: "markdown", mdown: "markdown",
   html: "html", htm: "html", csv: "csv", tsv: "tsv", json: "json", xml: "xml",
-  rss: "feed", atom: "feed", ipynb: "ipynb",
+  drawio: "drawio", rss: "feed", atom: "feed", ipynb: "ipynb",
   png: "image", jpg: "image", jpeg: "image", tif: "image", tiff: "image", webp: "image", bmp: "image",
   zip: "zip", msg: "outlook-msg",
   wav: "audio", mp3: "audio", m4a: "audio", flac: "audio", ogg: "audio",
