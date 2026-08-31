@@ -12,7 +12,7 @@ import { useCapabilities } from "./capability-store";
 import { useRouter } from "./router";
 import {
   SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, taskFailureLabel, formatForName, listAllTasks,
-  executionStageLabel, iconForFormat, supportsFileName,
+  executionStageLabel, iconForFormat, supportsFileName, taskFailureCode,
 } from "./task-ui";
 
 const MAX_BATCH_FILES = 100;
@@ -219,7 +219,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const format = formatForName(entry.file.name, options.format);
               const FormatIcon = iconForFormat(format);
               const percent = entry.task ? Math.round(entry.task.progressMillionths / 10_000) : 0;
-              const failureCode = entry.error ?? entry.task?.diagnostics[0]?.code;
+              const failureCode = entry.error ?? (entry.task ? taskFailureCode(entry.task) : undefined);
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
               const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${(entry.task ? taskFailureLabel(entry.task, t) : diagnosticLabel(failureCode ?? "conversionFailed", t))}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
               if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => selectTask(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;

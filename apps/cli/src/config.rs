@@ -45,6 +45,8 @@ impl Drop for TestGlobalConfigGuard {
     }
 }
 
+pub(crate) mod memory;
+
 const CONFIG_FILENAME: &str = ".into-markdown.toml";
 const MAX_PROVIDER_BASE_URL_BYTES: usize = 4 * 1024;
 const MAX_PROVIDER_MODEL_BYTES: usize = 512;
@@ -269,6 +271,7 @@ pub struct LoadedConfig {
     pub merged: toml::Value,
     pub effective: RawConfig,
     pub options: ConversionOptions,
+    pub memory_snapshot: into_markdown::MemoryBudgetSnapshotDto,
     pub language: Language,
     pub jobs: usize,
     pub emit: EmitKind,
@@ -396,7 +399,7 @@ fn load_with_global(
     }
     let legacy_model_configuration = parsed.conversion.ocr.legacy_model_bundle.is_some()
         || parsed.conversion.asr.legacy_model_bundle.is_some();
-    let options = resolve_conversion_options(&parsed.conversion)?;
+    let (options, memory_snapshot) = memory::resolve(&parsed.conversion)?;
     let language = resolve_language(&mut parsed, language_override, &mut sources);
     let jobs = parsed.cli.jobs.unwrap_or_else(default_jobs);
     if jobs == 0 {
@@ -406,7 +409,6 @@ fn load_with_global(
     let asset_mode = parse_asset_mode(parsed.conversion.output.asset_mode);
     let conflict = parse_conflict(parsed.conversion.output.conflict.as_deref())?;
     let sources = complete_sources(&parsed, sources)?;
-    let timeout_ms = parsed.conversion.timeout_ms;
     Ok(LoadedConfig {
         paths: ConfigPaths { global, project, explicit, loaded },
         merged,
@@ -419,10 +421,11 @@ fn load_with_global(
         ai_model: parsed.conversion.ai.model.clone(),
         ocr_languages: parsed.conversion.ocr.languages.clone(),
         prompts: parsed.conversion.ai.prompts.clone(),
-        timeout_ms,
+        timeout_ms: parsed.conversion.timeout_ms,
         legacy_model_configuration,
         effective: parsed,
         options,
+        memory_snapshot,
         language,
         jobs,
         emit,
@@ -524,7 +527,10 @@ fn complete_sources(
     Ok(sources)
 }
 
-fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOptions, CliError> {
+fn resolve_conversion_options(
+    config: &ConversionConfig,
+    snapshot: &mut into_markdown::MemoryBudgetSnapshotDto,
+) -> Result<ConversionOptions, CliError> {
     let mut options = ConversionOptions::default();
     options.error_policy = config.error_policy.unwrap_or_default();
     if let Some(mode) = config.text.decoding_mode {
@@ -595,18 +601,7 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
         options.network.deny_private_networks = value;
     }
     config.limits.apply(&mut options)?;
-    options.limits.max_memory_bytes = match config.limits.max_memory_bytes.as_ref() {
-        Some(MemoryLimitConfig::Bytes(value)) => *value,
-        Some(MemoryLimitConfig::Mode(value)) if value.eq_ignore_ascii_case("auto") => {
-            adaptive_memory_budget()
-        }
-        Some(MemoryLimitConfig::Mode(value)) => {
-            return Err(CliError::config(format!(
-                "conversion.limits.max_memory_bytes must be an integer or 'auto', got '{value}'"
-            )));
-        }
-        None => adaptive_memory_budget(),
-    };
+    memory::apply_config(&config.limits.max_memory_bytes, &mut options, snapshot)?;
     if let Some(value) = &config.output.asset_directory_suffix {
         options.output.asset_directory_suffix.clone_from(value);
     }
@@ -617,33 +612,6 @@ fn resolve_conversion_options(config: &ConversionConfig) -> Result<ConversionOpt
         options.output.asset_mode = value;
     }
     Ok(options)
-}
-
-pub(crate) fn adaptive_memory_budget() -> u64 {
-    adaptive_memory_budget_for(total_physical_memory().unwrap_or(8 * 1024 * 1024 * 1024))
-}
-
-const fn adaptive_memory_budget_for(total: u64) -> u64 {
-    const GIB: u64 = 1024 * 1024 * 1024;
-    if total < 8 * GIB {
-        GIB
-    } else if total < 16 * GIB {
-        2 * GIB
-    } else if total < 32 * GIB {
-        4 * GIB
-    } else {
-        8 * GIB
-    }
-}
-
-fn total_physical_memory() -> Option<u64> {
-    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
-
-    let mut system = System::new_with_specifics(
-        RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
-    );
-    system.refresh_memory();
-    (system.total_memory() > 0).then_some(system.total_memory())
 }
 
 fn validate_common(config: &RawConfig) -> Result<(), CliError> {
@@ -2061,7 +2029,7 @@ mod tests {
         let config: RawConfig =
             toml::from_str("[conversion.limits]\nmax_presentation_xml_events = 3000000\n").unwrap();
         assert_eq!(
-            resolve_conversion_options(&config.conversion)
+            resolve_conversion_options(&config.conversion, &mut memory::select(None, None))
                 .unwrap()
                 .limits
                 .max_presentation_xml_events,
@@ -2069,10 +2037,10 @@ mod tests {
         );
         let mut invalid = config;
         invalid.conversion.limits.max_presentation_xml_events = Some(0);
-        assert!(resolve_conversion_options(&invalid.conversion).is_err());
+        assert!(resolve_conversion_options(&invalid.conversion, &mut memory::select(None, None)).is_err());
         invalid.conversion.limits.max_presentation_xml_events = None;
         assert_eq!(
-            resolve_conversion_options(&invalid.conversion)
+            resolve_conversion_options(&invalid.conversion, &mut memory::select(None, None))
                 .unwrap()
                 .limits
                 .max_presentation_xml_events,
@@ -2081,24 +2049,24 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_memory_tiers_and_legacy_numeric_config_are_stable() {
-        const GIB: u64 = 1024 * 1024 * 1024;
-        assert_eq!(adaptive_memory_budget_for(7 * GIB), GIB);
-        assert_eq!(adaptive_memory_budget_for(8 * GIB), 2 * GIB);
-        assert_eq!(adaptive_memory_budget_for(16 * GIB), 4 * GIB);
-        assert_eq!(adaptive_memory_budget_for(32 * GIB), 8 * GIB);
-
+    fn automatic_and_legacy_numeric_config_are_stable() {
         let numeric: RawConfig =
             toml::from_str("[conversion.limits]\nmax_memory_bytes = 123456\n").unwrap();
         assert_eq!(
-            resolve_conversion_options(&numeric.conversion).unwrap().limits.max_memory_bytes,
+            resolve_conversion_options(&numeric.conversion, &mut memory::select(None, None))
+                .unwrap()
+                .limits
+                .max_memory_bytes,
             123_456
         );
         let automatic: RawConfig =
             toml::from_str("[conversion.limits]\nmax_memory_bytes = \"auto\"\n").unwrap();
         assert!(
-            resolve_conversion_options(&automatic.conversion).unwrap().limits.max_memory_bytes
-                >= GIB
+            resolve_conversion_options(&automatic.conversion, &mut memory::select(None, None))
+                .unwrap()
+                .limits
+                .max_memory_bytes
+                == 2 * 1024 * 1024 * 1024
         );
     }
 

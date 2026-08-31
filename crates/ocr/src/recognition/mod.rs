@@ -282,9 +282,9 @@ fn ocr(detail: &str) -> ConversionError {
     ConversionError::Ocr { provider: PROVIDER.into(), detail: detail.into() }
 }
 
-fn limit(detail: &str) -> ConversionError {
+fn limit(detail: &'static str) -> ConversionError {
     ConversionError::ResourceLimit {
-        limit: "max_memory_bytes",
+        limit: detail,
         detail: format!("PP-OCRv6 recognition bound exceeded: {detail}"),
     }
 }

@@ -16,6 +16,7 @@ mod candidate_index;
 mod geometry;
 mod jpeg_input;
 mod pdf_placement;
+mod runtime;
 use candidate_index::{
     CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
     validate_visual_references_without_index,
@@ -716,6 +717,7 @@ fn for_each_visual_reference(
 
 #[derive(Clone)]
 struct VisualRef {
+    optional: bool,
     asset: AssetId,
     provenance: Provenance,
 }
@@ -750,7 +752,7 @@ async fn enrich(
         return Ok(output);
     }
     let mut references = Vec::new();
-    collect_references(&output.document.blocks, &mut references, context)?;
+    collect_references(&output.document.blocks, &mut references, input_format, context)?;
     if references.is_empty() {
         return Ok(output);
     }
@@ -874,79 +876,38 @@ async fn enrich(
         context.checkpoint()?;
         let candidate = &candidates[grouping.groups[group_index].representative];
         let asset = &output.assets[candidate.asset_index];
-        let normalized = match normalize(asset, options, context) {
-            Ok(value) => value,
+        match runtime::recognize(asset, ordinal, options, services, context).await {
+            Ok((contribution, memory)) => {
+                if let Some(memory) = memory {
+                    output.attach_memory_reservation(context, memory)?;
+                }
+                cache[group_index] = Some(contribution);
+            }
             Err(error)
-                if effective_ocr_policy(options) == OcrPolicy::Auto
-                    && auto_degradable_normalization(&error) =>
+                if runtime::optional_failure(
+                    &error,
+                    options,
+                    &references,
+                    candidates
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| grouping.membership[*index] == group_index)
+                        .map(|(_, candidate)| output.assets[candidate.asset_index].id.clone()),
+                ) =>
             {
+                context.checkpoint()?;
                 cache[group_index] = Some(CachedContribution {
-                    nodes: Vec::new(),
-                    diagnostics: vec![visual_diagnostic(None, error.to_string())],
-                    telemetry: None,
+                    diagnostics: vec![Diagnostic {
+                        code: "ocr.optionalRecognitionMemorySkipped".into(),
+                        severity: DiagnosticSeverity::Warning,
+                        message: error.to_string(),
+                        locator: None,
+                    }],
+                    ..Default::default()
                 });
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        let identity = OcrInputIdentity::try_new(
-            Sha256::digest(&normalized.bytes).into(),
-            normalized.width,
-            normalized.height,
-            0,
-        )?;
-        let mut diagnostics: Vec<_> =
-            jpeg_input::diagnostic(normalized.trailing_bytes).into_iter().collect();
-        let normalized_plan = match services.ocr.as_deref() {
-            Some(engine) => engine.planned_normalized_png_output(
-                normalized.width,
-                normalized.height,
-                options,
-                context,
-            ),
-            None => Err(ConversionError::ComponentUnavailable {
-                component: "ocr".into(),
-                detail: "no OCR engine is configured".into(),
-            }),
-        };
-        match normalized_plan {
-            Ok(_) => {}
-            Err(error)
-                if effective_ocr_policy(options) == OcrPolicy::Auto
-                    && matches!(error, ConversionError::ComponentUnavailable { .. }) =>
-            {
-                diagnostics.push(visual_diagnostic(None, error.to_string()));
-                cache[group_index] =
-                    Some(CachedContribution { nodes: Vec::new(), diagnostics, telemetry: None });
-                continue;
             }
             Err(error) => return Err(error),
         }
-        let mut contribution = crate::image_converter::ocr::recognize_for_input(
-            &normalized.bytes,
-            u32::try_from(ordinal + 1)
-                .map_err(|_| resource("max_pages", "OCR page ordinal overflow"))?,
-            normalized.width,
-            normalized.height,
-            identity,
-            options,
-            services,
-            context,
-        )
-        .await?;
-        if let Some(memory) = contribution.memory.take() {
-            output.attach_memory_reservation(context, memory)?;
-        }
-        diagnostics.append(&mut contribution.diagnostics);
-        cache[group_index] = Some(CachedContribution {
-            nodes: contribution.nodes,
-            diagnostics,
-            telemetry: Some((
-                identity,
-                contribution.recognized_regions,
-                contribution.recognized_chars,
-            )),
-        });
     }
 
     let mut contributions_by_asset = BTreeMap::new();
@@ -1227,6 +1188,7 @@ fn checkpointed_sha256(
 fn collect_references(
     nodes: &[BlockNode],
     output: &mut Vec<VisualRef>,
+    input_format: InputFormat,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     for (index, node) in nodes.iter().enumerate() {
@@ -1235,25 +1197,35 @@ fn collect_references(
         }
         match &node.block {
             Block::Image { asset, .. } => {
-                output
-                    .push(VisualRef { asset: asset.clone(), provenance: node.provenance.clone() });
+                output.push(VisualRef {
+                    optional: runtime::has_native_body(
+                        nodes,
+                        &node.provenance,
+                        input_format,
+                        context,
+                    )?,
+                    asset: asset.clone(),
+                    provenance: node.provenance.clone(),
+                });
             }
             Block::List { items, .. } => {
                 for item in items {
-                    collect_references(&item.blocks, output, context)?;
+                    collect_references(&item.blocks, output, input_format, context)?;
                 }
             }
             Block::Table { rows, .. } => {
                 for row in rows {
                     for cell in &row.cells {
-                        collect_references(&cell.blocks, output, context)?;
+                        collect_references(&cell.blocks, output, input_format, context)?;
                     }
                 }
             }
             Block::Footnote { blocks, .. }
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
-            | Block::Sheet { blocks, .. } => collect_references(blocks, output, context)?,
+            | Block::Sheet { blocks, .. } => {
+                collect_references(blocks, output, input_format, context)?
+            }
             _ => {}
         }
     }
@@ -1407,6 +1379,7 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod tests {
     mod jpeg;
+    mod memory_recovery;
     mod pdf_placement;
 
     use super::*;

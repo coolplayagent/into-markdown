@@ -250,6 +250,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
     let output = prepared
         .execute(
             into_markdown_process_plugin::PluginRequest {
+                memory_limit: None,
                 request_id: "manager-e2e",
                 input_format: "fixture",
                 source_name: Some("fixture.bin"),
@@ -263,6 +264,7 @@ fn signed_install_prepares_and_executes_real_process_guest() {
     let second_output = second
         .execute(
             into_markdown_process_plugin::PluginRequest {
+                memory_limit: None,
                 request_id: "manager-e2e-second",
                 input_format: "fixture",
                 source_name: Some("fixture.bin"),

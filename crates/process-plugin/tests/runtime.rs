@@ -54,6 +54,7 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     assert_eq!(controlled.detail, "plugin returned unknownFixture: unknown fixture command");
     for (mode, expected) in [
         (b"resource-error".as_slice(), PluginErrorCode::ResourceLimit),
+        (b"recognition-memory-error".as_slice(), PluginErrorCode::OcrRecognitionMemory),
         (b"timeout-error".as_slice(), PluginErrorCode::Timeout),
         (b"cancelled-error".as_slice(), PluginErrorCode::Cancelled),
     ] {
@@ -104,6 +105,35 @@ fn real_process_fixture_enforces_protocol_lifecycle_and_capabilities() {
     let error = stall.execute(&source, ExecutionOptions::default()).unwrap_err();
     assert_eq!(error.code, PluginErrorCode::Timeout);
     assert!(started.elapsed() < Duration::from_secs(30), "blocked request write ignored deadline");
+}
+
+#[test]
+fn combined_provider_and_child_memory_is_terminal_and_releases_request_resources() {
+    let harness = Harness::new_with_mode(Some("aggregate-memory"));
+    let context = ExecutionContext::new(
+        ExecutionOptions { timeout: Some(Duration::from_secs(90)), ..ExecutionOptions::default() },
+        ResourceLimits::default(),
+    );
+    let error = harness
+        .plugin
+        .execute(
+            PluginRequest {
+                memory_limit: Some(512 * 1024 * 1024),
+                request_id: "combined-memory",
+                input_format: "text",
+                source_name: Some("fixture.txt"),
+                parameters_json: None,
+                source: b"child-memory",
+            },
+            &context,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, PluginErrorCode::ResourceLimit, "{error}");
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.reserved_temporary_bytes(), 0);
+    assert_eq!(harness.execute_with_context(b"ok", &context).unwrap().result.markdown, "ok");
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.reserved_temporary_bytes(), 0);
 }
 
 #[test]
@@ -347,7 +377,11 @@ impl Harness {
             if mode == "stall-request" {
                 policy.request_timeout = Duration::from_millis(250);
             }
-            policy.allow_child_processes = mode == "allow-child";
+            policy.allow_child_processes = matches!(mode, "allow-child" | "aggregate-memory");
+            if mode == "aggregate-memory" {
+                // Measure the memory guard independently of loaded CI hosts' startup latency.
+                policy.handshake_timeout = Duration::from_secs(30);
+            }
         }
         let plugin = ProcessPlugin::new(
             PluginManifest {
@@ -390,6 +424,7 @@ impl Harness {
     > {
         self.plugin.execute(
             PluginRequest {
+                memory_limit: None,
                 request_id: "fixture-request",
                 input_format: "text",
                 source_name: Some("fixture.txt"),

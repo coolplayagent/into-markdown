@@ -7,6 +7,10 @@
 //! pipe.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod error;
+mod memory;
+use error::terminal_error_code;
+pub use error::{PluginError, PluginErrorCode};
 mod protocol;
 mod sandbox;
 pub mod worker;
@@ -28,7 +32,6 @@ use std::sync::{
     mpsc,
 };
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
 const HASH_BUFFER_SIZE: usize = 64 * 1024;
 const HASH_BUFFER_BYTES: u64 = 64 * 1024;
@@ -36,72 +39,6 @@ const ABSOLUTE_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_ENTRIES: usize = 25_000;
 const ABSOLUTE_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024 * 1024;
-
-/// Stable process-plugin failure categories.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum PluginErrorCode {
-    /// The local plugin authority is malformed or no longer matches disk.
-    Authority,
-    /// The operating-system sandbox could not be installed fail-closed.
-    SandboxUnavailable,
-    /// The authenticated executable could not be launched.
-    Launch,
-    /// The peer violated framing, ordering, identity, or version rules.
-    Protocol,
-    /// The peer emitted a frame larger than policy permits.
-    FrameTooLarge,
-    /// The plugin exited or its protocol stream ended before a terminal response.
-    Crashed,
-    /// The request exceeded its host deadline.
-    Timeout,
-    /// The caller cancelled the request.
-    Cancelled,
-    /// The returned IR, resources, diagnostics, or provenance were invalid.
-    InvalidResult,
-    /// The plugin returned a controlled terminal error.
-    Plugin,
-    /// A host or provider resource budget was exceeded.
-    ResourceLimit,
-}
-
-impl PluginErrorCode {
-    /// Stable lower-camel-case representation.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Authority => "pluginAuthority",
-            Self::SandboxUnavailable => "pluginSandboxUnavailable",
-            Self::Launch => "pluginLaunch",
-            Self::Protocol => "pluginProtocol",
-            Self::FrameTooLarge => "pluginFrameTooLarge",
-            Self::Crashed => "pluginCrashed",
-            Self::Timeout => "pluginTimeout",
-            Self::Cancelled => "pluginCancelled",
-            Self::InvalidResult => "pluginInvalidResult",
-            Self::Plugin => "pluginError",
-            Self::ResourceLimit => "pluginResourceLimit",
-        }
-    }
-}
-
-/// Sanitized process-plugin failure. Child stderr is never included verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{code}: {detail}", code = code.as_str())]
-pub struct PluginError {
-    /// Stable machine category.
-    pub code: PluginErrorCode,
-    /// Bounded host-generated detail.
-    pub detail: String,
-}
-
-impl PluginError {
-    fn new(code: PluginErrorCode, detail: impl Into<String>) -> Self {
-        let mut detail = detail.into();
-        detail.truncate(512);
-        Self { code, detail }
-    }
-}
 
 /// Immutable authority for one installed executable.
 #[derive(Debug, Clone)]
@@ -337,6 +274,8 @@ impl Default for RuntimePolicy {
 /// One bounded conversion invocation.
 #[derive(Debug, Clone, Copy)]
 pub struct PluginRequest<'a> {
+    /// Optional request-specific child-memory allowance, backed by a host lease.
+    pub memory_limit: Option<u64>,
     /// Stable request ID unique within the host process.
     pub request_id: &'a str,
     /// Stable input-format wire name.
@@ -495,28 +434,29 @@ impl ProcessPlugin {
         request: PluginRequest<'_>,
         context: &ExecutionContext,
     ) -> Result<RawPluginExecution, PluginError> {
-        validate_request(&request, &self.policy)?;
-        let encoded_bound = u64::from(self.policy.max_frame_bytes)
+        let (policy, _worker_memory) = self.memory_policy(request.memory_limit, context)?;
+        validate_request(&request, &policy)?;
+        let encoded_bound = u64::from(policy.max_frame_bytes)
             .checked_mul(2)
-            .and_then(|value| value.checked_add(self.policy.max_output_bytes))
+            .and_then(|value| value.checked_add(policy.max_output_bytes))
             .and_then(|value| value.checked_add(HASH_BUFFER_BYTES))
             .ok_or_else(|| {
                 PluginError::new(PluginErrorCode::ResourceLimit, "frame reservation overflow")
             })?;
         let _wire_memory =
             context.reserve_memory(encoded_bound).map_err(|error| map_execution_error(&error))?;
-        verify_executable(&self.plugin, self.policy.max_file_bytes)?;
-        let directory_guard = sandbox::working_directory(&self.policy)?;
+        verify_executable(&self.plugin, policy.max_file_bytes)?;
+        let directory_guard = sandbox::working_directory(&policy)?;
         let staged = match self.runtime_staging {
             RuntimeStaging::CopyBeforeLaunch => {
-                stage_plugin(&self.plugin, &self.policy, directory_guard, context)?
+                stage_plugin(&self.plugin, &policy, directory_guard, context)?
             }
             RuntimeStaging::ManagerVerifiedPrivateSnapshot => {
                 stage_private_snapshot(&self.plugin, directory_guard, context)?
             }
         };
-        verify_executable(&staged.plugin, self.policy.max_file_bytes)?;
-        let mut child = sandbox::spawn(&staged.plugin, &self.policy, &staged.working_directory)?;
+        verify_executable(&staged.plugin, policy.max_file_bytes)?;
+        let mut child = sandbox::spawn(&staged.plugin, &policy, &staged.working_directory)?;
         let mut stdin = child
             .take_stdin()
             .ok_or_else(|| PluginError::new(PluginErrorCode::Launch, "plugin stdin missing"))?;
@@ -526,7 +466,7 @@ impl ProcessPlugin {
         let stderr = child
             .take_stderr()
             .ok_or_else(|| PluginError::new(PluginErrorCode::Launch, "plugin stderr missing"))?;
-        let maximum = self.policy.max_frame_bytes;
+        let maximum = policy.max_frame_bytes;
         // One queued frame plus the reader's current frame is covered by the two-frame execution
         // context reservation above. Backpressure remains cancellable during tree teardown.
         let (frames_tx, frames_rx) = mpsc::sync_channel(1);
@@ -576,14 +516,14 @@ impl ProcessPlugin {
         ) {
             return finish_error(child, reader, stderr_reader, map_write_error(&error));
         }
-        let handshake_deadline = Instant::now().checked_add(self.policy.handshake_timeout);
+        let handshake_deadline = Instant::now().checked_add(policy.handshake_timeout);
         let hello = match receive_until(
             &frames_rx,
             &mut child,
             context,
             handshake_deadline,
             false,
-            self.policy.max_memory_bytes,
+            policy.max_memory_bytes,
         ) {
             Ok(hello) => hello,
             Err(error) => return finish_error(child, reader, stderr_reader, error),
@@ -608,14 +548,14 @@ impl ProcessPlugin {
             .len()
             .saturating_add(request.parameters_json.map_or(0, str::len).saturating_add(4096));
         let (source_base64, source_path, _source_temporary) = if inline_request_bytes
-            <= self.policy.max_frame_bytes as usize
+            <= policy.max_frame_bytes as usize
         {
             (Some(inline_source), None, None)
         } else {
             let source_bytes = u64::try_from(request.source.len()).map_err(|_| {
                 PluginError::new(PluginErrorCode::ResourceLimit, "source byte count overflow")
             })?;
-            if source_bytes > self.policy.max_file_bytes {
+            if source_bytes > policy.max_file_bytes {
                 return finish_error(
                     child,
                     reader,
@@ -647,12 +587,12 @@ impl ProcessPlugin {
                     PluginError::new(PluginErrorCode::Launch, "request source staging failed"),
                 );
             }
-            if let Err(error) = sandbox::authorize_request_source(&self.policy, &staged_source) {
+            if let Err(error) = sandbox::authorize_request_source(&policy, &staged_source) {
                 return finish_error(child, reader, stderr_reader, error);
             }
             (None, Some("source.bin".to_owned()), Some(reservation))
         };
-        let request_deadline = Instant::now().checked_add(self.policy.request_timeout);
+        let request_deadline = Instant::now().checked_add(policy.request_timeout);
         stdin = match write_request_bounded(
             stdin,
             HostMessage::Request {
@@ -663,13 +603,13 @@ impl ProcessPlugin {
                 parameters_json: request.parameters_json.map(str::to_owned),
                 source_base64,
                 source_path,
-                maximum_output_bytes: self.policy.max_output_bytes,
+                maximum_output_bytes: policy.max_output_bytes,
             },
             maximum,
             &mut child,
             context,
             request_deadline,
-            self.policy.max_memory_bytes,
+            policy.max_memory_bytes,
         ) {
             Ok(stdin) => stdin,
             Err(error) => return finish_error(child, reader, stderr_reader, error),
@@ -693,7 +633,7 @@ impl ProcessPlugin {
                 context,
                 request_deadline,
                 true,
-                self.policy.max_memory_bytes,
+                policy.max_memory_bytes,
             ) {
                 Ok(frame) => frame,
                 Err(error)
@@ -710,7 +650,7 @@ impl ProcessPlugin {
                         },
                         maximum,
                     );
-                    let grace = Instant::now().checked_add(self.policy.cancellation_grace);
+                    let grace = Instant::now().checked_add(policy.cancellation_grace);
                     while grace.is_some_and(|deadline| Instant::now() < deadline) {
                         if child.try_wait().ok().flatten().is_some() {
                             break;
@@ -736,7 +676,7 @@ impl ProcessPlugin {
                     },
                     maximum,
                 );
-                let grace = Instant::now().checked_add(self.policy.cancellation_grace);
+                let grace = Instant::now().checked_add(policy.cancellation_grace);
                 while grace.is_some_and(|deadline| Instant::now() < deadline) {
                     if child.try_wait().ok().flatten().is_some() {
                         break;
@@ -795,9 +735,7 @@ impl ProcessPlugin {
                     event_count = event_count.saturating_add(1);
                     streamed_diagnostic_bytes =
                         streamed_diagnostic_bytes.saturating_add(diagnostic_json.len() as u64);
-                    if event_count > 10_000
-                        || streamed_diagnostic_bytes > self.policy.max_output_bytes
-                    {
+                    if event_count > 10_000 || streamed_diagnostic_bytes > policy.max_output_bytes {
                         return finish_error(
                             child,
                             reader,
@@ -855,7 +793,7 @@ impl ProcessPlugin {
                             ),
                         );
                     }
-                    if result_json.len() as u64 > self.policy.max_output_bytes {
+                    if result_json.len() as u64 > policy.max_output_bytes {
                         return finish_error(
                             child,
                             reader,
@@ -868,7 +806,7 @@ impl ProcessPlugin {
                     }
                     if (result_json.len() as u64)
                         .checked_add(streamed_diagnostic_bytes)
-                        .is_none_or(|bytes| bytes > self.policy.max_output_bytes)
+                        .is_none_or(|bytes| bytes > policy.max_output_bytes)
                     {
                         return finish_error(
                             child,
@@ -950,15 +888,6 @@ impl ProcessPlugin {
                 }
             }
         }
-    }
-}
-
-fn terminal_error_code(code: &str) -> PluginErrorCode {
-    match code {
-        "resourceLimit" => PluginErrorCode::ResourceLimit,
-        "cancelled" => PluginErrorCode::Cancelled,
-        "timeout" => PluginErrorCode::Timeout,
-        _ => PluginErrorCode::Plugin,
     }
 }
 
@@ -1679,6 +1608,18 @@ fn request_nonce(request_id: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_explicit_terminal_code_classifies_a_recognition_refusal() {
+        use super::{PluginErrorCode, terminal_error_code};
+        assert_eq!(
+            terminal_error_code("ocrRecognitionMemory"),
+            PluginErrorCode::OcrRecognitionMemory
+        );
+        assert_eq!(terminal_error_code("resourceLimit"), PluginErrorCode::ResourceLimit);
+        assert_eq!(terminal_error_code("recognition bound exceeded"), PluginErrorCode::Plugin);
+        assert_eq!(terminal_error_code("timeout"), PluginErrorCode::Timeout);
+        assert_eq!(terminal_error_code("cancelled"), PluginErrorCode::Cancelled);
+    }
     use super::*;
 
     #[test]

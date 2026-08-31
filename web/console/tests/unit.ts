@@ -15,6 +15,8 @@ import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
 import { archiveMembers } from "../src/archive-diagnostics";
 import { supportsFileName, taskFailureLabel } from "../src/task-ui";
+import { parseOcrOmissions } from "../src/ocr-omissions";
+import { taskFailureCode } from "../src/task-ui";
 import styles from "../src/styles.css";
 
 const token = "A".repeat(43);
@@ -476,9 +478,15 @@ test("result dialog provides reading and source views with a closed details draw
   const sibling = { ...completed, id: "c".repeat(32), displayName: "Appendix.pdf" };
   let previewCalls = 0;
   const markdown = "<a id=\"pdf-page-1\"></a>\n# Quarterly report\n\n| <strong>Item</strong> | **Amount** |\n| --- | ---: |\n| Revenue | 120 |\n\n<img src=file:///secret>";
-  const api: ApiClient = { ...availableApi, async getTask() { return completed; }, async listTasks(filters) { assert.equal(filters?.batchId, completed.batchId); return { tasks: [completed, sibling] }; }, async preview() { previewCalls += 1; return { text: markdown, truncated: true, contentType: "text/markdown" }; } };
+  const api: ApiClient = { ...availableApi, async getTask() { return completed; }, async listTasks(filters) { assert.equal(filters?.batchId, completed.batchId); return { tasks: [completed, sibling] }; }, async preview(_id, key) { previewCalls += 1;
+    if (key === "f".repeat(32)) return { text: JSON.stringify({ schemaVersion: 1, diagnostics: [
+      { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 3, part: "figure.png" } },
+    ] }), truncated: false, contentType: "application/json" };
+    return { text: markdown, truncated: true, contentType: "text/markdown" }; } };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
-  await waitFor(() => previewCalls === 1 && window.document.body.textContent.includes("Quarterly report"));
+  await waitFor(() => previewCalls === 2 && window.document.body.textContent.includes("figure.png"));
+  assert.ok(window.document.querySelector('.document-canvas .preview-notice')?.parentElement?.classList.contains("document-canvas"));
+  assert.ok(window.document.querySelector('.document-canvas')?.textContent?.includes("Some images exceeded"));
   assert.ok(window.document.querySelector('.result-dialog[role="dialog"]'));
   assert.equal(window.document.querySelector(".result-dialog-backdrop")?.parentElement, window.document.body, "the viewport dialog must escape animated route containers");
   assert.ok(window.document.body.textContent.includes("Add documents"), "the workbench remains mounted behind the result");
@@ -1152,4 +1160,16 @@ test("Markdown preview retains bounded node hierarchy indentation", async () => 
   const items = [...window.document.querySelectorAll(".preview-list-item")];
   assert.deepEqual(items.map(item => item.className), ["preview-list-item list-depth-0", "preview-list-item list-depth-1", "preview-list-item list-depth-2", "preview-list-item list-depth-12"]);
   assert.equal(window.document.querySelectorAll("[style]").length, 0);
+});
+
+test("structured OCR failure and omission locations are bounded and preserved", () => {
+  const failed = task("failed");
+  failed.failure = { schemaVersion: 1, code: "resourceLimit", reasonCode: "ocrRecognitionMemory", stage: "conversion", retryable: false };
+  assert.equal(taskFailureCode(parseTask(failed)), "ocrRecognitionMemory");
+  assert.throws(() => parseTask({ ...failed, failure: { ...failed.failure, reasonCode: "<script>" } }), ApiError);
+  assert.deepEqual(parseOcrOmissions(JSON.stringify({ diagnostics: [
+    { code: "irrelevant", locator: { page: 8 } },
+    { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 2, part: "chapter/image.png" } },
+  ] })), [{ page: 2, part: "chapter/image.png" }]);
+  assert.throws(() => parseOcrOmissions('{"diagnostics":[{"code":"ocr.optionalRecognitionMemorySkipped"}]}'));
 });

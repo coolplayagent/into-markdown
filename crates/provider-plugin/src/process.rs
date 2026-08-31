@@ -253,8 +253,7 @@ impl ProcessCapability {
             capability_id: self.binding.capability_id.clone(),
             options: options.clone(),
         };
-        let json =
-            self.execute("readiness", "application/octet-stream", &[0], &parameters, context)?;
+        let json = self.execute("readiness", None, &[0], &parameters, context)?;
         let response: ReadinessResponse = serde_json::from_str(&json)
             .map_err(|_| unavailable(&self.binding.provider_id, "readiness response is invalid"))?;
         if response.ready {
@@ -275,7 +274,7 @@ impl ProcessCapability {
     fn execute<T: Serialize>(
         &self,
         operation: &'static str,
-        _media_type: &str,
+        memory_limit: Option<u64>,
         source: &[u8],
         parameters: &T,
         context: &ExecutionContext,
@@ -294,6 +293,7 @@ impl ProcessCapability {
         self.process
             .execute_raw(
                 PluginRequest {
+                    memory_limit,
                     request_id: &request_id,
                     input_format: operation,
                     source_name: None,
@@ -469,6 +469,11 @@ impl OcrEngine for ProcessOcrEngine {
 }
 
 impl ProcessOcrEngine {
+    fn wire_memory_bytes(&self) -> u64 {
+        // Two maximum frames, the result JSON and executable hash scratch.
+        5 * self.capability.resources.max_output_bytes + 2 * FRAME_OVERHEAD + 64 * 1024
+    }
+
     fn output_plan(&self) -> Result<OcrOutputPlan, ConversionError> {
         let retained = self.capability.resources.max_output_bytes;
         let regions = 3_000_u32;
@@ -476,7 +481,11 @@ impl ProcessOcrEngine {
         let text = retained.saturating_sub(structural).min(16 * 1024 * 1024);
         OcrOutputPlan::try_new_with_working(
             retained,
-            self.capability.resources.max_memory_bytes,
+            self.capability
+                .resources
+                .max_memory_bytes
+                .min(self.options.limits.max_memory_bytes)
+                .saturating_add(self.wire_memory_bytes()),
             regions,
             text,
         )
@@ -487,37 +496,56 @@ impl ProcessOcrEngine {
         request: OcrRequest<'_>,
         context: &ExecutionContext,
     ) -> Result<OcrRecognition, ConversionError> {
+        let budget = self
+            .capability
+            .resources
+            .max_memory_bytes
+            .min(self.options.limits.max_memory_bytes)
+            .min(context.available_memory_bytes().saturating_sub(self.wire_memory_bytes()));
+        let mut options = self.options.clone();
+        options.limits.max_memory_bytes = budget;
+        if budget == 0 {
+            return Err(ConversionError::ResourceLimit {
+                limit: "max_memory_bytes",
+                detail: "no shared working allowance remains for the OCR provider".into(),
+            });
+        }
+        context.record_ocr_request(budget);
         let parameters = OcrParameters {
             schema_version: PROTOCOL_VERSION,
             capability_id: self.capability.binding.capability_id.clone(),
             media_type: request.media_type.to_owned(),
             languages: request.languages.iter().map(|value| (*value).to_owned()).collect(),
-            options: self.options.clone(),
+            options,
         };
-        let json = self.capability.execute(
-            "ocr",
-            request.media_type,
-            request.image,
-            &parameters,
-            context,
-        )?;
+        let json = self
+            .capability
+            .execute("ocr", Some(budget), request.image, &parameters, context)
+            .inspect_err(|error| {
+                if matches!(error, ConversionError::OcrRecognitionMemory { .. }) {
+                    context.record_ocr_memory_refusal();
+                }
+            })?;
         let response: OcrCapabilityResponse = serde_json::from_str(&json)
-            .map_err(|_| unavailable(self.id(), "provider returned invalid OCR JSON"))?;
+            .map_err(|_| invalid_ocr_response(self.id(), "provider returned invalid OCR JSON"))?;
         if response.schema_version != PROTOCOL_VERSION
             || response.capability_id != self.capability.binding.capability_id
             || response.provider_id != self.id()
         {
-            return Err(unavailable(
+            return Err(invalid_ocr_response(
                 self.id(),
                 "OCR provider identity does not match its manifest",
             ));
         }
         let result = BoundOcrResult::try_from_dto(response.result)?;
-        let identity = result
-            .input_identity()
-            .ok_or_else(|| unavailable(self.id(), "OCR provider omitted input identity"))?;
+        let identity = result.input_identity().ok_or_else(|| {
+            invalid_ocr_response(self.id(), "OCR provider omitted input identity")
+        })?;
         if identity.sha256() != Sha256::digest(request.image).as_slice() {
-            return Err(unavailable(self.id(), "OCR result is bound to a different input"));
+            return Err(invalid_ocr_response(
+                self.id(),
+                "OCR result is bound to a different input",
+            ));
         }
         Ok(OcrRecognition::Bound(result))
     }
@@ -549,7 +577,7 @@ impl Transcriber for ProcessTranscriber {
             };
             let json = self.capability.execute(
                 "transcription",
-                request.media_type,
+                None,
                 request.media,
                 &parameters,
                 context,
@@ -593,7 +621,7 @@ impl Diarizer for ProcessDiarizer {
             };
             let json = self.capability.execute(
                 "diarization",
-                request.media_type,
+                None,
                 request.media,
                 &parameters,
                 context,
@@ -632,7 +660,7 @@ impl LegacyOfficeNormalizer for ProcessLegacyOfficeNormalizer {
             };
             let json = self.capability.execute(
                 "legacy-office",
-                "application/x-ole-storage",
+                None,
                 request.document,
                 &parameters,
                 context,
@@ -794,11 +822,43 @@ fn map_error(provider: &str, error: &PluginError) -> ConversionError {
     match error.code {
         PluginErrorCode::Cancelled => ConversionError::Cancelled,
         PluginErrorCode::Timeout => ConversionError::Timeout,
-        PluginErrorCode::ResourceLimit | PluginErrorCode::FrameTooLarge => {
+        PluginErrorCode::OcrRecognitionMemory => ConversionError::OcrRecognitionMemory {
+            provider: provider.to_owned(),
+            detail: error.detail.clone(),
+        },
+        PluginErrorCode::FrameTooLarge => ConversionError::ResourceLimit {
+            limit: "providerFrameBytes",
+            detail: error.detail.clone(),
+        },
+        PluginErrorCode::ResourceLimit => {
             ConversionError::ResourceLimit { limit: "provider", detail: error.detail.clone() }
         }
+        PluginErrorCode::Protocol | PluginErrorCode::InvalidResult => {
+            ConversionError::ProviderProtocol {
+                provider: provider.into(),
+                detail: error.detail.clone(),
+            }
+        }
+        PluginErrorCode::Crashed => ConversionError::ProviderProcess {
+            provider: provider.into(),
+            detail: error.detail.clone(),
+        },
+        PluginErrorCode::Plugin => {
+            ConversionError::Ocr { provider: provider.into(), detail: error.detail.clone() }
+        }
+        PluginErrorCode::OcrWidthLimit
+        | PluginErrorCode::OcrPixelLimit
+        | PluginErrorCode::OcrTensorLimit
+        | PluginErrorCode::OcrStructureLimit => ConversionError::ResourceLimit {
+            limit: error.code.as_str(),
+            detail: error.detail.clone(),
+        },
         _ => unavailable(provider, &error.detail),
     }
+}
+
+fn invalid_ocr_response(provider: &str, detail: &str) -> ConversionError {
+    ConversionError::ProviderProtocol { provider: provider.to_owned(), detail: detail.to_owned() }
 }
 
 fn unavailable(provider: &str, detail: &str) -> ConversionError {
@@ -810,6 +870,34 @@ fn unavailable(provider: &str, detail: &str) -> ConversionError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn classification_survives_the_provider_boundary_without_message_matching() {
+        use super::*;
+        let detail = "recognition bound exceeded";
+        let typed = map_error(
+            "test.ocr",
+            &PluginError { code: PluginErrorCode::OcrRecognitionMemory, detail: detail.into() },
+        );
+        assert!(matches!(typed, ConversionError::OcrRecognitionMemory { .. }));
+        assert_eq!(typed.reason_code(), "ocrRecognitionMemory");
+        for code in [
+            PluginErrorCode::ResourceLimit,
+            PluginErrorCode::FrameTooLarge,
+            PluginErrorCode::Protocol,
+            PluginErrorCode::Crashed,
+            PluginErrorCode::Plugin,
+            PluginErrorCode::OcrWidthLimit,
+            PluginErrorCode::OcrPixelLimit,
+            PluginErrorCode::OcrTensorLimit,
+        ] {
+            let error = map_error("test.ocr", &PluginError { code, detail: detail.into() });
+            assert!(!matches!(
+                error,
+                ConversionError::OcrRecognitionMemory { .. }
+                    | ConversionError::ComponentUnavailable { .. }
+            ));
+        }
+    }
     use super::*;
     use into_markdown_core::{
         BlockNode, Inline, NodeId, Provenance, ProvenanceKind, SourceLocator, TimeRange,

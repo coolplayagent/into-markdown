@@ -124,8 +124,15 @@ impl PpOcrImageEngine {
         };
         let detected = detector.detect_page(1, image, context).await?;
         let language = language_hint(request.languages)?;
-        let recognition_result =
-            recognizer.recognize_page(image, &detected, language, context).await?;
+        let recognition_result = recognizer
+            .recognize_page(image, &detected, language, context)
+            .await
+            .map_err(|error| match error {
+                ConversionError::ResourceLimit { limit: "max_memory_bytes", detail } => {
+                    ConversionError::ResourceLimit { limit: "ocrRecognitionMemory", detail }
+                }
+                error => error,
+            })?;
         context.checkpoint()?;
         let identity = OcrInputIdentity::try_new(
             Sha256::digest(request.image).into(),

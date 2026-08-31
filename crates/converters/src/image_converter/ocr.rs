@@ -568,6 +568,10 @@ fn map_unavailable(provider: &str, error: ConversionError) -> ConversionError {
         ConversionError::Cancelled
         | ConversionError::Timeout
         | ConversionError::Ocr { .. }
+        | ConversionError::OcrRecognitionMemory { .. }
+        | ConversionError::Internal { .. }
+        | ConversionError::ProviderProtocol { .. }
+        | ConversionError::ProviderProcess { .. }
         | ConversionError::ResourceLimit { .. } => error,
         _ => ConversionError::ComponentUnavailable {
             component: provider.into(),

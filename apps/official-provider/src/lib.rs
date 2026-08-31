@@ -387,7 +387,23 @@ fn current_provider_executable() -> Result<PathBuf, WorkerError> {
 }
 
 fn worker_error(error: &ConversionError) -> WorkerError {
-    WorkerError::new(error.code().as_str(), error.to_string())
+    let code = match error {
+        ConversionError::ResourceLimit { limit: "ocrRecognitionMemory", .. } => {
+            "ocrRecognitionMemory"
+        }
+        ConversionError::ResourceLimit { limit: "recognitionWidth", .. } => "ocrWidthLimit",
+        ConversionError::ResourceLimit { limit: "recognitionCropPixels", .. } => "ocrPixelLimit",
+        ConversionError::ResourceLimit {
+            limit: "recognitionTensorElements" | "recognitionOutputElements",
+            ..
+        } => "ocrTensorLimit",
+        ConversionError::ResourceLimit {
+            limit: "recognitionRegions" | "recognitionDecodedBytes",
+            ..
+        } => "ocrStructureLimit",
+        _ => error.code().as_str(),
+    };
+    WorkerError::new(code, error.to_string())
 }
 
 const fn worker_name() -> &'static str {
@@ -571,6 +587,7 @@ mod speech_tests {
         let result = process
             .execute_raw(
                 PluginRequest {
+                    memory_limit: None,
                     request_id: "real-speech-sandbox",
                     input_format: "transcription",
                     source_name: Some("recording.webm"),
@@ -624,6 +641,34 @@ mod speech_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn worker_terminal_classification_is_stage_specific() {
+        use super::*;
+        let controlled = ConversionError::ResourceLimit {
+            limit: "ocrRecognitionMemory",
+            detail: "private refusal".into(),
+        };
+        assert_eq!(worker_error(&controlled).code, "ocrRecognitionMemory");
+        for (limit, expected) in [
+            ("recognitionWidth", "ocrWidthLimit"),
+            ("recognitionCropPixels", "ocrPixelLimit"),
+            ("recognitionTensorElements", "ocrTensorLimit"),
+            ("recognitionRegions", "ocrStructureLimit"),
+        ] {
+            assert_eq!(
+                worker_error(&ConversionError::ResourceLimit {
+                    limit,
+                    detail: "fixed bound".into()
+                })
+                .code,
+                expected
+            );
+        }
+        for limit in ["max_memory_bytes", "workerProtocol", "nativeWorkerMemory"] {
+            let error = ConversionError::ResourceLimit { limit, detail: "private refusal".into() };
+            assert_eq!(worker_error(&error).code, "resourceLimit");
+        }
+    }
     use super::*;
     use into_markdown::OcrPolicy;
 

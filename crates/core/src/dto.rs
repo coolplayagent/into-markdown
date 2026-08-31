@@ -16,8 +16,8 @@
 //! ```
 
 use crate::{
-    Asset, Diagnostic, DiagnosticSeverity, Document, Provenance, ProvenanceKind, SourceLocator,
-    ir::is_safe_container_part_name,
+    Asset, BatchOcrUsageDto, BatchResourceUsageDto, Diagnostic, DiagnosticSeverity, Document,
+    Provenance, ProvenanceKind, SourceLocator, ir::is_safe_container_part_name,
 };
 use base64::Engine as _;
 use serde::{
@@ -31,6 +31,8 @@ use std::io::{self, Write};
 use thiserror::Error;
 
 mod batch_report;
+mod resource_usage;
+use resource_usage::{RawMemoryBudgetSnapshot, RawOcrRuntimeUsage};
 
 /// Schema version emitted and accepted by application DTOs.
 pub const DTO_SCHEMA_VERSION: u32 = 1;
@@ -326,26 +328,6 @@ pub struct BatchLimitDto {
     pub detail: Option<String>,
 }
 
-/// Auditable OCR text that survived component filtering, deduplication, and merge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BatchOcrUsageDto {
-    /// Accepted and merged OCR source regions.
-    pub recognized_regions: u64,
-    /// Unicode scalar values contributed by those regions.
-    pub recognized_chars: u64,
-}
-
-/// Invocation-wide resource usage for a CLI batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchResourceUsageDto {
-    /// Actual batch-wide shared memory lease budget.
-    pub shared_lease_budget_bytes: u64,
-    /// Historical shared memory lease high-water mark.
-    pub shared_lease_peak_bytes: u64,
-    /// OCR contribution evidence when OCR was enabled for the invocation.
-    pub ocr: Option<BatchOcrUsageDto>,
-}
-
 /// One item in a machine-readable batch report.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BatchItemDto {
@@ -558,6 +540,10 @@ struct RawBatchOcrUsageDto {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawBatchResourceUsageDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory: Option<RawMemoryBudgetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ocr_runtime: Option<RawOcrRuntimeUsage>,
     shared_lease_budget_bytes: u64,
     shared_lease_peak_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -865,6 +851,8 @@ fn encode_batch_report(value: &BatchReportDto) -> RawBatchReportDto {
         failed: value.failed,
         wall_duration_ms: value.wall_duration_ms,
         resource_usage: value.resource_usage.as_ref().map(|usage| RawBatchResourceUsageDto {
+            memory: usage.memory.map(Into::into),
+            ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| RawBatchOcrUsageDto {
@@ -1558,30 +1546,7 @@ impl BatchReportDto {
         validate_version(self.schema_version)?;
         validate_duration(self.wall_duration_ms, "$.wallDurationMs")?;
         if let Some(usage) = &self.resource_usage {
-            if usage.shared_lease_budget_bytes == 0 {
-                return Err(DtoError::new(
-                    DtoErrorCode::InvalidField,
-                    "$.resourceUsage.sharedLeaseBudgetBytes",
-                    "shared lease budget must be greater than zero",
-                ));
-            }
-            if usage.shared_lease_peak_bytes > usage.shared_lease_budget_bytes {
-                return Err(DtoError::new(
-                    DtoErrorCode::InvalidField,
-                    "$.resourceUsage.sharedLeasePeakBytes",
-                    "shared lease peak cannot exceed its budget",
-                ));
-            }
-            if usage
-                .ocr
-                .is_some_and(|ocr| (ocr.recognized_regions == 0) != (ocr.recognized_chars == 0))
-            {
-                return Err(DtoError::new(
-                    DtoErrorCode::InvalidField,
-                    "$.resourceUsage.ocr",
-                    "OCR regions and characters must both be zero or both be positive",
-                ));
-            }
+            resource_usage::validate(usage)?;
         }
         if self.items.len() > limits.max_batch_items {
             return limit("$.items", "batchItems", limits.max_batch_items);
@@ -1974,6 +1939,8 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
         failed: raw.failed,
         wall_duration_ms: raw.wall_duration_ms,
         resource_usage: raw.resource_usage.map(|usage| BatchResourceUsageDto {
+            memory: usage.memory.map(Into::into),
+            ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| BatchOcrUsageDto {
@@ -3259,6 +3226,8 @@ mod tests {
             vec![item],
             Some(15.72),
             Some(BatchResourceUsageDto {
+                memory: None,
+                ocr_runtime: None,
                 shared_lease_budget_bytes: 2_147_483_648,
                 shared_lease_peak_bytes: 123_456_789,
                 ocr: Some(BatchOcrUsageDto { recognized_regions: 2, recognized_chars: 7 }),
@@ -3286,6 +3255,8 @@ mod tests {
     #[test]
     fn batch_resource_usage_rejects_zero_budget_impossible_peak_and_fake_ocr_hits() {
         let valid = BatchResourceUsageDto {
+            memory: None,
+            ocr_runtime: None,
             shared_lease_budget_bytes: 10,
             shared_lease_peak_bytes: 5,
             ocr: Some(BatchOcrUsageDto { recognized_regions: 0, recognized_chars: 0 }),

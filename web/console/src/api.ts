@@ -43,11 +43,11 @@ export interface ArtifactPreview { text: string; truncated: boolean; contentType
 export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
 export interface TaskRecord {
-  failure?: TaskFailure | null;
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
   pinned: boolean; artifactGeneration: number;
   displayName?: string | null; format?: InputFormat | null; batchId?: string | null;
+  failure?: TaskFailure | null;
   workflow: "conversion" | "meetingTranscript";
   configuration: { schemaVersion: number; ocrEnabled: boolean; preserveLayout: boolean };
 }

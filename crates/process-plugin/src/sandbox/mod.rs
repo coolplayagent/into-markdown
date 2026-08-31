@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 #[cfg(unix)]
+mod memory;
+#[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 pub(crate) mod windows;
@@ -152,41 +154,14 @@ impl SandboxChild {
         }
     }
 
-    // The cross-platform worker loop intentionally has one fallible physical-memory query
-    // contract. Linux reads the kernel-owned per-PID high-water mark while macOS uses the
-    // platform physical-footprint API; Windows enforces the same value in a Job Object.
+    // The owned process group includes provider and model workers. Windows applies
+    // the aggregate limit through its Job Object before starting the process.
     #[cfg_attr(windows, allow(clippy::unused_self, clippy::unnecessary_wraps))]
     pub(crate) fn memory_exceeded(&self, limit: u64) -> Result<bool, ()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             let Self::Unix(child) = self;
-            return match std::fs::read_to_string(format!("/proc/{}/status", child.id())) {
-                Ok(status) => linux_peak_resident_bytes(&status)
-                    .map(|bytes| bytes.is_some_and(|bytes| bytes > limit)),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-                Err(_) => Err(()),
-            };
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let Self::Unix(child) = self;
-            let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
-            // SAFETY: the owned child PID is live while borrowed and the V2
-            // output buffer has the exact layout requested by the flavor.
-            let result = unsafe {
-                libc::proc_pid_rusage(
-                    i32::try_from(child.id()).map_err(|_| ())?,
-                    libc::RUSAGE_INFO_V2,
-                    (&raw mut usage).cast(),
-                )
-            };
-            if result == 0 {
-                return Ok(usage.ri_phys_footprint.max(usage.ri_resident_size) > limit);
-            }
-            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-                return Ok(false);
-            }
-            return Err(());
+            memory::group_bytes(child.id()).map(|bytes| bytes > limit)
         }
         #[cfg(windows)]
         {
