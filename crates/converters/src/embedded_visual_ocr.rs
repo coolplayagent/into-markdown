@@ -15,6 +15,7 @@ use std::io::Cursor;
 mod candidate_index;
 mod geometry;
 mod jpeg_input;
+mod pdf_placement;
 use candidate_index::{
     CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
     validate_visual_references_without_index,
@@ -784,6 +785,15 @@ async fn enrich(
         }
     }
     let mut eligible_reference_count = 0_u32;
+    if input_format == InputFormat::Pdf {
+        pdf_placement::filter_references(
+            &mut references,
+            &eligible_assets,
+            &mut output.diagnostics,
+            options,
+            context,
+        )?;
+    }
     for (index, reference) in references.iter().enumerate() {
         if index % 256 == 0 {
             context.checkpoint()?;
@@ -805,6 +815,9 @@ async fn enrich(
                 "embedded visual references exceed the request limit",
             ));
         }
+    }
+    if eligible_reference_count == 0 {
+        return Ok(output);
     }
     let mut candidates = CandidateBuffer::new(eligible_assets.len(), context)?;
     let mut referenced_assets = BTreeSet::new();
@@ -955,6 +968,7 @@ async fn enrich(
         std::mem::take(&mut output.document.blocks),
         &contributions_by_asset,
         &mut occupied_ids,
+        input_format,
         context,
     )?;
     for (reference_index, reference) in references.iter().enumerate() {
@@ -1250,6 +1264,7 @@ fn rebuild_nodes(
     nodes: Vec<BlockNode>,
     cache: &BTreeMap<AssetId, CachedContribution>,
     occupied_ids: &mut BTreeSet<NodeId>,
+    input_format: InputFormat,
     context: &ExecutionContext,
 ) -> Result<Vec<BlockNode>, ConversionError> {
     let mut rebuilt = Vec::new();
@@ -1264,6 +1279,7 @@ fn rebuild_nodes(
                         std::mem::take(&mut item.blocks),
                         cache,
                         occupied_ids,
+                        input_format,
                         context,
                     )?;
                 }
@@ -1275,6 +1291,7 @@ fn rebuild_nodes(
                             std::mem::take(&mut cell.blocks),
                             cache,
                             occupied_ids,
+                            input_format,
                             context,
                         )?;
                     }
@@ -1284,12 +1301,23 @@ fn rebuild_nodes(
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                *blocks = rebuild_nodes(std::mem::take(blocks), cache, occupied_ids, context)?;
+                *blocks = rebuild_nodes(
+                    std::mem::take(blocks),
+                    cache,
+                    occupied_ids,
+                    input_format,
+                    context,
+                )?;
             }
             _ => {}
         }
         let contribution = match &node.block {
-            Block::Image { asset, .. } => cache.get(asset).cloned(),
+            Block::Image { asset, .. }
+                if input_format != InputFormat::Pdf
+                    || geometry::source_coordinate_frame(&node.provenance.locator).is_some() =>
+            {
+                cache.get(asset).cloned()
+            }
             _ => None,
         };
         let source_id = node.id.clone();
@@ -1379,6 +1407,7 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod tests {
     mod jpeg;
+    mod pdf_placement;
 
     use super::*;
     use image::{DynamicImage, Frame, ImageFormat, Rgba, RgbaImage, codecs::gif::GifEncoder};
