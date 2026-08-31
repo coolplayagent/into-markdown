@@ -340,3 +340,33 @@ fn rejects_encrypted_unsafe_relationships_and_doctype() {
     }
     assert_eq!(resolve_target("ppt/slides/slide1.xml", "/absolute").unwrap(), "absolute");
 }
+
+#[test]
+fn high_complexity_slide_keeps_every_text_run_and_releases_memory() {
+    let original = fixture(
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+        &[],
+    );
+    let runs = "<a:r><a:t>kept </a:t></a:r>".repeat(100_001);
+    let slide = format!(
+        r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id="1" name="Body"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p>{runs}</a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#
+    );
+    let bytes = rewrite_part(&original, "ppt/slides/slide1.xml", slide.as_bytes());
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let output = super::super::convert_presentation(&bytes, &options, &context).unwrap();
+    let markdown = render(&output.document, &output.assets, &options).unwrap();
+    assert_eq!(markdown.matches("kept").count(), 100_001);
+    drop(output);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    let mut low = options;
+    low.limits.max_presentation_xml_events = 100_000;
+    let context = ExecutionContext::new(ExecutionOptions::default(), low.limits.clone());
+    let error = super::super::convert_presentation(&bytes, &low, &context).unwrap_err();
+    assert!(matches!(
+        error,
+        ConversionError::ResourceLimit { limit: "max_presentation_xml_events", .. }
+    ));
+    assert!(error.to_string().contains("ppt/slides/slide1.xml"));
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}

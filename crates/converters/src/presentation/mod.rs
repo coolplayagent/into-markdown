@@ -59,7 +59,7 @@ use xml::{XmlProfile, preflight_xml};
 //   loaded part keys/Vec capacities, relationship/style/placeholder/slide/shape/table/chart
 //   collections, language sets, and both asset indexes (part and digest candidates);
 // - transient high-water: ZipArchive/read buffers, XML namespace/name/attribute identities plus
-//   stack/width/MC state, decoded text/attribute buffers, image-codec pixels/tables, SHA-256
+//   stack/MC state, decoded text/attribute buffers, image-codec pixels/tables, SHA-256
 //   hashing/collision confirmation, and geometry rect/order/union-find/component/corner storage.
 // The conservative Package reservation is acquired before ZIP materialization, grown before each
 // reachable part or retained index, held across all parser/geometry/codec/output allocations, then

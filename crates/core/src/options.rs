@@ -194,6 +194,8 @@ pub struct ResourceLimits {
     pub max_archive_compression_ratio: u32,
     /// Maximum XML/container nesting.
     pub max_nesting_depth: u16,
+    /// Maximum non-EOF XML events in one presentation part; must be positive.
+    pub max_presentation_xml_events: u64,
     /// Maximum PDF/page-like units.
     pub max_pages: u32,
     /// Maximum bytes retained by one asset.
@@ -230,6 +232,7 @@ impl Default for ResourceLimits {
             max_archive_entry_bytes: 256 * 1024 * 1024,
             max_archive_compression_ratio: 100,
             max_nesting_depth: 256,
+            max_presentation_xml_events: 2_000_000,
             max_pages: 10_000,
             max_asset_bytes: 256 * 1024 * 1024,
             max_total_asset_bytes: 1024 * 1024 * 1024,
@@ -422,5 +425,22 @@ mod tests {
         let decoded: AsrOptions = serde_json::from_value(value).unwrap();
 
         assert_eq!(decoded.chinese_script, ChineseScript::Preserve);
+    }
+}
+
+#[cfg(test)]
+mod presentation_budget_tests {
+    use super::*;
+    #[test]
+    fn old_resource_requests_keep_the_presentation_default() {
+        let decoded: ResourceLimits = serde_json::from_str("{}").unwrap();
+        assert_eq!(decoded.max_presentation_xml_events, 2_000_000);
+        let mut configured = decoded;
+        configured.max_presentation_xml_events = 3_000_000;
+        assert_eq!(
+            serde_json::from_value::<ResourceLimits>(serde_json::to_value(&configured).unwrap())
+                .unwrap(),
+            configured
+        );
     }
 }

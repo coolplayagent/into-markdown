@@ -51,11 +51,7 @@ impl NestedConversionService for NestedDispatcher {
             context.checkpoint()?;
             let candidates =
                 detect_formats(&self.detectors, request.input, request.hint, context).await?;
-            if candidates.is_empty() {
-                return Err(ConversionError::Unsupported {
-                    detail: "format detectors produced no candidates for container member".into(),
-                });
-            }
+            super::unsupported::check(request.input, &candidates)?;
             let mut selected = None;
             for candidate in &candidates {
                 for converter in &self.converters {

@@ -1,4 +1,4 @@
-use super::budget::MAX_XML_EVENTS;
+use super::budget::XmlEventBudget;
 use super::error::{limit, malformed};
 use super::mce::McSelection;
 use super::model::{
@@ -79,16 +79,16 @@ pub(super) fn slide_is_hidden(
     context: &ExecutionContext,
 ) -> Result<bool, ConversionError> {
     let mut reader = NsReader::from_reader(bytes);
-    let mut events = 0_usize;
+    let mut events =
+        XmlEventBudget::new(context.resource_limits().max_presentation_xml_events, part)?;
     loop {
         context.checkpoint()?;
-        events = events
-            .checked_add(1)
-            .ok_or_else(|| limit("xml_events", "hidden-slide scan event count overflow"))?;
-        if events > MAX_XML_EVENTS {
-            return Err(limit("xml_events", format!("hidden-slide scan for {part}")));
+        let event =
+            reader.read_event().map_err(|error| malformed(Some(part), error.to_string()))?;
+        if !matches!(event, Event::Eof) {
+            events.charge(part)?;
         }
-        match reader.read_event().map_err(|error| malformed(Some(part), error.to_string()))? {
+        match event {
             Event::Start(element) if local(element.name().as_ref()) == "sld" => {
                 return Ok(optional_xml_bool(&element, "show", part)?.is_some_and(|show| !show));
             }

@@ -1,0 +1,82 @@
+name: Presentation and archive compatibility
+on:
+  pull_request:
+    paths:
+      - 'crates/core/**'
+      - 'crates/engine/**'
+      - 'crates/converters/**'
+      - 'crates/api/**'
+      - 'apps/cli/**'
+      - 'tools/archive-compat/**'
+      - '.github/workflows/archive-compat.yml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: archive-compat-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+      - name: Run affected Rust contracts
+        shell: bash
+        run: |
+          cargo test --locked -p into-markdown-core -p into-markdown-engine --lib -j2
+          for suite in presentation zip epub core_catalog; do
+            cargo test --locked -p into-markdown-converters --lib "$suite" -j2
+          done
+          cargo test --locked -p into-markdown --lib -j2
+          cargo test --locked -p into-markdown-cli presentation -j2
+      - name: Build and exercise the candidate executable
+        shell: bash
+        run: |
+          cargo build --locked -p into-markdown-cli -j2
+          cli="$PWD/target/debug/into-md"
+          if [ "$RUNNER_OS" = Windows ]; then cli="$cli.exe"; fi
+          python tools/archive-compat/run.py --into-md "$cli" --work-root target/issue-338/candidate --cache target/issue-338/public --public-samples
+      - name: Compare the exact PR base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach ../into-markdown-archive-base "$BASE_SHA"
+          cargo build --locked --manifest-path ../into-markdown-archive-base/Cargo.toml --target-dir target -p into-markdown-cli -j2
+          cli="$PWD/target/debug/into-md"
+          if [ "$RUNNER_OS" = Windows ]; then cli="$cli.exe"; fi
+          python tools/archive-compat/run.py --into-md "$cli" --work-root target/issue-338/baseline --cache target/issue-338/public --public-samples --baseline
+          python tools/archive-compat/compare.py target/issue-338/baseline/report.json target/issue-338/candidate/report.json
+          git worktree remove ../into-markdown-archive-base
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: archive-compat-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/issue-338/candidate/report.json
+            target/issue-338/baseline/report.json
+          if-no-files-found: error

@@ -76,6 +76,7 @@ pub struct CapabilityDescriptor {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FormatStatus {
     Available,
+    Unsupported,
     Planned,
 }
 impl FormatStatus {
@@ -84,6 +85,7 @@ impl FormatStatus {
         match self {
             Self::Available => "available",
             Self::Planned => "planned",
+            Self::Unsupported => "unsupported",
         }
     }
 }

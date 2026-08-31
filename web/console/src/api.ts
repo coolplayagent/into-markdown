@@ -115,7 +115,7 @@ function safeText(value: unknown, limit: number): value is string {
 }
 function isFormatAdmin(value: unknown): value is FormatAdmin {
   return isObject(value) && safeText(value.format, 64) && safeText(value.family, 64)
-    && ["available", "planned"].includes(String(value.status))
+    && ["available", "planned", "unsupported"].includes(String(value.status))
     && ["core", "optional_runtime", "plugin"].includes(String(value.source))
     && Array.isArray(value.extensions) && value.extensions.length <= 32
     && value.extensions.every((item) => typeof item === "string" && /^[a-z0-9][a-z0-9+-]{0,31}$/.test(item))

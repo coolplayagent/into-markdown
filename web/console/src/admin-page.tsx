@@ -176,8 +176,9 @@ function FormatsSection({ snapshot, locale }: SectionProps) {
 }
 
 function FormatRow({ item, locale }: { item: FormatAdmin; locale: Locale }) {
-  const c = copy(locale); const ready = item.status === "supported" || item.status === "available" || !item.runtimeComponent;
-  return <tr><td><strong>{item.format.toUpperCase()}</strong></td><td>{friendlyFamily(item.family, locale)}</td><td>{item.extensions.join("、")}</td><td>{item.runtimeComponent ? pluginDisplayName(item.runtimeComponent, locale) : locale === "zh-CN" ? "内置" : "Built in"}</td><td><StatusBadge tone={ready ? "ok" : "warning"}>{ready ? c.ready : c.needsRuntime}</StatusBadge></td></tr>;
+  const c = copy(locale); const ready = item.status === "supported" || item.status === "available";
+  const label = item.status === "unsupported" ? (locale === "zh-CN" ? "可识别，请先解压后转换" : "Recognized; extract before converting") : ready ? c.ready : c.needsRuntime;
+  return <tr><td><strong>{item.format.toUpperCase()}</strong></td><td>{friendlyFamily(item.family, locale)}</td><td>{item.extensions.join("、")}</td><td>{item.runtimeComponent ? pluginDisplayName(item.runtimeComponent, locale) : locale === "zh-CN" ? "内置" : "Built in"}</td><td><StatusBadge tone={ready ? "ok" : "warning"}>{label}</StatusBadge></td></tr>;
 }
 
 function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refreshAdmin, initialContext }: SectionProps & { refreshAdmin: () => Promise<void>; initialContext?: "formats" | "providers" | "plugins" }) {

@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 base64.workspace = true
 calamine.workspace = true
+caseless.workspace = true
 chardetng.workspace = true
 crc32fast.workspace = true
 encoding_rs.workspace = true

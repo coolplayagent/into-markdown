@@ -1,5 +1,8 @@
 //! CLI orchestration, input expansion, policy application, and management commands.
 
+mod limits;
+use limits::apply as apply_limit_overrides;
+
 use crate::args::{
     AssetModeArg, CapabilitiesCommand, Cli, Command, CompletionShell, ConfigCommand,
     ConfigOutputFormat, ConflictPolicy, ConversionArgs, DetectArgs, EmitKind, EncodingErrorsArg,
@@ -620,6 +623,12 @@ fn show_format(value: &str, json: bool, stdout: &mut dyn Write) -> Result<(), Cl
         if let Some(component) = view.runtime_component {
             writeln!(stdout, "runtime: {component}")?;
             writeln!(stdout, "install hint: {}", view.install_hint.unwrap_or_default())?;
+        }
+        if descriptor.status == into_markdown::FormatStatus::Unsupported {
+            writeln!(
+                stdout,
+                "guidance: RAR 归档请先解压后再转换 / extract the archive before conversion"
+            )?;
         }
         writeln!(stdout, "extensions: {}", view.extensions.join(", "))?;
         Ok(())
@@ -4623,37 +4632,6 @@ fn apply_network_overrides(
     )
 }
 
-fn apply_limit_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
-    macro_rules! assign {
-        ($argument:ident, $field:ident) => {
-            if let Some(value) = arguments.$argument {
-                options.limits.$field = value;
-            }
-        };
-    }
-    assign!(max_input_size, max_input_bytes);
-    assign!(max_decompressed_size, max_decompressed_bytes);
-    assign!(max_archive_entries, max_archive_entries);
-    assign!(max_archive_depth, max_archive_depth);
-    assign!(max_archive_entry_size, max_archive_entry_bytes);
-    assign!(max_archive_compression_ratio, max_archive_compression_ratio);
-    assign!(max_depth, max_nesting_depth);
-    assign!(max_pages, max_pages);
-    assign!(max_asset_size, max_asset_bytes);
-    if let Some(value) = arguments.max_memory_size {
-        options.limits.max_memory_bytes = match value {
-            MemorySizeArg::Auto => config::adaptive_memory_budget(),
-            MemorySizeArg::Bytes(bytes) => bytes,
-        };
-    }
-    assign!(max_temporary_size, max_temporary_bytes);
-    assign!(max_table_rows, max_table_rows);
-    assign!(max_table_columns, max_table_columns);
-    assign!(max_table_cells, max_table_cells);
-    assign!(max_field_size, max_field_bytes);
-    assign!(max_total_asset_size, max_total_asset_bytes);
-}
-
 fn apply_output_overrides(arguments: &ConversionArgs, options: &mut ConversionOptions) {
     if let Some(mode) = arguments.asset_mode {
         options.output.asset_mode = match mode {
@@ -5921,6 +5899,31 @@ mod resource_usage_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn presentation_cli_overrides_config_and_rejects_zero() {
+        use clap::Parser as _;
+        let args = crate::args::Cli::try_parse_from([
+            "into-md",
+            "input.pptx",
+            "--max-presentation-xml-events",
+            "4000000",
+        ])
+        .unwrap();
+        let mut options = ConversionOptions::default();
+        options.limits.max_presentation_xml_events = 3_000_000;
+        apply_limit_overrides(&args.conversion, &mut options);
+        assert_eq!(options.limits.max_presentation_xml_events, 4_000_000);
+        assert!(
+            crate::args::Cli::try_parse_from([
+                "into-md",
+                "input.pptx",
+                "--max-presentation-xml-events",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
     use super::*;
     #[cfg(unix)]
     use crate::transaction::{HookDecision, Target};

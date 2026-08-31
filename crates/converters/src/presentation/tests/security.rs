@@ -1,5 +1,5 @@
 use super::super::PresentationConverter;
-use super::super::budget::{ASSET_INDEX_ENTRY_CHARGE, MAX_XML_WIDTH};
+use super::super::budget::ASSET_INDEX_ENTRY_CHARGE;
 use super::super::convert_presentation;
 use super::super::error::malformed;
 use super::super::geometry::sort_shapes_for_reading;
@@ -424,10 +424,20 @@ fn xml_ir_and_geometry_work_limits_are_stable() {
     ));
     let mut wide =
         format!(r#"<p:sld xmlns:p="{}"><p:cSld><p:spTree>"#, String::from_utf8_lossy(P_NS));
-    wide.push_str(&"<p:sp/>".repeat(MAX_XML_WIDTH + 1));
+    wide.push_str(&"<p:sp/>".repeat(100_001));
     wide.push_str("</p:spTree></p:cSld></p:sld>");
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    preflight_xml(wide.as_bytes(), "ppt/slides/wide.xml", XmlProfile::Slide, &options, &context)
+        .unwrap();
+    let mut options = options;
+    options.limits.max_presentation_xml_events = 100_006;
+    preflight_xml(wide.as_bytes(), "ppt/slides/wide.xml", XmlProfile::Slide, &options, &context)
+        .unwrap_err();
+    options.limits.max_presentation_xml_events = 100_007;
+    preflight_xml(wide.as_bytes(), "ppt/slides/wide.xml", XmlProfile::Slide, &options, &context)
+        .unwrap();
+    options.limits.max_presentation_xml_events = 0;
     assert!(matches!(
         preflight_xml(
             wide.as_bytes(),
@@ -436,7 +446,7 @@ fn xml_ir_and_geometry_work_limits_are_stable() {
             &options,
             &context
         ),
-        Err(ConversionError::ResourceLimit { limit: "xml_width", .. })
+        Err(ConversionError::ResourceLimit { limit: "max_presentation_xml_events", .. })
     ));
 
     let mut state = ParseState { nodes: MAX_DOCUMENT_NODES, ..ParseState::default() };

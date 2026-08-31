@@ -37,7 +37,7 @@ pub use execution::{
     ExecutionStage, PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation,
     TemporaryFile,
 };
-pub use format::{FormatCandidate, InputFormat};
+pub use format::{FormatCandidate, InputFormat, RarSignature};
 pub use input::{
     FormatHint, InputRef, ResolvedInput, ResolvedSource, SourceMetadata, SourceRedirect,
     SourceResolutionMetadata,

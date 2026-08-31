@@ -61,6 +61,12 @@ const FORMATS: &[FormatDescriptor] = &[
     format(InputFormat::OutlookMsg, "message", &["msg"]),
     format(InputFormat::Audio, "media", &["wav", "mp3", "m4a", "flac", "ogg"]),
     format(InputFormat::Video, "media", &["mp4", "mkv", "webm", "avi", "mov"]),
+    FormatDescriptor {
+        format: InputFormat::Rar,
+        family: "container",
+        extensions: &["rar"],
+        status: FormatStatus::Unsupported,
+    },
 ];
 
 const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
@@ -90,6 +96,7 @@ const FORMAT_CATALOG: &[CatalogFormatDescriptor] = &[
     catalog(23, None),
     plugin_catalog(24, ASR),
     plugin_catalog(25, ASR),
+    catalog(26, None),
 ];
 
 const fn format(
@@ -458,6 +465,18 @@ fn validate_format_coverage(
 ) -> Result<(), ConversionError> {
     for catalog_entry in FORMAT_CATALOG {
         let descriptor = catalog_entry.descriptor;
+        if descriptor.status == FormatStatus::Unsupported {
+            if descriptor.format != InputFormat::Rar
+                || catalog_entry.source != CapabilitySource::Core
+                || catalog_entry.runtime.is_some()
+                || coverage.contains_key(&descriptor.format)
+            {
+                return catalog_error(
+                    "recognized unsupported format has inconsistent conversion metadata",
+                );
+            }
+            continue;
+        }
         if !matches!(catalog_entry.source, CapabilitySource::Core | CapabilitySource::Plugin)
             || descriptor.status != FormatStatus::Available
         {
@@ -485,7 +504,12 @@ fn validate_format_coverage(
             ));
         }
     }
-    if coverage.len() != FORMAT_CATALOG.len() {
+    if coverage.len()
+        != FORMAT_CATALOG
+            .iter()
+            .filter(|entry| entry.descriptor.status == FormatStatus::Available)
+            .count()
+    {
         return catalog_error("converter inventory exposes a non-core format");
     }
     Ok(())

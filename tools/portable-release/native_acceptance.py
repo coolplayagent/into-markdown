@@ -570,7 +570,9 @@ def run_e2e(
                 "bytes": authority["library_size"],
                 "materialization": "canonical-var-fallback",
             }
+        archive_regression = run_archive_regression(binary, work, environment)
         return {
+            "archiveCompatibility": archive_regression,
             "schemaVersion": 1,
             "target": target,
             "artifactSha256": artifact_sha,
@@ -583,6 +585,16 @@ def run_e2e(
             "networkRequired": False,
             "conclusion": "pass",
         }
+
+
+def run_archive_regression(binary, work, environment):
+    archive_regression_root = work / "archive-compat"
+    subprocess.run(
+        [sys.executable, str(ROOT / "tools/archive-compat/run.py"), "--into-md", str(binary), "--work-root", str(archive_regression_root)],
+        cwd=work, env=environment, check=True, timeout=180,
+    )
+    archive_regression = json.loads((archive_regression_root / "report.json").read_text(encoding="utf-8"))
+    return archive_regression
 
 
 def write_json(path: pathlib.Path, value: dict) -> None:

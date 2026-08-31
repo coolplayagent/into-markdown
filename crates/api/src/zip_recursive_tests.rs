@@ -350,3 +350,92 @@ fn corrupt_crc(bytes: &mut [u8], target: &str) {
     }
     panic!("target central entry not found");
 }
+
+#[test]
+fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
+    for signature in [b"Rar!\x1a\x07\x00".as_slice(), b"Rar!\x1a\x07\x01\x00".as_slice()] {
+        for name in ["input.rar", "input.txt", "input.zip", "input.bin"] {
+            let request = ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
+            let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");
+            assert!(error.to_string().contains("extract"));
+            let result = convert(
+                archive(&[(name, signature), ("报告（保留）.txt", "正文完整".as_bytes())], false),
+                ConversionOptions::default(),
+                ExecutionOptions::default(),
+            )
+            .unwrap();
+            assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+            assert!(result.markdown.contains("正文完整"));
+            assert!(result.diagnostics.iter().any(|d| d.message.contains("extract")
+                && d.locator.as_ref().and_then(|l| l.part.as_deref()) == Some(name)));
+        }
+    }
+    for signature in [b"Rar!\x1a".as_slice(), b"Rar!\x1a\x07\x01".as_slice()] {
+        let request =
+            ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some("truncated.rar")));
+        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Malformed);
+        assert!(error.to_string().contains("truncated"));
+    }
+    for name in ["plain.txt", "plain.rar"] {
+        let request =
+            ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some(name)));
+        assert!(
+            block_on(default_engine().unwrap().convert(request))
+                .unwrap()
+                .markdown
+                .contains("ordinary Rar")
+        );
+    }
+    let only = archive(&[("only.rar", b"Rar!\x1a\x07\x00")], false);
+    assert_eq!(
+        convert(only, ConversionOptions::default(), ExecutionOptions::default())
+            .unwrap_err()
+            .code(),
+        ErrorCode::Unsupported
+    );
+}
+
+#[test]
+fn unicode_archive_names_survive_provenance_and_unsafe_aliases_fail() {
+    for name in ["目录/报告（最终）.txt", "café.txt", "e\u{301}.txt", "straße.txt", "😀.txt"]
+    {
+        let result = convert(
+            archive(&[(name, b"kept body")], false),
+            ConversionOptions::default(),
+            ExecutionOptions::default(),
+        )
+        .unwrap();
+        assert!(result.markdown.contains("kept body"));
+        assert!(
+            result
+                .document
+                .blocks
+                .iter()
+                .any(|node| node.provenance.locator.part.as_deref() == Some(name))
+        );
+    }
+    for (a, b) in [
+        ("café.txt", "cafe\u{301}.txt"),
+        ("straße.txt", "STRASSE.txt"),
+        ("x", "x/y.txt"),
+        ("A/x.txt", "a/y.txt"),
+    ] {
+        for entries in [
+            [(a, b"a".as_slice()), (b, b"b".as_slice())],
+            [(b, b"b".as_slice()), (a, b"a".as_slice())],
+        ] {
+            assert_eq!(
+                convert(
+                    archive(&entries, false),
+                    ConversionOptions::default(),
+                    ExecutionOptions::default()
+                )
+                .unwrap_err()
+                .code(),
+                ErrorCode::Malformed
+            );
+        }
+    }
+}

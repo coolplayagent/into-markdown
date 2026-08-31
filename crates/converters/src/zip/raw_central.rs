@@ -162,7 +162,7 @@ fn collect_records(
     occupied
         .try_reserve_exact(layout.entries)
         .map_err(|error| memory_limit(format!("reserve ZIP physical ranges: {error}")))?;
-    let mut policy = EntryPolicy::default();
+    let mut policy = EntryPolicy::new(budget.context())?;
     let mut cursor = layout.central_start;
     for index in 0..layout.entries {
         budget.context().checkpoint()?;
@@ -482,19 +482,6 @@ fn allocation_plan(layout: Layout) -> Result<u64, ConversionError> {
         .and_then(|value| value.checked_add(central.checked_mul(CENTRAL_WORK_FACTOR)?))
         .and_then(|value| value.checked_add(layout.name_bytes.checked_mul(NAME_WORK_FACTOR)?))
         .ok_or_else(|| memory_limit("ZIP metadata working set overflowed"))
-}
-
-#[cfg(test)]
-pub(super) fn planned_memory(bytes: &[u8]) -> Result<u64, ConversionError> {
-    let mut layout = locate(bytes)?;
-    let options = into_markdown_core::ConversionOptions::default();
-    let context = into_markdown_core::ExecutionContext::new(
-        into_markdown_core::ExecutionOptions::default(),
-        options.limits.clone(),
-    );
-    let budget = ArchiveBudget::new(&options, &context);
-    scan_records(bytes, &mut layout, &budget)?;
-    allocation_plan(layout)
 }
 
 fn slice<'a>(

@@ -1,0 +1,65 @@
+//! Reviewed keys for administration configuration updates.
+pub(super) fn admin_config_key_allowed(key: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "cli.language",
+        "cli.jobs",
+        "cli.color",
+        "cli.progress",
+        "cli.log_format",
+        "conversion.timeout_ms",
+        "conversion.text.decoding_mode",
+        "conversion.delimited_text.header",
+        "conversion.delimited_text.ragged_rows",
+        "conversion.ocr.policy",
+        "conversion.ocr.languages",
+        "conversion.ocr.minimum_confidence",
+        "conversion.asr.language",
+        "conversion.asr.chinese_script",
+        "conversion.asr.max_threads",
+        "conversion.asr.max_duration_ms",
+        "conversion.asr.max_segments",
+        "conversion.asr.max_native_memory_bytes",
+        "conversion.ai.vision_ocr",
+        "conversion.ai.image_description",
+        "conversion.ai.layout_repair",
+        "conversion.ai.table_repair",
+        "conversion.ai.formula_repair",
+        "conversion.ai.audio_transcription",
+        "conversion.ai.markdown_postprocess",
+        "conversion.ai.provider",
+        "conversion.ai.model",
+        "conversion.network.max_redirects",
+        "conversion.network.allowed_hosts",
+        "conversion.network.deny_private_networks",
+        "conversion.limits.max_input_bytes",
+        "conversion.limits.max_decompressed_bytes",
+        "conversion.limits.max_archive_entries",
+        "conversion.limits.max_archive_depth",
+        "conversion.limits.max_archive_entry_bytes",
+        "conversion.limits.max_archive_compression_ratio",
+        "conversion.limits.max_nesting_depth",
+        "conversion.limits.max_presentation_xml_events",
+        "conversion.limits.max_pages",
+        "conversion.limits.max_asset_bytes",
+        "conversion.limits.max_total_asset_bytes",
+        "conversion.limits.max_memory_bytes",
+        "conversion.limits.max_temporary_bytes",
+        "conversion.limits.max_table_rows",
+        "conversion.limits.max_table_columns",
+        "conversion.limits.max_table_cells",
+        "conversion.limits.max_field_bytes",
+        "conversion.output.emit",
+        "conversion.output.asset_mode",
+        "conversion.output.conflict",
+        "conversion.output.asset_directory_suffix",
+        "conversion.output.include_provenance",
+    ];
+    KEYS.contains(&key)
+        || key.strip_prefix("conversion.ai.prompts.").is_some_and(|name| {
+            !name.is_empty()
+                && name.len() <= 128
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}

@@ -540,11 +540,7 @@ pub(super) async fn convert(
     } else {
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
         let candidates = engine.detect_formats(source.input(), &request.hint, &context).await?;
-        if candidates.is_empty() {
-            return Err(ConversionError::Unsupported {
-                detail: "format detectors produced no candidates".into(),
-            });
-        }
+        super::unsupported::check(source.input(), &candidates)?;
         context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
         let mut attempts = Vec::new();
         for candidate in &candidates {
