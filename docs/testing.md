@@ -2,34 +2,38 @@
 
 ## PR 快速门禁与发布门禁
 
-普通 PR 以 `PR fast gate` 的四个并行检查为基础：Linux x86_64 负责共享 Core/OCR/布局
+普通 PR 固定只运行 `PR fast gate` 的四个并行检查：Linux x86_64 负责共享 Core/OCR/布局
 单测、发布契约与生产 Web，Linux ARM64、Windows x86_64 和 macOS ARM64 分别原生编译
 process-plugin 的平台边界并验证自身发布 authority。每个检查有 5 分钟硬超时；同一 PR 的
 新提交会取消旧门禁。缓存按平台与 `Cargo.lock` 复用，并在锁文件变化时恢复同平台最近的
 依赖闭包，避免把一次 PR 变更拆成多个串行 Cargo 图。
 
-`PR fast gate` 不编译 `media-runtime`、完整 CLI 或 whisper.cpp CPU 变体，也不运行耗时的真实进程矩阵；
-这些目标会重复构建大部分 Cargo 图，并且不能替代成品验证。四平台受保护发布 workflow
-继续构建完整 Core、OCR 与语音 provider，执行原生审计和真实 E2E；独立的手动/定时门禁
-继续运行完整 process-plugin、OCR 方向矩阵和 Cargo/Bazel 兼容性测试。
+新增 UT 可以放入现有四个 job，共享测试优先放入 Linux x86_64，平台相关测试放入对应 job。
+禁止新增工作流、job、矩阵或手动/定时 CI，也禁止通过脚本间接派发额外 CI。每个 job 已有的
+`tools/platform-release/pr_fast_gate.py` 调用会校验整个工作流目录的白名单、精确 job 名称、
+runner、超时和触发方式；额外工作流、矩阵或自动发布触发会令 fast gate 失败。对应回归为
+`python3 -m unittest tools.platform-release.test_pr_fast_gate`。校验使用固定的 YAML 块布局，
+UT 调整保持控制结构；修改白名单或跳过校验须先获得用户明确批准。
 
-正式发布固定为四个平台构建检查加一个聚合检查。每个平台检查的硬超时为 10 分钟，聚合
-检查为 5 分钟；构建从仓库的 `runtime-assets` Release 下载固定摘要、已审计的 FFmpeg
-运行时，不在发布任务中重新编译 FFmpeg。每个平台的 Job Summary 和机器可读报告分别记录
+完整 CLI、`media-runtime`、whisper.cpp CPU 变体、真实进程矩阵、WASI、语义质量、Web
+安全压力、OCR 方向及 Cargo/Bazel 工具链专项通过本地命令按需验证。仓库仅保留 fast gate
+和 `platform-modular-release.yml`；后者仅 `workflow_dispatch`，在用户明确要求发版或安装
+产物验收时构建完整 Core、OCR 与语音 provider，执行原生审计和真实 E2E。
+
+正式发布包含四个平台构建、Windows 成品黑盒验收和聚合检查，当前超时分别为 30、35 和
+20 分钟；构建从仓库的 `runtime-assets` Release 下载固定摘要、已审计的 FFmpeg
+运行时。每个平台的 Job Summary 和机器可读报告分别记录
 FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E、发布件上传和缓存上传
 耗时，用于直接定位超过预算的阶段。
 
-四平台 Cargo/Bazel 全矩阵、WASI、语义质量、Web 安全压力和工具链拒绝矩阵仍保留为可手动
-触发的独立 workflow；Linux、Windows 与 macOS 正式发布 workflow 会在受保护的 main/tag
-上执行真实原生构建、审计和成品 smoke。快速门禁用于尽早给出可操作错误，不能替代正式
-发布证据。
+快速门禁提供早期反馈，正式发布与本地专项验收分别记录实际构建、平台和运行证据。
 
 ## 格式准入与 HTML 回归
 
-与格式检测、解析、API 或 CLI 能力路由相关的 PR 额外运行四平台 `Format admission and HTML`。
-该门禁执行受影响的 Core/Engine/Converter/API 单测、CLI/stdin/批量契约、Web 能力路由，
-以及固定提交的 36 个公开 TXT/HTML/JS 样本、两种错误策略。样本来源、基线对照、
-候选/probe/路由及本地、CI、安装产物状态见 [#339 证据](evidence/issue-339.md)。
+格式检测、解析、API 和 CLI 能力路由的本地专项包含受影响四个库、CLI/stdin/批量、
+Web 能力路由及固定提交的 36 个公开 TXT/HTML/JS 样本、两种错误策略。执行命令、
+样本来源、基线候选/probe/实际路由，以及本地、历史 CI 和安装产物状态见
+[#339 证据](evidence/issue-339.md)。PR 继续遵循上述四个 fast job 的统一边界。
 
 ## 可执行文档契约
 
@@ -37,7 +41,7 @@ FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E�
 读取 `formats --json` 的当前可用 catalog，并要求中英文命令/格式示例精确覆盖。它逐条执行
 命令语法检查和格式 dry-run，完成真实 TXT 与 stdin 转换，解析 version、capabilities 与
 doctor JSON，并验证本地 Markdown 链接及 README 双语入口。公共命令、格式或文档入口发生
-变化而示例未同步时，CI 会失败。
+变化而示例未同步时，该契约测试会失败。
 
 跨格式语义布局、阅读顺序、表格拓扑、资源关联和 IR/GFM hash 门禁见
 [`semantic-layout-quality.md`](semantic-layout-quality.md)。平台无关核心及真实 package
@@ -56,9 +60,9 @@ bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resour
 
 fixture 重建必须逐字节匹配 authority；测试实际执行 command component，覆盖默认权限
 拒绝和精确 grant、非法 host import、preopen traversal/symlink escape、TCP loopback、fuel、
-epoch timeout/取消、memory growth/越界、输出、IR/resource/provenance。GitHub workflow 在
-Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 的真实 runner 上执行同一组
-Cargo/Bazel 测试；异平台 compile 或四个 manifest 别名不计作证据。
+epoch timeout/取消、memory growth/越界、输出、IR/resource/provenance。跨平台专项验收在
+Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 的原生环境按需执行同一组
+Cargo/Bazel 测试，并分别记录实际结果。
 
 插件管理器在四个平台运行 `cargo test --locked -p into-markdown-plugin-manager -j1`，并与
 HTTP transport、process-v1、WASI runtime 的真实执行门禁组合验证签名安装、精确 scope pin、
@@ -77,7 +81,7 @@ Web 安全的权威范围和剩余风险见 [`web-security-threat-model.md`](web
 into-markdown-cli --bin into-md ui::tests -- --test-threads=1`、`cargo test --locked -p
 into-markdown-cli web_tasks::tests -- --test-threads=1`、`bazel test //web/console:unit_test_preview
 //web/console:admin_unit_test //web/console:dist_integration_test` 和 `bazel test
-//apps/cli:web_security_test //web/console:web_security_test`。CI 另在真实 Chromium 中运行
+//apps/cli:web_security_test //web/console:web_security_test`。本地浏览器专项在真实 Chromium 中运行
 `web/console/tests/web-security.e2e.spec.ts`，从生产 `into-md ui` 的私有启动 URL 进入、上传敌意
 文本、等待实际转换结果并刷新恢复。前端用恶意 HTML、`javascript:`、`file:` 与远程图片语法验证预览 DOM
 不产生任何可执行或资源加载元素；另验证 256 KiB 截断、IR/provenance 树上限、资源浏览与 axe。

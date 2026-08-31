@@ -84,6 +84,6 @@ bazel test --config=macos_arm64 \
   //crates/converters:converters_test
 ```
 
-`.github/workflows/semantic-layout-quality.yml` 在 macOS ARM64、Linux x86-64、Linux ARM64 和
-Windows x86-64 的真实 runner 上分别通过 Cargo 和 Bazel 执行同一 authority；因此跨平台
-规范 IR/GFM 任一 byte 漂移都会由 hash 门禁直接失败，而不是由单平台生成结果推断一致。
+跨平台专项验收在 macOS ARM64、Linux x86-64、Linux ARM64 和 Windows x86-64 原生环境按需
+执行同一 authority，分别记录 Cargo 和 Bazel 的实际结果。规范 IR/GFM 任一 byte 漂移都会
+使 hash 门禁失败。常规 PR 仅运行四个 fast job，详见[测试策略](testing.md)。

@@ -60,6 +60,27 @@ English example coverage, command syntax, and local links, and performs real TXT
 conversion plus a dry-run for every available format. When adding or changing a public command or
 format, update [`docs/cli-examples.md`](docs/cli-examples.md) and its English counterpart.
 
+## CI change constraints
+
+- CI permits only the four existing jobs in `.github/workflows/pr-fast-gate.yml`:
+  Linux x86_64 (shared tests and Web), Linux ARM64 Core, Windows x86_64 Core, and macOS ARM64 Core.
+- Preserve their names, runners, five-minute timeouts, and `pull_request` trigger. Unit tests may
+  be added to these jobs: shared tests belong in Linux x86_64 and platform-specific tests in the
+  corresponding job. Run expensive suites, full builds, and real-runtime matrices locally on
+  demand, preserving the fast gate's time budget.
+- Additional workflows, jobs/tasks, matrix platforms or combinations, and manual, scheduled, or
+  other automatic CI triggers are forbidden. Scripts and reusable workflows must not dispatch
+  additional CI. Keep the allowlist validator enabled and intact when adding tests.
+- The workflow directory contains only `pr-fast-gate.yml` and the manual release workflow
+  `platform-modular-release.yml`. Run the release workflow only when the user explicitly requests
+  a release or installed-artifact acceptance.
+- The existing `pr_fast_gate.py` invocation in each job runs `ci_workflow_policy.py`, rejecting
+  extra workflows, jobs, matrices, changed runners/names, and automatic release triggers. The
+  validator uses a fixed YAML block layout; preserve the workflow control structure when editing
+  unit tests. Changes to the allowlist or release triggers require explicit user approval. Before
+  delivery, run `python3 -m unittest tools.platform-release.test_pr_fast_gate` and review workflows
+  and the scripts they invoke together.
+
 ## Plugin and release changes
 
 Process and WASI plugins follow the `process-v1` and `wasi-v1` isolation contracts. See

@@ -13,7 +13,8 @@
 这些结果仅证明列出的输入、配置与构建，原报告五个文件的实际编码、配置和触发条件仍待确认。
 
 固定对照基线：`26aaf8325ed31ce72921c84f0239574718d72257`。实现分支随后集成
-`172277d9e0f72226f7a22a9fd79652890f9541f5` 的 Draw.io 支持，复用其 MIME 模块。
+`172277d9e0f72226f7a22a9fd79652890f9541f5` 的 Draw.io 支持，复用其 MIME 模块，
+并同步 `0ae0ddfe3ecefb92a1e959f0055187b49b6b57e0` 的统一 CI 策略。
 #338 的 RAR 识别与归档解析属于独立 PR；本项通过共同检测入口执行支持检查。
 
 ## 公开语料：36 个原始文件
@@ -108,9 +109,9 @@ probe 报告记录 API 默认选项，OCR off。运行时及可选服务另由�
   `.py` 被接受上传后在任务行就近显示格式错误；HTML 预览实际产生粗体、斜体，空链接保留标签而无空 anchor。
 - 平台发布契约：72 项执行，71 通过、1 项按既有条件跳过。生产 Web 的 SPDX 与实际 JavaScript
   资产摘要绑定，CSS、bootstrap、Rust include 与 manifest 同步。
-- 当前主线快速 CI：[33396806735](https://github.com/coolplayagent/into-markdown/actions/runs/33396806735)
+- 策略收敛前的快速 CI：[33396806735](https://github.com/coolplayagent/into-markdown/actions/runs/33396806735)
   四平台通过；专项 CI [33396806728](https://github.com/coolplayagent/into-markdown/actions/runs/33396806728)
-  四平台通过，逐平台执行72个语料策略用例。最后文档/测试提交的精确 head 状态另见 PR。
+  四平台通过，逐平台执行72个语料策略用例。这些已完成结果保留为历史证据；专项工作流已按 #349 删除。最终 PR 只运行四个 fast job，精确 head 状态见 PR。
 - 当前构建验证：[33396591314](https://github.com/coolplayagent/into-markdown/actions/runs/33396591314)，
   `build_only=true`、版本 0.0.4、unsigned；等待构建与安装产物验收。没有发布或替换用户安装。
 
@@ -142,5 +143,9 @@ already routed these samples to Text. The reported TXT conversion failure remain
 explicit charset authority, resource limits, cancellation and timeouts remain enforced.
 
 Machine-readable CLI and probe reports above identify actual routes, confidence, options,
-diagnostics and output hashes. Local tests, four-platform CI, native-runtime tests and installed
+diagnostics and output hashes. Local tests, historical four-platform CI, native-runtime tests and installed
 artifact acceptance have separate statuses; known baseline CLI failures are retained explicitly.
+
+Following #349, the issue-specific workflow was removed and the existing four fast jobs remain
+the only PR CI entrypoints. Completed historical runs remain evidence; the explicit installed-artifact
+request authorizes the build-only official release workflow linked above.

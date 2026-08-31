@@ -69,9 +69,9 @@ cargo test --locked -p into-markdown-plugin-wasi --test runtime -j1
 bazel test //crates/plugin-wasi:plugin_wasi_runtime_test --jobs=1 --local_resources=memory=4096
 ```
 
-`.github/workflows/wasi-runtime.yml` 在 Windows x86-64、Linux x86-64、Linux ARM64 和
-macOS ARM64 的真实 runner 上执行同一重建、Cargo 与 Bazel 门禁；没有 ignored 或异平台
-别名测试。Wasmtime source/tag/commit、crate checksums/features、完整 license 与四 target
+上述专项命令在 Windows x86-64、Linux x86-64、Linux ARM64 和 macOS ARM64 原生环境按需
+执行，分别记录重建、Cargo 与 Bazel 的实际结果。常规 PR 仅运行四个 fast job，见
+[测试策略](testing.md)。Wasmtime source/tag/commit、crate checksums/features、完整 license 与四 target
 authority 位于 `third_party/wasmtime/`，由 license-check mutation tests 绑定。
 
 从协议选择、manifest、签名到安装与移除验收见[插件开发](plugin-development.md)。
