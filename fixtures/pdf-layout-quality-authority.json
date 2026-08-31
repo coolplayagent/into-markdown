@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "e4d8760bd6f354e18a0e5231083ab720e0a54598d414323a80641f6d3b599abb",
+  "fixture_manifest_sha256": "59e9420cb78a7977f83fcd6ac92df55f1cfa923c561b9264a848599b355c4ac6",
   "pdfium_manifest_sha256": "330c44bedcd37ee59feccfed78848c309d00e5be1439ac0d2027825d42782186",
-  "ocr_merge_authority_sha256": "69847bbc8995042eb51da84bc9139293536b6507d2e28fe8f0002c09184ae5db",
+  "ocr_merge_authority_sha256": "33152f7b85a6f2f720ecb6269805975d12f1b2735a4b592467c29ccfb5b078e3",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",

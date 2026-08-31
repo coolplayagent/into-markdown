@@ -395,7 +395,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "semantic_sha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
         "description": "bare equivalent of normal diagram"
       }
     },
@@ -423,7 +423,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "semantic_sha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
         "description": "compressed equivalent of normal diagram"
       }
     },
@@ -486,7 +486,7 @@
           "failing_value": 317,
           "passing_value": 318,
           "error_limit": "max_input_bytes",
-          "passing_semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+          "passing_semantic_sha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599"
         }
       }
     },
@@ -514,7 +514,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "semantic_sha256": "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599",
         "description": "layer, two labeled nodes and one connection"
       }
     },

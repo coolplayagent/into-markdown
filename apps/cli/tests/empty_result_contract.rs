@@ -22,18 +22,16 @@ fn genuine_empty_sources_commit_existing_targets_with_complete_reports() {
     let text = input.join("empty.txt");
     let markdown = input.join("empty.md");
     let docx = input.join("empty.docx");
-    let xlsx = input.join("empty.xlsx");
     std::fs::write(&text, b" \r\n").unwrap();
     std::fs::write(&markdown, b"\xef\xbb\xbf\n").unwrap();
     std::fs::write(&docx, empty_docx()).unwrap();
-    std::fs::write(&xlsx, empty_xlsx()).unwrap();
 
     let result = Command::new(binary())
         .args(["--no-config", "--output-dir"])
         .arg(&output)
         .args(["--report"])
         .arg(&report)
-        .args([&text, &markdown, &docx, &xlsx])
+        .args([&text, &markdown, &docx])
         .output()
         .unwrap();
 
@@ -41,7 +39,7 @@ fn genuine_empty_sources_commit_existing_targets_with_complete_reports() {
     assert!(result.stdout.is_empty());
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&report).unwrap()).unwrap();
-    assert_eq!(report["succeeded"], 4);
+    assert_eq!(report["succeeded"], 3);
     assert_eq!(report["failed"], 0);
     for item in report["items"].as_array().unwrap() {
         assert_eq!(item["status"], "success");
@@ -93,11 +91,11 @@ fn empty_stdout_is_explicit_in_reports_and_structured_output() {
 fn empty_content_fails_batch_without_committing_a_false_success_target() {
     let temporary = tempfile::tempdir().unwrap();
     let good = temporary.path().join("good.txt");
-    let omitted = temporary.path().join("omitted.docx");
+    let omitted = temporary.path().join("omitted.rtf");
     let output = temporary.path().join("output");
     let report = temporary.path().join("report.json");
     std::fs::write(&good, b"usable").unwrap();
-    std::fs::write(&omitted, alt_chunk_only_docx()).unwrap();
+    std::fs::write(&omitted, omitted_only_rtf()).unwrap();
 
     let result = Command::new(binary())
         .args(["--no-config", "--output-dir"])
@@ -127,10 +125,10 @@ fn empty_content_fails_batch_without_committing_a_false_success_target() {
 #[test]
 fn empty_content_single_file_still_writes_a_failed_report_and_no_target() {
     let temporary = tempfile::tempdir().unwrap();
-    let input = temporary.path().join("omitted.docx");
+    let input = temporary.path().join("omitted.rtf");
     let output = temporary.path().join("omitted.md");
     let report = temporary.path().join("report.json");
-    std::fs::write(&input, alt_chunk_only_docx()).unwrap();
+    std::fs::write(&input, omitted_only_rtf()).unwrap();
 
     let result = Command::new(binary())
         .args(["--no-config", "--output"])
@@ -149,9 +147,9 @@ fn empty_content_single_file_still_writes_a_failed_report_and_no_target() {
 #[test]
 fn empty_content_stdout_still_writes_a_failed_report_and_no_stdout() {
     let temporary = tempfile::tempdir().unwrap();
-    let input = temporary.path().join("omitted.docx");
+    let input = temporary.path().join("omitted.rtf");
     let report = temporary.path().join("report.json");
-    std::fs::write(&input, alt_chunk_only_docx()).unwrap();
+    std::fs::write(&input, omitted_only_rtf()).unwrap();
 
     let result = Command::new(binary())
         .args(["--no-config", "--report"])
@@ -208,10 +206,10 @@ fn empty_docx() -> Vec<u8> {
     )
 }
 
-fn alt_chunk_only_docx() -> Vec<u8> {
-    docx(
-        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:altChunk/></w:body></w:document>"#,
-    )
+fn omitted_only_rtf() -> Vec<u8> {
+    // An unknown RTF control has a diagnostic and no visible fallback text.
+    // Missing Word altChunk relationships intentionally emit an omission paragraph.
+    br"{\rtf1\ansi\unknowncontrol42}".to_vec()
 }
 
 fn docx(document: &str) -> Vec<u8> {
@@ -226,6 +224,28 @@ fn docx(document: &str) -> Vec<u8> {
         ),
         ("word/document.xml", document),
     ])
+}
+
+#[test]
+fn empty_worksheet_retains_its_name_and_paging_diagnostic() {
+    let temporary = tempfile::tempdir().unwrap();
+    let input = temporary.path().join("empty.xlsx");
+    std::fs::write(&input, empty_xlsx()).unwrap();
+    let result = Command::new(binary())
+        .args(["--no-config", "--emit", "result-json"])
+        .arg(input)
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(result["markdown"].as_str().unwrap().contains("Empty"));
+    assert!(
+        result["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["code"] == "spreadsheet.largeTablePaged")
+    );
 }
 
 fn empty_xlsx() -> Vec<u8> {

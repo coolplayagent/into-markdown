@@ -5,6 +5,12 @@ import json
 from pathlib import Path
 
 
+def rendered_images(item):
+    # Compare actual consumer references as well as the complete DTO inventory.
+    return Counter(image.get('sha256') or image['uri']
+                   for image in item['assetVerification']['images'])
+
+
 def compare(before, after, reviewed=()):
     baseline = {item['file']: item for item in before['items']}
     candidate = {item['file']: item for item in after['items']}
@@ -23,6 +29,7 @@ def compare(before, after, reviewed=()):
             row.update(contentEqual=old['semanticSha256'] == new['semanticSha256'],
                        visibleTextEqual=old['visibleTextSha256'] == new['visibleTextSha256'],
                        assetsEqual=old['assetVerification']['inventory'] == new['assetVerification']['inventory'],
+                       renderedImagesEqual=rendered_images(old) == rendered_images(new),
                        candidateAssetFailures=new['assetVerification']['failures'],
                        baselineAssetFailures=old['assetVerification']['failures'],
                        baselineTags=old['htmlTags'], candidateTags=new['htmlTags'],
@@ -40,7 +47,7 @@ def compare(before, after, reviewed=()):
     regressions = [row for row in rows if row['baseline'] == 'success' and
                    (row['candidate'] != 'success' or not row['contentEqual'] or
                     (not row['visibleTextEqual'] and not row.get('reviewedVisibleDelta')) or
-                    not row['assetsEqual'] or row['candidateAssetFailures'])]
+                    not row['assetsEqual'] or not row['renderedImagesEqual'] or row['candidateAssetFailures'])]
     return {'baselineRevision': before['revision'], 'candidateRevision': after['revision'],
             'baselineCliSha256': before['cliSha256'], 'candidateCliSha256': after['cliSha256'],
             'consumer': after['consumer'], 'testedByFormat': dict(Counter(name.split('/')[0] for name in baseline)),

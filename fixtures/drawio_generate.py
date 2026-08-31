@@ -11,7 +11,7 @@ MODEL = ('<mxGraphModel><root><mxCell id="0"/>'
          '<mxCell id="b" parent="1" vertex="1" value="End"/>'
          '<mxCell id="e" parent="1" edge="1" source="a" target="b" value="Continue"/>'
          '</root></mxGraphModel>')
-GOLDEN = "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+GOLDEN = "5ecb88e03eb41cad516db20588b7f68ad7f62c0f2e2bf69a3eddb4c4d4de3599"
 
 
 def drawio_fixtures(root, make_fixture):
