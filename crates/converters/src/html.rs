@@ -2844,8 +2844,6 @@ impl<'a, 'budget> Builder<'a, 'budget> {
             if !value.is_empty() {
                 self.reserve_vector(&mut output, 1)?;
                 self.constructed(FeedHtmlObjectKind::Inline);
-                marks.sort_unstable();
-                marks.dedup();
                 output.push(Inline::Text { value, marks });
             }
             return Ok(output);

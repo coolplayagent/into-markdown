@@ -3,7 +3,6 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod admission;
-use admission::format_from_media_type;
 mod core_catalog;
 mod core_catalog_authority;
 mod delimited;
