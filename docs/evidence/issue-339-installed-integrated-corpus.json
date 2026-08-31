@@ -1,0 +1,5328 @@
+{
+  "schemaVersion": 1,
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "binarySha256": "ef2e1f0f1419a597910cf52132740a3bd896b1f13878cb3630ea679af63555be",
+  "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
+  "manifestSha256": "1b5a0fc7ab3047c88f7eabee45554d726d0071cacec7544cf881bb5574f39309",
+  "binaryVersion": "into-md 0.0.4",
+  "records": [
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/big5.txt",
+      "sha256": "43c21b213b1fc167b642af992768ac2249680e57247ff539999d9060094342d7",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "big5.txt",
+        "sourceSize": 432,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 30.26 ms, conversion 0.49 ms\ntiming: batch wall 30.30 ms\n",
+      "markdownBytes": 581,
+      "markdownSha256": "4fe6e9aa70e9253e52ecdb4567e8cb4cdabdad957a3b15a3c597667a6f9c2cbe",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/big5.txt",
+      "sha256": "43c21b213b1fc167b642af992768ac2249680e57247ff539999d9060094342d7",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "big5.txt",
+        "sourceSize": 432,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 18.57 ms, conversion 0.36 ms\ntiming: batch wall 18.59 ms\n",
+      "markdownBytes": 581,
+      "markdownSha256": "4fe6e9aa70e9253e52ecdb4567e8cb4cdabdad957a3b15a3c597667a6f9c2cbe",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/gb18030.txt",
+      "sha256": "e4de892443028c3f230ab37e0c658f5bd0246b07147005580c2904b733ecf4fc",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "gb18030.txt",
+        "sourceSize": 864,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 19.56 ms, conversion 0.49 ms\ntiming: batch wall 19.57 ms\n",
+      "markdownBytes": 1157,
+      "markdownSha256": "5ec7dc343674b9e4c2bf854225446e291ad71fa991c256e7707b62331fe30109",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/gb18030.txt",
+      "sha256": "e4de892443028c3f230ab37e0c658f5bd0246b07147005580c2904b733ecf4fc",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "gb18030.txt",
+        "sourceSize": 864,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 18.07 ms, conversion 0.52 ms\ntiming: batch wall 18.08 ms\n",
+      "markdownBytes": 1157,
+      "markdownSha256": "5ec7dc343674b9e4c2bf854225446e291ad71fa991c256e7707b62331fe30109",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/shift_jis.txt",
+      "sha256": "73cdabebfb92b4eaf6b8af8442953da1041fa8141a0513279b8df215879d4246",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "shift_jis.txt",
+        "sourceSize": 760,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 17.59 ms, conversion 0.36 ms\ntiming: batch wall 17.60 ms\n",
+      "markdownBytes": 1103,
+      "markdownSha256": "15dff60b46ed79406ebc89cce2c1e94517c8b5cf70848daeae6bbdeb057eab6b",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/cjkencodings/shift_jis.txt",
+      "sha256": "73cdabebfb92b4eaf6b8af8442953da1041fa8141a0513279b8df215879d4246",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "shift_jis.txt",
+        "sourceSize": 760,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.72,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.98 ms, conversion 0.37 ms\ntiming: batch wall 17.00 ms\n",
+      "markdownBytes": 1103,
+      "markdownSha256": "15dff60b46ed79406ebc89cce2c1e94517c8b5cf70848daeae6bbdeb057eab6b",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/exception_hierarchy.txt",
+      "sha256": "bfa1d806de1482507b5582bcec118bfb87777e33d7d75872b8aea71c375b96fd",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "exception_hierarchy.txt",
+        "sourceSize": 2434,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 27.25 ms, conversion 0.34 ms\ntiming: batch wall 27.26 ms\n",
+      "markdownBytes": 2570,
+      "markdownSha256": "32424139633796f9fb035a3abb7e46ea2b858ce0b42a89bd0a95061ded92ed9b",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/exception_hierarchy.txt",
+      "sha256": "bfa1d806de1482507b5582bcec118bfb87777e33d7d75872b8aea71c375b96fd",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "exception_hierarchy.txt",
+        "sourceSize": 2434,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 25.90 ms, conversion 0.35 ms\ntiming: batch wall 25.91 ms\n",
+      "markdownBytes": 2570,
+      "markdownSha256": "32424139633796f9fb035a3abb7e46ea2b858ce0b42a89bd0a95061ded92ed9b",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/cmath_testcases.txt",
+      "sha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "cmath_testcases.txt",
+        "sourceSize": 144586,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 468.37 ms, conversion 3.17 ms\ntiming: batch wall 468.39 ms\n",
+      "markdownBytes": 144586,
+      "markdownSha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": [
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 75,
+            "byteEnd": 83,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 84,
+            "byteEnd": 94,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 127,
+            "byteEnd": 134,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 156,
+            "byteEnd": 164,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 211,
+            "byteEnd": 221,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 526,
+            "byteEnd": 533,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        }
+      ]
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/cmath_testcases.txt",
+      "sha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "cmath_testcases.txt",
+        "sourceSize": 144586,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 465.09 ms, conversion 2.86 ms\ntiming: batch wall 465.11 ms\n",
+      "markdownBytes": 144586,
+      "markdownSha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": [
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 75,
+            "byteEnd": 83,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 84,
+            "byteEnd": 94,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 127,
+            "byteEnd": 134,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 156,
+            "byteEnd": 164,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 211,
+            "byteEnd": 221,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.rawHtmlPreservedAsCode",
+          "severity": "warning",
+          "message": "raw inline HTML was preserved as non-executable code",
+          "locator": {
+            "byteStart": 526,
+            "byteEnd": 533,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        }
+      ]
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/formatfloat_testcases.txt",
+      "sha256": "220712cfdcb43c8f5d292b5226a036a0453f958379594d6a89b8c29fde14a4af",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "formatfloat_testcases.txt",
+        "sourceSize": 7630,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 70.62 ms, conversion 0.74 ms\ntiming: batch wall 70.64 ms\n",
+      "markdownBytes": 9757,
+      "markdownSha256": "4311768fa4fcc91ad5b13ffe88ffaaec808b493d980954aae81b6b1946b539f8",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/formatfloat_testcases.txt",
+      "sha256": "220712cfdcb43c8f5d292b5226a036a0453f958379594d6a89b8c29fde14a4af",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "formatfloat_testcases.txt",
+        "sourceSize": 7630,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 70.01 ms, conversion 0.74 ms\ntiming: batch wall 70.02 ms\n",
+      "markdownBytes": 9757,
+      "markdownSha256": "4311768fa4fcc91ad5b13ffe88ffaaec808b493d980954aae81b6b1946b539f8",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/ieee754.txt",
+      "sha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "ieee754.txt",
+        "sourceSize": 3226,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 43.19 ms, conversion 0.32 ms\ntiming: batch wall 43.20 ms\n",
+      "markdownBytes": 3226,
+      "markdownSha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": [
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 120,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 119,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 118,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 378,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 377,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 376,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 634,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 633,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 632,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 706,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 705,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 704,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 832,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 831,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 830,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1003,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1002,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1001,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1108,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1107,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1106,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1261,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1260,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1259,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1394,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1393,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1392,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1651,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1650,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1649,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1891,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1890,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1889,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2132,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2131,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2130,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2795,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2794,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2793,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2875,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2874,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2873,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        }
+      ]
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/mathdata/ieee754.txt",
+      "sha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "ieee754.txt",
+        "sourceSize": 3226,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 41.97 ms, conversion 0.31 ms\ntiming: batch wall 41.98 ms\n",
+      "markdownBytes": 3226,
+      "markdownSha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": [
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 120,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 119,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 118,
+            "byteEnd": 200,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 378,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 377,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 376,
+            "byteEnd": 490,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 634,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 633,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 632,
+            "byteEnd": 703,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 706,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 705,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 704,
+            "byteEnd": 742,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 832,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 831,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 830,
+            "byteEnd": 911,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1003,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1002,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1001,
+            "byteEnd": 1053,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1108,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1107,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1106,
+            "byteEnd": 1179,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1261,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1260,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1259,
+            "byteEnd": 1317,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1394,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1393,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1392,
+            "byteEnd": 1524,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1651,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1650,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1649,
+            "byteEnd": 1728,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1891,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1890,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 1889,
+            "byteEnd": 2079,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2132,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2131,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2130,
+            "byteEnd": 2676,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2795,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2794,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2793,
+            "byteEnd": 2872,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2875,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2874,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        },
+        {
+          "code": "markdown.blockquotePreservedAsCode",
+          "severity": "warning",
+          "message": "blockquote was preserved as a non-executable Markdown code container",
+          "locator": {
+            "byteStart": 2873,
+            "byteEnd": 3181,
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": null
+          }
+        }
+      ]
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest.txt",
+      "sha256": "18c36b3fe82930c2519a9da6e8fde3093187af0cdf0e7ef9966f42362634452b",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest.txt",
+        "sourceSize": 300,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 19.86 ms, conversion 0.20 ms\ntiming: batch wall 19.87 ms\n",
+      "markdownBytes": 337,
+      "markdownSha256": "d43f4e6a76eeecf4b4511f596d7339f797c9dfe3ad7c35411a5779e24ad633ea",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest.txt",
+      "sha256": "18c36b3fe82930c2519a9da6e8fde3093187af0cdf0e7ef9966f42362634452b",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest.txt",
+        "sourceSize": 300,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 20.05 ms, conversion 0.21 ms\ntiming: batch wall 20.07 ms\n",
+      "markdownBytes": 337,
+      "markdownSha256": "d43f4e6a76eeecf4b4511f596d7339f797c9dfe3ad7c35411a5779e24ad633ea",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest2.txt",
+      "sha256": "f0c95d104cb12cc84a2d304a21e35c6e9a661ee8a31452529d3865cbd75f3a08",
+      "policy": "best-effort",
+      "expectedOutcome": "unsafeText",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest2.txt",
+        "sourceSize": 418,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 0.83 ms, conversion unavailable\ntiming: batch wall 0.84 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest2.txt",
+      "sha256": "f0c95d104cb12cc84a2d304a21e35c6e9a661ee8a31452529d3865cbd75f3a08",
+      "policy": "strict",
+      "expectedOutcome": "unsafeText",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest2.txt",
+        "sourceSize": 418,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 0.56 ms, conversion unavailable\ntiming: batch wall 0.57 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest3.txt",
+      "sha256": "9ca124139afe89cc8eb7a6c3bb2abd85d8abdbb90f1b696dcfb09b305ff88e1d",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest3.txt",
+        "sourceSize": 82,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 19.37 ms, conversion 0.16 ms\ntiming: batch wall 19.38 ms\n",
+      "markdownBytes": 98,
+      "markdownSha256": "cf57f4e29442b7556ecee79675ad3d7aaf5e717e23a5fb871148c961fc7d534e",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest3.txt",
+      "sha256": "9ca124139afe89cc8eb7a6c3bb2abd85d8abdbb90f1b696dcfb09b305ff88e1d",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest3.txt",
+        "sourceSize": 82,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 18.22 ms, conversion 0.19 ms\ntiming: batch wall 18.23 ms\n",
+      "markdownBytes": 98,
+      "markdownSha256": "cf57f4e29442b7556ecee79675ad3d7aaf5e717e23a5fb871148c961fc7d534e",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest4.txt",
+      "sha256": "d8eb10ff8837b339686ae5aa2e0072a9de6abddf691b87dd415b56f395d8852b",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest4.txt",
+        "sourceSize": 244,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 20.16 ms, conversion 0.21 ms\ntiming: batch wall 20.17 ms\n",
+      "markdownBytes": 266,
+      "markdownSha256": "aeb06a18abab343a58959a8dfff7ea10cce1ce7ed33ad05ecd6a2fe2d5c4c0d4",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/test_doctest/test_doctest4.txt",
+      "sha256": "d8eb10ff8837b339686ae5aa2e0072a9de6abddf691b87dd415b56f395d8852b",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "test_doctest4.txt",
+        "sourceSize": 244,
+        "candidates": [
+          {
+            "format": "text",
+            "confidence": 0.88,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "plain-text safety and encoding thresholds",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 20.87 ms, conversion 0.21 ms\ntiming: batch wall 20.88 ms\n",
+      "markdownBytes": 266,
+      "markdownSha256": "aeb06a18abab343a58959a8dfff7ea10cce1ce7ed33ad05ecd6a2fe2d5c4c0d4",
+      "providers": [
+        "builtin.converter.text"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/tokenizedata/tokenize_tests.txt",
+      "sha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "tokenize_tests.txt",
+        "sourceSize": 2717,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 69.46 ms, conversion 0.43 ms\ntiming: batch wall 69.47 ms\n",
+      "markdownBytes": 2717,
+      "markdownSha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "txt",
+      "path": "Lib/test/tokenizedata/tokenize_tests.txt",
+      "sha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "tokenize_tests.txt",
+        "sourceSize": 2717,
+        "candidates": [
+          {
+            "format": "markdown",
+            "confidence": 0.91,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "multiple unambiguous Markdown/GFM structures",
+            "diagnostics": []
+          },
+          {
+            "format": "text",
+            "confidence": 0.55,
+            "explicit": false,
+            "detectorId": "builtin.detector.hints",
+            "reason": "filename extension",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 65.38 ms, conversion 0.37 ms\ntiming: batch wall 65.39 ms\n",
+      "markdownBytes": 2717,
+      "markdownSha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
+      "providers": [
+        "builtin.converter.markdown-gfm"
+      ],
+      "diagnostics": []
+    },
+    {
+      "kind": "html",
+      "path": "test/index.html",
+      "sha256": "7faa8ea77d1d45c978ab3d908e564b27887b503c81a88942db48c6ad09007abf",
+      "policy": "best-effort",
+      "expectedOutcome": "emptyHtml",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "index.html",
+        "sourceSize": 2009,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 0.81 ms, conversion unavailable\ntiming: batch wall 0.82 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "html",
+      "path": "test/index.html",
+      "sha256": "7faa8ea77d1d45c978ab3d908e564b27887b503c81a88942db48c6ad09007abf",
+      "policy": "strict",
+      "expectedOutcome": "emptyHtml",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "index.html",
+        "sourceSize": 2009,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 0.59 ms, conversion unavailable\ntiming: batch wall 0.60 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "html",
+      "path": "test/delegatetest.html",
+      "sha256": "54b5a3eaf58a4c60a11d34e371a4d3489c05db063d8ee41447653b0c27ec7099",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "delegatetest.html",
+        "sourceSize": 6011,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 32.54 ms, conversion 0.50 ms\ntiming: batch wall 32.55 ms\n",
+      "markdownBytes": 534,
+      "markdownSha256": "261020f45d33de70432bd53942d9a5f66359174d6ee8bca9f3bf0bc2371cc299",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/delegatetest.html",
+      "sha256": "54b5a3eaf58a4c60a11d34e371a4d3489c05db063d8ee41447653b0c27ec7099",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "delegatetest.html",
+        "sourceSize": 6011,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 32.75 ms, conversion 0.54 ms\ntiming: batch wall 32.77 ms\n",
+      "markdownBytes": 534,
+      "markdownSha256": "261020f45d33de70432bd53942d9a5f66359174d6ee8bca9f3bf0bc2371cc299",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/hovertest.html",
+      "sha256": "4de98423d583e67d48c0331219c5ad510670fdf4af4278c3a8b5ea32f4e44f82",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "hovertest.html",
+        "sourceSize": 3966,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 25.55 ms, conversion 0.39 ms\ntiming: batch wall 25.57 ms\n",
+      "markdownBytes": 553,
+      "markdownSha256": "4e38f4c9ed7d24b29cb51d004655579165c764d94741f29b19885b87a6c83c11",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/hovertest.html",
+      "sha256": "4de98423d583e67d48c0331219c5ad510670fdf4af4278c3a8b5ea32f4e44f82",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "hovertest.html",
+        "sourceSize": 3966,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 27.30 ms, conversion 0.38 ms\ntiming: batch wall 27.31 ms\n",
+      "markdownBytes": 553,
+      "markdownSha256": "4e38f4c9ed7d24b29cb51d004655579165c764d94741f29b19885b87a6c83c11",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/absolute.html",
+      "sha256": "1f5f7620b20bfe8c4d13513c9effaae8bebb51dcfa7965ac2eb4e3a032e6d699",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "absolute.html",
+        "sourceSize": 1860,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 21.82 ms, conversion 0.27 ms\ntiming: batch wall 21.83 ms\n",
+      "markdownBytes": 306,
+      "markdownSha256": "391154db594039242dcc2cd0c7c1d76ecfbc1cc187828a93fa96b6a44d9a6470",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/absolute.html",
+      "sha256": "1f5f7620b20bfe8c4d13513c9effaae8bebb51dcfa7965ac2eb4e3a032e6d699",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "absolute.html",
+        "sourceSize": 1860,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 21.14 ms, conversion 0.29 ms\ntiming: batch wall 21.16 ms\n",
+      "markdownBytes": 306,
+      "markdownSha256": "391154db594039242dcc2cd0c7c1d76ecfbc1cc187828a93fa96b6a44d9a6470",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/body.html",
+      "sha256": "a338b2ed941f93e97feef3dbb910731dc1e937631b9ce05975f2ccf106acfe9e",
+      "policy": "best-effort",
+      "expectedOutcome": "emptyHtml",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "body.html",
+        "sourceSize": 925,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 0.58 ms, conversion unavailable\ntiming: batch wall 0.59 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/body.html",
+      "sha256": "a338b2ed941f93e97feef3dbb910731dc1e937631b9ce05975f2ccf106acfe9e",
+      "policy": "strict",
+      "expectedOutcome": "emptyHtml",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "body.html",
+        "sourceSize": 925,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 0.60 ms, conversion unavailable\ntiming: batch wall 0.61 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/boxes.html",
+      "sha256": "83ef2a963c3d3e1830bc442a711d874a962795053c51155acc6404b3349bc0d6",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "boxes.html",
+        "sourceSize": 3007,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 20.52 ms, conversion 0.38 ms\ntiming: batch wall 20.54 ms\n",
+      "markdownBytes": 174,
+      "markdownSha256": "eff15c4e2e3de417824249723b3320a55a90f20f7defe13d9ab04e413776c073",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/boxes.html",
+      "sha256": "83ef2a963c3d3e1830bc442a711d874a962795053c51155acc6404b3349bc0d6",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "boxes.html",
+        "sourceSize": 3007,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 21.34 ms, conversion 0.34 ms\ntiming: batch wall 21.36 ms\n",
+      "markdownBytes": 174,
+      "markdownSha256": "eff15c4e2e3de417824249723b3320a55a90f20f7defe13d9ab04e413776c073",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/fixed.html",
+      "sha256": "d343088196c2ffb70caecfad8227cec87aa0fe5ac35c75898a416ad0b76196a6",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "fixed.html",
+        "sourceSize": 1356,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.84 ms, conversion 0.26 ms\ntiming: batch wall 16.86 ms\n",
+      "markdownBytes": 47,
+      "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/fixed.html",
+      "sha256": "d343088196c2ffb70caecfad8227cec87aa0fe5ac35c75898a416ad0b76196a6",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "fixed.html",
+        "sourceSize": 1356,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 17.07 ms, conversion 0.25 ms\ntiming: batch wall 17.09 ms\n",
+      "markdownBytes": 47,
+      "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/relative.html",
+      "sha256": "c415f44ae578f67ea598c767029324146663f550e70be31d7337c6621eb1f16d",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "relative.html",
+        "sourceSize": 1632,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.66 ms, conversion 0.26 ms\ntiming: batch wall 16.68 ms\n",
+      "markdownBytes": 176,
+      "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/relative.html",
+      "sha256": "c415f44ae578f67ea598c767029324146663f550e70be31d7337c6621eb1f16d",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "relative.html",
+        "sourceSize": 1632,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.19 ms, conversion 0.27 ms\ntiming: batch wall 16.21 ms\n",
+      "markdownBytes": 176,
+      "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/scroll.html",
+      "sha256": "340d2e9ffb0bdf5ee8857a658234ac1e3323dcfa59b9b735c4702f1cca4dfb02",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "scroll.html",
+        "sourceSize": 1560,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.44 ms, conversion 0.28 ms\ntiming: batch wall 16.45 ms\n",
+      "markdownBytes": 47,
+      "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/scroll.html",
+      "sha256": "340d2e9ffb0bdf5ee8857a658234ac1e3323dcfa59b9b735c4702f1cca4dfb02",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "scroll.html",
+        "sourceSize": 1560,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 17.63 ms, conversion 0.29 ms\ntiming: batch wall 17.65 ms\n",
+      "markdownBytes": 47,
+      "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/static.html",
+      "sha256": "eec52a528a91e6f0265351bdf4f22308ad221f8d1d925be1f9bc384ad4514152",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "static.html",
+        "sourceSize": 1512,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 18.17 ms, conversion 0.27 ms\ntiming: batch wall 18.18 ms\n",
+      "markdownBytes": 176,
+      "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/static.html",
+      "sha256": "eec52a528a91e6f0265351bdf4f22308ad221f8d1d925be1f9bc384ad4514152",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "static.html",
+        "sourceSize": 1512,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 16.25 ms, conversion 0.29 ms\ntiming: batch wall 16.27 ms\n",
+      "markdownBytes": 176,
+      "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/table.html",
+      "sha256": "4b8bcd56db857cbcdb534fabf8df67046b396f873e016c12c56dda08ab60c416",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "table.html",
+        "sourceSize": 1315,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 23.97 ms, conversion 0.33 ms\ntiming: batch wall 23.98 ms\n",
+      "markdownBytes": 171,
+      "markdownSha256": "488e0c269256ef37cf6cc7aa7e29d5a46f60df94a9026f122d9e4dfc721264a3",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/offset/table.html",
+      "sha256": "4b8bcd56db857cbcdb534fabf8df67046b396f873e016c12c56dda08ab60c416",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "table.html",
+        "sourceSize": 1315,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 23.31 ms, conversion 0.33 ms\ntiming: batch wall 23.32 ms\n",
+      "markdownBytes": 171,
+      "markdownSha256": "488e0c269256ef37cf6cc7aa7e29d5a46f60df94a9026f122d9e4dfc721264a3",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.parseRecovered",
+          "severity": "warning",
+          "message": "HTML5 parser recovered from 1 syntax error(s)",
+          "locator": null
+        },
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/selector/html5_selector.html",
+      "sha256": "3f0f89aedb19c60fdde3e35258e6ee2b2224442d43f34a7f883c2e679728a7b8",
+      "policy": "best-effort",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "html5_selector.html",
+        "sourceSize": 2066,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 20.25 ms, conversion 0.34 ms\ntiming: batch wall 20.26 ms\n",
+      "markdownBytes": 160,
+      "markdownSha256": "74c19aff59fa33e6d8cf4cb8a070a1d680b62c3b9bfb91e8b391c811cecf58e0",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "html",
+      "path": "test/data/selector/html5_selector.html",
+      "sha256": "3f0f89aedb19c60fdde3e35258e6ee2b2224442d43f34a7f883c2e679728a7b8",
+      "policy": "strict",
+      "expectedOutcome": "converted",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
+      ],
+      "detectExit": 0,
+      "detection": {
+        "sourceName": "html5_selector.html",
+        "sourceSize": 2066,
+        "candidates": [
+          {
+            "format": "html",
+            "confidence": 0.96,
+            "explicit": false,
+            "detectorId": "builtin.detector.content",
+            "reason": "HTML root markup",
+            "diagnostics": []
+          }
+        ]
+      },
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
+      ],
+      "exit": 0,
+      "stderr": "timing: total 19.47 ms, conversion 0.39 ms\ntiming: batch wall 19.49 ms\n",
+      "markdownBytes": 160,
+      "markdownSha256": "74c19aff59fa33e6d8cf4cb8a070a1d680b62c3b9bfb91e8b391c811cecf58e0",
+      "providers": [
+        "builtin.converter.html"
+      ],
+      "diagnostics": [
+        {
+          "code": "html.sourceLocationUnavailable",
+          "severity": "warning",
+          "message": "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span",
+          "locator": null
+        },
+        {
+          "code": "html.mainContentFallback",
+          "severity": "warning",
+          "message": "no non-empty explicit main-content region; used visible body content",
+          "locator": null
+        }
+      ]
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/core.js",
+      "sha256": "91534143930d07f1a38a23e456d402484d3abe85694f4bd48968b5792b1f9691",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.53 ms, conversion unavailable\ntiming: batch wall 0.54 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/core.js",
+      "sha256": "91534143930d07f1a38a23e456d402484d3abe85694f4bd48968b5792b1f9691",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.57 ms, conversion unavailable\ntiming: batch wall 0.59 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/manipulation.js",
+      "sha256": "9d85fee05495c9bc7ab6e14cbb791ea9306ba69e3dc2de12b44048db93011a4e",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.52 ms, conversion unavailable\ntiming: batch wall 0.53 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/manipulation.js",
+      "sha256": "9d85fee05495c9bc7ab6e14cbb791ea9306ba69e3dc2de12b44048db93011a4e",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.46 ms, conversion unavailable\ntiming: batch wall 0.47 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/selector.js",
+      "sha256": "4a50d927d7e34848320c38d7c034dc9ce5783b7387e3668fd7a1f6c49e68b060",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.46 ms, conversion unavailable\ntiming: batch wall 0.47 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/selector.js",
+      "sha256": "4a50d927d7e34848320c38d7c034dc9ce5783b7387e3668fd7a1f6c49e68b060",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.44 ms, conversion unavailable\ntiming: batch wall 0.45 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/attributes.js",
+      "sha256": "6aa2b9d730bd32032c4ca9881d574eb2d87bbc1b0a6f79326870e52d3f59aacc",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.48 ms, conversion unavailable\ntiming: batch wall 0.49 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/attributes.js",
+      "sha256": "6aa2b9d730bd32032c4ca9881d574eb2d87bbc1b0a6f79326870e52d3f59aacc",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.42 ms, conversion unavailable\ntiming: batch wall 0.43 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/css.js",
+      "sha256": "61d17d13468c89eb978842a6605dda57892977b2ef1659aee0201681f13c6557",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.44 ms, conversion unavailable\ntiming: batch wall 0.45 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/css.js",
+      "sha256": "61d17d13468c89eb978842a6605dda57892977b2ef1659aee0201681f13c6557",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.48 ms, conversion unavailable\ntiming: batch wall 0.49 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/data.js",
+      "sha256": "9394f8ee5aeea28221b35c6e203f2dfb49b3393539a2d92048d1db2835038b6e",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.42 ms, conversion unavailable\ntiming: batch wall 0.43 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/data.js",
+      "sha256": "9394f8ee5aeea28221b35c6e203f2dfb49b3393539a2d92048d1db2835038b6e",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.44 ms, conversion unavailable\ntiming: batch wall 0.44 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/event.js",
+      "sha256": "bdd9bf7286ef599274ece945315fce235f8fb6dcd7423bc24dd04e1a281c7f0e",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.47 ms, conversion unavailable\ntiming: batch wall 0.48 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/event.js",
+      "sha256": "bdd9bf7286ef599274ece945315fce235f8fb6dcd7423bc24dd04e1a281c7f0e",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.47 ms, conversion unavailable\ntiming: batch wall 0.49 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/traversing.js",
+      "sha256": "1b7fbb4ac877a45726183c8661ab3ca345e5cbd3789b8d5220525ff1fa5d7211",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.51 ms, conversion unavailable\ntiming: batch wall 0.52 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/traversing.js",
+      "sha256": "1b7fbb4ac877a45726183c8661ab3ca345e5cbd3789b8d5220525ff1fa5d7211",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.44 ms, conversion unavailable\ntiming: batch wall 0.45 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/ajax.js",
+      "sha256": "9e246d60eaf69c6a88936b12d49f745fd06e7da3e9d12a438f28b1cf41760de5",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.49 ms, conversion unavailable\ntiming: batch wall 0.50 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/ajax.js",
+      "sha256": "9e246d60eaf69c6a88936b12d49f745fd06e7da3e9d12a438f28b1cf41760de5",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.46 ms, conversion unavailable\ntiming: batch wall 0.47 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/animation.js",
+      "sha256": "e0ea07d85dc3de1c9ea920859169d34202b0773a84e368e5f53f1fc47debac62",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.42 ms, conversion unavailable\ntiming: batch wall 0.43 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/animation.js",
+      "sha256": "e0ea07d85dc3de1c9ea920859169d34202b0773a84e368e5f53f1fc47debac62",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.43 ms, conversion unavailable\ntiming: batch wall 0.44 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/deferred.js",
+      "sha256": "c1aa93f428a366bc1759c7f5b5eb71efc13bbdce3062196fefca3986de6cfcde",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.46 ms, conversion unavailable\ntiming: batch wall 0.48 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/deferred.js",
+      "sha256": "c1aa93f428a366bc1759c7f5b5eb71efc13bbdce3062196fefca3986de6cfcde",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.42 ms, conversion unavailable\ntiming: batch wall 0.43 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/serialize.js",
+      "sha256": "c7d2f443f0f92678854928aeb23a6344945244d991dd2b523e714ec6c2f9cd3c",
+      "policy": "best-effort",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "best-effort",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.45 ms, conversion unavailable\ntiming: batch wall 0.46 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    },
+    {
+      "kind": "js",
+      "path": "test/unit/serialize.js",
+      "sha256": "c7d2f443f0f92678854928aeb23a6344945244d991dd2b523e714ec6c2f9cd3c",
+      "policy": "strict",
+      "expectedOutcome": "unsupported",
+      "passed": true,
+      "detectCommand": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "formats",
+        "detect",
+        "--json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
+      ],
+      "detectExit": 3,
+      "detection": null,
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/installed-integrated/into-md",
+        "--no-config",
+        "--error-policy",
+        "strict",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-2bv3w8ea/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 0.42 ms, conversion unavailable\ntiming: batch wall 0.43 ms\n",
+      "markdownBytes": 0,
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "providers": [],
+      "diagnostics": []
+    }
+  ],
+  "passed": 72,
+  "total": 72
+}

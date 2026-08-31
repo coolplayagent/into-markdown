@@ -11,8 +11,8 @@ import { HistoryPanel } from "./history-panel";
 import { useCapabilities } from "./capability-store";
 import { useRouter } from "./router";
 import {
-  SUPPORTED_FILE_ACCEPT, TERMINAL, bytesLabel, createBatchId, diagnosticLabel, taskFailureLabel, formatForName, listAllTasks,
-  executionStageLabel, iconForFormat, supportsFileName, taskFailureCode,
+  TERMINAL, bytesLabel, createBatchId, diagnosticLabel, taskFailureLabel, formatForName, listAllTasks,
+  executionStageLabel, iconForFormat,
 } from "./task-ui";
 
 const MAX_BATCH_FILES = 100;
@@ -130,14 +130,10 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   const addFiles = (incoming: File[]) => {
     const base = batchFinished ? [] : entries;
     const seen = new Set(base.map((entry) => entry.key));
-    const unsupported = incoming.filter((file) => !supportsFileName(file.name, options.format));
-    const supported = incoming.filter((file) => supportsFileName(file.name, options.format));
-    const unique = supported.filter((file) => { const key = entryKey(file); if (seen.has(key)) return false; seen.add(key); return true; });
+    // Core authenticates the format after upload, including renamed documents.
+    const unique = incoming.filter((file) => { const key = entryKey(file); if (seen.has(key)) return false; seen.add(key); return true; });
     const combined = [...base, ...unique.map((file) => ({ key: entryKey(file), file }))];
     const total = combined.reduce((sum, entry) => sum + entry.file.size, 0);
-    const skipped = unsupported.slice(0, 3).map((file) => file.name).join("、")
-      + (unsupported.length > 3 ? ` +${unsupported.length - 3}` : "");
-    const unsupportedMessage = unsupported.length > 0 ? t("unsupportedFiles").replace("{files}", skipped) : "";
     setMessageScope("source");
     if (combined.length > MAX_BATCH_FILES) setMessage(t("tooManyFiles"));
     else if (combined.some((entry) => entry.file.size > options.maxInputMiB * 1024 * 1024)) setMessage(t("fileTooLarge"));
@@ -145,7 +141,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     else {
       if (batchFinished) { setBatchId(null); navigatedBatch.current = null; }
       setEntries(combined);
-      setMessage(unsupportedMessage);
+      setMessage("");
     }
   };
 
@@ -206,8 +202,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
       <section className="card upload-card" aria-labelledby="upload-heading">
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
         <div className="drop-zone-shell"><div id="upload-zone" className={`drop-zone ${dragging ? "dragging" : ""}`} role="button" tabIndex={0} onClick={() => input.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.current?.click(); } }} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}><span className="upload-icon" aria-hidden="true"><UploadCloud size={28} /></span><strong>{t("dropFiles")}</strong></div><button className="secondary add-file-button" type="button" disabled={uploading} onClick={() => input.current?.click()}><Plus size={17} aria-hidden="true" />{t("chooseFiles")}</button></div>
-        <input ref={input} className="visually-hidden" type="file" multiple accept={options.format ? undefined : SUPPORTED_FILE_ACCEPT} aria-label={t("chooseFiles")} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
-        <input ref={directory} className="visually-hidden" type="file" multiple accept={options.format ? undefined : SUPPORTED_FILE_ACCEPT} aria-label={t("chooseFolder")} {...({ webkitdirectory: "" } as Record<string, string>)} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
+        <input ref={input} className="visually-hidden" type="file" multiple aria-label={t("chooseFiles")} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
+        <input ref={directory} className="visually-hidden" type="file" multiple aria-label={t("chooseFolder")} {...({ webkitdirectory: "" } as Record<string, string>)} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
         <div className="picker-meta">
           <div className="picker-actions"><button className="text-button" type="button" disabled={uploading} onClick={() => directory.current?.click()}><FolderOpen size={16} aria-hidden="true" />{t("chooseFolder")}</button><span>{t("batchLimitSummary")}</span></div>
           {messageScope === "source" && message && <div className="picker-feedback" role="status" aria-live="polite"><CircleAlert size={16} aria-hidden="true" /><span>{message}</span></div>}
@@ -219,7 +215,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const format = formatForName(entry.file.name, options.format);
               const FormatIcon = iconForFormat(format);
               const percent = entry.task ? Math.round(entry.task.progressMillionths / 10_000) : 0;
-              const failureCode = entry.error ?? (entry.task ? taskFailureCode(entry.task) : undefined);
+              const failureCode = entry.error;
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
               const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${(entry.task ? taskFailureLabel(entry.task, t) : diagnosticLabel(failureCode ?? "conversionFailed", t))}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : `${format.toUpperCase()} · ${bytesLabel(entry.file.size)}`}</small>{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
               if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => selectTask(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;

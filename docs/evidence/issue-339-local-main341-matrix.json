@@ -1,0 +1,3704 @@
+{
+  "sourceRevision": "973f6891982776d891971da6d54dc70f3c60a78e",
+  "profile": "local source build after main #341; external pinned PDFium; OCR off",
+  "binarySha256": "39c20e51b49b158e53c73dd0d6163378b9da6cb3d6d39576f4659e8898b47ad2",
+  "publicBinarySources": [
+    {
+      "name": "markitdown-test.docx",
+      "format": "docx",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.docx",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.docx",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 135824,
+      "sha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE"
+    },
+    {
+      "name": "markitdown-test.pptx",
+      "format": "pptx",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.pptx",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.pptx",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 277515,
+      "sha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE"
+    },
+    {
+      "name": "markitdown-test.xls",
+      "format": "xls",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.xls",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.xls",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 27648,
+      "sha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE"
+    },
+    {
+      "name": "markitdown-test.xlsx",
+      "format": "xlsx",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.xlsx",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.xlsx",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 11562,
+      "sha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE"
+    },
+    {
+      "name": "markitdown-test.pdf",
+      "format": "pdf",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.pdf",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.pdf",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 92971,
+      "sha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "expectedOutcome": "existingParserBoundary",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE",
+      "errorContains": "malformed input (dest_page_index)",
+      "baselineSourceRevision": "26aaf8325ed31ce72921c84f0239574718d72257"
+    },
+    {
+      "name": "markitdown-test.jpg",
+      "format": "image",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/test.jpg",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/test.jpg",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "bytes": 474288,
+      "sha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE"
+    },
+    {
+      "name": "poi-simple.doc",
+      "format": "doc",
+      "repository": "apache/poi",
+      "revision": "87cdef57b0f714369c391e625180a59507a24576",
+      "path": "test-data/document/simple.doc",
+      "url": "https://raw.githubusercontent.com/apache/poi/87cdef57b0f714369c391e625180a59507a24576/test-data/document/simple.doc",
+      "license": "Apache-2.0 (repository distribution)",
+      "licensePath": "legal/LICENSE",
+      "bytes": 19456,
+      "sha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "expectedOutcome": "existingParserBoundary",
+      "licenseUrl": "https://github.com/apache/poi/blob/87cdef57b0f714369c391e625180a59507a24576/legal/LICENSE",
+      "errorContains": "malformed input (cfb/directory)",
+      "baselineSourceRevision": "26aaf8325ed31ce72921c84f0239574718d72257"
+    },
+    {
+      "name": "poi-basic_test_ppt_file.ppt",
+      "format": "ppt",
+      "repository": "apache/poi",
+      "revision": "87cdef57b0f714369c391e625180a59507a24576",
+      "path": "test-data/slideshow/basic_test_ppt_file.ppt",
+      "url": "https://raw.githubusercontent.com/apache/poi/87cdef57b0f714369c391e625180a59507a24576/test-data/slideshow/basic_test_ppt_file.ppt",
+      "license": "Apache-2.0 (repository distribution)",
+      "licensePath": "legal/LICENSE",
+      "bytes": 15360,
+      "sha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "expectedOutcome": "converted",
+      "licenseUrl": "https://github.com/apache/poi/blob/87cdef57b0f714369c391e625180a59507a24576/legal/LICENSE"
+    },
+    {
+      "name": "markitdown-masterformat.pdf",
+      "format": "pdf",
+      "repository": "microsoft/markitdown",
+      "revision": "fd239d5d2be43d9b68329730206b9312c7d5a388",
+      "path": "packages/markitdown/tests/test_files/masterformat_partial_numbering.pdf",
+      "url": "https://raw.githubusercontent.com/microsoft/markitdown/fd239d5d2be43d9b68329730206b9312c7d5a388/packages/markitdown/tests/test_files/masterformat_partial_numbering.pdf",
+      "license": "MIT (repository distribution)",
+      "licensePath": "LICENSE",
+      "licenseUrl": "https://github.com/microsoft/markitdown/blob/fd239d5d2be43d9b68329730206b9312c7d5a388/LICENSE",
+      "bytes": 2114,
+      "sha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "expectedOutcome": "converted"
+    }
+  ],
+  "realZipSource": {
+    "kind": "zip",
+    "name": "test_read_format_zip_filename_utf8_jp.zip",
+    "url": "https://raw.githubusercontent.com/libarchive/libarchive/c50cb99cbb2a7a50f71d4d9dcb04dbbe80ca4689/libarchive/test/test_read_format_zip_filename_utf8_jp.zip.uu",
+    "source_revision": "c50cb99cbb2a7a50f71d4d9dcb04dbbe80ca4689",
+    "license": "BSD-2-Clause (libarchive distribution)",
+    "license_url": "https://github.com/libarchive/libarchive/blob/c50cb99cbb2a7a50f71d4d9dcb04dbbe80ca4689/COPYING",
+    "encoding": "uu",
+    "feature": "zip_filename_utf8_jp",
+    "expected": "convert",
+    "sha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+    "upstream_sha256": "5a82e1e88e3509700f2cc10d1d0ffc8b80ecaa25668868dc8c0a9b9b8bec9ebe",
+    "bytes": 522
+  },
+  "records": [
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed.ppt",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-v872ndks/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.ppt"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 89.39 ms, conversion 0.99 ms\ntiming: batch wall 89.45 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-85w3y3s5/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.md"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 96.42 ms, conversion 0.96 ms\ntiming: batch wall 96.48 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-4zf2vwnp/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.csv"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 94.60 ms, conversion 0.95 ms\ntiming: batch wall 94.67 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-wvp7_vc4/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.js"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 100.85 ms, conversion 0.91 ms\ntiming: batch wall 100.91 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-4y7h450k/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.bin"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 101.17 ms, conversion 0.95 ms\ntiming: batch wall 101.24 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.ppt",
+      "sourceSha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "name": "ppt-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-n87qd_rf/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "34f3ed7f854dab1c8945bc4f142266951793c221720a118270df10c2fce134ad",
+      "assets": 1,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.imagePlacementRecovered",
+          "severity": "warning",
+          "message": "safe picture payloads were retained in source order because drawing anchors were incomplete",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Pictures"
+          }
+        },
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 98.38 ms, conversion 0.92 ms\ntiming: batch wall 98.44 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed.doc",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hvfmrx6q/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.doc"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 20.78 ms, conversion 0.58 ms\ntiming: batch wall 20.84 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-d_mur17b/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.md"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 21.85 ms, conversion 0.58 ms\ntiming: batch wall 21.90 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-5ja5uorc/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.csv"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 22.73 ms, conversion 0.57 ms\ntiming: batch wall 22.81 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-q85sst4l/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.js"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 22.16 ms, conversion 0.51 ms\ntiming: batch wall 22.22 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-qi_xiv6k/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.bin"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 21.37 ms, conversion 0.58 ms\ntiming: batch wall 21.43 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.doc",
+      "sourceSha256": "09e5b5be7573ee5f5ef62c6ef93998f9ec62e7c7297c20212c773771545557da",
+      "name": "doc-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-l9rvfe3h/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed"
+      ],
+      "format": "doc",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.doc.formattingPartiallyRecovered",
+          "severity": "warning",
+          "message": "paragraph text, tables, lists, fields, notes, and safe images were retained; unsupported binary property runs were not guessed",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "WordDocument"
+          }
+        }
+      ],
+      "stderr": "timing: total 18.22 ms, conversion 0.60 ms\ntiming: batch wall 18.29 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed.xls",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-q01e2ljd/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.xls"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 42.00 ms, conversion 0.99 ms\ntiming: batch wall 42.07 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-x8f2fbzj/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.md"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 43.64 ms, conversion 0.96 ms\ntiming: batch wall 43.70 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-tk0k8imp/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.csv"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 42.20 ms, conversion 1.06 ms\ntiming: batch wall 42.26 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-zzk0hykm/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.js"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 41.85 ms, conversion 0.96 ms\ntiming: batch wall 41.91 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-3qgsd_ah/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.bin"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 37.93 ms, conversion 1.06 ms\ntiming: batch wall 38.00 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/tools/macos-release/fixtures/normal.xls",
+      "sourceSha256": "e8dc53091dedbe680eae00cd3d812bf8931803512d4e8ecb942e9f19a8b2002d",
+      "name": "xls-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-akqikpmf/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "bcc63afa46b35aaf4187714ff999a04c08083b10af1cca59b8ae9184515e6e1c",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.xls.embeddedObjectsSkipped",
+          "severity": "warning",
+          "message": "embedded OLE, drawing, and ActiveX objects were not executed or exported",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "Workbook"
+          }
+        }
+      ],
+      "stderr": "timing: total 42.89 ms, conversion 1.05 ms\ntiming: batch wall 42.95 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed.pptx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-xpm78p6x/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.pptx"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 33.09 ms, conversion 3.85 ms\ntiming: batch wall 33.17 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-qo32apol/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.md"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 33.16 ms, conversion 3.83 ms\ntiming: batch wall 33.22 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-9_2l9j7n/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.csv"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 31.98 ms, conversion 3.82 ms\ntiming: batch wall 32.03 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-8m0t0rj3/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.js"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 34.61 ms, conversion 3.82 ms\ntiming: batch wall 34.68 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-6_ama_b5/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.bin"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 33.19 ms, conversion 3.92 ms\ntiming: batch wall 33.25 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pptx/normal.pptx",
+      "sourceSha256": "763afc551c4637165e903e034fade107a985c9f3dd3d50f2016bc0b83f2ce8c7",
+      "name": "pptx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-trcsod79/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 32.50 ms, conversion 3.88 ms\ntiming: batch wall 32.56 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed.docx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-c_lxil8b/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.docx"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 20.30 ms, conversion 0.78 ms\ntiming: batch wall 20.36 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-buz32qyr/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.md"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 18.07 ms, conversion 0.76 ms\ntiming: batch wall 18.13 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-5alczmlr/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.csv"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 19.48 ms, conversion 0.78 ms\ntiming: batch wall 19.54 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-h4_57fjo/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.js"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 18.26 ms, conversion 0.92 ms\ntiming: batch wall 18.32 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-j0ss105r/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.bin"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 20.56 ms, conversion 0.88 ms\ntiming: batch wall 20.63 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/docx/normal.docx",
+      "sourceSha256": "886601019dcd0e4b3663daac8554a47ee42257c85a49a1861453eb8f1b210fa0",
+      "name": "docx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-guvuhjto/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 18.88 ms, conversion 0.85 ms\ntiming: batch wall 18.95 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed.xlsx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-493xi5lb/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.xlsx"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 105.19 ms, conversion 2.16 ms\ntiming: batch wall 105.26 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-8yk87i83/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.md"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 110.33 ms, conversion 2.14 ms\ntiming: batch wall 110.40 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-qi4sl15o/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.csv"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 107.64 ms, conversion 2.05 ms\ntiming: batch wall 107.70 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-jadf_v73/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.js"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 104.18 ms, conversion 2.16 ms\ntiming: batch wall 104.26 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-3_gcc72l/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.bin"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 105.27 ms, conversion 2.06 ms\ntiming: batch wall 105.33 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/xlsx/normal.xlsx",
+      "sourceSha256": "254048a906683a8c04bfff8e0e82db4f82afbe9b6e866d11094fd05cad33b8ab",
+      "name": "xlsx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-2izggtud/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "b0a858bae54fa9a19f52b9e1515d4a20e3002157d3078a35a40db3da3dccf57f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 109.59 ms, conversion 2.03 ms\ntiming: batch wall 109.65 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed.pdf",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-ponw0wrj/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.pdf"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 678.09 ms, conversion 530.00 ms\ntiming: batch wall 678.16 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hnvgs413/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.md"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 704.99 ms, conversion 545.11 ms\ntiming: batch wall 705.05 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-9_i3y2az/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.csv"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 662.60 ms, conversion 525.44 ms\ntiming: batch wall 662.67 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-pe4ja52a/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.js"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 692.36 ms, conversion 540.99 ms\ntiming: batch wall 692.42 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-njyb_yn7/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.bin"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 688.53 ms, conversion 529.95 ms\ntiming: batch wall 688.60 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/pdf/structures.pdf",
+      "sourceSha256": "05f42881e5bccaaa8525d3389c2a2eaa868e9b1ee680947cac56e7b2a83d0f3e",
+      "name": "pdf-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-rtkdjt3y/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "03be7225a1ac120befd38154ec97ac90c356b0ae8391cce47953b1980fbcfcbb",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 708.17 ms, conversion 550.52 ms\ntiming: batch wall 708.24 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed.png",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-tzj30tu1/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.png"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 96.73 ms, conversion 15.86 ms\ntiming: batch wall 96.80 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-dwmyfzik/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.md"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 98.20 ms, conversion 15.31 ms\ntiming: batch wall 98.27 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-004wnkrw/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.csv"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 95.48 ms, conversion 15.52 ms\ntiming: batch wall 95.55 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-0pez5qv2/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.js"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 96.10 ms, conversion 14.96 ms\ntiming: batch wall 96.16 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-jxfusnaa/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.bin"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 99.06 ms, conversion 15.24 ms\ntiming: batch wall 99.12 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/fixtures/small/ocr/ocr-english-clear-1.png",
+      "sourceSha256": "adb8e2bfaf7e4c22fa6dd80ecec2e566c3c1949f6e16f2d32411697d6790f603",
+      "name": "image-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-shj651gl/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "ccb3f0241dff4df29007c8c6efd3b9829cb043689db4dfdab9056f8f7b9d9f4b",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 97.67 ms, conversion 15.25 ms\ntiming: batch wall 97.73 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.zip",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-4pc9pn_b/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.zip"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 41.10 ms, conversion 4.41 ms\ntiming: batch wall 41.17 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-ksd7x2sf/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.md"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 42.44 ms, conversion 6.57 ms\ntiming: batch wall 42.50 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-bb6c4cbe/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.csv"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 41.56 ms, conversion 4.50 ms\ntiming: batch wall 41.63 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-frdv9ixq/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.js"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 41.85 ms, conversion 4.44 ms\ntiming: batch wall 41.91 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-4lhsu_3o/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.bin"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 39.89 ms, conversion 4.69 ms\ntiming: batch wall 39.96 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-uq032tzd/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 40.12 ms, conversion 4.66 ms\ntiming: batch wall 40.18 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.docx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-ugu4pamv/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.docx"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 39.08 ms, conversion 4.55 ms\ntiming: batch wall 39.15 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.epub",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-x_xjwx8y/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.epub"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 40.20 ms, conversion 4.27 ms\ntiming: batch wall 40.26 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/generated.zip",
+      "sourceSha256": "04c3314afccc8295a247cad1f8d9202705b9b892630dc510e78220dd0cf67feb",
+      "name": "zip-renamed.rar",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-a_73asjr/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.rar"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "642b4fe493377a6076487bfb0a69f058c85bd8fa0291fb6bdfcb7b657de7e358",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "zip.entry.failed",
+          "severity": "error",
+          "message": "archive member \"rejected.js\" was skipped: unsupported input: unsupported input \"rejected.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "rejected.js"
+          }
+        }
+      ],
+      "stderr": "timing: total 40.65 ms, conversion 4.62 ms\ntiming: batch wall 40.71 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.zip",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-lrjkhltp/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.zip"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 25.05 ms, conversion 0.77 ms\ntiming: batch wall 25.12 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-5rjr9l8k/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.md"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 23.86 ms, conversion 0.75 ms\ntiming: batch wall 23.93 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-8_bskjo0/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.csv"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 24.14 ms, conversion 0.91 ms\ntiming: batch wall 24.20 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-c_3z81oi/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.js"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 26.88 ms, conversion 0.93 ms\ntiming: batch wall 26.94 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-cgykjvxr/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.bin"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 25.67 ms, conversion 0.72 ms\ntiming: batch wall 25.73 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-ddvsl5sh/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 23.66 ms, conversion 1.02 ms\ntiming: batch wall 23.72 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.docx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-zh_kcvb7/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.docx"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 23.25 ms, conversion 0.77 ms\ntiming: batch wall 23.32 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.epub",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-eanwyy0o/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.epub"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 24.38 ms, conversion 0.77 ms\ntiming: batch wall 24.46 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/real-zip/test_read_format_zip_filename_utf8_jp.zip",
+      "sourceSha256": "6b3bc9204b9f207b37604e39fdc46a7d010f90445c719a4d7b91fb18b9bb7e90",
+      "name": "zip-renamed.rar",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-_k2ppajb/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/zip-renamed.rar"
+      ],
+      "format": "zip",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9af5e16733421dd4fa4200d47353f7d79f33fd05c039834093ff8bf483bb5539",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 24.88 ms, conversion 0.88 ms\ntiming: batch wall 24.99 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed.docx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-g1otj_uv/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.docx"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 240.49 ms, conversion 50.44 ms\ntiming: batch wall 240.56 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-xpzlj9kh/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.md"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 239.44 ms, conversion 50.79 ms\ntiming: batch wall 239.50 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-fw7gv1l1/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.csv"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 251.27 ms, conversion 52.55 ms\ntiming: batch wall 251.33 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-i_3k7pbr/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.js"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 241.75 ms, conversion 51.06 ms\ntiming: batch wall 241.81 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-1uj2wqov/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed.bin"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 249.04 ms, conversion 51.42 ms\ntiming: batch wall 249.10 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.docx",
+      "sourceSha256": "ee1974633f3b1e8bb54201abce779a755cb1cd5259641a08cf7b1b9b36dec42b",
+      "name": "docx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-_9_kf4ky/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/docx-renamed"
+      ],
+      "format": "docx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "a943ca56709ebce757c5d12f89c801f381e372348893cad328e2b9c9e7e0e18c",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 275.66 ms, conversion 52.24 ms\ntiming: batch wall 275.72 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed.pptx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-na7hpwex/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.pptx"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 578.75 ms, conversion 280.04 ms\ntiming: batch wall 578.82 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-q3iygocx/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.md"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 565.06 ms, conversion 276.79 ms\ntiming: batch wall 565.12 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-er1q4dzn/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.csv"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 558.54 ms, conversion 275.53 ms\ntiming: batch wall 558.60 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-c0zm1v7p/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.js"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 569.37 ms, conversion 281.18 ms\ntiming: batch wall 569.44 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-h3tgmkn6/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed.bin"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 557.92 ms, conversion 277.91 ms\ntiming: batch wall 557.98 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pptx",
+      "sourceSha256": "f0b9e5252aec3730c91f276a7c3b8f4a9893a7b66540f6c6af160a49855ca507",
+      "name": "pptx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hjfzwd9z/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pptx-renamed"
+      ],
+      "format": "pptx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "29fa974876cf4921dd161964722a860b571694174522f2948992cc59af163f1a",
+      "assets": 2,
+      "diagnostics": [
+        {
+          "code": "presentation.dangerousPartsIgnored",
+          "severity": "warning",
+          "message": "macro, ActiveX, OLE or embedded-package parts were isolated and not read",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "[Content_Types].xml"
+          }
+        }
+      ],
+      "stderr": "timing: total 564.04 ms, conversion 277.76 ms\ntiming: batch wall 564.10 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed.xls",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-5gevayeo/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.xls"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 390.39 ms, conversion 1.98 ms\ntiming: batch wall 390.45 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-_9d1w78a/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.md"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 370.34 ms, conversion 2.13 ms\ntiming: batch wall 370.44 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-i8rtm529/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.csv"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 390.71 ms, conversion 2.15 ms\ntiming: batch wall 390.78 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-cl7s7hy4/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.js"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 395.20 ms, conversion 2.24 ms\ntiming: batch wall 395.27 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-49hf0ufl/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed.bin"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 405.89 ms, conversion 2.20 ms\ntiming: batch wall 405.96 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xls",
+      "sourceSha256": "17a94b6514e8998f4dc25bc77265b6f62982c18614ba4401a87fa01f90f53f1d",
+      "name": "xls-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-86msr2os/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xls-renamed"
+      ],
+      "format": "xls",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "9fa8137d00b9d613a1666300c5fb70f814586e69a0359ae0950266afe72c56b3",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 381.11 ms, conversion 2.05 ms\ntiming: batch wall 381.17 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed.xlsx",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-n9z24pdq/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.xlsx"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 421.01 ms, conversion 10.05 ms\ntiming: batch wall 421.07 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-kk1bzdgj/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.md"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 387.74 ms, conversion 9.24 ms\ntiming: batch wall 387.80 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-7rrtnrcv/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.csv"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 395.00 ms, conversion 9.57 ms\ntiming: batch wall 395.07 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hnq9d30a/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.js"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 388.41 ms, conversion 9.14 ms\ntiming: batch wall 388.48 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-it7n7dh1/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed.bin"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 419.01 ms, conversion 9.82 ms\ntiming: batch wall 419.09 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.xlsx",
+      "sourceSha256": "a867be6ece38a4224bcfe34312e5c296ed520a76a431e0454603ceb171fbd4af",
+      "name": "xlsx-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-mbiyg8rp/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/xlsx-renamed"
+      ],
+      "format": "xlsx",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "71733a78dd967cdaf930c43ed987d6d85c20af752893bec84dc8f9d0703888b7",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 393.66 ms, conversion 9.40 ms\ntiming: batch wall 393.71 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed.pdf",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-z4t2khah/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.pdf"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 544.60 ms, conversion unavailable\ntiming: batch wall 544.67 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-m95tpe_v/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.md"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 541.06 ms, conversion unavailable\ntiming: batch wall 541.12 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-e_z5x02g/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.csv"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 592.57 ms, conversion unavailable\ntiming: batch wall 592.63 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-8m7yonzs/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.js"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 557.20 ms, conversion unavailable\ntiming: batch wall 557.27 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-u7zr46yx/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.bin"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 548.27 ms, conversion unavailable\ntiming: batch wall 548.33 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf",
+      "sourceSha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "name": "pdf-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-_enzsle5/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed"
+      ],
+      "format": "pdf",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 536.35 ms, conversion unavailable\ntiming: batch wall 536.42 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed.jpg",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-x5mj0zk3/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.jpg"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 983.82 ms, conversion 773.10 ms\ntiming: batch wall 983.97 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-3cv_n1qe/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.md"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 911.59 ms, conversion 688.97 ms\ntiming: batch wall 911.65 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-pecfmqbe/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.csv"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 910.92 ms, conversion 700.64 ms\ntiming: batch wall 910.99 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-qcvloeqw/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.js"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 909.31 ms, conversion 700.06 ms\ntiming: batch wall 909.37 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-lzb0hqdk/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed.bin"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 908.06 ms, conversion 696.49 ms\ntiming: batch wall 908.14 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.jpg",
+      "sourceSha256": "9390b34525fd044df69265e022a06346abb6d203b14cbc9b2473c080c680e82e",
+      "name": "image-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-tp9nprth/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/image-renamed"
+      ],
+      "format": "image",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "585ee54d9ddf5443c943256cf599b5d02a70c597f7922e4f457e6b7b8176994f",
+      "assets": 1,
+      "diagnostics": [],
+      "stderr": "timing: total 880.65 ms, conversion 685.32 ms\ntiming: batch wall 880.71 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed.doc",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-6wx3vkzu/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.doc"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 1.17 ms, conversion unavailable\ntiming: batch wall 1.24 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-7zkhdoie/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.md"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 1.07 ms, conversion unavailable\ntiming: batch wall 1.13 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-aylgz940/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.csv"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 1.30 ms, conversion unavailable\ntiming: batch wall 1.37 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-cjuyrpm7/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.js"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 7.37 ms, conversion unavailable\ntiming: batch wall 7.43 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-p0x_hlir/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed.bin"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 3.44 ms, conversion unavailable\ntiming: batch wall 3.50 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc",
+      "sourceSha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "name": "doc-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-wgkzvdz2/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/doc-renamed"
+      ],
+      "format": "doc",
+      "exit": 3,
+      "passed": true,
+      "expectedOutcome": "existingParserBoundary",
+      "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 3.78 ms, conversion unavailable\ntiming: batch wall 3.85 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed.ppt",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-2md22rmn/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.ppt"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 32.16 ms, conversion 0.72 ms\ntiming: batch wall 32.23 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-42sh4nys/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.md"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 42.95 ms, conversion 0.69 ms\ntiming: batch wall 43.01 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hxpc9u_x/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.csv"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 22.91 ms, conversion 0.64 ms\ntiming: batch wall 22.97 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-4_ia23mo/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.js"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 56.25 ms, conversion 0.69 ms\ntiming: batch wall 56.32 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-b6hdog7v/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed.bin"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 25.61 ms, conversion 0.70 ms\ntiming: batch wall 25.67 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-basic_test_ppt_file.ppt",
+      "sourceSha256": "e8fd4c38ad72ce3735acbca0b60dd5870fb60f819c169e3947d166f4f1bcc79d",
+      "name": "ppt-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-18wdosqg/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/ppt-renamed"
+      ],
+      "format": "ppt",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "542055f963ba6f0c19b0a5bebdf810e0b1bf2ebdcff08e0bfb8b0d1884490fd3",
+      "assets": 0,
+      "diagnostics": [
+        {
+          "code": "legacyOffice.ppt.layoutPartiallyRecovered",
+          "severity": "warning",
+          "message": "legacy drawing geometry and theme semantics were not executed; text, notes, and safe picture payloads were retained in authoritative slide order",
+          "locator": {
+            "page": null,
+            "slide": null,
+            "sheet": null,
+            "cell": null,
+            "bounds": null,
+            "time": null,
+            "part": "PowerPoint Document"
+          }
+        }
+      ],
+      "stderr": "timing: total 36.62 ms, conversion 0.70 ms\ntiming: batch wall 36.69 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed.pdf",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-pfdvxw04/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.pdf"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1154.59 ms, conversion 567.33 ms\ntiming: batch wall 1154.66 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed.md",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-zpx1cjvn/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.md"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1182.70 ms, conversion 538.59 ms\ntiming: batch wall 1182.77 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed.csv",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-hktxplhm/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.csv"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1480.12 ms, conversion 529.65 ms\ntiming: batch wall 1480.19 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed.js",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-tfkopd4f/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.js"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1872.90 ms, conversion 529.20 ms\ntiming: batch wall 1872.97 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed.bin",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-0a7gw0di/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed.bin"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1510.30 ms, conversion 584.30 ms\ntiming: batch wall 1510.37 ms\n"
+    },
+    {
+      "source": "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-masterformat.pdf",
+      "sourceSha256": "de5bfd981f890d7b8a9544c34633f365449886e430bdfb2ea4ff6f0fad61ca63",
+      "name": "pdf-renamed",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "--assets-dir",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/conversion-j8jl329x/assets",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/main341-matrix-std7okpt/pdf-renamed"
+      ],
+      "format": "pdf",
+      "exit": 0,
+      "passed": true,
+      "expectedOutcome": "converted",
+      "markdownSha256": "d59341a1e5e5b23ce1268fedb7e11c4b9cd093af17fe8d21b29a76b37105dbff",
+      "assets": 0,
+      "diagnostics": [],
+      "stderr": "timing: total 1428.76 ms, conversion 544.56 ms\ntiming: batch wall 1428.83 ms\n"
+    }
+  ],
+  "passed": 120,
+  "total": 120
+}

@@ -6,17 +6,17 @@ fn read_report(path: &Path) -> serde_json::Value {
 
 #[test]
 fn every_embedded_visual_entry_assembles_ocr_and_preserves_legacy_auto_routing() {
-    let root = tempfile::tempdir().unwrap();
-    let mut plan = stopped_plan(root.path(), "visual");
     for extension in [
         "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub",
         "html", "ipynb", "zip", "msg", "png",
     ] {
-        plan.item.local_path = Some(root.path().join(format!("visual.{extension}")));
         let mut options = ConversionOptions::default();
         for policy in [OcrPolicy::Auto, OcrPolicy::Always] {
             options.ocr.policy = policy;
-            let needs = invocation_capabilities(std::slice::from_ref(&plan), None, None, &options);
+            let needs = crate::services::InvocationCapabilities::for_format(
+                InputFormat::from_extension(extension),
+                &options,
+            );
             let legacy_auto =
                 policy == OcrPolicy::Auto && matches!(extension, "doc" | "ppt" | "xls");
             assert_eq!(needs.ocr, !legacy_auto, "{extension} {policy:?}");
@@ -179,7 +179,7 @@ fn cancellation_and_timeout_reports_keep_terminal_zero_ocr_and_resource_usage() 
             ),
             options,
             execution,
-            services: into_markdown::Services::default(),
+            loaded: config::load(&root, &[], true, None, None).unwrap(),
             hint: FormatHint::default(),
             emit: EmitKind::Markdown,
             asset_mode: AssetModeArg::Extract,

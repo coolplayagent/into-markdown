@@ -551,7 +551,7 @@ def run_e2e(
             unsafe_cache.mkdir()
             os.symlink(unsafe_cache, home / "Library", target_is_directory=True)
             pdf_result = work / "structures.md"
-            pdf_case, _ = run_case(
+            cases.append(run_case(
                 "real-pdf-macos-var-fallback",
                 binary,
                 [
@@ -566,8 +566,7 @@ def run_e2e(
                 ],
                 work,
                 environment,
-            )
-            cases.append(pdf_case)
+            )[0])
             if not pdf_result.is_file() or not pdf_result.read_bytes():
                 raise AcceptanceError("macOS /var fallback PDF output is missing or empty")
             assert_runtime_absent(cache, home, temporary, "macOS /var fallback cleanup")
@@ -578,7 +577,6 @@ def run_e2e(
                 "bytes": authority["library_size"],
                 "materialization": "canonical-var-fallback",
             }
-        real_ocr = ocr_case(binary, environment, AcceptanceError)
         return {
             "schemaVersion": 1,
             "target": target,
@@ -587,7 +585,7 @@ def run_e2e(
             "cases": cases,
             "plainTextOutputSha256": sha256_file(result),
             "pdfiumRuntime": pdfium_runtime,
-            "realOcr": real_ocr,
+            "realOcr": ocr_case(binary, environment, AcceptanceError),
             "negativeCases": negative_cases,
             "runtimeCacheCreated": False,
             "networkRequired": False,

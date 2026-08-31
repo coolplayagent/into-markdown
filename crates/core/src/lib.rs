@@ -6,6 +6,7 @@
 //! the dependency never points in the opposite direction.
 
 mod artifact;
+mod detection;
 mod dto;
 mod error;
 mod execution;
@@ -27,6 +28,7 @@ mod stream;
 mod summary;
 
 pub use artifact::{ArtifactSinkCapabilities, DocumentStreamEvent};
+pub use detection::{DetectionAuthority, FormatDetection, FormatDetector};
 pub use dto::{
     AssetDto, BUNDLE_SCHEMA_VERSION, BatchItemDto, BatchItemOutcome, BatchItemStatus,
     BatchLimitDto, BatchReportDto, BundleAssetDto, BundleManifestDto, DTO_SCHEMA_VERSION,
@@ -79,10 +81,10 @@ pub use spi::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, ArtifactSink, AssetStreamInfo,
     BoxFuture, ConversionOutcome, ConversionRequest, ConversionResult, ConversionSummary,
     Converter, ConverterOutput, DetectionRequest, DetectionResult, DiarizationRequest,
-    DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, FormatDetector,
-    LegacyOfficeNormalizer, LegacyOfficeRequest, LegacyOfficeResult, MarkdownRenderer, OcrEngine,
-    OcrRequest, OutputEnricher, PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor,
-    TensorRuntime, Transcriber, TranscriptionRequest, TranscriptionResult,
+    DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, LegacyOfficeNormalizer,
+    LegacyOfficeRequest, LegacyOfficeResult, MarkdownRenderer, OcrEngine, OcrRequest,
+    OutputEnricher, PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime,
+    Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 #[doc(hidden)]
 pub use spi::{

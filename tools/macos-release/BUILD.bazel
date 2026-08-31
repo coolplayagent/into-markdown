@@ -84,5 +84,5 @@ exports_files([
 filegroup(
     name = "legacy_fixtures",
     srcs = glob(["fixtures/*"]),
-    visibility = ["//crates/converters:__pkg__"],
+    visibility = ["//crates/converters:__pkg__", "//crates/api:__pkg__"],
 )

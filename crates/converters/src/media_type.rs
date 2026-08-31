@@ -1,4 +1,4 @@
-//! MIME hints shared by source detection.
+//! Exact MIME hints shared by format support admission and source detection.
 use into_markdown_core::InputFormat;
 
 pub(super) fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
@@ -25,19 +25,25 @@ pub(super) fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
         "application/vnd.oasis.opendocument.spreadsheet" => InputFormat::Ods,
         "application/vnd.oasis.opendocument.presentation" => InputFormat::Odp,
         "application/vnd.ms-outlook" => InputFormat::OutlookMsg,
+        "application/vnd.jgraph.mxfile" => InputFormat::Drawio,
         "application/json" => InputFormat::Json,
         "application/xml" | "text/xml" => InputFormat::Xml,
-        "application/vnd.jgraph.mxfile" => InputFormat::Drawio,
-        "text/html" => InputFormat::Html,
+        "text/html" | "application/xhtml+xml" => InputFormat::Html,
+        "application/rss+xml" | "application/atom+xml" => InputFormat::Feed,
+        "application/x-ipynb+json" => InputFormat::Ipynb,
         "text/csv" => InputFormat::Csv,
         "text/tab-separated-values" => InputFormat::Tsv,
         "text/markdown" => InputFormat::Markdown,
         "text/plain" => InputFormat::Text,
         "application/zip" => InputFormat::Zip,
         "application/vnd.rar" | "application/x-rar-compressed" => InputFormat::Rar,
-        value if value.starts_with("image/") => InputFormat::Image,
-        value if value.starts_with("audio/") => InputFormat::Audio,
-        value if value.starts_with("video/") => InputFormat::Video,
+        "image/png" | "image/jpeg" | "image/tiff" | "image/webp" | "image/bmp"
+        | "image/x-ms-bmp" => InputFormat::Image,
+        "audio/wav" | "audio/x-wav" | "audio/vnd.wave" | "audio/mpeg" | "audio/mp4"
+        | "audio/x-m4a" | "audio/flac" | "audio/x-flac" | "audio/ogg" => InputFormat::Audio,
+        "video/mp4" | "video/quicktime" | "video/x-matroska" | "video/webm" | "video/x-msvideo" => {
+            InputFormat::Video
+        }
         _ => return None,
     })
 }

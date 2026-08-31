@@ -2,7 +2,7 @@
 mod issue_270_fixture_tests {
     use super::*;
     use into_markdown_core::{
-        ConversionOptions, DiagnosticSeverity, ExecutionOptions, ResourceLimits,
+        ConversionOptions, DiagnosticSeverity, ErrorPolicy, ExecutionOptions, ResourceLimits,
     };
     use into_markdown_render_markdown::render;
 
@@ -55,6 +55,38 @@ mod issue_270_fixture_tests {
                 diagnostic.code == "word.altChunkConverted"
                     && diagnostic.severity == DiagnosticSeverity::Info
             }));
+        }
+    }
+
+    #[test]
+    fn alt_chunk_repeated_marks_and_empty_links_preserve_content_in_both_policies() {
+        use std::io::{Cursor, Read, Write};
+        let original = include_bytes!("../../tests/fixtures/docx/issue-270/html.docx");
+        let mut archive = zip::ZipArchive::new(Cursor::new(original)).unwrap();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let mut replaced = false;
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            if entry.name().ends_with(".html") {
+                bytes = b"<main><p><b><strong><a href=' '>chunk-visible</a></strong></b></p></main>".to_vec();
+                replaced = true;
+            }
+            writer.start_file(entry.name(), zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        assert!(replaced);
+        let bytes = writer.finish().unwrap().into_inner();
+        for policy in [ErrorPolicy::Strict, ErrorPolicy::BestEffort] {
+            let mut options = ConversionOptions::default();
+            options.error_policy = policy;
+            let output = convert_docx(&bytes, &options, &context()).unwrap();
+            output.document.validate().unwrap();
+            let markdown = render(&output.document, &output.assets, &options).unwrap();
+            assert_order(&markdown, &["before", "chunk-visible", "after"]);
+            assert!(output.diagnostics.iter().any(|item| item.code == "html.linkUriRejected" && item.locator.as_ref().and_then(|loc| loc.part.as_deref()).is_some()));
+            assert!(!output.diagnostics.iter().any(|item| item.code == "word.altChunkOmitted"));
         }
     }
 

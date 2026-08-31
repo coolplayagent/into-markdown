@@ -1,5 +1,11 @@
 //! Per-invocation optional-service assembly with no implicit discovery or download.
 
+mod capabilities;
+use capabilities::assemble_at;
+pub(crate) use capabilities::{
+    InvocationCapabilities, assemble_with_context, effective_ocr_policy,
+};
+
 use crate::config::{CapabilityRouteConfig, LoadedConfig};
 use crate::error::CliError;
 use into_markdown::{
@@ -226,17 +232,6 @@ pub(crate) fn assemble(
     assemble_at(loaded, execution, cwd, needs)
 }
 
-/// Optional capabilities that can actually be reached by the current input set.
-/// Keeping this separate from installation state prevents an unrelated broken
-/// plugin from blocking formats that do not use it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct InvocationCapabilities {
-    pub(crate) ocr: bool,
-    pub(crate) transcription: bool,
-    pub(crate) diarization: bool,
-    pub(crate) legacy_office: bool,
-}
-
 /// Assemble the exact local or remote media services required by one durable
 /// Web meeting request. The helper verifies installed components and never
 /// downloads them.
@@ -428,48 +423,6 @@ pub(crate) fn media_model_revision() -> u128 {
         revision = revision.rotate_left(17) ^ modified ^ u128::from(metadata.len());
     }
     revision
-}
-
-fn assemble_at(
-    loaded: &LoadedConfig,
-    execution: &ExecutionOptions,
-    cwd: &Path,
-    needs: InvocationCapabilities,
-) -> Result<Services, CliError> {
-    let mut services = Services::default();
-    let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
-    if needs.ocr
-        && (loaded.options.ocr.policy != OcrPolicy::Off
-            || loaded.options.ai.vision_ocr != AiMode::Off
-            || configured_route_is_active(&loaded.effective.capability_routes.ocr))
-    {
-        match assemble_ocr(loaded, &context, cwd) {
-            Ok(engine) => services.ocr = Some(engine),
-            Err(error) if can_degrade_ocr(loaded.options.ocr.policy, &error) => {}
-            Err(error) => return Err(CliError::from(error)),
-        }
-    }
-    if ai_provider_service_enabled(&loaded.options) {
-        services.ai = assemble_ai_provider(loaded)?;
-    }
-    if needs.transcription
-        && (loaded.options.ai.audio_transcription != AiMode::Off
-            || configured_route_is_active(&loaded.effective.capability_routes.transcription)
-            || loaded
-                .effective
-                .plugins
-                .get("official.media.whisper")
-                .is_some_and(|plugin| plugin.enabled))
-    {
-        services.transcriber = Some(assemble_asr(loaded, &context, cwd)?);
-    }
-    if needs.diarization && loaded.options.diarization.enabled {
-        services.diarizer = Some(
-            assemble_diarization_config(loaded, &loaded.options, &context, cwd)
-                .map_err(CliError::from)?,
-        );
-    }
-    Ok(services)
 }
 
 fn configured_route_is_active(route: &CapabilityRouteConfig) -> bool {

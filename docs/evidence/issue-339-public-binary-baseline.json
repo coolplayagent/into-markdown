@@ -1,0 +1,36 @@
+{
+  "sourceRevision": "26aaf8325ed31ce72921c84f0239574718d72257",
+  "binarySha256": "0abeee41009cb838bd10ff2c16b5a0c66941690473f1db12dc014093f784f4c4",
+  "records": [
+    {
+      "name": "markitdown-test.pdf",
+      "sha256": "77c4014cf15ea5e56663e9b8093ddc2a89a9224c15d6a9eb2aa8af2b48e1b237",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339-baseline/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/markitdown-test.pdf"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (dest_page_index): page 1: native count was negative\ntiming: total 650.20 ms, conversion unavailable\ntiming: batch wall 655.04 ms\n"
+    },
+    {
+      "name": "poi-simple.doc",
+      "sha256": "4876e828e62d490fa188c7c4e47013e2e0dfdf02f5903dfd374bc0d2b2049ca1",
+      "command": [
+        "/Users/yx/projects/document-convert/into-markdown-issue-339-baseline/target/cargo/debug/into-md",
+        "--no-config",
+        "--ocr",
+        "off",
+        "--emit",
+        "result-json",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/public-binary/poi-simple.doc"
+      ],
+      "exit": 3,
+      "stderr": "into-md error: malformed: malformed input (cfb/directory): storage entry declares stream sectors or a non-zero size\ntiming: total 4.07 ms, conversion unavailable\ntiming: batch wall 4.16 ms\n"
+    }
+  ]
+}

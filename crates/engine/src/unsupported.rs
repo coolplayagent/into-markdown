@@ -12,6 +12,12 @@ pub(crate) fn check(
             detail: "format detectors produced no candidates".into(),
         });
     }
+    if candidates
+        .first()
+        .is_some_and(|candidate| candidate.explicit && candidate.format != InputFormat::Rar)
+    {
+        return Ok(());
+    }
     match RarSignature::detect(&input.bytes) {
         Some(RarSignature::Rar4 | RarSignature::Rar5) => Err(ConversionError::ArchiveExtractionRequired {
             format: "RAR".into(),
