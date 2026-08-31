@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5248,
+      "lines": 5170,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -159,7 +159,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4526,
+      "lines": 4525,
       "functions": [
         {
           "symbol": "impl Upload::finish",
@@ -798,7 +798,7 @@
     },
     {
       "path": "crates/converters/src/lib.rs",
-      "lines": 2757,
+      "lines": 2707,
       "functions": [
         {
           "symbol": "structured_text_candidate",
@@ -1318,7 +1318,7 @@
       "functions": [
         {
           "symbol": "preflight_xml",
-          "lines": 260
+          "lines": 239
         },
         {
           "symbol": "validate_interpreted_element",
@@ -1779,7 +1779,7 @@
       "functions": [
         {
           "symbol": "convert",
-          "lines": 292
+          "lines": 288
         }
       ],
       "allowances": [
@@ -2253,7 +2253,7 @@
     },
     {
       "path": "tools/license-check/src/lib.rs",
-      "lines": 3879,
+      "lines": 3876,
       "functions": [
         {
           "symbol": "pdfium_expected_targets",

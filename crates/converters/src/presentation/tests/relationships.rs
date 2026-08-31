@@ -667,6 +667,24 @@ fn mce_selects_first_understood_choice_and_never_materializes_unselected_payload
     drop(output);
     assert_eq!(context.reserved_memory_bytes(), 0);
 
+    let mut bounded = options.clone();
+    bounded.limits.max_presentation_xml_events = 32;
+    let bounded_context =
+        ExecutionContext::new(ExecutionOptions::default(), bounded.limits.clone());
+    let error = super::super::xml::preflight_xml(
+        slide.as_bytes(),
+        "ppt/slides/slide1.xml",
+        super::super::xml::XmlProfile::Slide,
+        &bounded,
+        &bounded_context,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ConversionError::ResourceLimit { limit: "max_presentation_xml_events", .. }
+    ));
+    assert_eq!(bounded_context.reserved_memory_bytes(), 0);
+
     let unsafe_unselected = slide.replace("name=\"unused\"", "name=\"&custom;\"");
     assert!(matches!(
         convert(&rewrite_part(&original, "ppt/slides/slide1.xml", unsafe_unselected.as_bytes(),)),

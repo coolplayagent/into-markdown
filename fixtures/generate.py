@@ -1506,6 +1506,7 @@ def build(root: Path, font_path: Path) -> None:
     add("rtf-limit", "rtf", "limit", "small/rtf/limit.rtf", rtf_limit, "application/rtf", limit_expected("RTF group stack crosses the exact configured depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "deep\n"))
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
+    fixtures.extend(media_fixtures(root))
     fixtures.extend(drawio_fixtures(root, generated_fixture))
     fixtures.extend(write_msg_fixtures(root))
     fixtures.extend(write_pdf_fixtures(root))
@@ -1537,7 +1538,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["drawio", "csv", "doc", "docx", "epub", "feed", "html", "image", "ipynb", "json", "markdown", "odp", "ods", "odt", "outlook-msg", "pdf", "ppt", "pptx", "rtf", "text", "tsv", "wikipedia", "xls", "xlsx", "xml", "zip"],
+        "available_formats": ["audio", "csv", "doc", "docx", "drawio", "epub", "feed", "html", "image", "ipynb", "json", "markdown", "odp", "ods", "odt", "outlook-msg", "pdf", "ppt", "pptx", "rtf", "text", "tsv", "video", "xls", "xlsx", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {

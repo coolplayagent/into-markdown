@@ -176,8 +176,9 @@ function FormatsSection({ snapshot, locale }: SectionProps) {
 }
 
 function FormatRow({ item, locale }: { item: FormatAdmin; locale: Locale }) {
-  const c = copy(locale); const ready = item.status === "supported" || item.status === "available" || !item.runtimeComponent;
-  return <tr><td><strong>{item.format.toUpperCase()}</strong></td><td>{friendlyFamily(item.family, locale)}</td><td>{item.extensions.join("、")}</td><td>{item.runtimeComponent ? pluginDisplayName(item.runtimeComponent, locale) : locale === "zh-CN" ? "内置" : "Built in"}</td><td><StatusBadge tone={ready ? "ok" : "warning"}>{ready ? c.ready : c.needsRuntime}</StatusBadge></td></tr>;
+  const c = copy(locale); const ready = item.status === "supported" || item.status === "available";
+  const label = item.status === "unsupported" ? (locale === "zh-CN" ? "可识别，请先解压后转换" : "Recognized; extract before converting") : ready ? c.ready : c.needsRuntime;
+  return <tr><td><strong>{item.format.toUpperCase()}</strong></td><td>{friendlyFamily(item.family, locale)}</td><td>{item.extensions.join("、")}</td><td>{item.runtimeComponent ? pluginDisplayName(item.runtimeComponent, locale) : locale === "zh-CN" ? "内置" : "Built in"}</td><td><StatusBadge tone={ready ? "ok" : "warning"}>{label}</StatusBadge></td></tr>;
 }
 
 function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refreshAdmin, initialContext }: SectionProps & { refreshAdmin: () => Promise<void>; initialContext?: "formats" | "providers" | "plugins" }) {
@@ -191,7 +192,7 @@ function CapabilitiesSection({ api, snapshot, busy, locale, act, feedback, refre
     setSourceManager(initialContext ?? null);
   }, [initialContext]);
   const find = (id: CapabilityAdmin["id"]) => snapshot.capabilities.find((item) => item.id === id)!;
-  return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.capabilitiesTitle} body={c.capabilitiesBody} action={<div className="source-manager-actions"><button className="secondary" type="button" onClick={() => setSourceManager("providers")}><Cloud size={17} />{c.providersTitle}</button><button className="secondary" type="button" onClick={() => setSourceManager("plugins")}><Package size={17} />{c.pluginsTitle}</button></div>} />
+  return <div className="admin-section-stack"><SectionTitle icon={<Settings2 />} title={c.capabilitiesTitle} body={c.capabilitiesBody} action={<div className="source-manager-actions"><button className="secondary" type="button" onClick={() => setSourceManager("formats")}><FileType2 size={17} />{c.tabs.formats}</button><button className="secondary" type="button" onClick={() => setSourceManager("providers")}><Cloud size={17} />{c.providersTitle}</button><button className="secondary" type="button" onClick={() => setSourceManager("plugins")}><Package size={17} />{c.pluginsTitle}</button></div>} />
     <div className="admin-grid capability-grid">
       <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("ocr")} title={c.ocrCapability} body={c.ocrCapabilityBody} icon={<ScanText size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback?.target === "ocr" ? feedback : null} manageLocal={false} />
       <CapabilityCard api={api} refreshAdmin={refreshAdmin} item={find("transcription")} title={c.transcription} body={locale === "zh-CN" ? "将音频和视频转换为带时间的逐字稿" : "Turn audio and video into timestamped transcripts"} icon={<Speech size={18} />} busy={busy} locale={locale} readOnly={snapshot.configurationReadOnly} act={act} feedback={feedback && ["transcription", "media"].includes(feedback.target) ? feedback : null} />

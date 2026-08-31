@@ -2057,6 +2057,30 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
+    fn presentation_budget_config_is_positive_and_preserves_defaults() {
+        let config: RawConfig =
+            toml::from_str("[conversion.limits]\nmax_presentation_xml_events = 3000000\n").unwrap();
+        assert_eq!(
+            resolve_conversion_options(&config.conversion)
+                .unwrap()
+                .limits
+                .max_presentation_xml_events,
+            3_000_000
+        );
+        let mut invalid = config;
+        invalid.conversion.limits.max_presentation_xml_events = Some(0);
+        assert!(resolve_conversion_options(&invalid.conversion).is_err());
+        invalid.conversion.limits.max_presentation_xml_events = None;
+        assert_eq!(
+            resolve_conversion_options(&invalid.conversion)
+                .unwrap()
+                .limits
+                .max_presentation_xml_events,
+            2_000_000
+        );
+    }
+
+    #[test]
     fn adaptive_memory_tiers_and_legacy_numeric_config_are_stable() {
         const GIB: u64 = 1024 * 1024 * 1024;
         assert_eq!(adaptive_memory_budget_for(7 * GIB), GIB);

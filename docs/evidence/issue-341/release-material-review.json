@@ -1,175 +1,175 @@
 {
-  "baseRevision": "172277d",
+  "baseRevision": "d04d41e",
   "baselineFixtureSha256": "4ad36154865ae311bce82aba3b597b3dd048d644483519c9c536f1dd2d5d40ec",
-  "candidateFixtureSha256": "59e9420cb78a7977f83fcd6ac92df55f1cfa923c561b9264a848599b355c4ac6",
+  "candidateFixtureSha256": "5ebf7fac3367e41d95b7110cd96b9864c93d478855c2fb4a5e625b97427ec717",
   "changes": [
     {
       "request": "tools/license-check/fixtures/release-request-aarch64-apple-darwin.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "f2851b5c6a99bda36d76eb9ae858873cafc2a8cb430ff7008b0c20ac3fa2afcc",
-      "afterSha256": "3024cf98645ba97582393f5c65e369833ca8fa82f0da56f5132f6cc6ddaf7aab",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "d47f49b9ff1e8ee007c3d64b6ede68197d081811066c57426cb7849e3c8ef7d6",
+      "afterSha256": "11b6e22576dc8b77246cb8fed50128ab14d667368698914cba8f94e2cd473753",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-aarch64-apple-darwin.json",
       "file": "SOURCES.json",
-      "beforeSha256": "10471a466fcd949bfe60a2f1d306ddf95d4a1fe3cf8230de5e870e89673a340b",
-      "afterSha256": "09ccfa101145d162723c5b0479cd0ff62117cb2c95c4dbe7a76d179beabf399d",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "cee0f48b1caefbcaf35d0bfce758daa2c50c06d87e2592593937859b4dda840f",
+      "afterSha256": "39fc9f3382591f3a45d52a927aa2a50eab460cdd5a370573db46d5cd3a23d8e5",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-aarch64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "6684fa3a302aa67bb3d54c780c53023789e08f94e4c4194d5083442023683b19",
-      "afterSha256": "42c7befbbd9e6be9a0686bcf0ca385a135a63593ba4536e90ab8a0cce87cfa1a",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "d79f729240bc33ed8cd2172ca2a3a2995acd05b7d6c35508681c47a1c7c1db66",
+      "afterSha256": "9415fea70c6152ad77911a67452ce1aa25fe16001df7e92b3e9bd4c45f9edb46",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-aarch64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "32e3f052bbbff6d5d3a088745fd816fa6f6af14371dd5ef8599d505511e0da30",
-      "afterSha256": "574f92703e26b6bde75259370f70fb32da6e46ab27c4517f1bd4712741bb4e93",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "53ce20b879b0863a910c40437c62f4e04534f1e9de4c508efb530d8beb7ab73e",
+      "afterSha256": "2392bc54a07e60191171885becc9d8f37c8c3ceceac3232578fd3f1baea0d781",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-apple-darwin.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "b3ea72ee69167556c6938773d10cc2065b3d02e6bffdf7828f42a232a8ba7b40",
-      "afterSha256": "0944709a075f46dae8f1e65c25ada23575df44fef5b60f62fd03999f03c4e907",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "9d4008cccb5321cf46cf64070ba22de5e23084c2fad6a4a92ac6b05e4f777c97",
+      "afterSha256": "72ec035eee01764b1fae4270f1b73cb9c8b8ed5cdec7590461bdc01580e76167",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-apple-darwin.json",
       "file": "SOURCES.json",
-      "beforeSha256": "b69dc4c3052ee6b1eaf3eb3e50a5e7aa26e2ac439892adca080b06525604ffb9",
-      "afterSha256": "56ab52010eebd90e6b62093330aa9a432cee9175cb7a611ee95a4473cb8447c6",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "f8e098033b84fb0a9dce13237c5c19ec610b0a9cdd62af435c5cd9fc5da71a67",
+      "afterSha256": "2db479adf83a1457b1acf81ef1eab59331ee74b31dcd4811d53f0133268d61da",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "46eb780f56150a3aaff89cc3f4eafe88f886543852a26403a8439d9c6fca6651",
-      "afterSha256": "4143daf37a0cbea6c00fe1bb7c7cb1f105933fdac18a19e7c99aedaf3ba5f371",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "bfcbfe7f1e92ed1298eb0c1044596725ffea190d5f2f55f0975d11defb16eebd",
+      "afterSha256": "b13cb40be1e2d7d53671424dcbe836e3739946f6829fc3a2632948db8ea9de21",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "46203948b1a07494f3dbd24e9866d15e1bd9303d6d00d0bd1161e1883f565f0b",
-      "afterSha256": "126d106e8f2aa6a839120efab30bd5be7817c30399820fd4b4a53f393eb0b736",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "17d8cd8a2a779c6a45cc4a5dbe0a01598e770b5ed7a2b98897538e541f654ffc",
+      "afterSha256": "305dcb3aef9401f994251bfbf65de537ec240984545f49995338287d3b82fbee",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-pc-windows-msvc.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "fe2a0aa6645b622db2c29ce5890353b4788348ac68e480f903bcb24255aee854",
-      "afterSha256": "027e1b05daa6810d4d00802f15d791427633a16186777ecaadefc03bf040440f",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "3697b2dec29e2f587d40924e4c306a7e4a39cc18eb2ec3466649de8f6c99db0c",
+      "afterSha256": "51c968a55a29f69a7c546b2f619a35e8a8cd01f86f87d2c6778e8b77c1ea695d",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-pc-windows-msvc.json",
       "file": "SOURCES.json",
-      "beforeSha256": "8e97beb77066d1b085a4ad6a724e35e3e54fe0065c13f0724c89d569ab906349",
-      "afterSha256": "e2a18f699a8ee53391ef394cc1dbb529ce9e422321ca97bb0465811c08650dc6",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "f48f9340bbe4f3c2d6f2d58b2fafd69185f6244b851e52861faf896535fcdca7",
+      "afterSha256": "4eeef684688f5c906a9570250b0a3bbefe3c084fb64e9fd0311feaefaf73c56f",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "b21aa7ff4d7669c1f8c374d161204379d5ebfcee68cca37dd541f4d638ea59d9",
-      "afterSha256": "0cf93aac6dd6399696210b66502c473e8bcc1acc06efa0b80ff6e94f073e0bf9",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "d70dfbe23864baeea68d41a35c24ccbbf9c9304b4050c12b01cbe05d7d6dccfd",
+      "afterSha256": "22d5c2c495f147d14bfbd156cbd74428dbe3f2563649da32f04b8ba169e3952b",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "3d18df5c776e36cdba5c7c7817947fd60c6b7a1f5a9203203b8e92011be7111b",
-      "afterSha256": "506317f322c1fd866b9d08b37d84612c8819a44a451721772646aa27eb705185",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "bf85e350e5b7df8279c8004b04dd090d33802217d7ba8c91ffc2265834f07d57",
+      "afterSha256": "19199c60e02c4219fc24b21d53306262cc72c077d1a0be818d3b2c782a0725d7",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-apple-darwin.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "020cee354dba6f96710c94f3f1757706530109f4ed6a13dcfa3f05c50e73e59b",
-      "afterSha256": "7fa2611c16c3bcf7405808b4f8792e99823a3d1106c9b630f1faac174e2ae157",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "bc221f52ed122a046f6a5057cacfba5ea55f1dada33bc2a8f2bf9c1cd6e5a12a",
+      "afterSha256": "7bdfd364ec679dd37ab5838d0145331eeb10b6795fe83800c0ed7508a98fc40a",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-apple-darwin.json",
       "file": "SOURCES.json",
-      "beforeSha256": "9474fe3f95fd6d625fe67cd6322a55c6cb6492b8ebb91e2bc3a928fcfdbcdfd2",
-      "afterSha256": "2244f41fe945cb98a59e31f6e0247dfb7cb7651511258afaaf3cc4d119112262",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "c5e95997afb384f8b71299891f658f4b7a375a199c87934346cfd5fb366d242e",
+      "afterSha256": "50f538fb036779e47405deda1eab651bbb633db3fdcfe429d25580d03f1b8ad6",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "dbcf756a192aacc1ad74c41797e85f478baa44e7c9a755a3943c3d0d7a271354",
-      "afterSha256": "467fe0437afac33c430988284ad049d847e2ffd0f523167164cd2c513a8ce9fe",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "d6d51f862adabb0e79069cf5fc9e59b0856cf7d7849a7c696f8c92e8a579c3b6",
+      "afterSha256": "21fbba19b0ec0765cb25108c36e345b5277abbf737090472161e9124b3d91583",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "32f791fb52d98f6793c6303626ec6b0050c7830c7c3cb2b02c21041416a27676",
-      "afterSha256": "ff090243c80d7eaf8902b7d13224f354e5d37563df87d29f64e736b0de705899",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "80a0cfd84760e94329567823ca683047ed656ae30923b08a3c30c2d573d44ace",
+      "afterSha256": "ebc39cf7a3784008a29058ebe4225463514c84bcb5ae0c47ee5709f15aea8ee5",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-pc-windows-msvc.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "b6df4f16a608cb979dec5ef4ac40da0d2ccda0c62ec6fe98e5145e52332cbc23",
-      "afterSha256": "af261c521a35695615c17fff03ebd70b457c9ffa53ad81a192c480c5bddd1145",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "66553ec3231389cd1ed3f3e59d2c335dbe202e3b53c65fa2159d363b37d3b8ba",
+      "afterSha256": "8147bafb09e3b650ee6957c413be56f2e9adce9f2440e21557d5af29e9a20456",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-pc-windows-msvc.json",
       "file": "SOURCES.json",
-      "beforeSha256": "ca75d7c7e373a298122edf72dec56aea46df0dc21854758b966dd98361643ba5",
-      "afterSha256": "8217bcde1a1a50288f6f77d5535bb85203cb014e6ae2df68e415cffb35c34a14",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "aca052830c1da8ffef78740554215efbcb5c7dda9a937b95ab6f434a76231f79",
+      "afterSha256": "43b95f5312c313793917f90aece3154372edb532db9ea73d64c98f351c212768",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "b90588d6f629c21a4daa074a893ab465836814052c1216b43abad072f81ca8d1",
-      "afterSha256": "8cda486ade57122482c631dbf66317c13e387f942bda677f016ff9ceca1df533",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "c8826ed977072529a5221b78921b2afa02a1aa6584773a4811f9fe2875479f99",
+      "afterSha256": "f0dde9f344a873538d056ea173c5a3c33cdc2ac8e3867b2b6b86f3b4f9fe60ae",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "ad68137f44b99e21eadaeb3a5d09dea00a15f507236d49afffa0791ef3a1995a",
-      "afterSha256": "c4bceabe47768df1ecdeee7be8c990baa2924045167fb8ebde693e4d24d7ed99",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "35f36c60fc9543c140746169403d7a18ad3f08598c87c2f2afdfb285704b2dfb",
+      "afterSha256": "010bddccb4d8a4228f8d320bb101a87ad242d25876c5fd5f55075f6f5558e140",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "9ac5c6976ebcb27259f78fb9694a14c6fc2e94f86fe97868d54ab421c98e60a6",
-      "afterSha256": "4da63d9dc70c5d30bf4823047b7785038e0f0dbc99f336e34c27c750a643e8e7",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "1be228670ba130816ef4fa1574597d7be7a904051204a04034490eab162d9ae4",
+      "afterSha256": "3749f7e4da1b53a8d66dda3b69a4c358c549a6eb05c40e2132542fffb456de1b",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json",
       "file": "SOURCES.json",
-      "beforeSha256": "546862cf08fc02ab118cde058c80648ce8460a55a88fcf937c538b53b22b4d52",
-      "afterSha256": "6c7650efac8f244ac5cc2d5554c2799aabd9b4a341ab5abc34565fb46b3ffc52",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "851a2d3a56da14e900eb96cc9ffceb2c2bf4d88052060b4ee3b4abda54f6ca8f",
+      "afterSha256": "13303b700fbedd0f30dd2f19daa4b134df39c741a40906d052c87e0d98eafcaf",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-x86_64-unknown-linux-gnu.json",
       "file": "SBOM.spdx.json",
-      "beforeSha256": "2dfd16fa5860d7cc5b360675918d8d5fcf55c2f4f83952ec41c8aeb7d3376fbc",
-      "afterSha256": "9f522eb3e0711160cd3209c285257795639646293a98fa51b7f90a317bdc7975",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "9f5d0c25da8f0a609c836cd12ac7f2d9fb8dc9fdaec2daf3a9bad0740e0e9ee5",
+      "afterSha256": "96e87dbe94a74a30fb007c2c22bac1b5c07fc453cbcfc0a26651e99b723e1f6a",
+      "change": "fixture-manifest SHA-256 only"
     },
     {
       "request": "tools/license-check/fixtures/release-request-x86_64-unknown-linux-gnu.json",
       "file": "SOURCES.json",
-      "beforeSha256": "38d7f85399056697349c81f783265fea1be07ecf2cf6766f0c2a26eb82646fdf",
-      "afterSha256": "ce393bd8978e8c88081c1782a9920d9af48a6d04d32317d20f001fb2ba833e31",
-      "change": "fixture-manifest SHA-256 only; Drawio connection headers now native bold"
+      "beforeSha256": "932d745c2a56e25398ef9a8e4f3d2f6f1da73a47129a72fed59763c42a2639ac",
+      "afterSha256": "49b5c4739d1073907d74964484c2ae5dae11f202368de86753a8c6ea1087f2da",
+      "change": "fixture-manifest SHA-256 only"
     }
   ]
 }

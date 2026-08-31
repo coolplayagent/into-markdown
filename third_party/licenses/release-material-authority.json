@@ -65,24 +65,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 94636,
+          "bytes": 94854,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "10390eeed2ac0b160a0a8f7c0aa8d52478cc3deadf5fb51bc4ef070aec304824"
+          "sha256": "bc7d74297dfdd49701a636c9a9c2ec6b15e958e1b0042048d6b635d23614957e"
         },
         {
-          "bytes": 346149,
+          "bytes": 346959,
           "path": "SBOM.spdx.json",
-          "sha256": "3024cf98645ba97582393f5c65e369833ca8fa82f0da56f5132f6cc6ddaf7aab"
+          "sha256": "11b6e22576dc8b77246cb8fed50128ab14d667368698914cba8f94e2cd473753"
         },
         {
-          "bytes": 264316,
+          "bytes": 264922,
           "path": "SOURCES.json",
-          "sha256": "09ccfa101145d162723c5b0479cd0ff62117cb2c95c4dbe7a76d179beabf399d"
+          "sha256": "39fc9f3382591f3a45d52a927aa2a50eab460cdd5a370573db46d5cd3a23d8e5"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-aarch64-apple-darwin.json"
@@ -95,24 +95,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 94636,
+          "bytes": 94854,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "10390eeed2ac0b160a0a8f7c0aa8d52478cc3deadf5fb51bc4ef070aec304824"
+          "sha256": "bc7d74297dfdd49701a636c9a9c2ec6b15e958e1b0042048d6b635d23614957e"
         },
         {
-          "bytes": 346138,
+          "bytes": 346948,
           "path": "SBOM.spdx.json",
-          "sha256": "42c7befbbd9e6be9a0686bcf0ca385a135a63593ba4536e90ab8a0cce87cfa1a"
+          "sha256": "9415fea70c6152ad77911a67452ce1aa25fe16001df7e92b3e9bd4c45f9edb46"
         },
         {
-          "bytes": 264383,
+          "bytes": 264989,
           "path": "SOURCES.json",
-          "sha256": "574f92703e26b6bde75259370f70fb32da6e46ab27c4517f1bd4712741bb4e93"
+          "sha256": "2392bc54a07e60191171885becc9d8f37c8c3ceceac3232578fd3f1baea0d781"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-aarch64-unknown-linux-gnu.json"
@@ -125,24 +125,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76984,
+          "bytes": 77202,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "4f45d8cfda88c5b50766510f34f320b903d88c2ea092de8e83b6cb787865b4b5"
+          "sha256": "1d30efb4c220bfb92621db9b9e7143571b75805f5f7a06ddf979cba37cf31030"
         },
         {
-          "bytes": 280579,
+          "bytes": 281389,
           "path": "SBOM.spdx.json",
-          "sha256": "0944709a075f46dae8f1e65c25ada23575df44fef5b60f62fd03999f03c4e907"
+          "sha256": "72ec035eee01764b1fae4270f1b73cb9c8b8ed5cdec7590461bdc01580e76167"
         },
         {
-          "bytes": 213299,
+          "bytes": 213905,
           "path": "SOURCES.json",
-          "sha256": "56ab52010eebd90e6b62093330aa9a432cee9175cb7a611ee95a4473cb8447c6"
+          "sha256": "2db479adf83a1457b1acf81ef1eab59331ee74b31dcd4811d53f0133268d61da"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-apple-darwin.json"
@@ -155,24 +155,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76984,
+          "bytes": 77202,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "4f45d8cfda88c5b50766510f34f320b903d88c2ea092de8e83b6cb787865b4b5"
+          "sha256": "1d30efb4c220bfb92621db9b9e7143571b75805f5f7a06ddf979cba37cf31030"
         },
         {
-          "bytes": 279976,
+          "bytes": 280786,
           "path": "SBOM.spdx.json",
-          "sha256": "4143daf37a0cbea6c00fe1bb7c7cb1f105933fdac18a19e7c99aedaf3ba5f371"
+          "sha256": "b13cb40be1e2d7d53671424dcbe836e3739946f6829fc3a2632948db8ea9de21"
         },
         {
-          "bytes": 212471,
+          "bytes": 213077,
           "path": "SOURCES.json",
-          "sha256": "126d106e8f2aa6a839120efab30bd5be7817c30399820fd4b4a53f393eb0b736"
+          "sha256": "305dcb3aef9401f994251bfbf65de537ec240984545f49995338287d3b82fbee"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-media-plugin-aarch64-unknown-linux-gnu.json"
@@ -185,24 +185,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76984,
+          "bytes": 77202,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "4f45d8cfda88c5b50766510f34f320b903d88c2ea092de8e83b6cb787865b4b5"
+          "sha256": "1d30efb4c220bfb92621db9b9e7143571b75805f5f7a06ddf979cba37cf31030"
         },
         {
-          "bytes": 280037,
+          "bytes": 280847,
           "path": "SBOM.spdx.json",
-          "sha256": "027e1b05daa6810d4d00802f15d791427633a16186777ecaadefc03bf040440f"
+          "sha256": "51c968a55a29f69a7c546b2f619a35e8a8cd01f86f87d2c6778e8b77c1ea695d"
         },
         {
-          "bytes": 212456,
+          "bytes": 213062,
           "path": "SOURCES.json",
-          "sha256": "e2a18f699a8ee53391ef394cc1dbb529ce9e422321ca97bb0465811c08650dc6"
+          "sha256": "4eeef684688f5c906a9570250b0a3bbefe3c084fb64e9fd0311feaefaf73c56f"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-pc-windows-msvc.json"
@@ -215,24 +215,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76984,
+          "bytes": 77202,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "4f45d8cfda88c5b50766510f34f320b903d88c2ea092de8e83b6cb787865b4b5"
+          "sha256": "1d30efb4c220bfb92621db9b9e7143571b75805f5f7a06ddf979cba37cf31030"
         },
         {
-          "bytes": 279974,
+          "bytes": 280784,
           "path": "SBOM.spdx.json",
-          "sha256": "0cf93aac6dd6399696210b66502c473e8bcc1acc06efa0b80ff6e94f073e0bf9"
+          "sha256": "22d5c2c495f147d14bfbd156cbd74428dbe3f2563649da32f04b8ba169e3952b"
         },
         {
-          "bytes": 212459,
+          "bytes": 213065,
           "path": "SOURCES.json",
-          "sha256": "506317f322c1fd866b9d08b37d84612c8819a44a451721772646aa27eb705185"
+          "sha256": "19199c60e02c4219fc24b21d53306262cc72c077d1a0be818d3b2c782a0725d7"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-media-plugin-x86_64-unknown-linux-gnu.json"
@@ -245,24 +245,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76790,
+          "bytes": 77008,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "f6bbed97df3974204b91a5688e5b45f120f2f449e5ae7e7ea3c3ad001fa90c44"
+          "sha256": "60b6e0e41e128a6592295038c9cab6e2b2c1d82e9c41c272524ca067a5a0f5a5"
         },
         {
-          "bytes": 279685,
+          "bytes": 280495,
           "path": "SBOM.spdx.json",
-          "sha256": "7fa2611c16c3bcf7405808b4f8792e99823a3d1106c9b630f1faac174e2ae157"
+          "sha256": "7bdfd364ec679dd37ab5838d0145331eeb10b6795fe83800c0ed7508a98fc40a"
         },
         {
-          "bytes": 212582,
+          "bytes": 213188,
           "path": "SOURCES.json",
-          "sha256": "2244f41fe945cb98a59e31f6e0247dfb7cb7651511258afaaf3cc4d119112262"
+          "sha256": "50f538fb036779e47405deda1eab651bbb633db3fdcfe429d25580d03f1b8ad6"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-apple-darwin.json"
@@ -275,24 +275,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76790,
+          "bytes": 77008,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "f6bbed97df3974204b91a5688e5b45f120f2f449e5ae7e7ea3c3ad001fa90c44"
+          "sha256": "60b6e0e41e128a6592295038c9cab6e2b2c1d82e9c41c272524ca067a5a0f5a5"
         },
         {
-          "bytes": 279674,
+          "bytes": 280484,
           "path": "SBOM.spdx.json",
-          "sha256": "467fe0437afac33c430988284ad049d847e2ffd0f523167164cd2c513a8ce9fe"
+          "sha256": "21fbba19b0ec0765cb25108c36e345b5277abbf737090472161e9124b3d91583"
         },
         {
-          "bytes": 212689,
+          "bytes": 213295,
           "path": "SOURCES.json",
-          "sha256": "ff090243c80d7eaf8902b7d13224f354e5d37563df87d29f64e736b0de705899"
+          "sha256": "ebc39cf7a3784008a29058ebe4225463514c84bcb5ae0c47ee5709f15aea8ee5"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-aarch64-unknown-linux-gnu.json"
@@ -305,24 +305,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76790,
+          "bytes": 77008,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "f6bbed97df3974204b91a5688e5b45f120f2f449e5ae7e7ea3c3ad001fa90c44"
+          "sha256": "60b6e0e41e128a6592295038c9cab6e2b2c1d82e9c41c272524ca067a5a0f5a5"
         },
         {
-          "bytes": 279735,
+          "bytes": 280545,
           "path": "SBOM.spdx.json",
-          "sha256": "af261c521a35695615c17fff03ebd70b457c9ffa53ad81a192c480c5bddd1145"
+          "sha256": "8147bafb09e3b650ee6957c413be56f2e9adce9f2440e21557d5af29e9a20456"
         },
         {
-          "bytes": 212671,
+          "bytes": 213277,
           "path": "SOURCES.json",
-          "sha256": "8217bcde1a1a50288f6f77d5535bb85203cb014e6ae2df68e415cffb35c34a14"
+          "sha256": "43b95f5312c313793917f90aece3154372edb532db9ea73d64c98f351c212768"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-pc-windows-msvc.json"
@@ -335,24 +335,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 76790,
+          "bytes": 77008,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "f6bbed97df3974204b91a5688e5b45f120f2f449e5ae7e7ea3c3ad001fa90c44"
+          "sha256": "60b6e0e41e128a6592295038c9cab6e2b2c1d82e9c41c272524ca067a5a0f5a5"
         },
         {
-          "bytes": 279672,
+          "bytes": 280482,
           "path": "SBOM.spdx.json",
-          "sha256": "8cda486ade57122482c631dbf66317c13e387f942bda677f016ff9ceca1df533"
+          "sha256": "f0dde9f344a873538d056ea173c5a3c33cdc2ac8e3867b2b6b86f3b4f9fe60ae"
         },
         {
-          "bytes": 212676,
+          "bytes": 213282,
           "path": "SOURCES.json",
-          "sha256": "c4bceabe47768df1ecdeee7be8c990baa2924045167fb8ebde693e4d24d7ed99"
+          "sha256": "010bddccb4d8a4228f8d320bb101a87ad242d25876c5fd5f55075f6f5558e140"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-ocr-plugin-x86_64-unknown-linux-gnu.json"
@@ -365,24 +365,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 94636,
+          "bytes": 94854,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "10390eeed2ac0b160a0a8f7c0aa8d52478cc3deadf5fb51bc4ef070aec304824"
+          "sha256": "bc7d74297dfdd49701a636c9a9c2ec6b15e958e1b0042048d6b635d23614957e"
         },
         {
-          "bytes": 346199,
+          "bytes": 347009,
           "path": "SBOM.spdx.json",
-          "sha256": "4da63d9dc70c5d30bf4823047b7785038e0f0dbc99f336e34c27c750a643e8e7"
+          "sha256": "3749f7e4da1b53a8d66dda3b69a4c358c549a6eb05c40e2132542fffb456de1b"
         },
         {
-          "bytes": 264389,
+          "bytes": 264995,
           "path": "SOURCES.json",
-          "sha256": "6c7650efac8f244ac5cc2d5554c2799aabd9b4a341ab5abc34565fb46b3ffc52"
+          "sha256": "13303b700fbedd0f30dd2f19daa4b134df39c741a40906d052c87e0d98eafcaf"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json"
@@ -395,24 +395,24 @@
           "sha256": "4edf1a0198ac101a603c6eca1310cb0f1e9b7ccd0103a6d81974abb1327f165a"
         },
         {
-          "bytes": 94636,
+          "bytes": 94854,
           "path": "THIRD_PARTY_NOTICES.md",
-          "sha256": "10390eeed2ac0b160a0a8f7c0aa8d52478cc3deadf5fb51bc4ef070aec304824"
+          "sha256": "bc7d74297dfdd49701a636c9a9c2ec6b15e958e1b0042048d6b635d23614957e"
         },
         {
-          "bytes": 346136,
+          "bytes": 346946,
           "path": "SBOM.spdx.json",
-          "sha256": "9f522eb3e0711160cd3209c285257795639646293a98fa51b7f90a317bdc7975"
+          "sha256": "96e87dbe94a74a30fb007c2c22bac1b5c07fc453cbcfc0a26651e99b723e1f6a"
         },
         {
-          "bytes": 264378,
+          "bytes": 264984,
           "path": "SOURCES.json",
-          "sha256": "ce393bd8978e8c88081c1782a9920d9af48a6d04d32317d20f001fb2ba833e31"
+          "sha256": "49b5c4739d1073907d74964484c2ae5dae11f202368de86753a8c6ea1087f2da"
         },
         {
-          "bytes": 5821,
+          "bytes": 5985,
           "path": "core-catalog.json",
-          "sha256": "bae202a109d9646c98d74427621deb636f9640049036e83cfe6094712a824ec3"
+          "sha256": "2035886f32247da0e00077963f34711666bd8f6f7707c2e8b1917e6ff2fdee3a"
         }
       ],
       "request": "tools/license-check/fixtures/release-request-x86_64-unknown-linux-gnu.json"

@@ -70,3 +70,16 @@ fn external_links_remain_data_and_active_schemes_are_rejected() {
     assert!(base.resolve("javascript:alert(1)").is_err());
     assert!(base.resolve("file:///etc/passwd").is_err());
 }
+
+#[test]
+fn unicode_logical_paths_resolve_exactly_without_renaming() {
+    for name in ["报告（最终）.xhtml", "café.xhtml", "e\u{301}.xhtml", "straße.xhtml", "😀.xhtml"]
+    {
+        let base = BasePath::document("OPS/package.opf").unwrap();
+        assert_eq!(
+            base.resolve(name).unwrap(),
+            Reference::Internal { path: format!("OPS/{name}"), fragment: None }
+        );
+        BasePath::document(&format!("OPS/{name}")).unwrap();
+    }
+}

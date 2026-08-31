@@ -83,6 +83,7 @@ max_archive_entry_bytes = 268435456
 max_archive_compression_ratio = 100
 max_nesting_depth = 256
 max_pages = 10000
+max_presentation_xml_events = 2000000
 max_pdf_page_objects = 100000
 max_pdf_total_objects = 10000000
 max_pdf_layout_comparisons = 12000000
