@@ -3,7 +3,7 @@
 use super::bundle;
 use crate::args::EmitKind;
 use crate::error::CliError;
-use into_markdown::{BatchReportDto, ConversionResult, DtoJsonStyle, ResultDto};
+use into_markdown::{ConversionResult, DtoJsonStyle, ResultDto};
 use std::io::{Cursor, Seek, Write};
 
 /// Serialize a conversion result into the selected primary artifact.
@@ -46,13 +46,4 @@ pub(crate) fn encode_result_into<W: Write + Seek>(
         EmitKind::Bundle => bundle::write_bundle(result, destination)?,
     }
     Ok(())
-}
-
-pub(super) fn report_json_with_newline(report: &BatchReportDto) -> Result<Vec<u8>, CliError> {
-    let json = report
-        .to_pretty_json()
-        .map_err(|error| CliError::internal(format!("serialize batch report DTO: {error}")))?;
-    let mut bytes = json.into_bytes();
-    bytes.push(b'\n');
-    Ok(bytes)
 }
