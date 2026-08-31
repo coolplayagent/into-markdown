@@ -18,7 +18,7 @@ def inline_text(value, native):
     data = value.get('data', {})
     if value.get('type') in {'text', 'sourceText'} and isinstance(data, dict):
         origin = data.get('provenance', {}).get('kind')
-        if origin in {'ocr', 'aiProvider'}:
+        if origin in {'localOcr', 'aiProvider'}:
             return ''
         return data.get('value', '') if native else ''
     if value.get('type') == 'link' and isinstance(data, dict):
@@ -49,7 +49,7 @@ def content(result):
                 if text:
                     locator = json.dumps(origin.get('locator', {}), sort_keys=True)
                     units[locator].append(text)
-                if origin.get('kind') in {'ocr', 'aiProvider'}:
+                if origin.get('kind') == 'localOcr':
                     ocr_units.append({'locator': origin.get('locator'), 'sha256': digest(block)})
             for child in value.values():
                 if isinstance(child, (dict, list)):

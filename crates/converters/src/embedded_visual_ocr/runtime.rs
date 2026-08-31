@@ -25,7 +25,7 @@ pub(super) fn has_native_body(
         // image alt text and successful OCR from another image cannot authorize an omission.
         let body = match &node.block {
             Block::Paragraph(inlines) => native_inlines(inlines),
-            Block::Code { text, .. } => !text.trim().is_empty(),
+            Block::Code { text, .. } => has_body_characters(text),
             _ => false,
         };
         if body {
@@ -138,13 +138,17 @@ pub(super) async fn recognize(
 
 fn native_inlines(inlines: &[Inline]) -> bool {
     inlines.iter().any(|inline| match inline {
-        Inline::Text { value, .. } => !value.trim().is_empty(),
+        Inline::Text { value, .. } => has_body_characters(value),
         Inline::SourceText { value, provenance, .. } => {
-            provenance.kind == ProvenanceKind::NativeParser && !value.trim().is_empty()
+            provenance.kind == ProvenanceKind::NativeParser && has_body_characters(value)
         }
         Inline::Link { content, .. } => native_inlines(content),
         _ => false,
     })
+}
+
+fn has_body_characters(value: &str) -> bool {
+    value.chars().any(|character| !character.is_whitespace() && !character.is_control())
 }
 
 fn same_content_unit(left: &SourceLocator, right: &SourceLocator, format: InputFormat) -> bool {
@@ -172,6 +176,14 @@ fn notebook_unit(part: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parser_control_markers_cannot_authorize_optional_ocr() {
+        assert!(!native_inlines(&[Inline::Text { value: "\u{8}\0\t\n ".into(), marks: vec![] }]));
+        assert!(has_body_characters("正文"));
+        assert!(has_body_characters("123"));
+        assert!(!has_body_characters("\u{8}"));
+    }
 
     #[test]
     fn notebook_outputs_archive_entries_and_epub_spines_keep_separate_body_evidence() {

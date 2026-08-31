@@ -4150,8 +4150,11 @@ fn invocation_capabilities(
                 | InputFormat::Odt
                 | InputFormat::Ods
                 | InputFormat::Odp
+                | InputFormat::Rtf
                 | InputFormat::Epub
                 | InputFormat::Html
+                | InputFormat::Ipynb
+                | InputFormat::Zip
                 | InputFormat::Image
                 | InputFormat::OutlookMsg
         )

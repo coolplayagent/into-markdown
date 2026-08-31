@@ -5,6 +5,26 @@ fn read_report(path: &Path) -> serde_json::Value {
 }
 
 #[test]
+fn every_embedded_visual_entry_assembles_ocr_and_preserves_legacy_auto_routing() {
+    let root = tempfile::tempdir().unwrap();
+    let mut plan = stopped_plan(root.path(), "visual");
+    for extension in [
+        "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub",
+        "html", "ipynb", "zip", "msg", "png",
+    ] {
+        plan.item.local_path = Some(root.path().join(format!("visual.{extension}")));
+        let mut options = ConversionOptions::default();
+        for policy in [OcrPolicy::Auto, OcrPolicy::Always] {
+            options.ocr.policy = policy;
+            let needs = invocation_capabilities(std::slice::from_ref(&plan), None, None, &options);
+            let legacy_auto =
+                policy == OcrPolicy::Auto && matches!(extension, "doc" | "ppt" | "xls");
+            assert_eq!(needs.ocr, !legacy_auto, "{extension} {policy:?}");
+        }
+    }
+}
+
+#[test]
 fn exhausted_automatic_budget_is_a_resource_refusal_before_output_admission() {
     let root = tempfile::tempdir().unwrap();
     let mut loaded = config::load(root.path(), &[], true, None, None).unwrap();
