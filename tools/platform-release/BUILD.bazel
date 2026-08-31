@@ -73,7 +73,6 @@ py_test(
         "//:Cargo.toml",
         "//:MODULE.bazel",
         "//:.github/workflows/platform-modular-release.yml",
-        "//:.github/workflows/ffmpeg-artifact-audit.yml",
         "//:.github/workflows/pr-fast-gate.yml",
         "//third_party/ffmpeg:runtime-assets.json",
         "//tools:ffmpeg_runtime.py",
