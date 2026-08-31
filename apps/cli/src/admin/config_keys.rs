@@ -37,6 +37,7 @@ pub(super) fn admin_config_key_allowed(key: &str) -> bool {
         "conversion.limits.max_archive_entry_bytes",
         "conversion.limits.max_archive_compression_ratio",
         "conversion.limits.max_nesting_depth",
+        "conversion.limits.max_presentation_xml_events",
         "conversion.limits.max_pages",
         "conversion.limits.max_pdf_page_objects",
         "conversion.limits.max_pdf_total_objects",

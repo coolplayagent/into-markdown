@@ -1,5 +1,5 @@
 use super::allocation::try_clone_bytes;
-use super::budget::{MAX_XML_EVENTS, MAX_XML_WIDTH};
+use super::budget::XmlEventBudget;
 use super::error::{limit, malformed};
 use super::mce::{McSelection, mc_choice_is_understood, validate_mc_requires};
 use super::schema::{A_NS, C_NS, M_NS, MC_NS, P_NS, R_NS, REL_NS, TYPES_NS};
@@ -73,14 +73,6 @@ pub(super) fn preflight_xml(
         limit("max_memory_bytes", format!("cannot reserve XML stack for {part}: {error}"))
     })?;
     let mut root = false;
-    let width_slots = maximum_depth
-        .checked_add(1)
-        .ok_or_else(|| limit("max_memory_bytes", "XML width slot count overflow"))?;
-    let mut width = Vec::<usize>::new();
-    width.try_reserve_exact(width_slots).map_err(|error| {
-        limit("max_memory_bytes", format!("cannot reserve XML width counters: {error}"))
-    })?;
-    width.resize(width_slots, 0);
     let mut alternate = Vec::<(usize, usize, bool, bool)>::new();
     alternate.try_reserve_exact(maximum_depth).map_err(|error| {
         limit("max_memory_bytes", format!("cannot reserve MC stack for {part}: {error}"))
@@ -94,19 +86,14 @@ pub(super) fn preflight_xml(
     })?;
     let mut master_tx_styles_seen = false;
     let mut master_text_sections_seen = 0_u8;
-    let mut events = 0_usize;
+    let mut events = XmlEventBudget::new(options.limits.max_presentation_xml_events, part)?;
     loop {
         context.checkpoint()?;
         let event = reader
             .read_event()
             .map_err(|error| malformed(Some(part), format!("invalid XML: {error}")))?;
         if !matches!(event, Event::Eof) {
-            events = events
-                .checked_add(1)
-                .ok_or_else(|| limit("xml_events", "XML event count overflow"))?;
-            if events > MAX_XML_EVENTS {
-                return Err(limit("xml_events", format!("XML part {part}")));
-            }
+            events.charge(part)?;
         }
         let interpreted = !semantic_mc.skip(&reader, &event, part)?;
         match event {
@@ -121,10 +108,6 @@ pub(super) fn preflight_xml(
                 let depth = stack.len().saturating_add(1);
                 if depth > maximum_depth {
                     return Err(limit("max_nesting_depth", format!("XML part {part}")));
-                }
-                width[depth] = width[depth].saturating_add(1);
-                if width[depth] > MAX_XML_WIDTH {
-                    return Err(limit("xml_width", format!("XML part {part}")));
                 }
                 let parent = if name.0 == MC_NS {
                     stack.last()
@@ -249,10 +232,6 @@ pub(super) fn preflight_xml(
                 let depth = stack.len().saturating_add(1);
                 if depth > maximum_depth {
                     return Err(limit("max_nesting_depth", format!("XML part {part}")));
-                }
-                width[depth] = width[depth].saturating_add(1);
-                if width[depth] > MAX_XML_WIDTH {
-                    return Err(limit("xml_width", format!("XML part {part}")));
                 }
             }
             Event::End(element) => {

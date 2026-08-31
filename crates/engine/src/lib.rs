@@ -14,6 +14,7 @@ mod result_policy;
 mod result_sink;
 mod stream_execution;
 mod timing;
+mod unsupported;
 
 pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 

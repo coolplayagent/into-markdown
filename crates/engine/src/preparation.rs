@@ -37,11 +37,7 @@ pub(crate) async fn prepare(
 
     context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
     let candidates = engine.detect_formats(source.input(), &request.hint, &context).await?;
-    if candidates.is_empty() {
-        return Err(ConversionError::Unsupported {
-            detail: "format detectors produced no candidates".into(),
-        });
-    }
+    super::unsupported::check(source.input(), &candidates)?;
     context.record_detected_format(candidates[0].format);
     context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
 

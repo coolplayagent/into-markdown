@@ -261,6 +261,10 @@ pub struct ConversionArgs {
     #[arg(long, value_name = "N")]
     pub max_depth: Option<u16>,
 
+    /// Maximum non-EOF XML events per presentation part (all MCE branches).
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_presentation_xml_events: Option<u64>,
+
     /// Maximum page-like units.
     #[arg(long, value_name = "N")]
     pub max_pages: Option<u32>,

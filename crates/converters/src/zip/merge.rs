@@ -116,7 +116,13 @@ impl<'a> MergeState<'a> {
             1,
             self.memory.as_mut().ok_or_else(memory_unavailable)?,
         )?;
-        let code = charged_format(self.memory()?, format_args!("zip.entry.failed"))?;
+        let diagnostic_code = if matches!(error, ConversionError::ArchiveExtractionRequired { .. })
+        {
+            "zip.entry.archiveExtractionRequired"
+        } else {
+            "zip.entry.failed"
+        };
+        let code = charged_format(self.memory()?, format_args!("{diagnostic_code}"))?;
         let message = charged_format(
             self.memory()?,
             format_args!("archive member {path:?} was skipped: {error}"),

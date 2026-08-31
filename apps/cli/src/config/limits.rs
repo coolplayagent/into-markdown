@@ -13,6 +13,7 @@ pub struct LimitsConfig {
     pub max_archive_entry_bytes: Option<u64>,
     pub max_archive_compression_ratio: Option<u32>,
     pub max_nesting_depth: Option<u16>,
+    pub max_presentation_xml_events: Option<u64>,
     pub max_pages: Option<u32>,
     pub max_pdf_page_objects: Option<u32>,
     pub max_pdf_total_objects: Option<u64>,
@@ -29,6 +30,9 @@ pub struct LimitsConfig {
 
 impl LimitsConfig {
     pub(super) fn apply(&self, options: &mut ConversionOptions) -> Result<(), CliError> {
+        if self.max_presentation_xml_events == Some(0) {
+            return Err(CliError::usage("max_presentation_xml_events must be greater than zero"));
+        }
         let limits = self;
         macro_rules! assign {
             ($field:ident) => {
@@ -44,6 +48,7 @@ impl LimitsConfig {
         assign!(max_archive_entry_bytes);
         assign!(max_archive_compression_ratio);
         assign!(max_nesting_depth);
+        assign!(max_presentation_xml_events);
         assign!(max_pages);
         assign!(max_pdf_page_objects);
         assign!(max_pdf_total_objects);

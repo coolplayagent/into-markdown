@@ -3,6 +3,10 @@
 //! Built-in source resolvers, format detectors, and converters.
 
 mod core_catalog;
+mod detection;
+pub use detection::ContentFormatDetector;
+#[cfg(test)]
+use detection::detect_content;
 mod core_catalog_authority;
 mod delimited;
 mod docx;
@@ -797,7 +801,9 @@ impl FormatDetector for HintFormatDetector {
                                 | InputFormat::Odp
                                 | InputFormat::Epub
                         );
-                    let confidence = if format == InputFormat::Drawio {
+                    let confidence = if format == InputFormat::Rar {
+                        0.05
+                    } else if format == InputFormat::Drawio {
                         1.0
                     } else if strong_package_hint
                         || matches!(
@@ -828,32 +834,6 @@ impl FormatDetector for HintFormatDetector {
     }
 }
 
-/// Detector for file signatures and bounded inspection of ZIP/OLE containers.
-#[derive(Debug, Default)]
-pub struct ContentFormatDetector;
-
-impl FormatDetector for ContentFormatDetector {
-    fn id(&self) -> &'static str {
-        "builtin.detector.content"
-    }
-
-    fn priority(&self) -> i32 {
-        200
-    }
-
-    fn detect<'a>(
-        &'a self,
-        input: &'a ResolvedInput,
-        _: &'a FormatHint,
-        context: &'a ExecutionContext,
-    ) -> BoxFuture<'a, Result<Vec<FormatCandidate>, ConversionError>> {
-        Box::pin(async move {
-            context.checkpoint()?;
-            detect_content(&input.bytes, context)
-        })
-    }
-}
-
 const ZIP_INSPECTION_ENTRY_LIMIT: usize = 4096;
 const ZIP_MIMETYPE_READ_LIMIT: u64 = 128;
 const ZIP_NAME_READ_LIMIT: usize = 1024 * 1024;
@@ -864,40 +844,6 @@ const OLE_INSPECTION_BYTE_LIMIT: usize = 8 * 1024 * 1024;
 const TEXT_INSPECTION_BYTE_LIMIT: usize = 1024 * 1024;
 const JSON_SCAN_DEPTH_LIMIT: usize = 4096;
 const JSON_SCAN_CHECKPOINT_BYTES: usize = 4096;
-
-fn detect_content(
-    bytes: &[u8],
-    context: &ExecutionContext,
-) -> Result<Vec<FormatCandidate>, ConversionError> {
-    if bytes.starts_with(b"PK\x03\x04")
-        || bytes.starts_with(b"PK\x05\x06")
-        || bytes.starts_with(b"PK\x07\x08")
-    {
-        return Ok(detect_zip(bytes));
-    }
-    if bytes.starts_with(&[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]) {
-        return Ok(detect_ole(bytes));
-    }
-    if let Some(candidate) = magic_candidate(bytes) {
-        return Ok(vec![candidate]);
-    }
-    if drawio::evidence(bytes, context)? {
-        return Ok(vec![FormatCandidate::new(InputFormat::Drawio, 0.99, "Drawio graph root")]);
-    }
-    if let Some(candidate) = structured_text_candidate(bytes, context)? {
-        return Ok(vec![candidate]);
-    }
-    Ok(text::sniff_unstructured_text(bytes, context)?
-        .map(|confidence| {
-            FormatCandidate::new(
-                InputFormat::Text,
-                confidence,
-                "plain-text safety and encoding thresholds",
-            )
-        })
-        .into_iter()
-        .collect())
-}
 
 fn magic_candidate(bytes: &[u8]) -> Option<FormatCandidate> {
     let (format, confidence, evidence) = if pdf::has_pdf_header(bytes) {

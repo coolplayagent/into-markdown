@@ -546,88 +546,8 @@ fn run_ui(
     ))
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FormatView<'a> {
-    format: &'a str,
-    family: &'a str,
-    status: &'a str,
-    source: &'a str,
-    extensions: &'a [&'a str],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    runtime_component: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    install_hint: Option<&'a str>,
-}
-
-fn list_formats(
-    family: Option<&str>,
-    status: Option<&str>,
-    json: bool,
-    stdout: &mut dyn Write,
-) -> Result<(), CliError> {
-    let views = into_markdown::format_catalog()
-        .iter()
-        .filter(|entry| family.is_none_or(|family| entry.descriptor.family == family))
-        .filter(|entry| status.is_none_or(|status| entry.descriptor.status.as_str() == status))
-        .map(|entry| FormatView {
-            format: entry.descriptor.format.as_str(),
-            family: entry.descriptor.family,
-            status: entry.descriptor.status.as_str(),
-            source: entry.source.as_str(),
-            extensions: entry.descriptor.extensions,
-            runtime_component: entry.runtime.map(|runtime| runtime.component),
-            install_hint: entry.runtime.map(|runtime| runtime.install_hint),
-        })
-        .collect::<Vec<_>>();
-    if json {
-        write_json(stdout, &views)
-    } else {
-        writeln!(stdout, "FORMAT\tFAMILY\tSTATUS\tSOURCE\tRUNTIME\tEXTENSIONS")?;
-        for view in views {
-            writeln!(
-                stdout,
-                "{}\t{}\t{}\t{}\t{}\t{}",
-                view.format,
-                view.family,
-                view.status,
-                view.source,
-                view.runtime_component.unwrap_or("-"),
-                view.extensions.join(",")
-            )?;
-        }
-        Ok(())
-    }
-}
-
-fn show_format(value: &str, json: bool, stdout: &mut dyn Write) -> Result<(), CliError> {
-    let entry =
-        find_format(value).ok_or_else(|| CliError::usage(format!("unknown format '{value}'")))?;
-    let descriptor = entry.descriptor;
-    let view = FormatView {
-        format: descriptor.format.as_str(),
-        family: descriptor.family,
-        status: descriptor.status.as_str(),
-        source: entry.source.as_str(),
-        extensions: descriptor.extensions,
-        runtime_component: entry.runtime.map(|runtime| runtime.component),
-        install_hint: entry.runtime.map(|runtime| runtime.install_hint),
-    };
-    if json {
-        write_json(stdout, &view)
-    } else {
-        writeln!(stdout, "format: {}", view.format)?;
-        writeln!(stdout, "family: {}", view.family)?;
-        writeln!(stdout, "status: {}", view.status)?;
-        writeln!(stdout, "source: {}", view.source)?;
-        if let Some(component) = view.runtime_component {
-            writeln!(stdout, "runtime: {component}")?;
-            writeln!(stdout, "install hint: {}", view.install_hint.unwrap_or_default())?;
-        }
-        writeln!(stdout, "extensions: {}", view.extensions.join(", "))?;
-        Ok(())
-    }
-}
+mod formats;
+use formats::{list_formats, show_format};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -5893,6 +5813,31 @@ mod resource_usage_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn presentation_cli_overrides_config_and_rejects_zero() {
+        use clap::Parser as _;
+        let args = crate::args::Cli::try_parse_from([
+            "into-md",
+            "input.pptx",
+            "--max-presentation-xml-events",
+            "4000000",
+        ])
+        .unwrap();
+        let mut options = ConversionOptions::default();
+        options.limits.max_presentation_xml_events = 3_000_000;
+        apply_limit_overrides(&args.conversion, &mut options);
+        assert_eq!(options.limits.max_presentation_xml_events, 4_000_000);
+        assert!(
+            crate::args::Cli::try_parse_from([
+                "into-md",
+                "input.pptx",
+                "--max-presentation-xml-events",
+                "0"
+            ])
+            .is_err()
+        );
+    }
+
     use super::*;
     #[cfg(unix)]
     use crate::transaction::{HookDecision, Target};

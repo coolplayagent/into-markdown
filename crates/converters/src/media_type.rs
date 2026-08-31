@@ -34,6 +34,7 @@ pub(super) fn format_from_media_type(media_type: &str) -> Option<InputFormat> {
         "text/markdown" => InputFormat::Markdown,
         "text/plain" => InputFormat::Text,
         "application/zip" => InputFormat::Zip,
+        "application/vnd.rar" | "application/x-rar-compressed" => InputFormat::Rar,
         value if value.starts_with("image/") => InputFormat::Image,
         value if value.starts_with("audio/") => InputFormat::Audio,
         value if value.starts_with("video/") => InputFormat::Video,

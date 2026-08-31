@@ -218,6 +218,7 @@ markdown-postprocess
 --max-archive-entries <N>
 --max-depth <N>
 --max-pages <N>
+--max-presentation-xml-events <N>
 --max-pdf-page-objects <N>
 --max-pdf-total-objects <N>
 --max-pdf-layout-comparisons <N>
@@ -236,6 +237,9 @@ markdown-postprocess
   DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
   目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
+- PPTX 每个 XML 部件默认最多 2,000,000 个非 EOF 事件（开始、空元素、结束、文本等），
+  包含未选中的 MCE 分支；`--max-presentation-xml-events` 可调整且必须大于零。
+  深度、几何、解压、内存与最终 IR 限制继续独立生效。Web 请求最多取默认值，可下调。
 - PDF 单页原始对象默认上限 100,000，单份 PDF 累计原始对象默认上限 10,000,000，
   版面比较默认上限 12,000,000。对应 `--max-pdf-page-objects`、
   `--max-pdf-total-objects`、`--max-pdf-layout-comparisons`；均拒绝零值，单页最多

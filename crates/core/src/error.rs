@@ -69,6 +69,14 @@ pub enum ConversionError {
         /// Human-readable reason the input is unsupported.
         detail: String,
     },
+    /// A recognized archive must be extracted before conversion.
+    #[error(
+        "unsupported {format} archive: extract the archive first, then convert the extracted files. 请先解压后再转换。"
+    )]
+    ArchiveExtractionRequired {
+        /// Recognized archive format.
+        format: String,
+    },
     /// The input format is known but no implementation is registered.
     #[error("no converter is registered for {format}")]
     NoConverter {
@@ -161,7 +169,9 @@ impl ConversionError {
     #[must_use]
     pub const fn code(&self) -> ErrorCode {
         match self {
-            Self::Unsupported { .. } => ErrorCode::Unsupported,
+            Self::Unsupported { .. } | Self::ArchiveExtractionRequired { .. } => {
+                ErrorCode::Unsupported
+            }
             Self::NoConverter { .. } => ErrorCode::NoConverter,
             Self::Malformed { .. } | Self::EmptyContent => ErrorCode::Malformed,
             Self::Encrypted => ErrorCode::Encrypted,
@@ -183,6 +193,7 @@ impl ConversionError {
     pub const fn reason_code(&self) -> &'static str {
         match self {
             Self::EmptyContent => "emptyContent",
+            Self::ArchiveExtractionRequired { .. } => "archiveExtractionRequired",
             Self::Recovery { reason, .. } => reason,
             Self::ResourceLimit { limit, .. } => limit,
             _ => self.code().as_str(),

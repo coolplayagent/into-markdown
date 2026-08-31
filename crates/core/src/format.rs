@@ -58,6 +58,8 @@ pub enum InputFormat {
     Video,
     /// ZIP archive.
     Zip,
+    /// RAR archive, recognized for extraction guidance.
+    Rar,
     /// Outlook MSG message.
     OutlookMsg,
     /// `YouTube` resource identified by URI.
@@ -97,6 +99,7 @@ impl InputFormat {
             Self::Audio => "audio",
             Self::Video => "video",
             Self::Zip => "zip",
+            Self::Rar => "rar",
             Self::OutlookMsg => "outlook-msg",
             Self::YouTube => "youtube",
             Self::Wikipedia => "wikipedia",
@@ -134,6 +137,7 @@ impl InputFormat {
             "wav" | "mp3" | "m4a" | "flac" | "ogg" => Self::Audio,
             "mp4" | "mov" | "mkv" | "webm" => Self::Video,
             "zip" => Self::Zip,
+            "rar" => Self::Rar,
             "msg" => Self::OutlookMsg,
             _ => return None,
         })
@@ -203,5 +207,32 @@ impl FormatCandidate {
     pub fn with_diagnostic(mut self, diagnostic: impl Into<String>) -> Self {
         self.diagnostics.push(diagnostic.into());
         self
+    }
+}
+
+/// Bounded identification of a RAR header at the beginning of an input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RarSignature {
+    /// Complete RAR 4.x magic.
+    Rar4,
+    /// Complete RAR 5.x magic.
+    Rar5,
+    /// A binary RAR marker whose version/signature bytes are incomplete or invalid.
+    Damaged,
+}
+
+impl RarSignature {
+    /// Inspect at most eight bytes. Text mentions and embedded signatures are ignored.
+    #[must_use]
+    pub fn detect(bytes: &[u8]) -> Option<Self> {
+        if bytes.starts_with(b"Rar!\x1a\x07\x00") {
+            Some(Self::Rar4)
+        } else if bytes.starts_with(b"Rar!\x1a\x07\x01\x00") {
+            Some(Self::Rar5)
+        } else if bytes.starts_with(b"Rar!\x1a") {
+            Some(Self::Damaged)
+        } else {
+            None
+        }
     }
 }
