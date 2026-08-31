@@ -22,8 +22,8 @@ SPEC.loader.exec_module(release_metadata)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_default_release_metadata_version_is_the_first_public_release(self) -> None:
-        self.assertEqual(release_metadata.project_version(), "0.0.4")
+    def test_default_release_metadata_version_matches_current_release(self) -> None:
+        self.assertEqual(release_metadata.project_version(), "0.0.5")
 
     def test_linux_cxx_execution_uses_a_portable_projection_identity(self) -> None:
         self.assertEqual(release_metadata.build_tool_execution_name("c++"), "cxx")
@@ -49,7 +49,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         completed = SimpleNamespace(returncode=0, stdout='{"status":"ok"}', stderr="")
         with mock.patch.object(release_metadata.subprocess, "run", return_value=completed) as run:
             result = release_metadata.run_projection(
-                pathlib.Path("release-projection"), "finalize", {"名称": "发布"}
+                pathlib.Path("release-projection"), "finalize", {"鍚嶇О": "鍙戝竷"}
             )
         self.assertEqual(result, {"status": "ok"})
         self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
