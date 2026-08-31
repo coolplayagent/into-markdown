@@ -32,7 +32,7 @@ OpenStax 全文有 188,095 个原始对象，单页最多 748 个，原生字符
 - 规划/物化结果变化、URI 长度变化、诊断与结果容量、过量扫描、无进度、失效句柄。
 - 请求取消、超时、低内存、单页/累计对象精确边界与累计溢出；失败释放请求内存租约。
 - OCR off/auto/always 的转换器路径，以及现有逐页 OCR 消费、取消及资源释放回归。
-  这些 OCR 测试验证路径和生命周期，公开大文件采用 OCR off。
+  OpenStax 大文件采用 OCR off；Accenture 另有下述本机包内 OCR 验证。
 - 配置读取、默认值、CLI 覆盖、请求序列化与 Web 上限；中文路径、批量输出、严格策略
   失败和低预算失败不覆盖已有输出，内部跳转与有效链接保留。
 - 锁定 PDFium 的版面质量 golden：规范化 IR、Markdown 与语义精确率/召回率断言。
@@ -73,7 +73,33 @@ Markdown 内容哈希；每项失败日志单独保存。安装产物省略 `--p
   `3dc43deebd466a72a2d588392a2c4cd67f80b13979ad2a5be3ae5a4ce123fd31`。
 - 发布流程的 `native_acceptance.py` 对四平台实际压缩包解出的可执行文件调用同一离线
   合成回归，另写 `pdf-regression.json`；`build_only=true` 验证构建不发布版本。
-  安装产物通过状态需以具体构建 run 的证据为准。
+  本次按用户确认，安装产物验收收敛为本机 macOS Core 打包测试。
+  [整套发布构建](https://github.com/coolplayagent/into-markdown/actions/runs/33387093767)
+  已主动取消；取消前 Linux x86_64/ARM64 的包内六项 PDF 回归通过，Windows/macOS
+  构建取消，整轮发布验收不计为通过。
+
+### 本机 macOS 压缩包
+
+从源码 `bb18d08eeeb9a1cfd538bbc749422babcd14d2a6` 使用发布构建函数
+`build_embedded_core` 重新编译 release profile Core，沿用正式的压缩包生成、独立材料
+清单校验及 `native_acceptance.py`。后续分支基线同步保持源文件树完全相同。
+OCR 依赖复用已校验的 0.0.4 macOS 发布包（SHA-256
+`f2646a1c5f8ade59f47c4d48baab71844bff01df5039b2bdd6543c4687c76916`），
+对应 OCR provider、ONNX Runtime 封装、模型和 Cargo.lock 在其源码 `a66287d` 后均无改动。
+本次没有构建语音组件、发布版本或修改本机安装。
+
+生成的 Core ZIP 为 39,920,704 字节，SHA-256
+`703f3b4d43c913a9f75f37ae2841e1372828d5668f588a1e6c4a590da8969c8a`；
+包内程序 SHA-256 为 `a43b885b623b0456270e3bca86afada40d76054d8cb444acc62e6f57839a8ddb`。
+在隔离 HOME/缓存中解压并清除 `PDFIUM_LIBRARY` 后，六项离线 PDF 回归和十项含公开
+样本的黑盒回归均通过。Accenture 的 off/auto 完整输出 29 页；含混合好坏链接的
+单页样本通过真实 OCR always 路径，保留正文、有效链接和内部跳转。
+
+Accenture 全文 always 越过原链接故障后，按预期触发现有 OCR 输出规划的
+`documentNodes` 上限。仅规范化原文件的注释矩形后，旧 0.0.4 发布版也得到同一错误；
+对照样本 SHA-256 为 `13fc3deda3e70cfa6e6c3a0536751710f36ce276efd4f68c17c17f6f47f5e617`。
+该 OCR 节点规划代码在本补丁中保持不变。构建输入、逐文件依赖哈希、包审计、公开
+样本和 OCR 日志保存在 `target/issue-334-repro/local-package/`。
 
 本地 Bazel quality 命令遇到基线已有的 rules_nodejs 扩展锁文件不一致；未改写锁文件。
 相同的显式质量测试通过 Cargo 编译，使用相同 fixture、manifest、PDFium 和 runfiles
