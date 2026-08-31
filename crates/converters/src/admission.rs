@@ -40,12 +40,7 @@ pub(super) fn detect(
     if let Some(candidates) = binary_candidates(&input.bytes) {
         return Ok(binary_detection(input, hint, candidates));
     }
-    let extension = hint
-        .extension
-        .as_deref()
-        .or_else(|| hint.filename.as_deref().and_then(super::extension_of))
-        .or_else(|| input.metadata.name.as_deref().and_then(super::extension_of))
-        .filter(|value| !value.trim_start_matches('.').is_empty());
+    let extension = input_extension(input, hint);
     let media_type = hint.media_type.as_deref().or(input.metadata.media_type.as_deref());
     let concrete_mime =
         media_type.and_then(|value| value.split(';').next()).map(str::trim).filter(|value| {
@@ -61,14 +56,10 @@ pub(super) fn detect(
             candidates: Vec::new(),
             authority: DetectionAuthority::Content,
             compatible_hints: Vec::new(),
-            unsupported_reason: Some(format!(
-                "unsupported input {:?} (extension {:?}, media type {:?}): no supported file signature or container identity; use an explicit format to interpret the content",
-                hint.filename
-                    .as_deref()
-                    .or(input.metadata.name.as_deref())
-                    .unwrap_or("unnamed input"),
-                extension,
-                media_type,
+            unsupported_reason: Some(unsupported_detail(
+                input,
+                hint,
+                "no supported file signature or container identity",
             )),
         });
     }
@@ -181,7 +172,7 @@ fn binary_detection(
     FormatDetection {
         compatible_hints,
         unsupported_reason: (candidates.is_empty() && hint.format.is_none()).then(|| {
-            "compound input has no supported document identity; specify its format if known".into()
+            unsupported_detail(input, hint, "compound input has no supported document identity")
         }),
         candidates,
         authority: if candidates_are_package {
@@ -206,4 +197,21 @@ pub(super) fn hint_mime_conflict(extension: Option<&str>, media_type: Option<&st
                 && !mime.eq_ignore_ascii_case("application/octet-stream")
                 && format_from_media_type(mime).is_none()
         })
+}
+
+fn input_extension<'a>(input: &'a ResolvedInput, hint: &'a FormatHint) -> Option<&'a str> {
+    hint.extension
+        .as_deref()
+        .or_else(|| hint.filename.as_deref().and_then(super::extension_of))
+        .or_else(|| input.metadata.name.as_deref().and_then(super::extension_of))
+        .filter(|value| !value.trim_start_matches('.').is_empty())
+}
+
+fn unsupported_detail(input: &ResolvedInput, hint: &FormatHint, reason: &str) -> String {
+    format!(
+        "unsupported input {:?} (extension {:?}, media type {:?}): {reason}; use an explicit format to interpret the content",
+        hint.filename.as_deref().or(input.metadata.name.as_deref()).unwrap_or("unnamed input"),
+        input_extension(input, hint),
+        hint.media_type.as_deref().or(input.metadata.media_type.as_deref()),
+    )
 }

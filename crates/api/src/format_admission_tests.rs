@@ -233,3 +233,22 @@ fn renamed_pdf_preserves_native_page_structure_and_body() {
         output.document.validate().unwrap();
     }
 }
+
+#[test]
+fn unknown_compound_identity_retains_source_hints_in_unsupported_error() {
+    let root = crate::test_fixture_root().parent().unwrap().to_path_buf();
+    let mut bytes = std::fs::read(root.join("tools/macos-release/fixtures/normal.doc")).unwrap();
+    let encoded = |text: &str| text.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+    let original = encoded("WordDocument");
+    let replacement = encoded("UnknownThing");
+    let offset = bytes.windows(original.len()).position(|window| window == original).unwrap();
+    bytes[offset..offset + original.len()].copy_from_slice(&replacement);
+    let mut input = request(&bytes, Some("unknown.msi"));
+    input.hint.media_type = Some("application/x-unknown-compound".into());
+    let error = block_on(default_engine().unwrap().convert(input)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::Unsupported);
+    let detail = error.to_string();
+    for expected in ["unknown.msi", "msi", "application/x-unknown-compound", "compound input"] {
+        assert!(detail.contains(expected), "{detail}");
+    }
+}
