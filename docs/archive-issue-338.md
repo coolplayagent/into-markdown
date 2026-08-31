@@ -72,7 +72,7 @@ python3 tools/archive-compat/compare.py \
 
 ## 证据状态
 
-- 本地：Core、Engine、转换器、API 整组通过；Web 分组、113 项发布契约和许可审计通过。
+- 本地：Core、Engine、转换器、API 整组通过；Web 分组、123 项发布与 CI 白名单契约和许可审计通过。
   CLI 全量 331 项通过、3 项失败、1 项既有 ignored；3 项失败已在 `26aaf83` 和 `172277d` 独立构建中复现相同断言，见
   [逐项日志](qa/evidence/issue-338/local-baseline-failures.json)：空正文判定，以及两项
   macOS Web 存储配额测试的 4096 字节差异。慢读写关闭测试曾在本机并发负载下超时，主线与修复版单项复跑均通过。
