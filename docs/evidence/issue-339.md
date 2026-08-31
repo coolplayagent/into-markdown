@@ -60,7 +60,8 @@
   `application/octet-stream` 保留通用检测，未知 image/audio MIME 拒绝。
 - 仓库真实 DOC/PPT/XLS、DOCX/PPTX/XLSX、PNG fixture：原文件与 `.js/.md/.csv/.bin`、
   无后缀对照实际选定转换器、完整 Markdown、资产数量和合法 IR；误导 JS MIME 同时存在。
-  PDF `structures.pdf` 用固定目标 PDFium 单独执行原生页结构和正文等价测试。
+  PDF `structures.pdf` 用固定目标 PDFium 单独执行原生页结构和正文等价测试。两个固定 libarchive ZIP 原始样本另执行
+  [48 个改名/策略用例](issue-339-real-zip.json)，正文和 ZIP 路由全部保持一致。
 - TXT 不完整 UTF-8 JSON/XML、BOM、UTF-16 JSON、全长二进制扫描及检测窗口边界保护在
   基线已存在。本次补强：UTF-16 LE/BE 的不完整 XML 声明从高分 XML 降为弱证据。
   对照中基线已由 XML probe 拒绝该候选并路由 Text，因此这是候选优先级修正；
@@ -102,33 +103,35 @@ probe 报告记录 API 默认选项，OCR off。运行时及可选服务另由�
 
 本地、CI、安装产物分别记录；[本地命令、日志摘要与运行时哈希](issue-339-validation.json)可供复核。最终结果见本节更新及 [PR #346](https://github.com/coolplayagent/into-markdown/pull/346)。
 
-- 本地当前主线隔离构建：Core/Engine/Converter/API 915 项通过、19 项按既有条件忽略；
+- 本地当前主线隔离构建：Core/Engine/Converter/API 925 项通过、19 项按既有条件忽略；
   CLI exit contract 18 项通过（含 Draw.io）。公开语料 72/72 满足预期。
-- 本地 Bazel：Core、Engine、Converter、API、Web typecheck/workbench、文档契约 7 个目标通过。
-- 本地原生 PDF：固定 PDFium 下准入测试 9 项通过，包含单独启用的 PDF 回归。
+- 本地 Bazel：Core、Engine、Converter、API、Web typecheck/workbench、文档契约与发布契约 8 个目标通过。
+- 本地原生 PDF：固定 PDFium 下准入测试 10 项通过，包含单独启用的 PDF 回归。
 - 本地 Clippy：受影响四个库执行 `--no-deps --lib -- -D warnings` 通过；
   非枚举顺序的嵌套样式专项通过，防止排序去重改变用户要求的首次出现顺序。
 - 本地 Web 浏览器：真实 PPT 改名 `.bin` 正常转换，页面、讲者备注、图片引用保留；
   `.py` 被接受上传后在任务行就近显示格式错误；HTML 预览实际产生粗体、斜体，空链接保留标签而无空 anchor。
-- 平台发布契约：72 项执行，71 通过、1 项按既有条件跳过。生产 Web 的 SPDX 与实际 JavaScript
+- 平台发布契约：82 项执行，81 通过、1 项按既有条件跳过。生产 Web 的 SPDX 与实际 JavaScript
   资产摘要绑定，CSS、bootstrap、Rust include 与 manifest 同步。
 - 策略收敛前的快速 CI：[33396806735](https://github.com/coolplayagent/into-markdown/actions/runs/33396806735)
   四平台通过；专项 CI [33396806728](https://github.com/coolplayagent/into-markdown/actions/runs/33396806728)
-  四平台通过，逐平台执行72个语料策略用例。这些已完成结果保留为历史证据；专项工作流已按 #349 删除。最终 PR 只运行四个 fast job，精确 head 状态见 PR。
+  四平台通过，逐平台执行72个语料策略用例。这些已完成结果保留为历史证据；专项工作流已按 #349 删除。最终 PR 只运行四个 fast job；整合提交 `d1f91b59d3b25ce27eafc793086f39ef94350e4f` 的
+  [四项 fast checks](https://github.com/coolplayagent/into-markdown/actions/runs/33401315417) 全部通过。
 - 当前构建验证：[33396591314](https://github.com/coolplayagent/into-markdown/actions/runs/33396591314)，
   `build_only=true`、版本 0.0.4、unsigned；六个构建/汇总任务全部通过。
   来源提交为 `c521b861fb96939474dc6fac89d0f61782283985`，早于本次 #338 整合。
   macOS 包的材料摘要、成员清单、模式和架构校验通过；[安装包语料](issue-339-installed-corpus.json)
   72/72、[安装包二进制改名与能力矩阵](issue-339-installed-matrix.json) 56/56。
   矩阵实际调用内置 PDFium/图片 OCR，缺失 ASR 插件返回 `componentUnavailable`。
-  该批证据保留对应来源，最终整合版本另行验证。没有发布或替换用户安装。
+  该批证据保留对应来源；[整合版本安装验收构建](https://github.com/coolplayagent/into-markdown/actions/runs/33401363606)
+  固定在 `d1f91b59d3b25ce27eafc793086f39ef94350e4f`，正在执行。没有发布或替换用户安装。
 
 全量 CLI 测试在固定基线也复现以下三项既有失败，不能计为通过：
 `empty_source_and_empty_content_share_the_web_terminal_contract`，
 `metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary`，
 `permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary`。
 前者涉及已有 altChunk 占位内容语义；后两者为本机文件系统空间边界差 4096 字节。
-全量 CLI 串行重跑为 326 通过、3 个上述基线失败、1 个既有忽略；slow-upload 退出测试重跑通过。
+全量 CLI 串行重跑为 331 通过、3 个上述基线失败、1 个既有忽略；slow-upload 退出测试重跑通过。
 上述状态不改变本项准入和合法 IR 断言。
 
 ## English evidence summary

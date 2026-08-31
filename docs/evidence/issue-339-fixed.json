@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
-  "binarySha256": "808ed09159eba335f71baac0674bd28bdb7a6160e80c2c5f51aa01a6ff326306",
-  "sourceRevision": "c521b861fb96939474dc6fac89d0f61782283985",
+  "binarySha256": "8dd2ee34f9ec8bde66e8ac4488e6ae1952a623bc0d3a44a92b65aaff37c92a77",
+  "sourceRevision": "d1f91b59d3b25ce27eafc793086f39ef94350e4f",
   "manifestSha256": "1b5a0fc7ab3047c88f7eabee45554d726d0071cacec7544cf881bb5574f39309",
   "binaryVersion": "into-md 0.0.4",
   "records": [
@@ -14,7 +14,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -37,7 +37,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -46,11 +46,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 150.36 ms, conversion 10.06 ms\ntiming: batch wall 150.85 ms\n",
+      "stderr": "timing: total 38.40 ms, conversion 8.13 ms\ntiming: batch wall 38.83 ms\n",
       "markdownBytes": 581,
       "markdownSha256": "4fe6e9aa70e9253e52ecdb4567e8cb4cdabdad957a3b15a3c597667a6f9c2cbe",
       "providers": [
@@ -66,7 +66,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -89,7 +89,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -98,11 +98,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/big5.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 599.49 ms, conversion 43.69 ms\ntiming: batch wall 599.81 ms\n",
+      "stderr": "timing: total 34.41 ms, conversion 7.92 ms\ntiming: batch wall 34.59 ms\n",
       "markdownBytes": 581,
       "markdownSha256": "4fe6e9aa70e9253e52ecdb4567e8cb4cdabdad957a3b15a3c597667a6f9c2cbe",
       "providers": [
@@ -118,7 +118,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -141,7 +141,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -150,11 +150,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 374.07 ms, conversion 34.60 ms\ntiming: batch wall 374.31 ms\n",
+      "stderr": "timing: total 56.99 ms, conversion 21.68 ms\ntiming: batch wall 57.25 ms\n",
       "markdownBytes": 1157,
       "markdownSha256": "5ec7dc343674b9e4c2bf854225446e291ad71fa991c256e7707b62331fe30109",
       "providers": [
@@ -170,7 +170,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -193,7 +193,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -202,11 +202,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/gb18030.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 683.37 ms, conversion 283.93 ms\ntiming: batch wall 684.04 ms\n",
+      "stderr": "timing: total 53.44 ms, conversion 23.92 ms\ntiming: batch wall 53.65 ms\n",
       "markdownBytes": 1157,
       "markdownSha256": "5ec7dc343674b9e4c2bf854225446e291ad71fa991c256e7707b62331fe30109",
       "providers": [
@@ -222,7 +222,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -245,7 +245,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -254,11 +254,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 122.58 ms, conversion 7.45 ms\ntiming: batch wall 122.78 ms\n",
+      "stderr": "timing: total 35.38 ms, conversion 6.66 ms\ntiming: batch wall 35.57 ms\n",
       "markdownBytes": 1103,
       "markdownSha256": "15dff60b46ed79406ebc89cce2c1e94517c8b5cf70848daeae6bbdeb057eab6b",
       "providers": [
@@ -274,7 +274,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -297,7 +297,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -306,11 +306,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/cjkencodings/shift_jis.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 205.52 ms, conversion 19.11 ms\ntiming: batch wall 205.73 ms\n",
+      "stderr": "timing: total 33.61 ms, conversion 8.40 ms\ntiming: batch wall 33.76 ms\n",
       "markdownBytes": 1103,
       "markdownSha256": "15dff60b46ed79406ebc89cce2c1e94517c8b5cf70848daeae6bbdeb057eab6b",
       "providers": [
@@ -326,7 +326,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -349,7 +349,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -358,11 +358,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 1267.89 ms, conversion 307.21 ms\ntiming: batch wall 1317.74 ms\n",
+      "stderr": "timing: total 58.40 ms, conversion 5.53 ms\ntiming: batch wall 58.56 ms\n",
       "markdownBytes": 2570,
       "markdownSha256": "32424139633796f9fb035a3abb7e46ea2b858ce0b42a89bd0a95061ded92ed9b",
       "providers": [
@@ -378,7 +378,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -401,7 +401,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -410,11 +410,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/exception_hierarchy.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 661.76 ms, conversion 16.09 ms\ntiming: batch wall 661.97 ms\n",
+      "stderr": "timing: total 63.71 ms, conversion 6.13 ms\ntiming: batch wall 63.86 ms\n",
       "markdownBytes": 2570,
       "markdownSha256": "32424139633796f9fb035a3abb7e46ea2b858ce0b42a89bd0a95061ded92ed9b",
       "providers": [
@@ -430,7 +430,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -461,7 +461,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -470,11 +470,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 14497.88 ms, conversion 1891.45 ms\ntiming: batch wall 14498.09 ms\n",
+      "stderr": "timing: total 2095.68 ms, conversion 111.14 ms\ntiming: batch wall 2095.85 ms\n",
       "markdownBytes": 144586,
       "markdownSha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
       "providers": [
@@ -587,7 +587,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -618,7 +618,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -627,11 +627,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/cmath_testcases.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 14037.60 ms, conversion 1524.31 ms\ntiming: batch wall 14038.62 ms\n",
+      "stderr": "timing: total 2266.65 ms, conversion 108.88 ms\ntiming: batch wall 2266.80 ms\n",
       "markdownBytes": 144586,
       "markdownSha256": "f02a1dec4f2512ac0994b6463dd31636449b428315a210bae8fe1fb6a07a5c96",
       "providers": [
@@ -744,7 +744,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -767,7 +767,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -776,11 +776,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 1536.72 ms, conversion 128.52 ms\ntiming: batch wall 1536.94 ms\n",
+      "stderr": "timing: total 284.34 ms, conversion 20.46 ms\ntiming: batch wall 284.54 ms\n",
       "markdownBytes": 9757,
       "markdownSha256": "4311768fa4fcc91ad5b13ffe88ffaaec808b493d980954aae81b6b1946b539f8",
       "providers": [
@@ -796,7 +796,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -819,7 +819,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -828,11 +828,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/formatfloat_testcases.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 1287.08 ms, conversion 217.56 ms\ntiming: batch wall 1287.30 ms\n",
+      "stderr": "timing: total 269.66 ms, conversion 20.95 ms\ntiming: batch wall 269.86 ms\n",
       "markdownBytes": 9757,
       "markdownSha256": "4311768fa4fcc91ad5b13ffe88ffaaec808b493d980954aae81b6b1946b539f8",
       "providers": [
@@ -848,7 +848,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -879,7 +879,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -888,11 +888,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 609.88 ms, conversion 8.97 ms\ntiming: batch wall 610.07 ms\n",
+      "stderr": "timing: total 125.53 ms, conversion 7.60 ms\ntiming: batch wall 125.70 ms\n",
       "markdownBytes": 3226,
       "markdownSha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
       "providers": [
@@ -1581,7 +1581,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -1612,7 +1612,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -1621,11 +1621,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/mathdata/ieee754.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 637.78 ms, conversion 6.65 ms\ntiming: batch wall 638.14 ms\n",
+      "stderr": "timing: total 126.12 ms, conversion 3.80 ms\ntiming: batch wall 126.28 ms\n",
       "markdownBytes": 3226,
       "markdownSha256": "65c61ebcfed051d0de62dc1dc833786b6c5cd9a826141e76d3b2865a6520f4bf",
       "providers": [
@@ -2314,7 +2314,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2337,7 +2337,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2346,11 +2346,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 53.01 ms, conversion 2.30 ms\ntiming: batch wall 53.20 ms\n",
+      "stderr": "timing: total 39.31 ms, conversion 1.66 ms\ntiming: batch wall 39.46 ms\n",
       "markdownBytes": 337,
       "markdownSha256": "d43f4e6a76eeecf4b4511f596d7339f797c9dfe3ad7c35411a5779e24ad633ea",
       "providers": [
@@ -2366,7 +2366,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2389,7 +2389,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2398,11 +2398,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 57.44 ms, conversion 2.60 ms\ntiming: batch wall 57.69 ms\n",
+      "stderr": "timing: total 36.57 ms, conversion 1.60 ms\ntiming: batch wall 36.70 ms\n",
       "markdownBytes": 337,
       "markdownSha256": "d43f4e6a76eeecf4b4511f596d7339f797c9dfe3ad7c35411a5779e24ad633ea",
       "providers": [
@@ -2418,7 +2418,7 @@
       "expectedOutcome": "unsafeText",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2441,7 +2441,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2450,11 +2450,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
       ],
       "exit": 3,
-      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 4.61 ms, conversion unavailable\ntiming: batch wall 4.79 ms\n",
+      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 5.93 ms, conversion unavailable\ntiming: batch wall 6.25 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -2468,7 +2468,7 @@
       "expectedOutcome": "unsafeText",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2491,7 +2491,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2500,11 +2500,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest2.txt"
       ],
       "exit": 3,
-      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 5.07 ms, conversion unavailable\ntiming: batch wall 5.27 ms\n",
+      "stderr": "into-md error: noConverter: no converter is registered for text\ntiming: total 4.56 ms, conversion unavailable\ntiming: batch wall 5.16 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -2518,7 +2518,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2541,7 +2541,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2550,11 +2550,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 51.36 ms, conversion 7.03 ms\ntiming: batch wall 51.65 ms\n",
+      "stderr": "timing: total 36.89 ms, conversion 2.57 ms\ntiming: batch wall 37.14 ms\n",
       "markdownBytes": 98,
       "markdownSha256": "cf57f4e29442b7556ecee79675ad3d7aaf5e717e23a5fb871148c961fc7d534e",
       "providers": [
@@ -2570,7 +2570,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2593,7 +2593,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2602,11 +2602,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest3.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 41.70 ms, conversion 2.56 ms\ntiming: batch wall 41.98 ms\n",
+      "stderr": "timing: total 27.90 ms, conversion 1.29 ms\ntiming: batch wall 28.07 ms\n",
       "markdownBytes": 98,
       "markdownSha256": "cf57f4e29442b7556ecee79675ad3d7aaf5e717e23a5fb871148c961fc7d534e",
       "providers": [
@@ -2622,7 +2622,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2645,7 +2645,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2654,11 +2654,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 46.67 ms, conversion 3.05 ms\ntiming: batch wall 47.01 ms\n",
+      "stderr": "timing: total 35.24 ms, conversion 1.62 ms\ntiming: batch wall 35.42 ms\n",
       "markdownBytes": 266,
       "markdownSha256": "aeb06a18abab343a58959a8dfff7ea10cce1ce7ed33ad05ecd6a2fe2d5c4c0d4",
       "providers": [
@@ -2674,7 +2674,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2697,7 +2697,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2706,11 +2706,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/test_doctest/test_doctest4.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 39.46 ms, conversion 2.38 ms\ntiming: batch wall 39.67 ms\n",
+      "stderr": "timing: total 34.22 ms, conversion 1.54 ms\ntiming: batch wall 34.39 ms\n",
       "markdownBytes": 266,
       "markdownSha256": "aeb06a18abab343a58959a8dfff7ea10cce1ce7ed33ad05ecd6a2fe2d5c4c0d4",
       "providers": [
@@ -2726,7 +2726,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2757,7 +2757,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2766,11 +2766,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 687.29 ms, conversion 5.15 ms\ntiming: batch wall 687.47 ms\n",
+      "stderr": "timing: total 269.26 ms, conversion 6.40 ms\ntiming: batch wall 269.39 ms\n",
       "markdownBytes": 2717,
       "markdownSha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
       "providers": [
@@ -2786,7 +2786,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2817,7 +2817,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2826,11 +2826,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/txt/Lib/test/tokenizedata/tokenize_tests.txt"
       ],
       "exit": 0,
-      "stderr": "timing: total 1176.21 ms, conversion 8.17 ms\ntiming: batch wall 1176.41 ms\n",
+      "stderr": "timing: total 361.74 ms, conversion 4.78 ms\ntiming: batch wall 361.87 ms\n",
       "markdownBytes": 2717,
       "markdownSha256": "c3bffa36e519c31e7d4a6ef862999afde0d2971b12d5cc8ccba97d00e2289185",
       "providers": [
@@ -2846,7 +2846,7 @@
       "expectedOutcome": "emptyHtml",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2869,7 +2869,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2878,11 +2878,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
       ],
       "exit": 3,
-      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 22.15 ms, conversion unavailable\ntiming: batch wall 22.35 ms\n",
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 36.24 ms, conversion unavailable\ntiming: batch wall 36.40 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -2896,7 +2896,7 @@
       "expectedOutcome": "emptyHtml",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2919,7 +2919,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -2928,11 +2928,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/index.html"
       ],
       "exit": 3,
-      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 8.99 ms, conversion unavailable\ntiming: batch wall 9.17 ms\n",
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 6.92 ms, conversion unavailable\ntiming: batch wall 7.05 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -2946,7 +2946,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -2969,7 +2969,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -2978,11 +2978,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 123.68 ms, conversion 20.09 ms\ntiming: batch wall 123.85 ms\n",
+      "stderr": "timing: total 128.73 ms, conversion 14.35 ms\ntiming: batch wall 128.89 ms\n",
       "markdownBytes": 534,
       "markdownSha256": "261020f45d33de70432bd53942d9a5f66359174d6ee8bca9f3bf0bc2371cc299",
       "providers": [
@@ -3011,7 +3011,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3034,7 +3034,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3043,11 +3043,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/delegatetest.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 196.80 ms, conversion 11.62 ms\ntiming: batch wall 197.04 ms\n",
+      "stderr": "timing: total 113.33 ms, conversion 12.15 ms\ntiming: batch wall 113.49 ms\n",
       "markdownBytes": 534,
       "markdownSha256": "261020f45d33de70432bd53942d9a5f66359174d6ee8bca9f3bf0bc2371cc299",
       "providers": [
@@ -3076,7 +3076,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3099,7 +3099,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3108,11 +3108,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 431.96 ms, conversion 16.06 ms\ntiming: batch wall 432.17 ms\n",
+      "stderr": "timing: total 75.69 ms, conversion 10.40 ms\ntiming: batch wall 75.89 ms\n",
       "markdownBytes": 553,
       "markdownSha256": "4e38f4c9ed7d24b29cb51d004655579165c764d94741f29b19885b87a6c83c11",
       "providers": [
@@ -3147,7 +3147,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3170,7 +3170,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3179,11 +3179,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/hovertest.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 401.50 ms, conversion 140.35 ms\ntiming: batch wall 401.83 ms\n",
+      "stderr": "timing: total 80.16 ms, conversion 9.70 ms\ntiming: batch wall 80.36 ms\n",
       "markdownBytes": 553,
       "markdownSha256": "4e38f4c9ed7d24b29cb51d004655579165c764d94741f29b19885b87a6c83c11",
       "providers": [
@@ -3218,7 +3218,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3241,7 +3241,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3250,11 +3250,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 43.75 ms, conversion 3.55 ms\ntiming: batch wall 43.93 ms\n",
+      "stderr": "timing: total 44.12 ms, conversion 4.08 ms\ntiming: batch wall 44.32 ms\n",
       "markdownBytes": 306,
       "markdownSha256": "391154db594039242dcc2cd0c7c1d76ecfbc1cc187828a93fa96b6a44d9a6470",
       "providers": [
@@ -3289,7 +3289,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3312,7 +3312,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3321,11 +3321,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/absolute.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 50.00 ms, conversion 6.21 ms\ntiming: batch wall 50.20 ms\n",
+      "stderr": "timing: total 38.36 ms, conversion 4.30 ms\ntiming: batch wall 38.49 ms\n",
       "markdownBytes": 306,
       "markdownSha256": "391154db594039242dcc2cd0c7c1d76ecfbc1cc187828a93fa96b6a44d9a6470",
       "providers": [
@@ -3360,7 +3360,7 @@
       "expectedOutcome": "emptyHtml",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3383,7 +3383,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3392,11 +3392,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
       ],
       "exit": 3,
-      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 4.88 ms, conversion unavailable\ntiming: batch wall 5.49 ms\n",
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 4.38 ms, conversion unavailable\ntiming: batch wall 4.55 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -3410,7 +3410,7 @@
       "expectedOutcome": "emptyHtml",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3433,7 +3433,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3442,11 +3442,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/body.html"
       ],
       "exit": 3,
-      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 5.02 ms, conversion unavailable\ntiming: batch wall 5.28 ms\n",
+      "stderr": "into-md error: malformed: malformed input (html): HTML contains no visible document content\ntiming: total 4.77 ms, conversion unavailable\ntiming: batch wall 4.95 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -3460,7 +3460,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3483,7 +3483,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3492,11 +3492,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 53.65 ms, conversion 9.95 ms\ntiming: batch wall 54.21 ms\n",
+      "stderr": "timing: total 48.23 ms, conversion 7.93 ms\ntiming: batch wall 48.40 ms\n",
       "markdownBytes": 174,
       "markdownSha256": "eff15c4e2e3de417824249723b3320a55a90f20f7defe13d9ab04e413776c073",
       "providers": [
@@ -3531,7 +3531,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3554,7 +3554,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3563,11 +3563,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/boxes.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 79.75 ms, conversion 12.61 ms\ntiming: batch wall 79.98 ms\n",
+      "stderr": "timing: total 45.09 ms, conversion 7.08 ms\ntiming: batch wall 45.28 ms\n",
       "markdownBytes": 174,
       "markdownSha256": "eff15c4e2e3de417824249723b3320a55a90f20f7defe13d9ab04e413776c073",
       "providers": [
@@ -3602,7 +3602,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3625,7 +3625,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3634,11 +3634,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 29.53 ms, conversion 3.44 ms\ntiming: batch wall 29.81 ms\n",
+      "stderr": "timing: total 24.62 ms, conversion 3.63 ms\ntiming: batch wall 24.77 ms\n",
       "markdownBytes": 47,
       "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
       "providers": [
@@ -3673,7 +3673,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3696,7 +3696,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3705,11 +3705,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/fixed.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 29.46 ms, conversion 4.47 ms\ntiming: batch wall 29.68 ms\n",
+      "stderr": "timing: total 25.95 ms, conversion 3.23 ms\ntiming: batch wall 26.13 ms\n",
       "markdownBytes": 47,
       "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
       "providers": [
@@ -3744,7 +3744,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3767,7 +3767,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3776,11 +3776,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 63.91 ms, conversion 7.75 ms\ntiming: batch wall 64.16 ms\n",
+      "stderr": "timing: total 28.51 ms, conversion 4.70 ms\ntiming: batch wall 28.67 ms\n",
       "markdownBytes": 176,
       "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
       "providers": [
@@ -3815,7 +3815,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3838,7 +3838,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3847,11 +3847,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/relative.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 46.68 ms, conversion 7.03 ms\ntiming: batch wall 47.06 ms\n",
+      "stderr": "timing: total 26.33 ms, conversion 3.77 ms\ntiming: batch wall 26.48 ms\n",
       "markdownBytes": 176,
       "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
       "providers": [
@@ -3886,7 +3886,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3909,7 +3909,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -3918,11 +3918,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 37.83 ms, conversion 4.75 ms\ntiming: batch wall 38.05 ms\n",
+      "stderr": "timing: total 25.54 ms, conversion 4.65 ms\ntiming: batch wall 25.72 ms\n",
       "markdownBytes": 47,
       "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
       "providers": [
@@ -3957,7 +3957,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -3980,7 +3980,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -3989,11 +3989,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/scroll.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 32.88 ms, conversion 4.80 ms\ntiming: batch wall 33.12 ms\n",
+      "stderr": "timing: total 24.51 ms, conversion 2.96 ms\ntiming: batch wall 24.64 ms\n",
       "markdownBytes": 47,
       "markdownSha256": "92bcee3e345e7d991c4931ad31d3f5a8e143de15650bf64cb3dda3bfd85c47de",
       "providers": [
@@ -4028,7 +4028,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4051,7 +4051,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4060,11 +4060,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 43.44 ms, conversion 6.29 ms\ntiming: batch wall 43.65 ms\n",
+      "stderr": "timing: total 26.78 ms, conversion 3.40 ms\ntiming: batch wall 26.95 ms\n",
       "markdownBytes": 176,
       "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
       "providers": [
@@ -4099,7 +4099,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4122,7 +4122,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4131,11 +4131,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/static.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 36.54 ms, conversion 4.20 ms\ntiming: batch wall 36.74 ms\n",
+      "stderr": "timing: total 25.86 ms, conversion 2.61 ms\ntiming: batch wall 26.04 ms\n",
       "markdownBytes": 176,
       "markdownSha256": "3eb705c22caec2badb1ab591b515fe5628c3605dc13483763dfaa6e4dc7df32d",
       "providers": [
@@ -4170,7 +4170,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4193,7 +4193,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4202,11 +4202,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 122.68 ms, conversion 6.37 ms\ntiming: batch wall 123.04 ms\n",
+      "stderr": "timing: total 54.11 ms, conversion 4.49 ms\ntiming: batch wall 54.29 ms\n",
       "markdownBytes": 171,
       "markdownSha256": "488e0c269256ef37cf6cc7aa7e29d5a46f60df94a9026f122d9e4dfc721264a3",
       "providers": [
@@ -4241,7 +4241,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4264,7 +4264,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4273,11 +4273,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/offset/table.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 91.40 ms, conversion 4.56 ms\ntiming: batch wall 91.56 ms\n",
+      "stderr": "timing: total 107.90 ms, conversion 3.30 ms\ntiming: batch wall 108.03 ms\n",
       "markdownBytes": 171,
       "markdownSha256": "488e0c269256ef37cf6cc7aa7e29d5a46f60df94a9026f122d9e4dfc721264a3",
       "providers": [
@@ -4312,7 +4312,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4335,7 +4335,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4344,11 +4344,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 40.30 ms, conversion 6.87 ms\ntiming: batch wall 40.54 ms\n",
+      "stderr": "timing: total 34.66 ms, conversion 4.87 ms\ntiming: batch wall 34.80 ms\n",
       "markdownBytes": 160,
       "markdownSha256": "74c19aff59fa33e6d8cf4cb8a070a1d680b62c3b9bfb91e8b391c811cecf58e0",
       "providers": [
@@ -4377,7 +4377,7 @@
       "expectedOutcome": "converted",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4400,7 +4400,7 @@
         ]
       },
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4409,11 +4409,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/html/test/data/selector/html5_selector.html"
       ],
       "exit": 0,
-      "stderr": "timing: total 49.29 ms, conversion 6.12 ms\ntiming: batch wall 49.46 ms\n",
+      "stderr": "timing: total 32.63 ms, conversion 4.69 ms\ntiming: batch wall 32.77 ms\n",
       "markdownBytes": 160,
       "markdownSha256": "74c19aff59fa33e6d8cf4cb8a070a1d680b62c3b9bfb91e8b391c811cecf58e0",
       "providers": [
@@ -4442,7 +4442,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4452,7 +4452,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4461,11 +4461,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.68 ms, conversion unavailable\ntiming: batch wall 2.87 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.35 ms, conversion unavailable\ntiming: batch wall 2.53 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4479,7 +4479,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4489,7 +4489,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4498,11 +4498,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/core.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.85 ms, conversion unavailable\ntiming: batch wall 3.02 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"core.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.25 ms, conversion unavailable\ntiming: batch wall 2.39 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4516,7 +4516,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4526,7 +4526,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4535,11 +4535,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.18 ms, conversion unavailable\ntiming: batch wall 3.39 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.52 ms, conversion unavailable\ntiming: batch wall 2.64 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4553,7 +4553,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4563,7 +4563,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4572,11 +4572,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/manipulation.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.89 ms, conversion unavailable\ntiming: batch wall 3.07 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"manipulation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.90 ms, conversion unavailable\ntiming: batch wall 3.04 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4590,7 +4590,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4600,7 +4600,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4609,11 +4609,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.90 ms, conversion unavailable\ntiming: batch wall 3.07 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 1.85 ms, conversion unavailable\ntiming: batch wall 1.97 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4627,7 +4627,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4637,7 +4637,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4646,11 +4646,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/selector.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.68 ms, conversion unavailable\ntiming: batch wall 2.86 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"selector.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.90 ms, conversion unavailable\ntiming: batch wall 3.03 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4664,7 +4664,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4674,7 +4674,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4683,11 +4683,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.63 ms, conversion unavailable\ntiming: batch wall 2.87 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.27 ms, conversion unavailable\ntiming: batch wall 2.45 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4701,7 +4701,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4711,7 +4711,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4720,11 +4720,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/attributes.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.84 ms, conversion unavailable\ntiming: batch wall 4.16 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"attributes.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.07 ms, conversion unavailable\ntiming: batch wall 2.21 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4738,7 +4738,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4748,7 +4748,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4757,11 +4757,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 7.94 ms, conversion unavailable\ntiming: batch wall 8.24 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 1.98 ms, conversion unavailable\ntiming: batch wall 2.12 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4775,7 +4775,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4785,7 +4785,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4794,11 +4794,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/css.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 5.17 ms, conversion unavailable\ntiming: batch wall 5.49 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"css.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.73 ms, conversion unavailable\ntiming: batch wall 2.85 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4812,7 +4812,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4822,7 +4822,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4831,11 +4831,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 11.88 ms, conversion unavailable\ntiming: batch wall 12.50 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.58 ms, conversion unavailable\ntiming: batch wall 2.78 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4849,7 +4849,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4859,7 +4859,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4868,11 +4868,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/data.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.41 ms, conversion unavailable\ntiming: batch wall 3.61 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"data.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.11 ms, conversion unavailable\ntiming: batch wall 2.25 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4886,7 +4886,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4896,7 +4896,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4905,11 +4905,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.20 ms, conversion unavailable\ntiming: batch wall 3.40 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.80 ms, conversion unavailable\ntiming: batch wall 2.99 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4923,7 +4923,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4933,7 +4933,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -4942,11 +4942,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/event.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.13 ms, conversion unavailable\ntiming: batch wall 3.34 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"event.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.54 ms, conversion unavailable\ntiming: batch wall 2.71 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4960,7 +4960,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -4970,7 +4970,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -4979,11 +4979,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.25 ms, conversion unavailable\ntiming: batch wall 5.17 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.03 ms, conversion unavailable\ntiming: batch wall 2.17 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -4997,7 +4997,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5007,7 +5007,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -5016,11 +5016,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/traversing.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.34 ms, conversion unavailable\ntiming: batch wall 3.59 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"traversing.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.58 ms, conversion unavailable\ntiming: batch wall 2.76 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5034,7 +5034,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5044,7 +5044,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -5053,11 +5053,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.50 ms, conversion unavailable\ntiming: batch wall 3.69 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.41 ms, conversion unavailable\ntiming: batch wall 2.55 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5071,7 +5071,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5081,7 +5081,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -5090,11 +5090,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/ajax.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.43 ms, conversion unavailable\ntiming: batch wall 3.73 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"ajax.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.17 ms, conversion unavailable\ntiming: batch wall 2.30 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5108,7 +5108,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5118,7 +5118,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -5127,11 +5127,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 4.21 ms, conversion unavailable\ntiming: batch wall 4.50 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.42 ms, conversion unavailable\ntiming: batch wall 2.59 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5145,7 +5145,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5155,7 +5155,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -5164,11 +5164,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/animation.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.78 ms, conversion unavailable\ntiming: batch wall 74.89 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"animation.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.62 ms, conversion unavailable\ntiming: batch wall 2.80 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5182,7 +5182,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5192,7 +5192,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -5201,11 +5201,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.74 ms, conversion unavailable\ntiming: batch wall 3.04 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.17 ms, conversion unavailable\ntiming: batch wall 2.29 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5219,7 +5219,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5229,7 +5229,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -5238,11 +5238,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/deferred.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 12.16 ms, conversion unavailable\ntiming: batch wall 12.35 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"deferred.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 1.84 ms, conversion unavailable\ntiming: batch wall 1.97 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5256,7 +5256,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5266,7 +5266,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "best-effort",
@@ -5275,11 +5275,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.23 ms, conversion unavailable\ntiming: batch wall 3.49 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.65 ms, conversion unavailable\ntiming: batch wall 2.84 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
@@ -5293,7 +5293,7 @@
       "expectedOutcome": "unsupported",
       "passed": true,
       "detectCommand": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "formats",
         "detect",
@@ -5303,7 +5303,7 @@
       "detectExit": 3,
       "detection": null,
       "command": [
-        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/fixed-into-md-current",
+        "/Users/yx/projects/document-convert/into-markdown-issue-339/target/cargo/debug/into-md",
         "--no-config",
         "--error-policy",
         "strict",
@@ -5312,11 +5312,11 @@
         "--emit",
         "result-json",
         "--assets-dir",
-        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-sq7aas5b/assets",
+        "/var/folders/sx/zf4ynj4s1g522wm8xj44fxwc0000gn/T/into-md-339-69znqpjm/assets",
         "/Users/yx/projects/document-convert/into-markdown-issue-339/target/issue339/corpus/js/test/unit/serialize.js"
       ],
       "exit": 3,
-      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 3.81 ms, conversion unavailable\ntiming: batch wall 3.99 ms\n",
+      "stderr": "into-md error: unsupported: unsupported input: unsupported input \"serialize.js\" (extension Some(\"js\"), media type None): no supported file signature or container identity; use an explicit format to interpret the content\ntiming: total 2.65 ms, conversion unavailable\ntiming: batch wall 2.84 ms\n",
       "markdownBytes": 0,
       "markdownSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "providers": [],
