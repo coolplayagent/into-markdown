@@ -9,22 +9,22 @@
       "cache": "immutable"
     },
     {
-      "path": "/assets/app.e3f1dcfcfa7504ec.js",
-      "sha256": "e3f1dcfcfa7504eca4775dc3d4511b32528bd1b55259cbc3d14ff679e6abc83c",
-      "bytes": 693671,
+      "path": "/assets/app.bd21406250ed8891.js",
+      "sha256": "bd21406250ed889114e935db6b6e6585fdd16ceb96c4587644dcc1302f0058e8",
+      "bytes": 696840,
       "mime": "text/javascript; charset=utf-8",
       "cache": "immutable"
     },
     {
-      "path": "/assets/bootstrap.72b97418e0c6dec6.js",
-      "sha256": "72b97418e0c6dec60eaf0359208a6fc33ec56c0022c681530d93c251346dcd80",
+      "path": "/assets/bootstrap.3915864f99ea7f1a.js",
+      "sha256": "3915864f99ea7f1af83d18b1d17d132f7887e04677607cfd1e6e8715b8bd14e2",
       "bytes": 1458,
       "mime": "text/javascript; charset=utf-8",
       "cache": "immutable"
     },
     {
       "path": "/index.html",
-      "sha256": "6d3e56a093e3acbb6c661364bf2111ce4e76cc66bdb6b751ce259119a4187356",
+      "sha256": "24fea16f372fcd70e0af6c5b6ce2450054a9672e4db7cd4d67eeb92cc49be5bf",
       "bytes": 496,
       "mime": "text/html; charset=utf-8",
       "cache": "no-store"

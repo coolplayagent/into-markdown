@@ -113,7 +113,11 @@ pub(crate) fn compare_cli(
         return Err("installed CLI formats differ from release catalog authority".into());
     }
     if reported.iter().any(|entry| {
-        entry.status != "available" || !matches!(entry.source.as_str(), "core" | "plugin")
+        (entry.status != "available"
+            && !(entry.format == "rar"
+                && entry.status == "unsupported"
+                && entry.runtime_component.is_none()))
+            || !matches!(entry.source.as_str(), "core" | "plugin")
     }) {
         return Err("installed CLI catalog contains a non-production source or status".into());
     }

@@ -11,6 +11,7 @@ for key, old in before.items():
     new = after[key]
     assert old['sample']['sha256'] == new['sample']['sha256'], key
     if old.get('markdown_bytes'):
+        assert new['exit_code'] == old['exit_code'], (key,'baseline success lost')
         assert new.get('markdown_sha256') == old['markdown_sha256'], (key,'baseline output changed')
         assert new['assets'] == old['assets'], (key,'baseline assets changed')
     elif new.get('markdown_bytes'):

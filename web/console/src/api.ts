@@ -41,7 +41,9 @@ export interface ArtifactReference {
 }
 export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
 export interface ArtifactDownload { blob: Blob; filename: string }
+export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
 export interface TaskRecord {
+  failure?: TaskFailure | null;
   id: string; createdAtMs: number; updatedAtMs: number; status: TaskStatus;
   progressMillionths: number; diagnostics: TaskDiagnostic[]; artifacts: ArtifactReference[];
   pinned: boolean; artifactGeneration: number;
@@ -61,8 +63,8 @@ export interface TaskEvent {
   execution?: { stage: string; basisPoints: number; completedUnits: number | null;
     totalUnits: number | null; message: string | null };
 }
-export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "outlook-msg";
-const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb", "image", "audio", "video", "zip", "outlook-msg"]);
+export type InputFormat = "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "odt" | "ods" | "odp" | "rtf" | "epub" | "text" | "markdown" | "html" | "csv" | "tsv" | "json" | "xml" | "feed" | "ipynb" | "image" | "audio" | "video" | "zip" | "rar" | "outlook-msg";
+const inputFormats = new Set<InputFormat>(["pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub", "text", "markdown", "html", "csv", "tsv", "json", "xml", "feed", "ipynb", "image", "audio", "video", "zip", "rar", "outlook-msg"]);
 export type OcrPolicy = "off" | "auto" | "always";
 export type AiMode = "off" | "fallback" | "prefer" | "only";
 export type AssetMode = "extract" | "embed" | "omit";
@@ -264,6 +266,11 @@ function isArtifact(value: unknown): value is ArtifactReference {
     && (value.filename === undefined || value.filename === null || typeof value.filename === "string" && value.filename.length <= 255 && !/[\u0000-\u001f\u007f/\\]/.test(value.filename))
     && (value.mediaType === undefined || value.mediaType === null || typeof value.mediaType === "string" && value.mediaType.length <= 127 && /^[\x20-\x7e]+$/.test(value.mediaType));
 }
+function isTaskFailure(value: unknown): value is TaskFailure {
+  const code = (item: unknown) => typeof item === "string" && /^[a-zA-Z0-9]{1,64}$/.test(item);
+  return isObject(value) && value.schemaVersion === 1 && code(value.code) && code(value.stage)
+    && (value.reasonCode == null || code(value.reasonCode)) && typeof value.retryable === "boolean";
+}
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || !taskStatuses.has(value.status as TaskStatus) || !Number.isSafeInteger(value.progressMillionths)
@@ -278,6 +285,7 @@ export function parseTask(value: unknown): TaskRecord {
     || value.batchId !== undefined && value.batchId !== null
       && (typeof value.batchId !== "string" || !/^[0-9a-f]{32}$/.test(value.batchId))
     || value.workflow !== "conversion" && value.workflow !== "meetingTranscript"
+    || value.failure != null && !isTaskFailure(value.failure)
     || !isObject(value.configuration)) throw new ApiError("invalidResponse");
   return value as unknown as TaskRecord;
 }

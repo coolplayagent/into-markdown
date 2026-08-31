@@ -13,8 +13,8 @@ pub(crate) fn check(
         });
     }
     match RarSignature::detect(&input.bytes) {
-        Some(RarSignature::Rar4 | RarSignature::Rar5) => Err(ConversionError::Unsupported {
-            detail: "RAR archive conversion is unsupported; extract the archive first, then convert the extracted files. RAR 归档请先解压后再转换。".into(),
+        Some(RarSignature::Rar4 | RarSignature::Rar5) => Err(ConversionError::ArchiveExtractionRequired {
+            format: "RAR".into(),
         }),
         Some(RarSignature::Damaged) => Err(ConversionError::Malformed {
             part: input.metadata.name.clone(),

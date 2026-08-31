@@ -8,6 +8,9 @@ import os
 from pathlib import Path
 import platform
 import re
+import signal
+import struct
+import zlib
 import subprocess
 import time
 import zipfile
@@ -23,7 +26,7 @@ def run_process(command, cwd, log):
     started = time.monotonic()
     peak = 0
     with log.open('wb') as output:
-        process = subprocess.Popen(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(command, cwd=cwd, stdout=output, stderr=subprocess.STDOUT, start_new_session=system != 'Windows')
         if system == 'Windows':
             from ctypes import wintypes
             class Counters(ctypes.Structure):
@@ -40,7 +43,9 @@ def run_process(command, cwd, log):
         try:
             code = process.wait(timeout=180)
         except subprocess.TimeoutExpired:
-            process.kill(); process.wait(); raise
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            raise
     elapsed = time.monotonic() - started
     text = log.read_text(encoding='utf-8', errors='replace')
     if system == 'Darwin':
@@ -53,7 +58,7 @@ def run_process(command, cwd, log):
 
 
 def check_assets(markdown, output):
-    links = re.findall(r'!\[[^\]]*\]\(<?([^\s)>]+)>?\)', markdown)
+    links = re.findall(r'(?<!\\)!\[[^\]]*\]\(<?([^\s)>]+)>?\)', markdown)
     from urllib.parse import unquote
     checked = []
     for link in links:
@@ -70,6 +75,8 @@ def check_assets(markdown, output):
 def execute(binary, source, work, extra=()):
     work.mkdir(parents=True, exist_ok=True)
     output = work / '结果.md'
+    output.unlink(missing_ok=True)
+    (work/'batch.json').unlink(missing_ok=True)
     command = [str(binary), str(source), '--no-config', '--progress', 'never', '--ocr', 'off', '--error-policy', 'best-effort', '--asset-mode', 'extract', '--conflict', 'overwrite', '--report', str(work/'batch.json'), '-o', str(output), *extra]
     result = run_process(command, work, work / 'process.log')
     result['command'] = command
@@ -111,13 +118,34 @@ def synthetic(binary, root):
         assert result['exit_code'] != 0 and 'unsupported' in result['log'] and 'extract' in result['log'], result
         cases.append(dict(name=f'rar{version}', **result))
     source = root / '混合归档.zip'
-    make_zip(source, [('报告（最终）.txt','完整正文'), ('伪装.zip',b'Rar!\x1a\x07\x01\x00')])
-    result = execute(binary, source, root / 'mixed')
-    assert result.get('markdown_bytes') and '完整正文' in (root/'mixed/结果.md').read_text(encoding="utf-8"), result
+    def chunk(kind, data):
+        return struct.pack('>I',len(data)) + kind + data + struct.pack('>I',zlib.crc32(kind+data))
+    png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR',struct.pack('>IIBBBBB',1,1,8,6,0,0,0)) + chunk(b'IDAT',zlib.compress(b'\x00\xff\x00\x00\xff')) + chunk(b'IEND',b'')
+    make_zip(source, [('报告（最终）.txt','完整正文'), ('伪装.zip',b'Rar!\x1a\x07\x01\x00'),('图片（红色）.png',png)])
+    result = execute(binary, source, root / '中文目录（混合）')
+    assert result.get('markdown_bytes') and '完整正文' in (root/'中文目录（混合）/结果.md').read_text(encoding="utf-8"), result
     assert 'extract' in json.dumps(result.get('batch',{})), result
+    assert result['assets'], result
     cases.append(dict(name='mixed', **result))
     for name, entries in [('unicode-alias',[('é.txt','a'),('e\u0301.txt','b')]),('case-prefix',[('A/x.txt','a'),('a/y.txt','b')]),('traversal',[('../escape.txt','a')]),('device',[('ＣＯＮ.txt','a')])]:
         source = root / f'{name}.zip'; make_zip(source, entries)
+        result = execute(binary, source, root/name)
+        assert result['exit_code'] != 0 and not result.get('markdown_bytes'), result
+        cases.append(dict(name=name, **result))
+    for name in ['crc', 'symlink', 'compression-bomb']:
+        source = root / f'{name}.zip'
+        if name == 'crc':
+            make_zip(source, [('body.txt', b'unique CRC payload')])
+            data = source.read_bytes().replace(b'unique CRC payload', b'broken CRC payload')
+            source.write_bytes(data)
+        elif name == 'symlink':
+            with zipfile.ZipFile(source, 'w') as archive:
+                info = zipfile.ZipInfo('link.txt'); info.create_system = 3
+                info.external_attr = 0o120777 << 16
+                archive.writestr(info, '../escape')
+        else:
+            with zipfile.ZipFile(source, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr('bomb.txt', b'A'*1_000_000)
         result = execute(binary, source, root/name)
         assert result['exit_code'] != 0 and not result.get('markdown_bytes'), result
         cases.append(dict(name=name, **result))
@@ -139,16 +167,24 @@ def main():
     parser.add_argument('--cache', type=Path)
     parser.add_argument('--public-samples', action='store_true')
     parser.add_argument('--baseline', action='store_true')
+    parser.add_argument('--representative', action='store_true', help='one reviewed public file per format for installed artifacts')
+    parser.add_argument('--source-revision', default=os.environ.get('GITHUB_SHA'))
     args = parser.parse_args()
     binary = args.into_md.resolve(); root = args.work_root.resolve(); root.mkdir(parents=True, exist_ok=True)
-    report = dict(schema_version=1, platform=platform.platform(), binary_sha256=sha256(binary.read_bytes()), version=subprocess.check_output([str(binary),'version','--json','--no-config'],text=True), cases=[])
+    report = dict(schema_version=1, source_revision=args.source_revision, platform=platform.platform(), binary_sha256=sha256(binary.read_bytes()), version=subprocess.check_output([str(binary),'version','--json','--no-config'],text=True), cases=[])
     if not args.baseline:
         report['synthetic'] = synthetic(binary, root/'synthetic')
     if args.public_samples:
         cache = (args.cache or root/'public').resolve()
         for sample in fetch(cache):
+            if args.representative and sample['name'] not in {'customGeo.pptx','test_read_format_zip_filename_cp932.zip','test_read_format_rar5_unicode.rar','accessible_epub_3.epub'}:
+                continue
             extra = ['--zip-charset',sample['charset']] if sample.get('charset') else []
             result = execute(binary, cache/sample['kind']/sample['name'], root/sample['kind']/sample['name'], extra)
+            if not args.baseline and sample['expected'] == 'convert':
+                assert result['exit_code'] == 0 and result.get('markdown_bytes'), result
+            if not args.baseline and sample['expected'] == 'reject':
+                assert result['exit_code'] != 0 and not result.get('markdown_bytes') and sample['expected_diagnostic'] in result['log'], result
             if sample['kind'] == 'rar' and not args.baseline:
                 assert result['exit_code'] != 0 and 'unsupported' in result['log'] and 'extract' in result['log'], result
             report['cases'].append(dict(sample=sample, **result))

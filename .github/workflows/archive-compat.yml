@@ -66,10 +66,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git worktree add --detach ../into-markdown-archive-base "$BASE_SHA"
-          cargo build --locked --manifest-path ../into-markdown-archive-base/Cargo.toml --target-dir target -p into-markdown-cli -j2
-          cli="$PWD/target/debug/into-md"
+          cargo build --locked --manifest-path ../into-markdown-archive-base/Cargo.toml --target-dir target/baseline-build -p into-markdown-cli -j2
+          cli="$PWD/target/baseline-build/debug/into-md"
           if [ "$RUNNER_OS" = Windows ]; then cli="$cli.exe"; fi
-          python tools/archive-compat/run.py --into-md "$cli" --work-root target/issue-338/baseline --cache target/issue-338/public --public-samples --baseline
+          python tools/archive-compat/run.py --into-md "$cli" --work-root target/issue-338/baseline --cache target/issue-338/public --public-samples --baseline --source-revision "$BASE_SHA"
           python tools/archive-compat/compare.py target/issue-338/baseline/report.json target/issue-338/candidate/report.json
           git worktree remove ../into-markdown-archive-base
       - uses: actions/upload-artifact@v4

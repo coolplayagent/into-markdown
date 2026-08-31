@@ -359,6 +359,7 @@ fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
             let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
             assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");
             assert!(error.to_string().contains("extract"));
+            assert_eq!(error.reason_code(), "archiveExtractionRequired");
             let result = convert(
                 archive(&[(name, signature), ("报告（保留）.txt", "正文完整".as_bytes())], false),
                 ConversionOptions::default(),
@@ -437,5 +438,22 @@ fn unicode_archive_names_survive_provenance_and_unsafe_aliases_fail() {
                 ErrorCode::Malformed
             );
         }
+    }
+}
+
+#[test]
+fn recoverable_rar_retains_the_same_terminal_diagnostic() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = crate::RecoveryStore::open(directory.path().join("recovery")).unwrap();
+    let token = store.create_token().unwrap();
+    let engine = default_engine().unwrap();
+    for _ in 0..2 {
+        let request = ConversionRequest::new(InputRef::bytes(
+            b"Rar!\x1a\x07\x01\x00".to_vec(),
+            Some("renamed.zip"),
+        ));
+        let error = block_on(engine.convert_recoverable(request, &store, &token)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Unsupported);
+        assert_eq!(error.reason_code(), "archiveExtractionRequired");
     }
 }

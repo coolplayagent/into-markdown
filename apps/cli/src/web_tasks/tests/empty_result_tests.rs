@@ -111,3 +111,20 @@ fn alt_chunk_only_docx() -> Vec<u8> {
     }
     output.into_inner()
 }
+
+#[test]
+fn rar_failure_reason_survives_web_task_persistence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+    let mut upload =
+        backend.begin_upload_configured("renamed.txt", Some(8), WebTaskRequest::default()).unwrap();
+    upload.write_chunk(b"Rar!\x1a\x07\x01\x00").unwrap();
+    let record = upload.finish().unwrap();
+    let record = wait_terminal(&backend, &record.id);
+    assert_eq!(record.status, TaskStatus::Failed);
+    assert!(record.artifacts.is_empty());
+    let failure = backend.web_record(record).unwrap().failure.unwrap();
+    assert_eq!(failure.code, "unsupported");
+    assert_eq!(failure.reason_code.as_deref(), Some("archiveExtractionRequired"));
+    assert!(!failure.retryable);
+}
