@@ -87,11 +87,18 @@ fn coordinate_frame(
     source: &SourceLocator,
     ocr: &SourceLocator,
 ) -> Option<(into_markdown_core::Rect, f32, f32)> {
+    let bounds = source_coordinate_frame(source)?;
+    let width = ocr.page_width?;
+    let height = ocr.page_height?;
+    (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
+        .then_some((bounds, width, height))
+}
+
+/// A placement that can carry image-local OCR into the container's coordinates.
+pub(super) fn source_coordinate_frame(source: &SourceLocator) -> Option<into_markdown_core::Rect> {
     let bounds = source.bounds?;
     let page_width = source.page_width?;
     let page_height = source.page_height?;
-    let width = ocr.page_width?;
-    let height = ocr.page_height?;
     // A container bounding box alone is not an image-to-page transform. In
     // particular, do not mix ODF points or DrawingML EMUs with image pixels,
     // or infer a rotated/cropped placement from its axis-aligned envelope.
@@ -109,12 +116,8 @@ fn coordinate_frame(
         && page_height > 0.0
         && f64::from(bounds.x) + f64::from(bounds.width) <= f64::from(page_width)
         && f64::from(bounds.y) + f64::from(bounds.height) <= f64::from(page_height)
-        && source.rotation_degrees.is_none_or(|rotation| rotation == 0.0)
-        && width.is_finite()
-        && height.is_finite()
-        && width > 0.0
-        && height > 0.0)
-        .then_some((bounds, width, height))
+        && source.rotation_degrees.is_none_or(|rotation| rotation == 0.0))
+    .then_some(bounds)
 }
 
 fn remapped_ocr_locator(source: &SourceLocator, ocr: &SourceLocator) -> SourceLocator {

@@ -1,5 +1,6 @@
 //! Enrich transient PDF pages without changing aggregate stream ownership.
 
+use crate::{optional_embedded_ocr, push_optional_ocr_skipped};
 use into_markdown_core::{
     Asset, ConversionError, ConversionOptions, ConverterEventSink, ConverterOutput, Document,
     EnrichmentPlan, ExecutionContext, InputFormat, LocalBoxFuture, OutputEnricher, Services,
@@ -37,35 +38,52 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
 
     fn enrich_page(
         &mut self,
-        output: ConverterOutput,
+        mut output: ConverterOutput,
     ) -> LocalBoxFuture<'_, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
             self.context.checkpoint()?;
             let enricher = self.enricher.ok_or_else(|| ConversionError::Internal {
                 detail: "page enrichment was not negotiated".into(),
             })?;
-            let plan = enricher.planned_enrichment_bytes(
-                &output,
-                self.converter_id,
-                self.format,
-                self.options,
-                self.services,
-                self.context,
-            )?;
-            let EnrichmentPlan::Reserve(bytes) = plan else { return Ok(output) };
             // As in nested conversion, the enclosing native invocation already
             // holds the global admission. Child credits cannot back new credits.
-            // Check the incremental peak before entry and use the same context
-            // for all actual OCR working-set and retained-output reservations.
-            if bytes > self.context.available_memory_bytes() {
-                return Err(ConversionError::ResourceLimit {
-                    limit: "max_memory_bytes",
-                    detail: format!(
-                        "page OCR planned {bytes} bytes but only {} remain",
-                        self.context.available_memory_bytes()
-                    ),
+            // Apply the aggregate path's optional preflight policy before the
+            // enricher consumes the page; runtime errors remain terminal.
+            let plan = enricher
+                .planned_enrichment_bytes(
+                    &output,
+                    self.converter_id,
+                    self.format,
+                    self.options,
+                    self.services,
+                    self.context,
+                )
+                .and_then(|plan| {
+                    if let EnrichmentPlan::Reserve(bytes) = plan {
+                        let available = self.context.available_memory_bytes();
+                        if bytes > available {
+                            return Err(ConversionError::ResourceLimit {
+                                limit: "max_memory_bytes",
+                                detail: format!(
+                                    "page OCR planned {bytes} bytes but only {available} remain"
+                                ),
+                            });
+                        }
+                    }
+                    Ok(plan)
                 });
-            }
+            let plan = match plan {
+                Ok(plan) => plan,
+                Err(error)
+                    if optional_embedded_ocr(self.options, enricher)
+                        && matches!(error, ConversionError::ResourceLimit { .. }) =>
+                {
+                    push_optional_ocr_skipped(&mut output, &error)?;
+                    return Ok(output);
+                }
+                Err(error) => return Err(error),
+            };
+            let EnrichmentPlan::Reserve(_) = plan else { return Ok(output) };
             let output = self
                 .context
                 .run(enricher.enrich(
@@ -90,3 +108,7 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "page_enrichment_tests.rs"]
+mod tests;
