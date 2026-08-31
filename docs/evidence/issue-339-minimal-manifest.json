@@ -1,0 +1,82 @@
+{
+  "samples": [
+    {
+      "kind": "constructed",
+      "path": "incomplete-json.txt",
+      "sha256": "ffb38b22ee3e0ca90325ebce953a9846990f292faf44c50498771602e31cb61f",
+      "base64": "eyJhIjo="
+    },
+    {
+      "kind": "constructed",
+      "path": "incomplete-xml.txt",
+      "sha256": "29d6f33653db58ba8a43b22931d6930caaada19c716b73535533107c5d58880c",
+      "base64": "PHJvb3Q+dGV4dA=="
+    },
+    {
+      "kind": "constructed",
+      "path": "declaration-le.txt",
+      "sha256": "c3e85471d625ebe20ff2730065cb58d9467515f5ed270db738dc43411f407f31",
+      "base64": "//48AD8AeABtAGwAIAB2AGUAcgBzAGkAbwBuAD0AJwAxAC4AMAAnAD8APgB1AG4AZgBpAG4AaQBzAGgAZQBkAA=="
+    },
+    {
+      "kind": "constructed",
+      "path": "declaration-be.txt",
+      "sha256": "7b4befbbbfe8396909d6fddcbe68f22ca494a8f152a457c2eb2fcc19c0f332e7",
+      "base64": "/v8APAA/AHgAbQBsACAAdgBlAHIAcwBpAG8AbgA9ACcAMQAuADAAJwA/AD4AdQBuAGYAaQBuAGkAcwBoAGUAZA=="
+    },
+    {
+      "kind": "constructed",
+      "path": "nested.html",
+      "sha256": "3e9e77f3e9a7ec5fe952aea7d49d73283c093a233d51992e3f561c183b80d6af",
+      "base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PHA+PGk+PGI+PHN0cm9uZz48ZW0+a2VwdDwvZW0+PC9zdHJvbmc+PC9iPjwvaT48L3A+PC9ib2R5PjwvaHRtbD4="
+    },
+    {
+      "kind": "constructed",
+      "path": "blank.html",
+      "sha256": "8867a17d5ac2462206b9a156dc9f3f1a1d5917f2186d3c1ed3ce034123325723",
+      "base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PHA+PGEgaHJlZj0iICI+PGI+bGFiZWw8L2I+PC9hPjwvcD48L2JvZHk+PC9odG1sPg=="
+    },
+    {
+      "kind": "constructed",
+      "path": "empty.html",
+      "sha256": "f77cea8b03420402ee45a5da297f91460ce644a853f005cc1718001e2bbc9693",
+      "base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PHA+PGEgaHJlZj0iIj48Yj5sYWJlbDwvYj48L2E+PC9wPjwvYm9keT48L2h0bWw+"
+    },
+    {
+      "kind": "constructed",
+      "path": "base.html",
+      "sha256": "022efba556f37054dcf685671ede7670120155dc44520750d587242b6296c462",
+      "base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PGJhc2UgaHJlZj0iaHR0cHM6Ly9leGFtcGxlLmNvbS9wYXRoIj48cD48YSBocmVmPSIgIj48Yj5sYWJlbDwvYj48L2E+PC9wPjwvYm9keT48L2h0bWw+"
+    },
+    {
+      "kind": "constructed",
+      "path": "unsafe.html",
+      "sha256": "aa20ed5167d9ce39cc852ae9fe54b7831dded39051890c96bdee59ea0177a8b4",
+      "base64": "PCFkb2N0eXBlIGh0bWw+PGh0bWw+PGJvZHk+PHA+PGEgaHJlZj0iamF2YXNjcmlwdDphbGVydCgxKSI+PGI+bGFiZWw8L2I+PC9hPjwvcD48L2JvZHk+PC9odG1sPg=="
+    },
+    {
+      "kind": "constructed",
+      "path": "complete-json.py",
+      "sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+      "base64": "eyJhIjoxfQ=="
+    },
+    {
+      "kind": "repository-fixture",
+      "path": "renamed.md",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "sourcePath": "tools/macos-release/fixtures/normal.ppt"
+    },
+    {
+      "kind": "repository-fixture",
+      "path": "renamed.csv",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "sourcePath": "tools/macos-release/fixtures/normal.ppt"
+    },
+    {
+      "kind": "repository-fixture",
+      "path": "renamed.js",
+      "sha256": "16e53bdba2b33533c34f63a710b44fb7fda6cb479855315921b0b07aa1c961d6",
+      "sourcePath": "tools/macos-release/fixtures/normal.ppt"
+    }
+  ]
+}

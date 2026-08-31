@@ -3496,6 +3496,17 @@ mod tests {
     }
 
     #[test]
+    fn mark_order_follows_nesting_instead_of_enum_order() {
+        let output = convert("<p><u><i><b><u>ordered</u></b></i></u></p>");
+        let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
+            panic!("paragraph")
+        };
+        let Inline::Text { marks, .. } = &inlines[0] else { panic!("text") };
+        assert_eq!(marks, &[InlineMark::Underline, InlineMark::Italic, InlineMark::Bold]);
+        output.document.validate().unwrap();
+    }
+
+    #[test]
     fn repeated_subscripts_are_unique() {
         let output = convert("<p><sub><sub>lower</sub></sub></p>");
         let Block::Paragraph(inlines) = &output.document.blocks[0].block else {
