@@ -474,9 +474,12 @@ fn drawio_public_memory_detection_explicit_xml_and_zip_use_shared_contract() {
 }
 
 #[test]
-fn drawio_extension_conflicts_and_explicit_invalid_structures_fail_clearly() {
+fn explicit_drawio_invalid_structures_fail_clearly() {
     for source in [b"<ordinary/>".as_slice(), b"%PDF-1.7\ninvalid", b"not XML"] {
-        let request = ConversionRequest::new(InputRef::bytes(source, Some("bad.drawio")));
+        let mut request = ConversionRequest::new(InputRef::bytes(source, Some("bad.drawio")));
+        // Content detection can route a PDF signature to PDFium regardless of
+        // this suffix. Exercise Draw.io validation through its explicit format.
+        request.hint.format = Some(InputFormat::Drawio);
         let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
         assert!(matches!(error, ConversionError::Malformed { .. }), "{error}");
     }

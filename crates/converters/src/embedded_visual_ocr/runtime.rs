@@ -50,7 +50,10 @@ pub(super) fn has_native_body(
         context.checkpoint()?;
         let origin = &node.provenance;
         if origin.kind != ProvenanceKind::NativeParser
-            || origin.provider != image.provider
+            || (origin.provider != image.provider
+                && !(format == InputFormat::Pdf
+                    && origin.provider == "builtin.pdf.layout"
+                    && image.provider == "builtin.converter.pdfium"))
             || !same_content_unit(&origin.locator, &image.locator, format)
             || origin.locator.page != image.locator.page
             || origin.locator.slide != image.locator.slide
@@ -213,6 +216,37 @@ fn notebook_unit(part: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_pdf_layout_body_belongs_to_the_same_page_as_pdfium_images() {
+        let image = Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: "builtin.converter.pdfium".into(),
+            locator: SourceLocator { page: Some(1), ..Default::default() },
+            confidence: None,
+        };
+        let mut body = BlockNode {
+            id: NodeId("body".into()),
+            block: Block::Paragraph(vec![Inline::Text {
+                value: "native PDF body".into(),
+                marks: vec![],
+            }]),
+            provenance: Provenance { provider: "builtin.pdf.layout".into(), ..image.clone() },
+        };
+        let context = ExecutionContext::new(Default::default(), Default::default());
+        assert!(
+            has_native_body(std::slice::from_ref(&body), &image, InputFormat::Pdf, &context)
+                .unwrap()
+        );
+        body.provenance.locator.page = Some(2);
+        assert!(
+            !has_native_body(std::slice::from_ref(&body), &image, InputFormat::Pdf, &context)
+                .unwrap()
+        );
+        body.provenance.locator.page = Some(1);
+        body.provenance.kind = ProvenanceKind::LocalOcr;
+        assert!(!has_native_body(&[body], &image, InputFormat::Pdf, &context).unwrap());
+    }
 
     #[test]
     fn omitted_images_without_source_parts_have_distinct_logical_references() {

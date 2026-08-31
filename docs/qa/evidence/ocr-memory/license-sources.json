@@ -64,6 +64,14 @@
         "sha256": "3b4399ee9710e14b0aa5372a4cfdff3e1eb35201735f9596cec0a3c00e9baddd",
         "bytes": 428
       }
+    ],
+    "microsoft/markitdown": [
+      {
+        "url": "https://raw.githubusercontent.com/microsoft/markitdown/9dc0d6579b8739c9d0671ff205e071e3053c7df1/LICENSE",
+        "revision": "9dc0d6579b8739c9d0671ff205e071e3053c7df1",
+        "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+        "bytes": 1141
+      }
     ]
   }
 }

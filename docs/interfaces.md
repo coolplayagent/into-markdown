@@ -346,3 +346,9 @@ transition 禁止新增 artifact。进度只允许单调增加；reconcile 对 C
 Windows 使用 Job Object 总内存上限。`OcrRecognitionMemory` 仅表示受控的识别阶段私有
 逻辑预算拒绝，`code()` 保持 `resourceLimit`，`reason_code()` 为 `ocrRecognitionMemory`。
 公共 API 的调用方可据此区分识别额度与全局资源失败，禁止通过错误文本判断降级。
+
+Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 huge-page 字段，
+共享普通页面按比例计入，历史进程峰值单独用于测量报告。已退出进程的 ENOENT/ESRCH
+视为离开进程组；其他观测失败终止请求并报告进程异常。内存超额错误包含观测字节数及额度。
+PDF 原生页沿用逐页预检降级：必须有本页原生正文，扫描页标记会阻止降级。
+通用容器增强器的全局预检与工作租约不足保持失败，逐图片运行期恢复由识别错误分类决定。

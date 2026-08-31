@@ -124,7 +124,7 @@ pub(super) fn convert_strict(bytes: Vec<u8>) -> Result<crate::ConversionResult, 
     )
 }
 
-fn convert_with(
+pub(super) fn convert_with(
     bytes: Vec<u8>,
     options: ConversionOptions,
     execution: ExecutionOptions,

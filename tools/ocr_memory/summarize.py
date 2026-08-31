@@ -20,14 +20,21 @@ def load(path):
 
 def analyze(root, samples):
     records = []
+    seen = set()
     identities = {Path(item['path']).stem: item for item in samples}
     for receipt in sorted(root.rglob('measurement.json')):
         run = load(receipt)
-        mode, grouping, _ = receipt.relative_to(root).parts[:3]
+        mode, grouping, label, filename = receipt.relative_to(root).parts
+        if filename != 'measurement.json' or (grouping != 'single' and label != 'all'):
+            raise ValueError(f'noncanonical experiment directory: {receipt}')
         report_path = receipt.parent / 'report.json'
         report = load(report_path) if report_path.exists() else {}
         items = {Path(item['input']).stem: item for item in report.get('items', [])}
         for identity in run['samples']:
+            key = (mode, grouping, identity)
+            if key in seen or (grouping == 'single' and label != identity[:16]):
+                raise ValueError(f'duplicate or mismatched measurement: {receipt}')
+            seen.add(key)
             sample = identities[identity[:16]]
             item = items.get(identity[:16], {})
             artifact = receipt.parent / 'stdout.json' if grouping == 'single' else (

@@ -502,8 +502,12 @@ fn xhtml_nested_style_aliases_keep_valid_ir() {
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    for result in [convert(bytes.clone()), convert_strict(bytes)] {
-        let result = result.unwrap();
+    for policy in [crate::ErrorPolicy::BestEffort, crate::ErrorPolicy::Strict] {
+        // This fixture validates XHTML style normalization with no OCR service.
+        let mut options = crate::ConversionOptions { error_policy: policy, ..Default::default() };
+        options.ocr.policy = crate::OcrPolicy::Off;
+        let result =
+            super::epub_tests::convert_with(bytes.clone(), options, Default::default()).unwrap();
         result.document.validate().unwrap();
         assert!(result.markdown.replace("\\-", "-").contains("epub-styled"));
     }

@@ -20,13 +20,13 @@ pub use recovery::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
 use fixed_alloc::{FixedSlots, try_clone_string};
 use into_markdown_core::{
-    AiMode, ArtifactSink, ArtifactSinkCapabilities, Asset, Block, BlockNode, ConversionError,
+    ArtifactSink, ArtifactSinkCapabilities, Asset, Block, BlockNode, ConversionError,
     ConversionOptions, ConversionRequest, ConversionResult, ConversionSummary, Converter,
-    ConverterOutput, ConverterStreamMode, DetectionRequest, DetectionResult, Diagnostic,
-    DiagnosticSeverity, Document, EnrichmentPlan, ErrorPolicy, ExecutionContext, ExecutionStage,
-    FormatCandidate, FormatDetector, FormatHint, MarkdownRenderer, OcrPolicy, OutputEnricher,
-    Provenance, ResolvedInput, ResourceReservation, Services, SourceLocator, SourceMetadata,
-    SourceResolver, StreamConsumerKind, estimate_validation_working_set,
+    ConverterOutput, ConverterStreamMode, DetectionRequest, DetectionResult, Document,
+    EnrichmentPlan, ExecutionContext, ExecutionStage, FormatCandidate, FormatDetector, FormatHint,
+    MarkdownRenderer, OutputEnricher, Provenance, ResolvedInput, ResourceReservation, Services,
+    SourceLocator, SourceMetadata, SourceResolver, StreamConsumerKind,
+    estimate_validation_working_set,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -518,38 +518,16 @@ pub(crate) async fn invoke_enrichers(
 ) -> Result<ConverterOutput, ConversionError> {
     for enricher in enrichers {
         context.checkpoint()?;
-        let plan = match enricher.planned_enrichment_bytes(
+        let plan = enricher.planned_enrichment_bytes(
             &output,
             converter_id,
             format,
             options,
             services,
             context,
-        ) {
-            Ok(plan) => plan,
-            Err(error)
-                if optional_embedded_ocr(options, enricher.as_ref())
-                    && matches!(error, ConversionError::ResourceLimit { .. }) =>
-            {
-                push_optional_ocr_skipped(&mut output, &error)?;
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        let EnrichmentPlan::Reserve(plan) = plan else {
-            continue;
-        };
-        let mut memory = match context.reserve_memory(plan) {
-            Ok(memory) => memory,
-            Err(error)
-                if optional_embedded_ocr(options, enricher.as_ref())
-                    && matches!(error, ConversionError::ResourceLimit { .. }) =>
-            {
-                push_optional_ocr_skipped(&mut output, &error)?;
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
+        )?;
+        let EnrichmentPlan::Reserve(plan) = plan else { continue };
+        let mut memory = context.reserve_memory(plan)?;
         let credited_context = context.with_memory_credit(&mut memory)?;
         output = context
             .run(enricher.enrich(
@@ -586,39 +564,6 @@ pub(crate) async fn invoke_enrichers(
         output = output.certify_enrichment_reservation(context, memory)?;
     }
     Ok(output)
-}
-
-fn optional_embedded_ocr(options: &ConversionOptions, enricher: &dyn OutputEnricher) -> bool {
-    if options.error_policy != ErrorPolicy::BestEffort
-        || enricher.id() != "builtin.enricher.embedded-visual-ocr"
-    {
-        return false;
-    }
-    let effective = match options.ai.vision_ocr {
-        AiMode::Only => OcrPolicy::Always,
-        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
-            OcrPolicy::Auto
-        }
-        _ => options.ocr.policy,
-    };
-    effective == OcrPolicy::Auto
-}
-
-fn push_optional_ocr_skipped(
-    output: &mut ConverterOutput,
-    error: &ConversionError,
-) -> Result<(), ConversionError> {
-    output.diagnostics.try_reserve(1).map_err(|allocation| ConversionError::ResourceLimit {
-        limit: "max_memory_bytes",
-        detail: format!("cannot reserve optional OCR diagnostic: {allocation}"),
-    })?;
-    output.diagnostics.push(Diagnostic {
-        code: "presentation.optionalOcrSkipped".into(),
-        severity: DiagnosticSeverity::Warning,
-        message: format!("optional embedded OCR was skipped: {error}"),
-        locator: None,
-    });
-    Ok(())
 }
 
 async fn invoke_converter_preflighted<F>(

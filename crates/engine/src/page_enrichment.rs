@@ -1,6 +1,6 @@
 //! Enrich transient PDF pages without changing aggregate stream ownership.
 
-use crate::{optional_embedded_ocr, push_optional_ocr_skipped};
+mod policy;
 use into_markdown_core::{
     Asset, ConversionError, ConversionOptions, ConverterEventSink, ConverterOutput, Document,
     EnrichmentPlan, ExecutionContext, InputFormat, LocalBoxFuture, OutputEnricher, Services,
@@ -47,8 +47,8 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
             })?;
             // As in nested conversion, the enclosing native invocation already
             // holds the global admission. Child credits cannot back new credits.
-            // Apply the aggregate path's optional preflight policy before the
-            // enricher consumes the page; runtime errors remain terminal.
+            // Preserve native PDF pages at the preflight boundary. The global
+            // aggregate path and all runtime errors remain terminal.
             let plan = enricher
                 .planned_enrichment_bytes(
                     &output,
@@ -75,10 +75,10 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
             let plan = match plan {
                 Ok(plan) => plan,
                 Err(error)
-                    if optional_embedded_ocr(self.options, enricher)
-                        && matches!(error, ConversionError::ResourceLimit { .. }) =>
+                    if matches!(error, ConversionError::ResourceLimit { .. })
+                        && policy::optional_page(&output, self, enricher)? =>
                 {
-                    push_optional_ocr_skipped(&mut output, &error)?;
+                    policy::push_skipped(&mut output, &error)?;
                     return Ok(output);
                 }
                 Err(error) => return Err(error),
