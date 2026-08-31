@@ -9,6 +9,7 @@ import shutil
 import stat
 import struct
 import sys
+import tomllib
 import zipfile
 from dataclasses import dataclass
 from typing import Mapping
@@ -220,6 +221,17 @@ def validate(source: pathlib.Path = SKILL_SOURCE) -> tuple[pathlib.Path, ...]:
     return tuple(source / relative for relative in CANONICAL_FILES)
 
 
+def _workspace_version() -> str:
+    try:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        version = manifest["workspace"]["package"]["version"]
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as error:
+        raise SkillReleaseError("cannot read Cargo.toml workspace.package.version") from error
+    if not isinstance(version, str) or not version.strip():
+        raise SkillReleaseError("Cargo.toml workspace.package.version must be a non-empty string")
+    return version
+
+
 def _validate_skill_markdown(text: str) -> None:
     lines = text.splitlines()
     if not lines or lines[0] != "---":
@@ -229,13 +241,37 @@ def _validate_skill_markdown(text: str) -> None:
     except ValueError as error:
         raise SkillReleaseError("SKILL.md frontmatter is not closed") from error
     fields = {}
-    for line in lines[1:end]:
+    frontmatter = iter(lines[1:end])
+    # Parse the reviewed block layout; version uses a double-quoted YAML string.
+    for line in frontmatter:
         key, separator, value = line.partition(":")
-        if not separator or not key or not value.strip():
+        if not separator or key not in {"name", "description", "metadata"}:
             raise SkillReleaseError("SKILL.md frontmatter contains an invalid field")
-        fields[key] = value.strip().strip('"')
-    if set(fields) != {"name", "description"} or fields["name"] != SKILL_NAME:
-        raise SkillReleaseError("SKILL.md must declare the reviewed name and description only")
+        if key in fields:
+            raise SkillReleaseError(f"SKILL.md frontmatter contains a duplicate field: {key}")
+        if key == "metadata":
+            version_key, version_separator, version_value = next(frontmatter, "").partition(":")
+            if value.strip() or version_key != "  version" or not version_separator:
+                raise SkillReleaseError("SKILL.md metadata must contain an indented version field")
+            try:
+                version = json.loads(version_value.strip())
+            except json.JSONDecodeError as error:
+                raise SkillReleaseError("SKILL.md metadata.version must be a double-quoted string") from error
+            if not isinstance(version, str) or not version.strip():
+                raise SkillReleaseError("SKILL.md metadata.version must be a non-empty string")
+            fields[key] = version
+        else:
+            if not value.strip():
+                raise SkillReleaseError("SKILL.md frontmatter contains an invalid field")
+            fields[key] = value.strip().strip('"')
+    if set(fields) != {"name", "description", "metadata"} or fields["name"] != SKILL_NAME:
+        raise SkillReleaseError("SKILL.md must declare the reviewed name, description, and metadata.version")
+    expected_version = _workspace_version()
+    if fields["metadata"] != expected_version:
+        raise SkillReleaseError(
+            f"SKILL.md metadata.version {fields['metadata']!r} differs from "
+            f"Cargo.toml workspace.package.version {expected_version!r}"
+        )
     description = fields["description"].lower()
     positive = [
         "documents",

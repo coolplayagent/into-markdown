@@ -64,7 +64,13 @@ python3 tools/skill-release/skill_release_main.py verify \
 
 发布 CI 连续生成两次并逐字节比较 ZIP，然后重新读取所有条目、权限和 canonical 字节。三平台
 Core 装配器复用同一 materializer；安装后 smoke 还会检查 skill 的精确文件集合、入口、元数据和
-许可证。skill 随产品发布同步演进，不维护独立版本号。
+许可证。skill 随产品发布同步演进。
+
+`SKILL.md` 的 YAML 头部通过 `metadata.version` 标识产品版本，使用两空格缩进的
+`version` 字段和双引号字符串。根 `Cargo.toml` 的 `workspace.package.version` 是版本权威；
+升级产品版本时同步更新该字段。仓库校验器与现有 PR 门禁会拒绝版本缺失、重复字段、结构错误
+或版本不一致。复制与打包保留 canonical 字节，发布 ZIP 的 `archive-manifest.json` 同时绑定
+包含版本头的完整 `SKILL.md`。
 
 ## English summary
 
@@ -73,3 +79,7 @@ directory in every Core package. Users explicitly install either copy into an ag
 directory. The skill runs the installed CLI for conversion and read-only diagnostics; the CLI and
 Web workflows handle product installation, plugins, providers, models, configuration, and Web UI
 administration.
+
+The skill's YAML frontmatter declares `metadata.version` as a double-quoted string matching
+`workspace.package.version` in the root `Cargo.toml`. Update both together when bumping the product
+version; release validation and the PR gate reject missing, malformed, or mismatched skill versions.

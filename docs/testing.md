@@ -619,6 +619,11 @@ fail closed；官方插件目录与安装 transport 固定 HTTPS 来源、完整
 `quick_validate.py`，再执行仓库校验器，检查 frontmatter、路由描述、OpenAI 元数据、引用关系、
 精确允许文件集合和许可证。任何符号链接、额外文件、非 UTF-8 内容或元数据依赖都会失败关闭。
 
+版本契约要求 `metadata.version` 与根 `Cargo.toml` 的 `workspace.package.version` 一致。
+测试覆盖缺失、空值、重复字段、错误嵌套、版本漂移，以及产品升级后同步更新技能头的恢复路径。
+materialize 与 ZIP 必须保留完整版本头；即使重算归档 manifest，版本头篡改仍须被 canonical
+字节校验拒绝。现有 PR fast gate 执行这些技能发布测试。
+
 发布工作流在两个独立目录生成同名 `into-markdown-skill.zip`，逐字节比较 ZIP 和 SHA-256
 sidecar，再解包复验固定根目录、排序、时间戳、目录 `0755`、文件 `0644` 和 canonical 字节。
 Core 装配只调用同一 materializer；`archive-manifest.json` 必须逐文件绑定
