@@ -66,6 +66,7 @@ fn engine(failure: ConversionError) -> Arc<MixedOcr> {
             plans: AtomicUsize::new(0),
             planned_bytes: 16 * 1024,
             planned_working_bytes: 0,
+            planned_regions: 1,
             corrupt_identity: false,
         },
     })

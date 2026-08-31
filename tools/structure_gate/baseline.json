@@ -460,15 +460,15 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1316,
+      "lines": 1288,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 217
+          "lines": 208
         },
         {
           "symbol": "plan_enrichment",
-          "lines": 236
+          "lines": 216
         }
       ],
       "allowances": [
