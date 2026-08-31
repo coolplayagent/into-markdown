@@ -1,0 +1,52 @@
+{
+  "status": "passed",
+  "candidateRevision": "f63520bd7cc5409b0fc1816b61e6f5e97db2f818",
+  "target": "aarch64-apple-darwin",
+  "version": "0.0.4",
+  "signing": "ad-hoc; local acceptance only",
+  "releasePublished": false,
+  "existingInstallationReplaced": false,
+  "archiveVerification": "passed",
+  "nativeCases": 9,
+  "pdfCases": 6,
+  "crossFormatGoldens": 13,
+  "pathCases": 84,
+  "artifacts": [
+    {
+      "name": "into-md-macos-arm64.zip",
+      "bytes": 39590413,
+      "sha256": "c1a39b228f8f252121a7baaaf27a5f76f64c538ad630e873bf9abc20daffb9d0"
+    },
+    {
+      "name": "official.media.whisper-aarch64-apple-darwin.imp",
+      "bytes": 580962257,
+      "sha256": "980aed83256eadf7924044627b1a80a7f5ebf4a76103a259efefffaf0fe59758"
+    }
+  ],
+  "timings": {
+    "phases": {
+      "final-core-link": {
+        "durationMs": 443147
+      },
+      "helper-provider-build": {
+        "durationMs": 1365536
+      }
+    },
+    "schemaVersion": 1,
+    "target": "aarch64-apple-darwin"
+  },
+  "priorAttempts": [
+    {
+      "log": "local-release/build.log",
+      "result": "stopped own build to integrate main #338; completed using build-after-338.log"
+    },
+    {
+      "log": "local-release/native-acceptance.log",
+      "result": "failed obsolete Drawio HTML golden; updated only expected native-bold output and passed rerun"
+    },
+    {
+      "log": "local-release/path-matrix/report.json",
+      "result": "84 harness invocation failures: --data-dir is only a ui flag; rerun used supported isolated INTO_MARKDOWN_USER_DATA_HOME environment"
+    }
+  ]
+}

@@ -5,7 +5,7 @@ use crate::odf::styles::StyleCatalog;
 use crate::odf::text::ParseMode;
 use crate::odf::xml::XmlNode;
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, ExecutionContext, Inline, InlineMark, SourceLocator,
+    Block, ConversionError, ConversionOptions, ExecutionContext, Inline, SourceLocator,
 };
 
 pub(super) fn parse_presentation(
@@ -49,17 +49,7 @@ pub(super) fn parse_presentation(
                     ParseMode::Notes,
                     1,
                 )?;
-                if !note_blocks.is_empty() {
-                    state.add_inlines(1)?;
-                    blocks.push(state.node(
-                        Block::Paragraph(vec![Inline::Text {
-                            value: "Speaker notes".into(),
-                            marks: vec![InlineMark::Bold],
-                        }]),
-                        locator.clone(),
-                    )?);
-                    blocks.append(&mut note_blocks);
-                }
+                append_notes(state, &mut blocks, &mut note_blocks, &locator)?;
                 continue;
             }
             let is_title =
@@ -141,4 +131,32 @@ fn master_text(
         }
     }
     Ok(blocks)
+}
+
+fn append_notes(
+    state: &mut ParseState,
+    blocks: &mut Vec<into_markdown_core::BlockNode>,
+    note_blocks: &mut Vec<into_markdown_core::BlockNode>,
+    locator: &SourceLocator,
+) -> Result<(), ConversionError> {
+    if into_markdown_core::speaker_notes::has_visible_content(
+        note_blocks,
+        into_markdown_core::AssetMode::Extract,
+    ) {
+        state.add_inlines(1)?;
+        let mut heading = state.node(
+            Block::Heading {
+                level: 3,
+                content: vec![Inline::Text { value: "Speaker notes".into(), marks: Vec::new() }],
+            },
+            locator.clone(),
+        )?;
+        into_markdown_core::speaker_notes::mark_heading(&mut heading)?;
+        for block in note_blocks.iter_mut() {
+            into_markdown_core::speaker_notes::mark_body(block)?;
+        }
+        blocks.push(heading);
+        blocks.append(note_blocks);
+    }
+    Ok(())
 }

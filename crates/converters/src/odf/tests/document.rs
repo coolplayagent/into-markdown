@@ -17,7 +17,7 @@ fn odt_preserves_styles_lists_tables_links_annotations_and_metadata() {
     output.document.validate().unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
     assert!(markdown.contains("## Heading"));
-    assert!(markdown.contains("<strong>bold</strong>"), "{markdown}");
+    assert!(markdown.contains("**bold**"), "{markdown}");
     assert!(markdown.contains("[link](<https://example.com/path>)"));
     assert!(markdown.contains("Comment: review"));
     assert!(markdown.contains("- one"));
@@ -156,12 +156,8 @@ fn versions_and_style_family_origin_are_bound() {
     );
     let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-    assert!(markdown.contains("<em>paragraph "));
-    assert!(
-        markdown.contains("<strong><em>span</em></strong>")
-            || markdown.contains("<em><strong>span</strong></em>"),
-        "{markdown}"
-    );
+    assert!(markdown.contains("*paragraph*"));
+    assert!(markdown.contains("***span***"), "{markdown}");
 
     let bad_styles = common_styles.replace("office:version='1.3'", "office:version='9.9'");
     let mismatched =
@@ -234,4 +230,28 @@ fn odp_emits_one_title_and_notes_inside_slide() {
         convert(&overflow, InputFormat::Odp, ResourceLimits::default()),
         Err(ConversionError::Malformed { part: Some(part), .. }) if part == "content.xml"
     ));
+}
+
+#[test]
+fn odp_notes_omit_empty_groups_and_keep_images_alt_and_tables() {
+    use into_markdown_core::AssetMode;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let picture = "<draw:frame><draw:image xlink:href='Pictures/a.png'/></draw:frame>";
+    for (body, extracted, omitted) in [
+        (String::new(), false, false), ("<text:p> \t </text:p>".into(), false, false),
+        ("<text:p>Useful note</text:p>".into(), true, true),
+        (picture.to_owned(), true, false),
+        (picture.replace("<draw:image", "<svg:desc>Diagram note</svg:desc><draw:image"), true, true),
+        ("<table:table><table:table-row><table:table-cell><text:p>Note cell</text:p></table:table-cell></table:table-row></table:table>".into(), true, true),
+    ] {
+        let content = format!("<office:document-content {NS}><office:body><office:presentation><draw:page draw:name='Slide'><presentation:notes>{body}</presentation:notes></draw:page></office:presentation></office:body></office:document-content>");
+        let bytes = package(InputFormat::Odp, &content, &[("Pictures/a.png", "image/png", png.get_ref())]);
+        let result = convert(&bytes, InputFormat::Odp, ResourceLimits::default()).unwrap();
+        for mode in [AssetMode::Extract, AssetMode::Embed, AssetMode::Omit] {
+            let mut options = ConversionOptions::default(); options.output.asset_mode = mode;
+            let markdown = render(&result.document, &result.assets, &options).unwrap();
+            assert_eq!(markdown.contains("### Speaker notes"), if mode == AssetMode::Omit { omitted } else { extracted }, "{body}: {markdown}");
+        }
+    }
 }

@@ -966,11 +966,11 @@ mod tests {
             assert_eq!(
                 result.markdown,
                 "## Slide 1: Corpus 你好 – Привет\n\n\
-                 <em>English français</em>\n\n\
+                 *English français*\n\n\
                  ### Speaker notes\n\n\
                  Nota 日本語\n\n\
                  ## Slide 2: Second layout\n\n\
-                 <em>مرحبا</em>\n"
+                 *مرحبا*\n"
             );
             assert!(result.has_memory_lease());
         }

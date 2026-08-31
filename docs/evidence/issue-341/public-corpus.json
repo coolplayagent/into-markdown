@@ -1,0 +1,1809 @@
+{
+  "schemaVersion": 1,
+  "minimumPerFormat": 11,
+  "formats": [
+    {
+      "format": "docx",
+      "items": [
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/1c0bondp/minutes-piug-meeting-22-08-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/01-f7f5c85f2d701f10.docx",
+          "sha256": "f7f5c85f2d701f10297f64c41aff9800bf8da78a1b331343eeb48157d8127d1e",
+          "bytes": 28764,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/1c0bondp/minutes-piug-meeting-22-08-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:19.993595+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/07/3a.-ARC-Minutes-20-May-2020.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/02-52a1d2c62abf9f3b.docx",
+          "sha256": "52a1d2c62abf9f3b4933d8da3c63449d583bb577e3a983d847c1035939685ee7",
+          "bytes": 96764,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/07/3a.-ARC-Minutes-20-May-2020.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:23.051718+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/gvylxzbn/46-minutes-of-piug-meeting-260825-1.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/03-451e290b2c619147.docx",
+          "sha256": "451e290b2c619147b59609eaa2e6fb023029b93502fa6bda16374e348e1532a4",
+          "bytes": 35766,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/gvylxzbn/46-minutes-of-piug-meeting-260825-1.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:24.535697+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-23-June-2021.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/04-5a01b34e8290ce28.docx",
+          "sha256": "5a01b34e8290ce2857cdb5b109eeaf07f7a015083258763f6440ef5a0968969a",
+          "bytes": 108489,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-23-June-2021.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:26.847446+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/klglwg1v/41-minutes-of-piug-meeting-28524.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/05-2b234095b6f95b9c.docx",
+          "sha256": "2b234095b6f95b9c7fe70d7a5b3e20daee8044e7ffc72a4fcb3a20b41c416b76",
+          "bytes": 25324,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/klglwg1v/41-minutes-of-piug-meeting-28524.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:28.661656+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-24-february-2021.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/06-538fa2daf1e65f8a.docx",
+          "sha256": "538fa2daf1e65f8a2fa23f0075b782bf6f061412e9e7465b66377949299fb01b",
+          "bytes": 105443,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-24-february-2021.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:30.718180+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/kxapxrhj/minutes-piug-meeting-27-09-22.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/07-c4159e5ef77de30b.docx",
+          "sha256": "c4159e5ef77de30bc4f47ed6ccbd697b6a9fd6a7257f38604299327d95efcfca",
+          "bytes": 18818,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/kxapxrhj/minutes-piug-meeting-27-09-22.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:32.250488+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/mt1ptws5/43-minutes-of-piug-meeting-261124.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/08-60c3ecde497e60ac.docx",
+          "sha256": "60c3ecde497e60ac637bd001e93ce95817220deec77491fa7489ffb662b41f57",
+          "bytes": 17959,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/mt1ptws5/43-minutes-of-piug-meeting-261124.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:35.112463+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/pxddcoki/minutes-piug-meeting-23-05-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/09-b59bf2342ee4eb29.docx",
+          "sha256": "b59bf2342ee4eb291cb8e586fa29a27883bd80c40cab3e57c1e1ed7794a0db3c",
+          "bytes": 27600,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/pxddcoki/minutes-piug-meeting-23-05-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:37.046412+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/qiag4fx5/minutes-of-piug-meeting-21-11-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/10-a4aef952e73550fe.docx",
+          "sha256": "a4aef952e73550fee97c3714b20e81a633750c7f2268f38d9cd1b52d133e0c7c",
+          "bytes": 29321,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/qiag4fx5/minutes-of-piug-meeting-21-11-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:39.090630+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/rufn4kq5/48-minutes-for-24-february-2026.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/11-5c55fa160c1c4cd8.docx",
+          "sha256": "5c55fa160c1c4cd847377a0c327131651e963af2f28eb01f651a71edc81f8a04",
+          "bytes": 41191,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/rufn4kq5/48-minutes-for-24-february-2026.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:41.785231+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        }
+      ],
+      "attempts": [
+        {
+          "page": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "status": "listed",
+          "candidates": 10
+        },
+        {
+          "page": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "status": "listed",
+          "candidates": 3
+        },
+        {
+          "page": "https://chevingtonparishcouncil.gov.uk/meetings/",
+          "status": "failed",
+          "error": "<urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1032)>"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/1c0bondp/minutes-piug-meeting-22-08-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/01-f7f5c85f2d701f10.docx",
+          "sha256": "f7f5c85f2d701f10297f64c41aff9800bf8da78a1b331343eeb48157d8127d1e",
+          "bytes": 28764,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/1c0bondp/minutes-piug-meeting-22-08-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:19.993595+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/07/3a.-ARC-Minutes-20-May-2020.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/02-52a1d2c62abf9f3b.docx",
+          "sha256": "52a1d2c62abf9f3b4933d8da3c63449d583bb577e3a983d847c1035939685ee7",
+          "bytes": 96764,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/07/3a.-ARC-Minutes-20-May-2020.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:23.051718+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/gvylxzbn/46-minutes-of-piug-meeting-260825-1.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/03-451e290b2c619147.docx",
+          "sha256": "451e290b2c619147b59609eaa2e6fb023029b93502fa6bda16374e348e1532a4",
+          "bytes": 35766,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/gvylxzbn/46-minutes-of-piug-meeting-260825-1.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:24.535697+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-23-June-2021.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/04-5a01b34e8290ce28.docx",
+          "sha256": "5a01b34e8290ce2857cdb5b109eeaf07f7a015083258763f6440ef5a0968969a",
+          "bytes": 108489,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-23-June-2021.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:26.847446+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/klglwg1v/41-minutes-of-piug-meeting-28524.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/05-2b234095b6f95b9c.docx",
+          "sha256": "2b234095b6f95b9c7fe70d7a5b3e20daee8044e7ffc72a4fcb3a20b41c416b76",
+          "bytes": 25324,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/klglwg1v/41-minutes-of-piug-meeting-28524.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:28.661656+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-24-february-2021.docx",
+          "sourcePage": "https://www.childrenscommissioner.gov.uk/corporate-governance/audit-and-risk-committee/",
+          "file": "docx/06-538fa2daf1e65f8a.docx",
+          "sha256": "538fa2daf1e65f8a2fa23f0075b782bf6f061412e9e7465b66377949299fb01b",
+          "bytes": 105443,
+          "finalUrl": "https://assets.childrenscommissioner.gov.uk/wpuploads/2020/10/cco-arc-minutes-24-february-2021.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:30.718180+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/kxapxrhj/minutes-piug-meeting-27-09-22.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/07-c4159e5ef77de30b.docx",
+          "sha256": "c4159e5ef77de30bc4f47ed6ccbd697b6a9fd6a7257f38604299327d95efcfca",
+          "bytes": 18818,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/kxapxrhj/minutes-piug-meeting-27-09-22.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:32.250488+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/mt1ptws5/43-minutes-of-piug-meeting-261124.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/08-60c3ecde497e60ac.docx",
+          "sha256": "60c3ecde497e60ac637bd001e93ce95817220deec77491fa7489ffb662b41f57",
+          "bytes": 17959,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/mt1ptws5/43-minutes-of-piug-meeting-261124.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:35.112463+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/pxddcoki/minutes-piug-meeting-23-05-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/09-b59bf2342ee4eb29.docx",
+          "sha256": "b59bf2342ee4eb291cb8e586fa29a27883bd80c40cab3e57c1e1ed7794a0db3c",
+          "bytes": 27600,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/pxddcoki/minutes-piug-meeting-23-05-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:37.046412+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/qiag4fx5/minutes-of-piug-meeting-21-11-23.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/10-a4aef952e73550fe.docx",
+          "sha256": "a4aef952e73550fee97c3714b20e81a633750c7f2268f38d9cd1b52d133e0c7c",
+          "bytes": 29321,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/qiag4fx5/minutes-of-piug-meeting-21-11-23.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:39.090630+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "docx",
+          "url": "https://www.scotcourts.gov.uk/media/rufn4kq5/48-minutes-for-24-february-2026.docx",
+          "sourcePage": "https://www.scotcourts.gov.uk/about-us/user-groups/personal-injury-users-group",
+          "file": "docx/11-5c55fa160c1c4cd8.docx",
+          "sha256": "5c55fa160c1c4cd847377a0c327131651e963af2f28eb01f651a71edc81f8a04",
+          "bytes": 41191,
+          "finalUrl": "https://www.scotcourts.gov.uk/media/rufn4kq5/48-minutes-for-24-february-2026.docx",
+          "contentType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "fetchedAt": "2026-08-31T12:05:41.785231+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        }
+      ]
+    },
+    {
+      "format": "xlsx",
+      "items": [
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/census/aboutcensus/censusproducts/topicsummaries/census2021topicssummaries.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/census/aboutcensus/censusproducts/topicsummaries",
+          "file": "xlsx/01-febe3578e3d50c15.xlsx",
+          "sha256": "febe3578e3d50c15f0bc4abffb665dd510177eff93e8c706a387206e9f8c9d07",
+          "bytes": 261784,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/census/aboutcensus/censusproducts/topicsummaries/census2021topicssummaries.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:09.254230+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable/gbphpmachinereadable.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable",
+          "file": "xlsx/02-b2e3b78e7eba7336.xlsx",
+          "sha256": "b2e3b78e7eba733691beef27c1e38b2f0436e0a16cb3e9471c784dcc9ce1d228",
+          "bytes": 1608524,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable/gbphpmachinereadable.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:11.831523+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/2015todecember2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/03-99f50d8710a53cca.xlsx",
+          "sha256": "99f50d8710a53cca3e2aad4ec461d7f25b683a4cca166f66c3dff032a689ddc7",
+          "bytes": 64437,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/2015todecember2022/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:12.787362+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/10to21april2024/workingarrangements10to21april2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/04-9299e2716056f491.xlsx",
+          "sha256": "9299e2716056f4913287b6997ce768355667f71a1bcfb4a044629044b60dd21a",
+          "bytes": 550315,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/10to21april2024/workingarrangements10to21april2024.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:14.303985+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22mayto2june2024/workingarrangements22mayto2june2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/05-00a0e45d94367fef.xlsx",
+          "sha256": "00a0e45d94367fef218147ae08a40a586815da2512d6f1d565c065fd1d890584",
+          "bytes": 551386,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22mayto2june2024/workingarrangements22mayto2june2024.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:24.609698+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/06-04387984068a1d3a.xlsx",
+          "sha256": "04387984068a1d3a40aeddfee006d2dc29b9394f4c04770a04336a736fb5b422",
+          "bytes": 63137,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2022/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:25.239592+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22novemberto4december2022/workingarrangements22november4december2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/07-104f4d61373e242d.xlsx",
+          "sha256": "104f4d61373e242d590b507c4cb72157be5378814dfd76a52d4015aae38d7bbe",
+          "bytes": 182473,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22novemberto4december2022/workingarrangements22november4december2022.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:26.053348+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/08-ea5d7a82a72f94ff.xlsx",
+          "sha256": "ea5d7a82a72f94ffa969af34772064dc55af40cb5374696fd62809ae84e6e1df",
+          "bytes": 60533,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2019/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:26.664506+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to14may2023/workingarrangements4to14may2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/09-a93e3e5c6fa78a11.xlsx",
+          "sha256": "a93e3e5c6fa78a1172da65ed9615111002be2d60ebdf06a9135a513e661dc494",
+          "bytes": 269137,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to14may2023/workingarrangements4to14may2023.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:36.582858+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tojanuary2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/10-bd209c86d021ff97.xlsx",
+          "sha256": "bd209c86d021ff97fb46b59817bc13a6e50040806f1d00918c7c21a1ae4874f5",
+          "bytes": 62314,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tojanuary2020/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:37.319548+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to29june2025/workingarrangements4to29june2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/11-5c3fe27a1c844c41.xlsx",
+          "sha256": "5c3fe27a1c844c41d03e4335903eab8e2dd635ed7f70f6507a001d07061a71b0",
+          "bytes": 99846,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to29june2025/workingarrangements4to29june2025.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:39.091495+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        }
+      ],
+      "attempts": [
+        {
+          "page": "https://www.ons.gov.uk/census/aboutcensus/censusproducts/topicsummaries",
+          "status": "listed",
+          "candidates": 1
+        },
+        {
+          "page": "https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable",
+          "status": "listed",
+          "candidates": 2
+        },
+        {
+          "page": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "listed",
+          "candidates": 76
+        },
+        {
+          "page": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "listed",
+          "candidates": 48
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/census/aboutcensus/censusproducts/topicsummaries/census2021topicssummaries.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/census/aboutcensus/censusproducts/topicsummaries",
+          "file": "xlsx/01-febe3578e3d50c15.xlsx",
+          "sha256": "febe3578e3d50c15f0bc4abffb665dd510177eff93e8c706a387206e9f8c9d07",
+          "bytes": 261784,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/census/aboutcensus/censusproducts/topicsummaries/census2021topicssummaries.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:09.254230+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable/gbphpmachinereadable.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable",
+          "file": "xlsx/02-b2e3b78e7eba7336.xlsx",
+          "sha256": "b2e3b78e7eba733691beef27c1e38b2f0436e0a16cb3e9471c784dcc9ce1d228",
+          "bytes": 1608524,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable/gbphpmachinereadable.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:11.831523+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/2015todecember2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/03-99f50d8710a53cca.xlsx",
+          "sha256": "99f50d8710a53cca3e2aad4ec461d7f25b683a4cca166f66c3dff032a689ddc7",
+          "bytes": 64437,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/2015todecember2022/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:12.787362+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/10to21april2024/workingarrangements10to21april2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/04-9299e2716056f491.xlsx",
+          "sha256": "9299e2716056f4913287b6997ce768355667f71a1bcfb4a044629044b60dd21a",
+          "bytes": 550315,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/10to21april2024/workingarrangements10to21april2024.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:14.303985+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable/gbphpsummary.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/populationandmigration/populationprojections/adhocs/29452022basednationalpopulationprojectionshighlifeexpectancyvariantdatasetsforgreatbritainsummaryandmachinereadable",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/april2023/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/11to22january2023/workingarrangements11to22january2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/april2024/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/12to23october2022/workingarrangements12to23october2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/august2023/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/14to25september2022/workingarrangements14to25september2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/august2024/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/17to29may2023/workingarrangements17to29may2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/december2014todecember2018/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/19aprilto1may2023/workingarrangements19aprilto1may2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/december2023/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/1to26april2026/workingarrangements1to26april2026.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/december2024/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/1to26july2026/workingarrangements1to26july2026.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/february2024/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/1to26october2025/workingarrangements1to26october2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/jan2015tojan2023/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/21december2022to8january2023/workingarrangements21december2022to8january2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22februaryto5march2023/workingarrangements22februaryto5march2023correction.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22marchto2april2023/workingarrangements22marchto2april2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2021/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22mayto2june2024/workingarrangements22mayto2june2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/05-00a0e45d94367fef.xlsx",
+          "sha256": "00a0e45d94367fef218147ae08a40a586815da2512d6f1d565c065fd1d890584",
+          "bytes": 551386,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22mayto2june2024/workingarrangements22mayto2june2024.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:24.609698+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/06-04387984068a1d3a.xlsx",
+          "sha256": "04387984068a1d3a40aeddfee006d2dc29b9394f4c04770a04336a736fb5b422",
+          "bytes": 63137,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toapril2022/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:25.239592+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22novemberto4december2022/workingarrangements22november4december2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/07-104f4d61373e242d.xlsx",
+          "sha256": "104f4d61373e242d590b507c4cb72157be5378814dfd76a52d4015aae38d7bbe",
+          "bytes": 182473,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/22novemberto4december2022/workingarrangements22november4december2022.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:26.053348+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/08-ea5d7a82a72f94ff.xlsx",
+          "sha256": "ea5d7a82a72f94ffa969af34772064dc55af40cb5374696fd62809ae84e6e1df",
+          "bytes": 60533,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2019/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:26.664506+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/24aprilto6may2024/workingarrangements24aprilto6may2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/25januaryto5february2023/workingarrangements25januaryto5february2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2021/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/26octoberto6november2022/workingarrangements26octoberto6november2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015toaugust2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/29septemberto9october2022/workingarrangements29septemberto9october2022.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015todecember2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/2to27april2025/workingarrangements2to27april2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015todecember2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/2to27july2025/workingarrangements2to27july2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015todecember2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/2to27october2024/workingarrangements2to27october2024.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tofebruary2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/3december2025to4january2026/workingarrangements3december2025to4january2026.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tofebruary2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/3to28june2026/workingarrangements3to28june2026.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tofebruary2021/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/3to28september2025/workingarrangements3to28september2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tofebruary2022/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4december2024to5january2025/workingarrangements4december2024to5january2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tofebruary2023/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4februaryto1march2026/workingarrangements4februaryto1march2026correctionv2.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tojanuary2019/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "status": "failed",
+          "error": "HTTP Error 429: Too Many Requests"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to14may2023/workingarrangements4to14may2023.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/09-a93e3e5c6fa78a11.xlsx",
+          "sha256": "a93e3e5c6fa78a1172da65ed9615111002be2d60ebdf06a9135a513e661dc494",
+          "bytes": 269137,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to14may2023/workingarrangements4to14may2023.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:36.582858+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tojanuary2020/dataset9.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates",
+          "file": "xlsx/10-bd209c86d021ff97.xlsx",
+          "sha256": "bd209c86d021ff97fb46b59817bc13a6e50040806f1d00918c7c21a1ae4874f5",
+          "bytes": 62314,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/economy/inflationandpriceindices/datasets/outputandinputproducerpriceinflationcontributionstothe12monthrates/january2015tojanuary2020/dataset9.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:37.319548+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "xlsx",
+          "url": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to29june2025/workingarrangements4to29june2025.xlsx",
+          "sourcePage": "https://www.ons.gov.uk/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements",
+          "file": "xlsx/11-5c3fe27a1c844c41.xlsx",
+          "sha256": "5c3fe27a1c844c41d03e4335903eab8e2dd635ed7f70f6507a001d07061a71b0",
+          "bytes": 99846,
+          "finalUrl": "https://www.ons.gov.uk/file?uri=/peoplepopulationandcommunity/wellbeing/datasets/publicopinionsandsocialtrendsgreatbritainworkingarrangements/4to29june2025/workingarrangements4to29june2025.xlsx",
+          "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8",
+          "fetchedAt": "2026-08-31T12:05:39.091495+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        }
+      ]
+    },
+    {
+      "format": "pptx",
+      "items": [
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.01.Introduction.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/01-1ecab1282a1bfd23.pptx",
+          "sha256": "1ecab1282a1bfd23adbb2c179ab658229b64dc8c55865aa9450970992237b727",
+          "bytes": 5222097,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.01.Introduction.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:12.273062+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.02.Mathematical_background.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/02-d6e1d9f1cca9a72a.pptx",
+          "sha256": "d6e1d9f1cca9a72adbaf8b0ee4040b3fdb1397e2dec103d81368833b459db6a8",
+          "bytes": 4665903,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.02.Mathematical_background.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:14.728477+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.03.C++.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/03-9e97b63323b07d8e.pptx",
+          "sha256": "9e97b63323b07d8eb244ae8189c751bdb1aee2d792c1ae494957f7999fd5e687",
+          "bytes": 4614424,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.03.C++.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:17.333185+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.04.Proof_by_induction.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/04-c3c60b36a86dee6a.pptx",
+          "sha256": "c3c60b36a86dee6a58aaa050d6ac161d84f918c4841ac7d0ad6bde1638b1c10b",
+          "bytes": 4769140,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.04.Proof_by_induction.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:19.270344+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/10.01.Disjoint_sets.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/05-bb1721a445ebb6b7.pptx",
+          "sha256": "bb1721a445ebb6b7fd13034b2ffa5ddb8ed6a66aeddac0dc118446e0c3e76ce1",
+          "bytes": 7428589,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/10.01.Disjoint_sets.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:21.400615+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.01.Graph_theory.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/06-798a5e3d3eedb7d9.pptx",
+          "sha256": "798a5e3d3eedb7d94eb453cc3e13f368baf6decc8e282ebc97783f65c254c65f",
+          "bytes": 5583626,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.01.Graph_theory.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:24.036024+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.02.Graph_data_structures.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/07-025c7c666a1dbb08.pptx",
+          "sha256": "025c7c666a1dbb08721bc5c24cf95ada17c421a338aad1a808ab804038e74442",
+          "bytes": 5469691,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.02.Graph_data_structures.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:26.072681+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03.Graph_traversals.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/08-6dca078016e46a44.pptx",
+          "sha256": "6dca078016e46a44cc90b51c27a3b9827fa23c6cfb1a31d2771df0e5254117af",
+          "bytes": 5511642,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03.Graph_traversals.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:28.113983+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03a.Connectedness.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/09-ccb3c39d9e2f00d2.pptx",
+          "sha256": "ccb3c39d9e2f00d2dd825a09223e2e2a296ed8a6678fb247749e1acd97f7994a",
+          "bytes": 5574176,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03a.Connectedness.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:30.126921+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03b.Unweighted_path_length.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/10-51c9273a9d82f7f8.pptx",
+          "sha256": "51c9273a9d82f7f84d907a1871ac4fe2e1418b8f8d10c3797d6e41a3b70dfcec",
+          "bytes": 4615864,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03b.Unweighted_path_length.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:32.912470+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03c.Identifying_bipartite_graphs.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/11-5f21aa7d681c550f.pptx",
+          "sha256": "5f21aa7d681c550fade2876589bba486fba3e8d788272cdc999ec0f8862b6992",
+          "bytes": 4889466,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03c.Identifying_bipartite_graphs.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:37.050043+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        }
+      ],
+      "attempts": [
+        {
+          "page": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "status": "listed",
+          "candidates": 94
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.01.Introduction.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/01-1ecab1282a1bfd23.pptx",
+          "sha256": "1ecab1282a1bfd23adbb2c179ab658229b64dc8c55865aa9450970992237b727",
+          "bytes": 5222097,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.01.Introduction.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:12.273062+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.02.Mathematical_background.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/02-d6e1d9f1cca9a72a.pptx",
+          "sha256": "d6e1d9f1cca9a72adbaf8b0ee4040b3fdb1397e2dec103d81368833b459db6a8",
+          "bytes": 4665903,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.02.Mathematical_background.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:14.728477+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.03.C++.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/03-9e97b63323b07d8e.pptx",
+          "sha256": "9e97b63323b07d8eb244ae8189c751bdb1aee2d792c1ae494957f7999fd5e687",
+          "bytes": 4614424,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.03.C++.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:17.333185+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.04.Proof_by_induction.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/04-c3c60b36a86dee6a.pptx",
+          "sha256": "c3c60b36a86dee6a58aaa050d6ac161d84f918c4841ac7d0ad6bde1638b1c10b",
+          "bytes": 4769140,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/1.04.Proof_by_induction.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:19.270344+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/10.01.Disjoint_sets.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/05-bb1721a445ebb6b7.pptx",
+          "sha256": "bb1721a445ebb6b7fd13034b2ffa5ddb8ed6a66aeddac0dc118446e0c3e76ce1",
+          "bytes": 7428589,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/10.01.Disjoint_sets.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:21.400615+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/10.02.Trees_and_forests.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "status": "failed",
+          "error": "HTTP Error 404: Not Found"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.01.Graph_theory.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/06-798a5e3d3eedb7d9.pptx",
+          "sha256": "798a5e3d3eedb7d94eb453cc3e13f368baf6decc8e282ebc97783f65c254c65f",
+          "bytes": 5583626,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.01.Graph_theory.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:24.036024+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.02.Graph_data_structures.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/07-025c7c666a1dbb08.pptx",
+          "sha256": "025c7c666a1dbb08721bc5c24cf95ada17c421a338aad1a808ab804038e74442",
+          "bytes": 5469691,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.02.Graph_data_structures.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:26.072681+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03.Graph_traversals.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/08-6dca078016e46a44.pptx",
+          "sha256": "6dca078016e46a44cc90b51c27a3b9827fa23c6cfb1a31d2771df0e5254117af",
+          "bytes": 5511642,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03.Graph_traversals.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:28.113983+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03a.Connectedness.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/09-ccb3c39d9e2f00d2.pptx",
+          "sha256": "ccb3c39d9e2f00d2dd825a09223e2e2a296ed8a6678fb247749e1acd97f7994a",
+          "bytes": 5574176,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03a.Connectedness.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:30.126921+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03b.Unweighted_path_length.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/10-51c9273a9d82f7f8.pptx",
+          "sha256": "51c9273a9d82f7f84d907a1871ac4fe2e1418b8f8d10c3797d6e41a3b70dfcec",
+          "bytes": 4615864,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03b.Unweighted_path_length.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:32.912470+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "pptx",
+          "url": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03c.Identifying_bipartite_graphs.pptx",
+          "sourcePage": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/",
+          "file": "pptx/11-5f21aa7d681c550f.pptx",
+          "sha256": "5f21aa7d681c550fade2876589bba486fba3e8d788272cdc999ec0f8862b6992",
+          "bytes": 4889466,
+          "finalUrl": "https://ece.uwaterloo.ca/~dwharder/aads/Lecture_materials/11.03c.Identifying_bipartite_graphs.pptx",
+          "contentType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+          "fetchedAt": "2026-08-31T12:05:37.050043+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        }
+      ]
+    },
+    {
+      "format": "ppt",
+      "items": [
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch01.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/01-53952da80b10a6c9.ppt",
+          "sha256": "53952da80b10a6c99865aae32532cae57fe6bd3f55873866c66d85495414d851",
+          "bytes": 1174528,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch01.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:07.790746+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch02.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/02-2d654ff73bef1492.ppt",
+          "sha256": "2d654ff73bef14920226e3d89f2be767cc2cd2002782a6b8908fedd5ab0a2270",
+          "bytes": 1102336,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch02.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:11.048631+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch03.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/03-5d986e2bbc1215c0.ppt",
+          "sha256": "5d986e2bbc1215c0e60cd14713dbf4cbd161b1d8c45b3d51544f097fdef3fc51",
+          "bytes": 1422336,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch03.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:14.281146+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch04.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/04-097216fd87f5c750.ppt",
+          "sha256": "097216fd87f5c750255f470254faf167ed50431a0535023b621f0eaf71ffe458",
+          "bytes": 1787392,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch04.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:16.368363+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch05.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/05-5e9e30c86b1f805e.ppt",
+          "sha256": "5e9e30c86b1f805ef4218a7a2fcfbc58d10ede823701273d138be9cdfb04f1e9",
+          "bytes": 1687552,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch05.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:18.228102+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch06.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/06-e7fe0efd1884e030.ppt",
+          "sha256": "e7fe0efd1884e030919c5f0d3aec8b9e54563c023a70355de1d49981df7923d8",
+          "bytes": 1075200,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch06.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:19.777240+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch07.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/07-06a7024490558762.ppt",
+          "sha256": "06a70244905587621bae65ec456951dd6819fdc5c00af53192c9c0ac2f782ff3",
+          "bytes": 1600512,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch07.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:21.893020+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch08.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/08-416322e067ee3098.ppt",
+          "sha256": "416322e067ee30984240b80ed0c9ed4c50c75a106e1bb62c44dc1c34837a260d",
+          "bytes": 1533952,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch08.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:23.926221+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch09.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/09-e590451aba136d9d.ppt",
+          "sha256": "e590451aba136d9d7e8bd694568ef333e03b85c5730a93a12afd0a9c3c06a034",
+          "bytes": 1547264,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch09.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:25.521290+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch10.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/10-12f117b0e075420c.ppt",
+          "sha256": "12f117b0e075420cbd94bdc631bf233631475179658985411951a33e12846e60",
+          "bytes": 879616,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch10.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:27.184583+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch11.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/11-2ad2f83602a9e6f4.ppt",
+          "sha256": "2ad2f83602a9e6f44e88e39c50b6de4f89db895c328dd6e0d1d2c28bd8de855b",
+          "bytes": 922624,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch11.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:28.873940+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        }
+      ],
+      "attempts": [
+        {
+          "page": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "status": "listed",
+          "candidates": 22
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch01.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/01-53952da80b10a6c9.ppt",
+          "sha256": "53952da80b10a6c99865aae32532cae57fe6bd3f55873866c66d85495414d851",
+          "bytes": 1174528,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch01.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:07.790746+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch02.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/02-2d654ff73bef1492.ppt",
+          "sha256": "2d654ff73bef14920226e3d89f2be767cc2cd2002782a6b8908fedd5ab0a2270",
+          "bytes": 1102336,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch02.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:11.048631+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch03.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/03-5d986e2bbc1215c0.ppt",
+          "sha256": "5d986e2bbc1215c0e60cd14713dbf4cbd161b1d8c45b3d51544f097fdef3fc51",
+          "bytes": 1422336,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch03.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:14.281146+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch04.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/04-097216fd87f5c750.ppt",
+          "sha256": "097216fd87f5c750255f470254faf167ed50431a0535023b621f0eaf71ffe458",
+          "bytes": 1787392,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch04.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:16.368363+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch05.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/05-5e9e30c86b1f805e.ppt",
+          "sha256": "5e9e30c86b1f805ef4218a7a2fcfbc58d10ede823701273d138be9cdfb04f1e9",
+          "bytes": 1687552,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch05.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:18.228102+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch06.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/06-e7fe0efd1884e030.ppt",
+          "sha256": "e7fe0efd1884e030919c5f0d3aec8b9e54563c023a70355de1d49981df7923d8",
+          "bytes": 1075200,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch06.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:19.777240+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch07.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/07-06a7024490558762.ppt",
+          "sha256": "06a70244905587621bae65ec456951dd6819fdc5c00af53192c9c0ac2f782ff3",
+          "bytes": 1600512,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch07.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:21.893020+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch08.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/08-416322e067ee3098.ppt",
+          "sha256": "416322e067ee30984240b80ed0c9ed4c50c75a106e1bb62c44dc1c34837a260d",
+          "bytes": 1533952,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch08.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:23.926221+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch09.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/09-e590451aba136d9d.ppt",
+          "sha256": "e590451aba136d9d7e8bd694568ef333e03b85c5730a93a12afd0a9c3c06a034",
+          "bytes": 1547264,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch09.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:25.521290+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch10.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/10-12f117b0e075420c.ppt",
+          "sha256": "12f117b0e075420cbd94bdc631bf233631475179658985411951a33e12846e60",
+          "bytes": 879616,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch10.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:27.184583+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "ppt",
+          "url": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch11.ppt",
+          "sourcePage": "https://people.eecs.ku.edu/~hossein/710/Lectures/",
+          "file": "ppt/11-2ad2f83602a9e6f4.ppt",
+          "sha256": "2ad2f83602a9e6f44e88e39c50b6de4f89db895c328dd6e0d1d2c28bd8de855b",
+          "bytes": 922624,
+          "finalUrl": "https://people.eecs.ku.edu/~hossein/710/Lectures/ch11.ppt",
+          "contentType": "application/vnd.ms-powerpoint",
+          "fetchedAt": "2026-08-31T12:05:28.873940+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        }
+      ]
+    },
+    {
+      "format": "odp",
+      "items": [
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture01.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/01-0d607489b9fe0c72.odp",
+          "sha256": "0d607489b9fe0c72e386014cdebf43db5987cd160ef3444bce779dbd2f2576aa",
+          "bytes": 875329,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture01.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:10.091385+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture02.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/02-4d294976a26593c7.odp",
+          "sha256": "4d294976a26593c755ecc019a871f9ed7633983da37e21b56bd40e637a1cb9de",
+          "bytes": 137092,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture02.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:11.651895+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture03.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/03-411071f23656a29c.odp",
+          "sha256": "411071f23656a29c5223ef73aa50897907c3020bed2ecc64c8bab5c0df3e177b",
+          "bytes": 153247,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture03.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:14.770988+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture04.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/04-a3ccbe5ad31964b6.odp",
+          "sha256": "a3ccbe5ad31964b65cda0f80ae8cc10a541e8f2737768fd2bc26bd22b5a14c2f",
+          "bytes": 148467,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture04.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:16.639311+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture05.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/05-caef9bde5621dfc5.odp",
+          "sha256": "caef9bde5621dfc5a439fb75e183bf9ea840d13d9de9186ef92cd6ec3e5d0e57",
+          "bytes": 89269,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture05.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:17.635132+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture06.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/06-482e529ca2a9a43b.odp",
+          "sha256": "482e529ca2a9a43bf1effd81dd9b98eae03076a0a55dca9ec070b117c571afe0",
+          "bytes": 93595,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture06.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:18.771635+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture07.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/07-e5106cb380693650.odp",
+          "sha256": "e5106cb380693650e404d44d3d38070fae28422347ef77894cd2c4b1ea87472c",
+          "bytes": 69447,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture07.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:20.001973+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture08.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/08-be9414aeb64853bc.odp",
+          "sha256": "be9414aeb64853bcba7c561cd33f79660a925c8f688acc798599dde0f6af66ec",
+          "bytes": 130785,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture08.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:21.235225+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture09.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/09-1f3246a7f1510e53.odp",
+          "sha256": "1f3246a7f1510e53bc9aef5437097a2f800833a3eabf47bbd77f33ae6b4a2924",
+          "bytes": 56458,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture09.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:22.219620+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture10.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/10-56e9d6aff22678a2.odp",
+          "sha256": "56e9d6aff22678a2631190f9947f36fb241ccad028284b5f35832b6e5df5f3a5",
+          "bytes": 87730,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture10.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:23.369986+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture11.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/11-a9576dc716dea318.odp",
+          "sha256": "a9576dc716dea3189dd53b2c99269c6973c9b311668eeeaf3c4094d6e7bb2a1f",
+          "bytes": 187600,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture11.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:24.845792+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred"
+        }
+      ],
+      "attempts": [
+        {
+          "page": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "status": "listed",
+          "candidates": 25
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture01.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/01-0d607489b9fe0c72.odp",
+          "sha256": "0d607489b9fe0c72e386014cdebf43db5987cd160ef3444bce779dbd2f2576aa",
+          "bytes": 875329,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture01.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:10.091385+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture02.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/02-4d294976a26593c7.odp",
+          "sha256": "4d294976a26593c755ecc019a871f9ed7633983da37e21b56bd40e637a1cb9de",
+          "bytes": 137092,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture02.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:11.651895+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture03.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/03-411071f23656a29c.odp",
+          "sha256": "411071f23656a29c5223ef73aa50897907c3020bed2ecc64c8bab5c0df3e177b",
+          "bytes": 153247,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture03.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:14.770988+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture04.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/04-a3ccbe5ad31964b6.odp",
+          "sha256": "a3ccbe5ad31964b65cda0f80ae8cc10a541e8f2737768fd2bc26bd22b5a14c2f",
+          "bytes": 148467,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture04.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:16.639311+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture05.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/05-caef9bde5621dfc5.odp",
+          "sha256": "caef9bde5621dfc5a439fb75e183bf9ea840d13d9de9186ef92cd6ec3e5d0e57",
+          "bytes": 89269,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture05.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:17.635132+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture06.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/06-482e529ca2a9a43b.odp",
+          "sha256": "482e529ca2a9a43bf1effd81dd9b98eae03076a0a55dca9ec070b117c571afe0",
+          "bytes": 93595,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture06.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:18.771635+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture07.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/07-e5106cb380693650.odp",
+          "sha256": "e5106cb380693650e404d44d3d38070fae28422347ef77894cd2c4b1ea87472c",
+          "bytes": 69447,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture07.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:20.001973+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture08.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/08-be9414aeb64853bc.odp",
+          "sha256": "be9414aeb64853bcba7c561cd33f79660a925c8f688acc798599dde0f6af66ec",
+          "bytes": 130785,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture08.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:21.235225+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture09.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/09-1f3246a7f1510e53.odp",
+          "sha256": "1f3246a7f1510e53bc9aef5437097a2f800833a3eabf47bbd77f33ae6b4a2924",
+          "bytes": 56458,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture09.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:22.219620+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture10.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/10-56e9d6aff22678a2.odp",
+          "sha256": "56e9d6aff22678a2631190f9947f36fb241ccad028284b5f35832b6e5df5f3a5",
+          "bytes": 87730,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture10.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:23.369986+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        },
+        {
+          "format": "odp",
+          "url": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture11.odp",
+          "sourcePage": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/",
+          "file": "odp/11-a9576dc716dea318.odp",
+          "sha256": "a9576dc716dea3189dd53b2c99269c6973c9b311668eeeaf3c4094d6e7bb2a1f",
+          "bytes": 187600,
+          "finalUrl": "https://cs.uwaterloo.ca/~iang/cs456/F06-lectures/lecture11.odp",
+          "contentType": "application/vnd.oasis.opendocument.presentation",
+          "fetchedAt": "2026-08-31T12:05:24.845792+00:00",
+          "distribution": "local QA only; source copyright retained; no redistribution grant inferred",
+          "status": "downloaded"
+        }
+      ]
+    }
+  ]
+}

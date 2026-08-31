@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "4ad36154865ae311bce82aba3b597b3dd048d644483519c9c536f1dd2d5d40ec",
+  "fixture_manifest_sha256": "5ebf7fac3367e41d95b7110cd96b9864c93d478855c2fb4a5e625b97427ec717",
   "authorities": [
     {
       "schemaVersion": 1,
@@ -162,7 +162,7 @@
             "references": []
           },
           {
-            "id": "presentation-node-2",
+            "id": "presentation-node-3::speaker-notes-heading",
             "kind": "heading:3",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 2,
@@ -189,7 +189,7 @@
             "references": []
           },
           {
-            "id": "presentation-slide-1-z-1-node-3",
+            "id": "presentation-slide-1-z-1-node-2::speaker-note",
             "kind": "paragraph",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 3,
@@ -287,8 +287,8 @@
         ],
         "assets": []
       },
-      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
-      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+      "irSha256": "9bd7c5c4efa1c47d6d9e6f32205c9ddb0a99983455222dafe37fb8db8c42b8f1",
+      "gfmSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9"
     },
     {
       "schemaVersion": 1,
@@ -363,7 +363,7 @@
             "references": []
           },
           {
-            "id": "presentation-node-2",
+            "id": "presentation-node-3::speaker-notes-heading",
             "kind": "heading:3",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 2,
@@ -390,7 +390,7 @@
             "references": []
           },
           {
-            "id": "presentation-slide-1-z-1-node-3",
+            "id": "presentation-slide-1-z-1-node-2::speaker-note",
             "kind": "paragraph",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 3,
@@ -488,8 +488,8 @@
         ],
         "assets": []
       },
-      "irSha256": "11a80bc57e55bf5cd0f6f68198afc0e23aa6ad9c3179a14ce8fd927f650244d6",
-      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+      "irSha256": "eb95fbfb4837ddf59ff2a5b5f470763e1c7d37732076245f4069218844be3169",
+      "gfmSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9"
     },
     {
       "schemaVersion": 1,
@@ -564,7 +564,7 @@
             "references": []
           },
           {
-            "id": "presentation-node-2",
+            "id": "presentation-node-3::speaker-notes-heading",
             "kind": "heading:3",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 2,
@@ -591,7 +591,7 @@
             "references": []
           },
           {
-            "id": "presentation-slide-1-z-1-node-3",
+            "id": "presentation-slide-1-z-1-node-2::speaker-note",
             "kind": "paragraph",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 3,
@@ -689,8 +689,8 @@
         ],
         "assets": []
       },
-      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
-      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+      "irSha256": "9bd7c5c4efa1c47d6d9e6f32205c9ddb0a99983455222dafe37fb8db8c42b8f1",
+      "gfmSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9"
     },
     {
       "schemaVersion": 1,
@@ -765,7 +765,7 @@
             "references": []
           },
           {
-            "id": "presentation-node-2",
+            "id": "presentation-node-3::speaker-notes-heading",
             "kind": "heading:3",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 2,
@@ -792,7 +792,7 @@
             "references": []
           },
           {
-            "id": "presentation-slide-1-z-1-node-3",
+            "id": "presentation-slide-1-z-1-node-2::speaker-note",
             "kind": "paragraph",
             "parentId": "presentation-slide-1-z-1-node-4",
             "order": 3,
@@ -890,8 +890,8 @@
         ],
         "assets": []
       },
-      "irSha256": "f8974626927023589f5d98f94ea52c06b038fef001900825927c446e4cf3601e",
-      "gfmSha256": "0061ec388f2883d862132ec132edf293d4646032b74f1ce8e6e6be89b781c03b"
+      "irSha256": "9bd7c5c4efa1c47d6d9e6f32205c9ddb0a99983455222dafe37fb8db8c42b8f1",
+      "gfmSha256": "81f5089a96e2875cfcd2dd254d06b211801124b8525a4491292ee853fc7a42f9"
     },
     {
       "schemaVersion": 1,
@@ -929,7 +929,7 @@
             "references": []
           },
           {
-            "id": "workbook-table-0",
+            "id": "workbook-table-0-0",
             "kind": "table",
             "parentId": "workbook-sheet-0",
             "order": 1,
@@ -940,7 +940,7 @@
               "page": null,
               "slide": null,
               "sheet": "Corpus",
-              "cell": null,
+              "cell": "0,0",
               "part": null,
               "byteStart": null,
               "byteEnd": null
@@ -1047,7 +1047,7 @@
           {
             "id": "workbook-cell-0-0-0",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 2,
             "siblingOrder": 0,
             "depth": 2,
@@ -1074,7 +1074,7 @@
           {
             "id": "workbook-cell-0-0-1",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 3,
             "siblingOrder": 1,
             "depth": 2,
@@ -1101,7 +1101,7 @@
           {
             "id": "workbook-cell-0-0-2",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 4,
             "siblingOrder": 2,
             "depth": 2,
@@ -1128,7 +1128,7 @@
           {
             "id": "workbook-cell-0-1-0",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 5,
             "siblingOrder": 3,
             "depth": 2,
@@ -1155,7 +1155,7 @@
           {
             "id": "workbook-cell-0-1-1",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 6,
             "siblingOrder": 4,
             "depth": 2,
@@ -1182,7 +1182,7 @@
           {
             "id": "workbook-cell-0-1-2",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 7,
             "siblingOrder": 5,
             "depth": 2,
@@ -1283,7 +1283,7 @@
           }
         ]
       },
-      "irSha256": "596a25175eacbf32388ffbbc9205d46b658ad8125e22a53af1780ffc537b939f",
+      "irSha256": "4c652e7ec7fd52a2de2ce4a0e3189214b74dfb4723e71c520b8f401eeaaff74c",
       "gfmSha256": "54f31131d817ff48fb79e562d820992c04924d7a2639c3cd8f96ee70ebeed6d4"
     },
     {
@@ -1322,7 +1322,7 @@
             "references": []
           },
           {
-            "id": "workbook-table-0",
+            "id": "workbook-table-0-0",
             "kind": "table",
             "parentId": "workbook-sheet-0",
             "order": 1,
@@ -1333,7 +1333,7 @@
               "page": null,
               "slide": null,
               "sheet": "Corpus",
-              "cell": null,
+              "cell": "0,0",
               "part": null,
               "byteStart": null,
               "byteEnd": null
@@ -1394,7 +1394,7 @@
           {
             "id": "workbook-cell-0-0-0",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 2,
             "siblingOrder": 0,
             "depth": 2,
@@ -1421,7 +1421,7 @@
           {
             "id": "workbook-cell-0-0-1",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 3,
             "siblingOrder": 1,
             "depth": 2,
@@ -1448,7 +1448,7 @@
           {
             "id": "workbook-cell-0-1-0",
             "kind": "paragraph",
-            "parentId": "workbook-table-0",
+            "parentId": "workbook-table-0-0",
             "order": 4,
             "siblingOrder": 2,
             "depth": 2,
@@ -1475,7 +1475,7 @@
         ],
         "assets": []
       },
-      "irSha256": "760653d1d4a8062d8a2744da3ce9a7ed1a7aaac348b09ca057f50b302e61e1cb",
+      "irSha256": "7aaaa95232ffa4e1e3d4587535b4d163a10e147f05887288ed577166ef900efe",
       "gfmSha256": "78361dfef27119e9b1600879712ab0cf3b9196b14a908d1980b8780cc23e0751"
     },
     {
@@ -1712,7 +1712,7 @@
         ],
         "assets": []
       },
-      "irSha256": "927f78b6e20913202e49035fa354abed9a10625718b6265e21512953bfbd3ea2",
+      "irSha256": "9681db5f66b34fc3b92000dcca66ef72e3869d52cd540596c9288e269c259c10",
       "gfmSha256": "4f0bb1503bdce8a8571ee61b7f034a94425963876d5bf95d49f709709fc9f1ee"
     },
     {
@@ -1941,7 +1941,7 @@
         "assets": []
       },
       "irSha256": "0877dc31c19cc002d8432c362a9e60154f29a697d2c587220f91326342fbaa60",
-      "gfmSha256": "b7c044a1671642a8bc44b9c5a48bf01df6fc1a2a97e258fb0e522ac1e0921769"
+      "gfmSha256": "9599eaa0b53968a54eda9915a7e8e59cf1bc8444786f29ae9fb7dfc3600c3b69"
     },
     {
       "schemaVersion": 1,
@@ -2507,8 +2507,8 @@
             "references": []
           },
           {
-            "id": "odf-3",
-            "kind": "paragraph",
+            "id": "odf-3::speaker-notes-heading",
+            "kind": "heading:3",
             "parentId": "odf-4",
             "order": 2,
             "siblingOrder": 1,
@@ -2534,7 +2534,7 @@
             "references": []
           },
           {
-            "id": "odf-2",
+            "id": "odf-2::speaker-note",
             "kind": "paragraph",
             "parentId": "odf-4",
             "order": 3,
@@ -2563,8 +2563,8 @@
         ],
         "assets": []
       },
-      "irSha256": "c241f5b54f533ddb6e7763f5ac6936042fbb1b9bdf2ffd7c711bb5a8f8ea4d60",
-      "gfmSha256": "33364d2a5a9a9f1cb93e22c57d6d54d31badb3247327641cfce39ca9ac180adf"
+      "irSha256": "184594c2e54bd7a944bd7fe6cac34c48272be1c7a9202ebb094414773aae7bbe",
+      "gfmSha256": "5276964b0d08d9658d89cc450ec2f60dc4689685bdb21d768528d46a2d07cb78"
     },
     {
       "schemaVersion": 1,
@@ -2678,7 +2678,7 @@
         "assets": []
       },
       "irSha256": "77edf09f5e507eedcd18b31eae18e1bfc31972d4b92cf423df23d3bc37cd9415",
-      "gfmSha256": "192122cc10295ba219ded2d4995e9d66f81358aee56d6e0b47dc591ba582469a"
+      "gfmSha256": "8629ab8e7dbc3b820d277c15397f9f4fd0d3b660ca3e0902f0960dda8342c889"
     },
     {
       "schemaVersion": 1,
@@ -3130,7 +3130,7 @@
         "assets": []
       },
       "irSha256": "b02e98dc289157fd0dd170f35ea6c6ced02dcca18cc89dc5c2ffe3d955aad2ce",
-      "gfmSha256": "747acafb3f0a1bd58024b276273edf1ade3cfb83ace9ca42ce54423f0a171ea3"
+      "gfmSha256": "3a07cae4cdf5e934f63c3d47d1f42f6a1fc5a14f0b20b46cbbd9003f45db67db"
     },
     {
       "schemaVersion": 1,
@@ -3402,7 +3402,7 @@
         ]
       },
       "irSha256": "41567b59368d211543ce98ea4cb05a7d99b7f74411432aea7b14f7e9f22a47e3",
-      "gfmSha256": "9f4f89545f5fbf6f45e348ed69d4b26410516310f8736cb632b890aefc1112af"
+      "gfmSha256": "e0342c9e2fb20236cdcd3b6df842e91b3bf48818dc0e329bda8abaafd8c838c5"
     },
     {
       "schemaVersion": 1,
@@ -3836,7 +3836,7 @@
         ]
       },
       "irSha256": "2575fada812f52d0b62b8096c2705afc4f1a503777b290341b55317b6052eda9",
-      "gfmSha256": "8cb76c2394e297ccf0845ed118f745ce1c1c1a79b5032976a128914e5acf9b3a"
+      "gfmSha256": "413b505dc3fb65f0890dadd6f8a47b85bde52e7c6fa60198b9d7cda9f5c8299c"
     }
   ],
   "coverage": [
