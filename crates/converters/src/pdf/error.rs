@@ -29,6 +29,7 @@ pub(super) fn map_pdfium_error(error: PdfiumError) -> ConversionError {
         PdfiumError::Allocation { operation, bytes } => {
             resource("max_memory_bytes", format!("{operation} could not allocate {bytes} bytes"))
         }
+        PdfiumError::Link { .. } => malformed("link_rect", error.to_string()),
         PdfiumError::Poisoned => ConversionError::Internal { detail: error.to_string() },
         PdfiumError::Native { operation, code } => {
             malformed(operation, format!("PDFium native error {code}"))

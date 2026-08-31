@@ -2447,7 +2447,7 @@ fn validate_pdfium_manifest(
 
     let actual_exports: BTreeSet<_> =
         manifest.required_exports.iter().map(String::as_str).collect();
-    let expected_exports: BTreeSet<_> = PDFIUM_REQUIRED_EXPORTS.iter().copied().collect();
+    let expected_exports: BTreeSet<_> = native::PDFIUM_REQUIRED_EXPORTS.iter().copied().collect();
     if manifest.required_exports.len() != expected_exports.len()
         || actual_exports != expected_exports
     {
@@ -2618,56 +2618,6 @@ fn pdfium_expected_targets() -> BTreeMap<&'static str, ExpectedPdfiumTarget> {
         ),
     ])
 }
-
-const PDFIUM_REQUIRED_EXPORTS: [&str; 47] = [
-    "FPDF_InitLibraryWithConfig",
-    "FPDF_DestroyLibrary",
-    "FPDF_LoadMemDocument64",
-    "FPDF_CloseDocument",
-    "FPDF_GetPageCount",
-    "FPDF_LoadPage",
-    "FPDF_ClosePage",
-    "FPDFText_LoadPage",
-    "FPDFText_ClosePage",
-    "FPDFText_CountChars",
-    "FPDFText_GetText",
-    "FPDFText_GetUnicode",
-    "FPDFText_GetCharBox",
-    "FPDFText_GetFontSize",
-    "FPDFText_GetFontInfo",
-    "FPDFText_GetCharAngle",
-    "FPDF_GetPageWidthF",
-    "FPDF_GetPageHeightF",
-    "FPDFPage_GetRotation",
-    "FPDFPage_CountObjects",
-    "FPDFPage_GetObject",
-    "FPDFPageObj_GetType",
-    "FPDFPageObj_GetBounds",
-    "FPDFLink_Enumerate",
-    "FPDFLink_GetAnnotRect",
-    "FPDFLink_GetAction",
-    "FPDFAction_GetType",
-    "FPDFAction_GetURIPath",
-    "FPDFLink_GetDest",
-    "FPDFDest_GetDestPageIndex",
-    "FPDFLink_LoadWebLinks",
-    "FPDFLink_CountWebLinks",
-    "FPDFLink_GetURL",
-    "FPDFLink_CountRects",
-    "FPDFLink_GetRect",
-    "FPDFLink_CloseWebLinks",
-    "FPDFBitmap_CreateEx",
-    "FPDFBitmap_Destroy",
-    "FPDFBitmap_GetBuffer",
-    "FPDFBitmap_GetFormat",
-    "FPDFBitmap_GetHeight",
-    "FPDFBitmap_GetStride",
-    "FPDFBitmap_GetWidth",
-    "FPDFImageObj_GetBitmap",
-    "FPDFImageObj_GetImagePixelSize",
-    "FPDF_RenderPageBitmap",
-    "FPDF_GetLastError",
-];
 
 fn validate_ffmpeg_source(inventory: &Inventory, source: &FfmpegSource, errors: &mut Vec<String>) {
     let Some(component) = exact_component(inventory, "ffmpeg", errors) else { return };
@@ -4536,7 +4486,7 @@ mod tests {
                     "https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/7999".to_owned(),
                 license: "BSD-3-Clause".to_owned(),
                 distribution_license_note: "preserve all notices".to_owned(),
-                required_exports: PDFIUM_REQUIRED_EXPORTS.map(str::to_owned).into(),
+                required_exports: native::PDFIUM_REQUIRED_EXPORTS.map(str::to_owned).into(),
                 targets,
             },
             Inventory {
