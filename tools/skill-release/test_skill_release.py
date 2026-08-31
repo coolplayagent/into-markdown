@@ -10,6 +10,7 @@ import stat
 import struct
 import sys
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from unittest import mock
@@ -224,6 +225,9 @@ def replace_material_and_recompute_manifest(
 
 class SkillReleaseTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.product_version = tomllib.loads(
+            (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        )["workspace"]["package"]["version"]
         self.pdfium_authority = mock.patch(
             "skill_release.WINDOWS_PDFIUM_AUTHORITY",
             {
@@ -243,9 +247,91 @@ class SkillReleaseTests(unittest.TestCase):
             [path.as_posix() for path in ALLOWED_FILES],
         )
         text = (SKILL_SOURCE / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(f'metadata:\n  version: "{self.product_version}"\n', text)
         self.assertIn("Do not search `PATH`", text)
         for spec in ASSET_SPECS:
             self.assertIn(spec.relative.as_posix(), text)
+
+    def test_invalid_version_frontmatter_fails_closed(self) -> None:
+        text = (SKILL_SOURCE / "SKILL.md").read_text(encoding="utf-8")
+        _opening, header, body = text.split("---", 2)
+        fields, version_field = header.split("metadata:\n", 1)
+        metadata_block = "metadata:\n" + version_field
+        invalid_metadata = {
+            "missing metadata": "",
+            "missing version": "metadata:\n",
+            "empty value": "metadata:\n  version:\n",
+            "empty string": 'metadata:\n  version: ""\n',
+            "blank string": 'metadata:\n  version: " "\n',
+            "null": "metadata:\n  version: null\n",
+            "boolean": "metadata:\n  version: true\n",
+            "number": "metadata:\n  version: 4\n",
+            "list": 'metadata:\n  version: ["0.0.4"]\n',
+            "mapping": 'metadata:\n  version: {"value": "0.0.4"}\n',
+            "unquoted": "metadata:\n  version: 0.0.4\n",
+            "unclosed string": 'metadata:\n  version: "0.0.4\n',
+            "top-level version": 'version: "0.0.4"\n',
+            "unindented version": 'metadata:\nversion: "0.0.4"\n',
+            "wrong indentation": 'metadata:\n    version: "0.0.4"\n',
+            "scalar metadata": 'metadata: "0.0.4"\n',
+            "flow metadata": 'metadata: {version: "0.0.4"}\n',
+            "duplicate metadata": metadata_block * 2,
+            "duplicate version": metadata_block + version_field,
+            "duplicate name": metadata_block + "name: into-markdown\n",
+            "duplicate description": metadata_block + "description: duplicate\n",
+            "extra metadata field": metadata_block + '  author: "extra"\n',
+            "version drift": 'metadata:\n  version: "999.999.999"\n',
+        }
+        with tempfile.TemporaryDirectory() as name:
+            source = materialize(pathlib.Path(name) / SKILL_NAME)
+            for label, metadata in invalid_metadata.items():
+                with self.subTest(case=label):
+                    (source / "SKILL.md").write_text(
+                        "---" + fields + metadata + "---" + body, encoding="utf-8"
+                    )
+                    with self.assertRaisesRegex(SkillReleaseError, "SKILL.md"):
+                        validate(source)
+
+    def test_product_version_bump_requires_matching_skill_version(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            source = materialize(root / SKILL_NAME)
+            (root / "LICENSE").write_bytes((ROOT / "LICENSE").read_bytes())
+            cargo = root / "Cargo.toml"
+            text = (source / "SKILL.md").read_text(encoding="utf-8")
+            # Exercise the actual manifest reader, including prerelease/build metadata.
+            with mock.patch("skill_release.ROOT", root):
+                for version in ("999.999.999", "999.999.999-rc.1+build.2"):
+                    with self.subTest(version=version):
+                        cargo.write_text(
+                            f'[workspace.package]\nversion = "{version}"\n', encoding="utf-8"
+                        )
+                        (source / "SKILL.md").write_text(text, encoding="utf-8")
+                        with self.assertRaisesRegex(SkillReleaseError, "differs from.*workspace.package.version"):
+                            validate(source)
+                        (source / "SKILL.md").write_text(
+                            text.replace(f'  version: "{self.product_version}"', f'  version: "{version}"'),
+                            encoding="utf-8",
+                        )
+                        validate(source)
+
+    def test_unavailable_or_invalid_product_version_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            source = materialize(root / SKILL_NAME)
+            with mock.patch("skill_release.ROOT", root):
+                with self.assertRaisesRegex(SkillReleaseError, "Cargo.toml workspace.package.version"):
+                    validate(source)
+                for manifest in (
+                    "invalid TOML",
+                    "[workspace.package]\n",
+                    "[workspace.package]\nversion = 4\n",
+                    '[workspace.package]\nversion = ""\n',
+                ):
+                    with self.subTest(manifest=manifest):
+                        (root / "Cargo.toml").write_text(manifest, encoding="utf-8")
+                        with self.assertRaisesRegex(SkillReleaseError, "Cargo.toml workspace.package.version"):
+                            validate(source)
 
     def test_archive_is_deterministic_and_has_exact_assets_and_modes(self) -> None:
         with tempfile.TemporaryDirectory() as name:
@@ -281,6 +367,14 @@ class SkillReleaseTests(unittest.TestCase):
                 )
                 manifest = archive.getinfo(f"{SKILL_NAME}/{ARCHIVE_MANIFEST.as_posix()}")
                 self.assertIn(b'"schemaVersion": 1', archive.read(manifest))
+                skill_bytes = (SKILL_SOURCE / "SKILL.md").read_bytes()
+                self.assertEqual(archive.read(f"{SKILL_NAME}/SKILL.md"), skill_bytes)
+                skill_record = next(
+                    record for record in json.loads(archive.read(manifest))["files"]
+                    if record["path"] == "SKILL.md"
+                )
+                self.assertEqual(skill_record["bytes"], len(skill_bytes))
+                self.assertEqual(skill_record["sha256"], hashlib.sha256(skill_bytes).hexdigest())
                 for target, _asset in TARGET_LAYOUTS:
                     for member in AUTHORITY_MATERIALS:
                         relative = evidence_relative(target, member)
@@ -289,6 +383,23 @@ class SkillReleaseTests(unittest.TestCase):
                             cores[relative].read_bytes(),
                         )
                 self.assertFalse(any("whisper" in name.lower() or "ffmpeg" in name.lower() for name in names))
+
+    def test_changed_skill_version_fails_even_with_recomputed_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            root = pathlib.Path(name)
+            valid = create_archive(root / "valid.zip", write_cores(root))
+            contents = (SKILL_SOURCE / "SKILL.md").read_bytes().replace(
+                f'  version: "{self.product_version}"'.encode(), b'  version: "999.999.999"'
+            )
+            rewrite_entry(valid, root / "tampered.zip", f"{SKILL_NAME}/SKILL.md", contents=contents)
+            replace_material_and_recompute_manifest(
+                valid, root / "recomputed.zip", "SKILL.md", contents
+            )
+            for archive in (root / "tampered.zip", root / "recomputed.zip"):
+                with self.subTest(archive=archive.name), self.assertRaisesRegex(
+                    SkillReleaseError, "instruction metadata or bytes"
+                ):
+                    verify_release(archive)
 
     def test_three_target_materials_and_matching_binaries_are_authority_bound(self) -> None:
         with tempfile.TemporaryDirectory() as name:
