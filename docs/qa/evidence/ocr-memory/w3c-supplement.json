@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "samples": [
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-pp-embedded-images.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-pp-embedded-images",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "e37c5aaa9e3c23a6ffa28f64aa2b2536a92de9ab237893e7256ab55283367c4f",
+      "size": 27435153,
+      "embeddedRasterEntries": 10,
+      "archiveEntries": 29,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/e37c5aaa9e3c23a6.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 25,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-pp-images-mixed.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-pp-images-mixed",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "609d5045cd3b53988f064f156926feb8bb097e2d323ea82f2d50af15e8222dc1",
+      "size": 30449821,
+      "embeddedRasterEntries": 11,
+      "archiveEntries": 31,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/609d5045cd3b5398.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 26,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-roll-images-mixed.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-roll-images-mixed",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "aa033777c8cdf9cd2f2673ccda1aa96ba801f6809800fb17215a68e7c34881b3",
+      "size": 30449737,
+      "embeddedRasterEntries": 11,
+      "archiveEntries": 31,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/aa033777c8cdf9cd.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 26,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-roll-embedded-images.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-roll-embedded-images",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "c8fc1b4fa17f55d99f9b7088e91024e42b0a4b0577b4536a968c89ba2da1aa64",
+      "size": 27435070,
+      "embeddedRasterEntries": 10,
+      "archiveEntries": 29,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/c8fc1b4fa17f55d9.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 25,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-pp-images-in-spine.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-pp-images-in-spine",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "4de1047a8bb5616676fbfc76572fed2e1439a88acaa4583aa3236fbec8ee256c",
+      "size": 27745305,
+      "embeddedRasterEntries": 10,
+      "archiveEntries": 28,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/4de1047a8bb56166.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 24,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/lay-roll-images-in-spine.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/lay-roll-images-in-spine",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "663d25000d47300171f5e0ecc8feeeb8e2ebe04910a35bdb45016f8208f267ab",
+      "size": 27745316,
+      "embeddedRasterEntries": 10,
+      "archiveEntries": 28,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/663d25000d473001.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 24,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/pub-foreign_image.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/pub-foreign_image",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "f97af9f2450f893d5fb4b194c6553ded208b729ad2c48f54b6944bd0bdb4f309",
+      "size": 713375,
+      "embeddedRasterEntries": 1,
+      "archiveEntries": 9,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/f97af9f2450f893d.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 7,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/cnt-css-fonts_ot.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/cnt-css-fonts_ot",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "8634d66f7fab7498135902fffa7eb623a82c5ea2c1bb52904fc2e60aea5607f9",
+      "size": 35408,
+      "embeddedRasterEntries": 0,
+      "archiveEntries": 9,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/8634d66f7fab7498.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 6,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/cnt-css-fonts_tt.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/cnt-css-fonts_tt",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "b1d0c9bfe0b6ba414d54814f5d969ea994f2ab6e29e0ea13f3fe6b62879ca374",
+      "size": 44931,
+      "embeddedRasterEntries": 0,
+      "archiveEntries": 9,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/b1d0c9bfe0b6ba41.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 6,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/cnt-css-fonts_woff.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/cnt-css-fonts_woff",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "95259cb6421260a520b2fc31e779476f2147106e68dc975804b417d9af1d1dc5",
+      "size": 39362,
+      "embeddedRasterEntries": 0,
+      "archiveEntries": 9,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/95259cb6421260a5.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 6,
+        "unmatchedFiles": []
+      }
+    },
+    {
+      "kind": "epub",
+      "extension": "epub",
+      "url": "https://w3c.github.io/epub-tests/tests/cnt-css-fonts_woff2.epub",
+      "repository": "w3c/epub-tests",
+      "revision": "ec9085b1377668921eb252496163524fdbbb3b42",
+      "sourcePath": "tests/cnt-css-fonts_woff2",
+      "sourceClass": "upstream-conformance",
+      "rightsUrl": "https://github.com/w3c/epub-tests/blob/ec9085b1377668921eb252496163524fdbbb3b42/LICENSE.md",
+      "redistribution": "W3C-20230101; license applies explicitly to EPUB documents; original files retained locally",
+      "sha256": "bb66085575b31b67a3e0d88f0c5e5d42bf5f53e46929de0f2acb33e4bb93f135",
+      "size": 13865,
+      "embeddedRasterEntries": 0,
+      "archiveEntries": 9,
+      "encryptedEntries": 0,
+      "expectation": "record content preservation and typed outcome; source classification frozen before conversion",
+      "path": "samples/epub/bb66085575b31b67.epub",
+      "sourceTreeVerification": {
+        "matchedFiles": 6,
+        "unmatchedFiles": []
+      }
+    }
+  ],
+  "acquisitionFailures": []
+}
