@@ -159,7 +159,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4526,
+      "lines": 4525,
       "functions": [
         {
           "symbol": "impl Upload::finish",

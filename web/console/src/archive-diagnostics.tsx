@@ -8,7 +8,7 @@ export function archiveMembers(text: string): string[] {
   return value.diagnostics.slice(0, 1024).flatMap((item: unknown) => {
     if (!item || typeof item !== "object" || !("code" in item) || item.code !== "zip.entry.archiveExtractionRequired" || !("locator" in item)) return [];
     const locator = item.locator;
-    return locator && typeof locator === "object" && "part" in locator && typeof locator.part === "string" && locator.part.length <= 4096 ? [locator.part] : [];
+    return locator && typeof locator === "object" && "part" in locator && typeof locator.part === "string" ? [locator.part.length > 4096 ? `${locator.part.slice(0, 4096)}…` : locator.part] : [];
   });
 }
 

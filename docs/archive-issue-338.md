@@ -32,6 +32,7 @@ macOS ARM64 上以主线 `26aaf83` 对比修复版、相同配置（OCR off、be
 | RAR | 12 | 0 | 12：明确 unsupported 与先解压建议 |
 | EPUB | 12 | 10 | 2：处理指令安全策略、既有 EPUB XML 事件上限 |
 
+[本地逐文件证据](qa/evidence/issue-338/local-corpus.json)记录二进制哈希、正文/资产、诊断、耗时与 RSS。
 主线成功的 27 个文件，正文 SHA-256 和全部提取资产引用/哈希在修复版保持一致。
 俄文 ZIP 两例包含 `ПРИВЕТ`/`привет` 别名，修复版正确定位为冲突。
 `haruko-html-jpeg.epub` 与 `linear-algebra.epub` 在相同主线分别复现 XML PI 拒绝和
@@ -64,7 +65,10 @@ python3 tools/archive-compat/compare.py \
 
 ## 证据状态
 
-- 本地：Core、Engine、转换器、API 整组通过；CLI、Web、许可与发布契约在最终提交复核。
+- 本地：Core、Engine、转换器、API 整组通过；Web 分组、113 项发布契约和许可审计通过。
+  CLI 全量的 3 项失败已在 `26aaf83` 独立构建中复现相同断言，见
+  [逐项日志](qa/evidence/issue-338/local-baseline-failures.json)：空正文判定，以及两项
+  macOS Web 存储配额测试的 4096 字节差异。慢读写关闭测试曾在本机并发负载下超时，单项继续复核。
 - 四平台：专用 PR 工作流覆盖 macOS ARM64、Linux x86_64/ARM64、Windows x86_64，
   每个平台执行真实样本、中文落盘、资产链接及精确 PR 基线对比。
 - 安装产物：发布 build-only 工作流从实际归档提取可执行文件，执行合成安全回归和

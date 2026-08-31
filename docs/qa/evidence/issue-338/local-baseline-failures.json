@@ -1,0 +1,26 @@
+{
+  "base": "26aaf83",
+  "candidate": "58e961b",
+  "platform": "macOS ARM64",
+  "build_command": "CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo test --locked --manifest-path ../into-markdown-issue-338-baseline/Cargo.toml --target-dir target/baseline-tests -p into-markdown-cli --bin into-md --no-run -j2",
+  "failures": [
+    {
+      "name": "empty_source_and_empty_content_share_the_web_terminal_contract",
+      "baseline_exit_code": 101,
+      "candidate_exit_code": 101,
+      "baseline_log": "failures:\n\n---- web_tasks::tests::empty_result_tests::empty_source_and_empty_content_share_the_web_terminal_contract stdout ----\n\nthread 'web_tasks::tests::empty_result_tests::empty_source_and_empty_content_share_the_web_terminal_contract' (6433970) panicked at apps/cli/src/web_tasks/tests/empty_result_tests.rs:41:5:\nassertion `left == right` failed\n  left: Succeeded\n right: Failed\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    web_tasks::tests::empty_result_tests::empty_source_and_empty_content_share_the_web_terminal_contract\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 329 filtered out; finished in 0.30s\n\nerror: test failed, to rerun pass `-p into-markdown-cli --bin into-md`\n"
+    },
+    {
+      "name": "metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary",
+      "baseline_exit_code": 101,
+      "candidate_exit_code": 101,
+      "baseline_log": "failures:\n\n---- web_tasks::tests::metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary stdout ----\n\nthread 'web_tasks::tests::metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary' (6434190) panicked at apps/cli/src/web_tasks.rs:6886:9:\nassertion `left == right` failed\n  left: 15049166848\n right: 15049162752\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    web_tasks::tests::metadata_headroom_serializes_multiple_admission_failure_transitions_at_data_boundary\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 329 filtered out; finished in 0.13s\n\nerror: test failed, to rerun pass `-p into-markdown-cli --bin into-md`\n"
+    },
+    {
+      "name": "permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary",
+      "baseline_exit_code": 101,
+      "candidate_exit_code": 101,
+      "baseline_log": "failures:\n\n---- web_tasks::tests::permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary stdout ----\n\nthread 'web_tasks::tests::permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary' (6434241) panicked at apps/cli/src/web_tasks.rs:6492:9:\nassertion `left == right` failed\n  left: 15049166848\n right: 15049162752\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n\nfailures:\n    web_tasks::tests::permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary\n\ntest result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 329 filtered out; finished in 0.07s\n\nerror: test failed, to rerun pass `-p into-markdown-cli --bin into-md`\n"
+    }
+  ]
+}

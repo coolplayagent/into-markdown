@@ -4205,10 +4205,9 @@ fn load_task_failure(shared: &Shared, id: &TaskId) -> Result<Option<WebTaskFailu
         || failure.reason_code.as_ref().is_some_and(|value| value.len() > 64)
         || failure.stage.len() > 64
         || !failure.code.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        || failure
-            .reason_code
-            .as_ref()
-            .is_some_and(|value| !value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        || failure.reason_code.as_ref().is_some_and(|value| {
+            !value.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        })
         || !failure.stage.bytes().all(|byte| byte.is_ascii_alphanumeric())
     {
         return Err(WebTaskError::Unsafe("task failure record is incompatible".into()));

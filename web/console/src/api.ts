@@ -269,7 +269,7 @@ function isArtifact(value: unknown): value is ArtifactReference {
 function isTaskFailure(value: unknown): value is TaskFailure {
   const code = (item: unknown) => typeof item === "string" && /^[a-zA-Z0-9]{1,64}$/.test(item);
   return isObject(value) && value.schemaVersion === 1 && code(value.code) && code(value.stage)
-    && (value.reasonCode == null || code(value.reasonCode)) && typeof value.retryable === "boolean";
+    && (value.reasonCode == null || typeof value.reasonCode === "string" && /^[a-zA-Z0-9_]{1,64}$/.test(value.reasonCode)) && typeof value.retryable === "boolean";
 }
 export function parseTask(value: unknown): TaskRecord {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)

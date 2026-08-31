@@ -128,3 +128,21 @@ fn rar_failure_reason_survives_web_task_persistence() {
     assert_eq!(failure.reason_code.as_deref(), Some("archiveExtractionRequired"));
     assert!(!failure.retryable);
 }
+
+#[test]
+fn presentation_resource_reason_survives_web_task_persistence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+    let bytes = include_bytes!("../../../../../fixtures/small/pptx/normal.pptx");
+    let mut request = WebTaskRequest::default();
+    request.options.limits.max_presentation_xml_events = 1;
+    let mut upload =
+        backend.begin_upload_configured("limited.pptx", Some(bytes.len() as u64), request).unwrap();
+    upload.write_chunk(bytes).unwrap();
+    let record = upload.finish().unwrap();
+    let record = wait_terminal(&backend, &record.id);
+    assert_eq!(record.status, TaskStatus::Failed);
+    let failure = backend.web_record(record).unwrap().failure.unwrap();
+    assert_eq!(failure.code, "resourceLimit");
+    assert_eq!(failure.reason_code.as_deref(), Some("max_presentation_xml_events"));
+}
