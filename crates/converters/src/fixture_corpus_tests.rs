@@ -174,6 +174,7 @@ fn format(value: &str) -> InputFormat {
         "wikipedia" => InputFormat::Wikipedia,
         "xlsx" => InputFormat::Xlsx,
         "xml" => InputFormat::Xml,
+        "drawio" => InputFormat::Drawio,
         "video" => InputFormat::Video,
         unknown => panic!("fixture uses unknown converter format {unknown}"),
     }
@@ -192,6 +193,7 @@ fn converter(format: InputFormat) -> Box<dyn Converter> {
         InputFormat::Epub => Box::new(EpubConverter),
         InputFormat::Odt | InputFormat::Ods | InputFormat::Odp => Box::new(OdfConverter),
         InputFormat::Feed => Box::new(FeedConverter),
+        InputFormat::Drawio => Box::new(DrawioConverter),
         InputFormat::Rtf => Box::new(RtfConverter),
         InputFormat::OutlookMsg => Box::new(MsgConverter),
         InputFormat::Wikipedia => Box::new(MediaWikiConverter),

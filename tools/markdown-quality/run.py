@@ -86,7 +86,7 @@ def run_one(item, args):
     destination = args.output / Path(item['file']).with_suffix('')
     destination.mkdir(parents=True, exist_ok=True)
     output = destination / 'result.json'
-    command = [str(args.cli), str(source.resolve()), '--ocr', 'off', '--error-policy', 'best-effort',
+    command = [str(args.cli), '--no-config', str(source.resolve()), '--ocr', 'off', '--error-policy', 'best-effort',
                '--max-memory-size', '2GiB', '--emit', 'result-json', '--asset-mode', 'extract',
                '--assets-dir', str((destination / '素材 中文 (a)#%&').resolve()),
                '--output', str(output.resolve()), '--conflict', 'overwrite']

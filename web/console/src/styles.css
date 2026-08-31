@@ -436,3 +436,17 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
   .doctor-run-actions button { width: 100%; }
   .transcript-action-buttons { grid-template-columns: 1fr; }
 }
+
+/* Preserve converter hierarchy using bounded classes under the strict CSP. */
+.preview-list-item.list-depth-1 { margin-inline-start: 1.5rem; }
+.preview-list-item.list-depth-2 { margin-inline-start: 3rem; }
+.preview-list-item.list-depth-3 { margin-inline-start: 4.5rem; }
+.preview-list-item.list-depth-4 { margin-inline-start: 6rem; }
+.preview-list-item.list-depth-5 { margin-inline-start: 7.5rem; }
+.preview-list-item.list-depth-6 { margin-inline-start: 9rem; }
+.preview-list-item.list-depth-7 { margin-inline-start: 10.5rem; }
+.preview-list-item.list-depth-8 { margin-inline-start: 12rem; }
+.preview-list-item.list-depth-9 { margin-inline-start: 13.5rem; }
+.preview-list-item.list-depth-10 { margin-inline-start: 15rem; }
+.preview-list-item.list-depth-11 { margin-inline-start: 16.5rem; }
+.preview-list-item.list-depth-12 { margin-inline-start: 18rem; }

@@ -993,7 +993,7 @@ fn validate_file(file: &ArchiveFile, selected: &BTreeSet<&str>, errors: &mut Vec
             .push(format!("archive non-component file {} has component owner {id}", file.path)),
     }
     if file.kind == ArchiveFileKind::Component
-        && file.component_id.as_deref().is_some_and(embedded_only)
+        && file.component_id.as_deref().is_some_and(crate::materials::embedded_only)
     {
         errors.push(format!(
             "embedded component cannot hide a standalone archive file {}",
@@ -1028,18 +1028,6 @@ fn agent_skill_path(path: &str) -> bool {
             | "share/into-markdown/skills/into-markdown/agents/openai.yaml"
             | "share/into-markdown/skills/into-markdown/references/cli-workflows.md"
     )
-}
-
-fn embedded_only(id: &str) -> bool {
-    id.starts_with("cargo:")
-        || id.starts_with("npm:")
-        || matches!(
-            id,
-            "opencc-transcript-character-table"
-                | "imageproc-contour-adaptation"
-                | "clipper2-rust"
-                | "calamine"
-        )
 }
 
 fn projection_material_path(path: &str) -> bool {

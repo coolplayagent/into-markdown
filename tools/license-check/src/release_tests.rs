@@ -401,6 +401,7 @@ fn select(projection: &mut ArchiveProjection, components: &[&str]) {
                     id.as_str(),
                     "opencc-transcript-character-table"
                         | "imageproc-contour-adaptation"
+                        | "diagram-design-drawio-adaptation"
                         | "clipper2-rust"
                         | "calamine"
                 )
@@ -565,6 +566,12 @@ fn install_base_materials(
             "MIT",
         ),
         (
+            "diagram-design-drawio-adaptation",
+            "share/into-markdown/licenses/diagram-design-MIT.txt",
+            "third_party/licenses/diagram-design-MIT.txt",
+            "MIT",
+        ),
+        (
             "clipper2-rust",
             "share/into-markdown/licenses/BSL-1.0.txt",
             "third_party/licenses/BSL-1.0.txt",
@@ -719,6 +726,7 @@ fn four_platform_requests_use_one_license_conclusion() {
         for required in [
             "opencc-transcript-character-table",
             "imageproc-contour-adaptation",
+            "diagram-design-drawio-adaptation",
             "clipper2-rust",
             "calamine",
         ] {
@@ -1577,4 +1585,26 @@ fn cargo_and_npm_authorities_can_bind_embedded_project_content() {
     let errors = verify_archive_projection(&root(), &serde_json::to_string(&projection).unwrap())
         .unwrap_err();
     assert!(errors.iter().any(|error| error.contains("embeds unknown or unselected")));
+}
+
+/// Export review candidates without changing the pinned release authority.
+#[test]
+#[ignore = "run explicitly after reviewing renderer/catalog changes, then inspect the candidate"]
+fn export_release_material_profile_candidate() {
+    let repository = root();
+    let mut profiles = Vec::new();
+    for relative in crate::release_authority::profile_paths() {
+        let request = fs::read_to_string(repository.join(relative)).unwrap();
+        let generated = generate_release_inputs_unchecked(&repository, &request).unwrap();
+        let files: Vec<_> = [&generated.notice, &generated.third_party_notices, &generated.sbom, &generated.sources, &generated.core_catalog]
+            .into_iter().map(|file| serde_json::json!({"path": file.path, "bytes": file.contents.len(), "sha256": file.sha256})).collect();
+        profiles.push(serde_json::json!({"request": relative, "files": files}));
+    }
+    let directory = repository.join("target");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("release-material-profiles.candidate.json"),
+        serde_json::to_string_pretty(&profiles).unwrap() + "\n",
+    )
+    .unwrap();
 }

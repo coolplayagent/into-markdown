@@ -18,6 +18,22 @@ rust_library(
     proc_macro_deps = all_crate_deps(proc_macro = True),
 )
 
+# Feature-isolated dependency used by the installed OCR service quality assembly.
+rust_library(
+    name = "onnxruntime_authenticated_read_only_snapshot",
+    srcs = glob(["src/**/*.rs"]),
+    compile_data = ["//third_party/onnxruntime:manifest.json"],
+    crate_name = "into_markdown_onnxruntime",
+    edition = "2024",
+    crate_features = ["authenticated-read-only-snapshot"],
+    tags = ["manual"],
+    deps = [
+        "//crates/core",
+        "//crates/ocr:ocr_authenticated_read_only_snapshot",
+    ] + all_crate_deps(normal = True),
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+)
+
 # The worker contains no runtime/model archive. Its executable path is passed
 # explicitly by the product/runfiles owner; it never searches CWD, PATH, or an
 # environment variable for ORT.

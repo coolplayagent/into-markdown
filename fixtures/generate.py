@@ -16,6 +16,8 @@ import unicodedata
 import zipfile
 import zlib
 from pathlib import Path
+from fixture_expected import expected, expected_hash, limit_expected
+from drawio_generate import drawio_fixtures
 
 GENERATOR_VERSION = "1.0.0"
 GENERATOR_SEED = 20260813
@@ -669,55 +671,6 @@ def presentationml(
         entries.append(("ppt/vbaProject.bin", b"MUST NEVER BE OPENED OR EXECUTED"))
     return zip_bytes(entries)
 
-
-def expected(
-    outcome: str,
-    description: str,
-    semantic: str = "",
-    error_code: str = "",
-    limit: dict[str, object] | None = None,
-) -> dict[str, object]:
-    result: dict[str, object] = {
-        "outcome": outcome,
-        "error_code": error_code,
-        "semantic_sha256": sha256(semantic.encode("utf-8")) if semantic else "",
-        "description": description,
-    }
-    if limit is not None:
-        result["limit"] = limit
-    return result
-
-
-def expected_hash(description: str, semantic_sha256: str) -> dict[str, object]:
-    return {
-        "outcome": "success",
-        "error_code": "",
-        "semantic_sha256": semantic_sha256,
-        "description": description,
-    }
-
-
-def limit_expected(
-    description: str,
-    option: str,
-    failing_value: int,
-    passing_value: int,
-    error_limit: str,
-    passing_semantic: str,
-    passing_semantic_sha256: str = "",
-) -> dict[str, object]:
-    return expected(
-        "error",
-        description,
-        error_code="resourceLimit",
-        limit={
-            "option": option,
-            "failing_value": failing_value,
-            "passing_value": passing_value,
-            "error_limit": error_limit,
-            "passing_semantic_sha256": passing_semantic_sha256 or sha256(passing_semantic.encode("utf-8")),
-        },
-    )
 
 
 def generated_fixture(
@@ -1553,6 +1506,7 @@ def build(root: Path, font_path: Path) -> None:
     add("rtf-limit", "rtf", "limit", "small/rtf/limit.rtf", rtf_limit, "application/rtf", limit_expected("RTF group stack crosses the exact configured depth boundary", "max_nesting_depth", 8, 9, "max_nesting_depth", "deep\n"))
     rtf_malicious = b"{\\rtf1\\ansi before{\\object{\\*\\objdata 010203}{\\result hidden}}{\\field{\\*\\fldinst HYPERLINK \\\"file:///etc/passwd\\\"}{\\fldrslt unsafe}}after\\par}\n"
     add("rtf-malicious", "rtf", "malicious", "small/rtf/malicious.rtf", rtf_malicious, "application/rtf", expected("success", "embedded object and local-file hyperlink remain inert", "beforeunsafeafter\n"))
+    fixtures.extend(drawio_fixtures(root, generated_fixture))
     fixtures.extend(write_msg_fixtures(root))
     fixtures.extend(write_pdf_fixtures(root))
 
@@ -1583,7 +1537,7 @@ def build(root: Path, font_path: Path) -> None:
             "reference_platform": "macos-11-arm64-cp313",
             "pillow_wheel_sha256": "7db51d222548ccfd274e4572fdbf3e810a5e66b00608862f947b163e613b67dd",
         },
-        "available_formats": ["csv", "doc", "docx", "epub", "feed", "html", "image", "ipynb", "json", "markdown", "odp", "ods", "odt", "outlook-msg", "pdf", "ppt", "pptx", "rtf", "text", "tsv", "wikipedia", "xls", "xlsx", "xml", "zip"],
+        "available_formats": ["drawio", "csv", "doc", "docx", "epub", "feed", "html", "image", "ipynb", "json", "markdown", "odp", "ods", "odt", "outlook-msg", "pdf", "ppt", "pptx", "rtf", "text", "tsv", "wikipedia", "xls", "xlsx", "xml", "zip"],
         "fixtures": fixtures,
         "large_artifacts": [
             {
@@ -1699,8 +1653,20 @@ def main() -> None:
         action="store_true",
         help="regenerate in a temporary directory and require byte equality with checked-in authority",
     )
+    parser.add_argument("--drawio-only", action="store_true", help="regenerate Drawio semantic fixtures")
     args = parser.parse_args()
     output_root = args.output_root.resolve()
+    if args.drawio_only:
+        if args.verify:
+            parser.error("--drawio-only cannot be combined with --verify")
+        path = output_root / "manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["fixtures"] = [f for f in manifest["fixtures"] if f["format"] != "drawio"] + drawio_fixtures(output_root, generated_fixture)
+        manifest["fixtures"].sort(key=lambda f: f["id"])
+        manifest["available_formats"] = sorted(set(manifest["available_formats"]) | {"drawio"})
+        manifest["generator"]["sha256"] = sha256(Path(__file__).read_bytes())
+        path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return
     if args.refresh_odf:
         if args.verify:
             parser.error("--refresh-odf cannot be combined with --verify")

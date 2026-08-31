@@ -34,14 +34,15 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
       continue;
     }
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    const listDepth = Math.min(12, Math.floor((line.match(/^[ \t]*/)?.[0] ?? "").replaceAll("\t", "    ").length / 4));
     if (heading) {
       const level = heading[1]!.length;
       output.push(<div className={`preview-heading h${level}`} role="heading" aria-level={level} key={index}>{renderInline(heading[2]!)}</div>);
     } else if (/^\s*[-*+]\s+/.test(line)) {
-      output.push(<div className="preview-list-item" key={index}><span className="preview-list-marker" aria-hidden="true">•</span><span>{renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</span></div>);
+      output.push(<div className={`preview-list-item list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">•</span><span>{renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</span></div>);
     } else if (/^\s*\d{1,4}[.)]\s+/.test(line)) {
       const ordered = /^\s*(\d{1,4})[.)]\s+(.*)$/.exec(line)!;
-      output.push(<div className="preview-list-item ordered" key={index}><span className="preview-list-marker" aria-hidden="true">{ordered[1]}.</span><span>{renderInline(ordered[2]!)}</span></div>);
+      output.push(<div className={`preview-list-item ordered list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">{ordered[1]}.</span><span>{renderInline(ordered[2]!)}</span></div>);
     } else if (line.trim()) {
       output.push(<p key={index}>{renderInline(line)}</p>);
     }

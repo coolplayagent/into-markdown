@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "4b3849d29765330c3dbd25e97de3b97957a9422b21ffccad779691d49cd663f3",
+  "fixture_manifest_sha256": "e4d8760bd6f354e18a0e5231083ab720e0a54598d414323a80641f6d3b599abb",
   "pdfium_manifest_sha256": "330c44bedcd37ee59feccfed78848c309d00e5be1439ac0d2027825d42782186",
-  "ocr_merge_authority_sha256": "f8f9edd49ffebc1957aed2c2f04fd579437217fe952f398720af6cca4fad1516",
+  "ocr_merge_authority_sha256": "69847bbc8995042eb51da84bc9139293536b6507d2e28fe8f0002c09184ae5db",
   "fixture_license": "Apache-2.0",
   "fixture_provenance": "repository-generated",
   "coordinate_system": "top-left-pdf-points-after-declared-page-rotation",
   "normalization": "unicode-nfc-collapse-whitespace",
-  "minimum_semantic_precision": 0.90,
-  "minimum_semantic_recall": 0.90,
+  "minimum_semantic_precision": 0.9,
+  "minimum_semantic_recall": 0.9,
   "pipeline": [
     "pinned-pdfium-character-and-geometry-extraction",
     "bounded-native-and-ocr-page-layout",

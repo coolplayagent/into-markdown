@@ -23,6 +23,7 @@ DATA = [
     "//third_party/licenses:calamine-MIT.txt",
     "//third_party/licenses:cargo-normal-runtime.json",
     "//third_party/licenses:imageproc-MIT.txt",
+    "//third_party/licenses:diagram-design-MIT.txt",
     "//third_party/licenses:npm-inventory.json",
     "//third_party/licenses:non-distributed-sources.json",
     "//third_party/licenses:npm-release.spdx.json",

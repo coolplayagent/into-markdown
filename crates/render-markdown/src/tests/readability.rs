@@ -251,6 +251,39 @@ fn custom_numbering_restarts_tasks_and_empty_items_preserve_structure_without_so
 }
 
 #[test]
+fn wide_ordered_markers_keep_children_and_html_preserves_non_markdown_starts() {
+    for start in [100, 100_000_000, 1_000_000_000] {
+        let doc = document(vec![node(
+            "wide",
+            Block::List {
+                kind: ListKind::Ordered,
+                start,
+                items: vec![ListItem {
+                    checked: None,
+                    marker_label: Some("源编号".into()),
+                    blocks: vec![
+                        paragraph("a", "first"),
+                        node("b", Block::Paragraph(vec![marked("second", &[InlineMark::Bold])])),
+                    ],
+                }],
+            },
+        )]);
+        let before = doc.clone();
+        let markdown = output(&doc);
+        let events = Parser::new(&markdown).collect::<Vec<_>>();
+        assert!(!events.iter().any(|event| matches!(event, Event::Start(Tag::CodeBlock(_)))));
+        if start <= 999_999_999 {
+            assert_eq!(events.first(), Some(&Event::Start(Tag::List(Some(start)))));
+            assert_eq!(events.last(), Some(&Event::End(pulldown_cmark::TagEnd::List(true))));
+        } else {
+            assert!(markdown.starts_with("<ol start=\"1000000000\">"));
+        }
+        assert!(events.contains(&Event::Start(Tag::Strong)));
+        assert_eq!(doc, before);
+    }
+}
+
+#[test]
 fn native_marks_beside_links_code_and_table_breaks_keep_semantics() {
     let content = vec![
         marked("bold", &[InlineMark::Bold]),

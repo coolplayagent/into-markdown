@@ -13,7 +13,17 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const GOLDENS: [(&str, &str, &str); 11] = [
+const GOLDENS: [(&str, &str, &str); 13] = [
+    (
+        "drawio",
+        "drawio/normal.drawio",
+        "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+    ),
+    (
+        "drawio-compressed",
+        "drawio/compressed.drawio",
+        "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+    ),
     (
         "text-file",
         "text/normal.txt",

@@ -762,6 +762,11 @@ fn main() {
             Some(family),
         );
     }
+    let diagram = b"<mxGraphModel><root><mxCell id='node' vertex='1' value='Installed diagram'/></root></mxGraphModel>";
+    let request = ConversionRequest::new(InputRef::bytes(diagram.as_slice(), Some("memory.drawio")));
+    let result = block_on(engine.convert(request)).expect("installed Drawio conversion");
+    assert_eq!(result.detected_format().map(|f| f.as_str()), Some("drawio"));
+    assert!(result.markdown.contains("Installed diagram"));
     let request = ConversionRequest::new(InputRef::bytes(
         b"Installed Rust consumer\n".as_slice(),
         Some("memory.txt"),

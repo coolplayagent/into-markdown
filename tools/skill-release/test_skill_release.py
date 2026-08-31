@@ -78,6 +78,7 @@ def write_cores(root: pathlib.Path) -> dict[pathlib.PurePosixPath, pathlib.Path]
         / "third_party/licenses/npm/lucide-ISC-MIT.txt",
         pathlib.PurePosixPath("licenses/npm/react-MIT.txt"): ROOT
         / "third_party/licenses/npm/react-MIT.txt",
+        pathlib.PurePosixPath("licenses/diagram-design-MIT.txt"): ROOT / "third_party/licenses/diagram-design-MIT.txt",
     }
     for target, base in (
         ("x86_64-pc-windows-msvc", windows.parent),

@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "b262034253a21b82da504b49c38fe4afb5da77f91ebfabe932b1f79c24f9ada3",
+    "sha256": "0b38cbc77fbb9cf2eeafbdac5d8275f1824e5173c2c2071cf5465d33d141b834",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -17,6 +17,7 @@
     "csv",
     "doc",
     "docx",
+    "drawio",
     "epub",
     "feed",
     "html",
@@ -368,6 +369,153 @@
         "error_code": "",
         "semantic_sha256": "75e91c063ae865bd2ae46f084407dee1df4a4e0bf3995d7ce9495814db0e3006",
         "description": "one WordprocessingML paragraph"
+      }
+    },
+    {
+      "id": "drawio-bare",
+      "format": "drawio",
+      "scenario": "normal",
+      "path": "small/drawio/bare.drawio",
+      "bytes": 282,
+      "sha256": "9a4d915d990b6276c8824b34e9d5b0593006c47325594fed72536fcd73004a54",
+      "media_type": "application/vnd.jgraph.mxfile",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "description": "bare equivalent of normal diagram"
+      }
+    },
+    {
+      "id": "drawio-compressed",
+      "format": "drawio",
+      "scenario": "normal",
+      "path": "small/drawio/compressed.drawio",
+      "bytes": 260,
+      "sha256": "9abfdec38ddd7cc21c07ddcd16da17a7121a49b87424b5f0da72b554619ee6fa",
+      "media_type": "application/vnd.jgraph.mxfile",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "description": "compressed equivalent of normal diagram"
+      }
+    },
+    {
+      "id": "drawio-corrupt",
+      "format": "drawio",
+      "scenario": "corrupt",
+      "path": "small/drawio/corrupt.drawio",
+      "bytes": 43,
+      "sha256": "a709908accf865c8bf5fb675555cbf098bcaf0e701888b21e376aef797427d90",
+      "media_type": "application/vnd.jgraph.mxfile",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "malformed",
+        "semantic_sha256": "",
+        "description": "invalid compressed page"
+      }
+    },
+    {
+      "id": "drawio-limit",
+      "format": "drawio",
+      "scenario": "limit",
+      "path": "small/drawio/limit.drawio",
+      "bytes": 318,
+      "sha256": "b7549866ac5357f97eed9257a1f87398a44e4fe52c9190a01c33b3058af91407",
+      "media_type": "application/vnd.jgraph.mxfile",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "error",
+        "error_code": "resourceLimit",
+        "semantic_sha256": "",
+        "description": "exact input byte boundary",
+        "limit": {
+          "option": "max_input_bytes",
+          "failing_value": 317,
+          "passing_value": 318,
+          "error_limit": "max_input_bytes",
+          "passing_semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+        }
+      }
+    },
+    {
+      "id": "drawio-normal",
+      "format": "drawio",
+      "scenario": "normal",
+      "path": "small/drawio/normal.drawio",
+      "bytes": 318,
+      "sha256": "b7549866ac5357f97eed9257a1f87398a44e4fe52c9190a01c33b3058af91407",
+      "media_type": "application/vnd.jgraph.mxfile",
+      "license": {
+        "spdx": "Apache-2.0",
+        "copyright": "2026 into-markdown contributors",
+        "redistribution": "repository and release test artifacts permitted"
+      },
+      "provenance": {
+        "kind": "repository-generated",
+        "source_url": "",
+        "author": "into-markdown contributors",
+        "acquired_on": "2026-08-13",
+        "generator": "fixtures/generate.py@1.0.0",
+        "source_sha256": ""
+      },
+      "expected": {
+        "outcome": "success",
+        "error_code": "",
+        "semantic_sha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c",
+        "description": "layer, two labeled nodes and one connection"
       }
     },
     {

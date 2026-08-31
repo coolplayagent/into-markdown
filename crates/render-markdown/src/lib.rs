@@ -5,6 +5,7 @@
 
 mod fixed_alloc;
 mod inline;
+mod list;
 
 use inline::{protect_paragraph_indent, render_html_inlines, render_inlines};
 
@@ -1123,45 +1124,6 @@ impl RenderContext<'_> {
                     .filter(|value| (1..=64).contains(value))
                     .map_or_else(|| speaker.to_owned(), |value| format!("Speaker {value}"))
             })
-    }
-
-    fn render_list(
-        &self,
-        kind: ListKind,
-        start: u64,
-        items: &[ListItem],
-        context: InlineContext,
-    ) -> Result<String, ConversionError> {
-        let mut lines = Vec::with_capacity(items.len());
-        for (index, item) in items.iter().enumerate() {
-            let marker = match kind {
-                ListKind::Bullet => "-".to_owned(),
-                ListKind::Task => {
-                    if item.checked == Some(true) {
-                        "- [x]".to_owned()
-                    } else {
-                        "- [ ]".to_owned()
-                    }
-                }
-                ListKind::Ordered => {
-                    let number = start
-                        .checked_add(index as u64)
-                        .ok_or_else(|| render_error("ordered-list marker overflowed u64"))?;
-                    format!("{number}.")
-                }
-            };
-            let body = self.render_blocks_in(&item.blocks, context)?;
-            let paragraph_first =
-                item.blocks.first().is_some_and(|node| matches!(node.block, Block::Paragraph(_)));
-            if body.is_empty() {
-                lines.push(marker);
-            } else if paragraph_first {
-                lines.push(format!("{marker} {}", indent_continuation(&body, 4)));
-            } else {
-                lines.push(format!("{marker}\n{}", indent_all(&body, 4)));
-            }
-        }
-        Ok(lines.join("\n"))
     }
 
     fn render_table(

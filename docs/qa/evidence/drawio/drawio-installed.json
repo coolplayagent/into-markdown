@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "7ee9b328e3056a035be8f3dfe90f6e1ba117473c",
+  "target": "aarch64-apple-darwin",
+  "artifactSha256": "0757c8b72e6765c20c8bdb3b6dc1ebe90d94e71df864da7845d434eb7bb2ae8f",
+  "cases": [
+    {
+      "name": "installed-format-catalog",
+      "exitCode": 0,
+      "stdoutSha256": "d3d79ea8523c1f0cdabacca270b5d06e0a3b675fbc481ce461df1ec005ac551b"
+    },
+    {
+      "name": "installed-normal",
+      "exitCode": 0,
+      "stdoutSha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+    },
+    {
+      "name": "installed-compressed",
+      "exitCode": 0,
+      "stdoutSha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+    },
+    {
+      "name": "installed-bare",
+      "exitCode": 0,
+      "stdoutSha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+    },
+    {
+      "name": "stdin",
+      "exitCode": 0,
+      "stdoutSha256": "e7a22ce8919dc6209d9ccdd222a84d4dd376e58a986f6c2875d82628304bdd2c"
+    },
+    {
+      "name": "result-dto",
+      "exitCode": 0,
+      "stdoutSha256": "d8a2ae12b1c7635cda246edc3a02d22aa970742b24a2fa6a94b217303c1a9982"
+    },
+    {
+      "name": "explicit-xml",
+      "exitCode": 0,
+      "stdoutSha256": "8110a15138562264948d5f397096ad915d8f9263d6f5ea2c6b45a82d2044a299"
+    },
+    {
+      "name": "ordinary-xml",
+      "exitCode": 0,
+      "stdoutSha256": "d527eb0cf2994cbf882caa45351caa136f1756d6c1b616790373935fb6f75b5a"
+    },
+    {
+      "name": "batch",
+      "exitCode": 0,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "zip",
+      "exitCode": 0,
+      "stdoutSha256": "a70180658f3858fdb2e8c03b5e60dc462f4dccde48c9aff95a3f9c72d94b5510"
+    },
+    {
+      "name": "malformed",
+      "exitCode": 3,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "input-limit",
+      "exitCode": 5,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "best-effort-pages",
+      "exitCode": 0,
+      "stdoutSha256": "1132d7f048c3e44df7fd755802f263d94d0cf23d46b2ffa2c7d40a78a68ff838"
+    },
+    {
+      "name": "strict-pages",
+      "exitCode": 3,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "installedTreeUnchanged": true,
+  "temporaryFilesReleased": true,
+  "diagramDesignLicenseVerified": true,
+  "conclusion": "pass"
+}
