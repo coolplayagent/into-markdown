@@ -45,6 +45,8 @@ pub enum Error {
     ResourceLimit { limit: &'static str, actual: u64, maximum: u64 },
     #[error("invalid PDFium result for {operation}: {detail}")]
     InvalidResult { operation: &'static str, detail: String },
+    #[error("invalid PDF link {identity}: {reason}")]
+    Link { identity: LinkIdentity, reason: LinkIssueReason },
     #[error("PDFium runtime lock is poisoned")]
     Poisoned,
     #[error("PDFium allocation for {operation} failed ({bytes} bytes)")]
@@ -152,18 +154,15 @@ trait Backend: Send + Sync {
     ) -> Result<PathBoundsAllocationPlan, Error>;
     fn links(
         &self,
-        document: usize,
-        page: usize,
-        text: usize,
-        limits: Limits,
+        request: LinkRequest,
         plan: LinkAllocationPlan,
-    ) -> Result<Vec<Link>, Error>;
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<LinkExtraction, Error>;
     fn link_allocation_bytes(
         &self,
-        document: usize,
-        page: usize,
-        text: usize,
-        limits: Limits,
+        request: LinkRequest,
+        policy: LinkPolicy,
+        checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<LinkAllocationPlan, Error>;
     fn image_objects(
         &self,
@@ -528,24 +527,45 @@ impl TextPage<'_> {
     }
 
     pub fn plan_links(&self) -> Result<PlannedLinks<'_, '_>, Error> {
+        self.plan_link_extraction(LinkPolicy::Strict, &mut || true)
+    }
+
+    /// Plan links and bounded omission diagnostics using the same policy and
+    /// enumeration as materialization. A false checkpoint interrupts the scan.
+    pub fn plan_link_extraction(
+        &self,
+        policy: LinkPolicy,
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<PlannedLinks<'_, '_>, Error> {
         let _guard = self.page.document.runtime.0.lock()?;
         let plan = self.page.document.runtime.0.backend.link_allocation_bytes(
-            self.page.document.raw,
-            self.page.raw,
-            self.raw,
-            self.page.document.runtime.0.limits,
+            LinkRequest {
+                document: self.page.document.raw,
+                page: self.page.raw,
+                text: self.raw,
+                limits: self.page.document.runtime.0.limits,
+            },
+            policy,
+            checkpoint,
         )?;
         Ok(PlannedLinks { text: self, plan })
     }
 
-    fn materialize_links(&self, plan: LinkAllocationPlan) -> Result<Vec<Link>, Error> {
+    fn materialize_links(
+        &self,
+        plan: LinkAllocationPlan,
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<LinkExtraction, Error> {
         let _guard = self.page.document.runtime.0.lock()?;
         self.page.document.runtime.0.backend.links(
-            self.page.document.raw,
-            self.page.raw,
-            self.raw,
-            self.page.document.runtime.0.limits,
+            LinkRequest {
+                document: self.page.document.raw,
+                page: self.page.raw,
+                text: self.raw,
+                limits: self.page.document.runtime.0.limits,
+            },
             plan,
+            checkpoint,
         )
     }
 
@@ -645,7 +665,14 @@ impl PlannedLinks<'_, '_> {
         self.plan.bytes
     }
     pub fn materialize(self) -> Result<Vec<Link>, Error> {
-        self.text.materialize_links(self.plan)
+        self.materialize_with_checkpoint(&mut || true).map(|extraction| extraction.links)
+    }
+    /// Materialize accepted links and omission diagnostics within the reserved plan.
+    pub fn materialize_with_checkpoint(
+        self,
+        checkpoint: &mut dyn FnMut() -> bool,
+    ) -> Result<LinkExtraction, Error> {
+        self.text.materialize_links(self.plan, checkpoint)
     }
 }
 
@@ -768,8 +795,69 @@ pub struct Character {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Link {
+    /// Stable source identity, unaffected by omitted links.
+    pub identity: LinkIdentity,
+    /// Unrotated page-relative rectangle, with the clipped page origin at (0, 0).
     pub bounds: PdfRect,
     pub target: LinkTarget,
+}
+
+/// Handling of recoverable link geometry failures.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LinkPolicy {
+    #[default]
+    Strict,
+    BestEffort,
+}
+
+/// Zero-based identity in the original annotation or automatic-web-link stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkIdentity {
+    Annotation { index: u32 },
+    Web { index: u32, rectangle: u32 },
+}
+impl std::fmt::Display for LinkIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Annotation { index } => write!(f, "annotation[{index}]"),
+            Self::Web { index, rectangle } => write!(f, "web[{index}].rectangle[{rectangle}]"),
+        }
+    }
+}
+
+/// Bounded diagnostic categories; no native-owned strings are retained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkIssueReason {
+    ReadFailed,
+    NonFinite,
+    Unrepresentable,
+    Empty,
+    OutsidePage,
+    MissingRectangle,
+}
+impl std::fmt::Display for LinkIssueReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ReadFailed => "rectangle read failed",
+            Self::NonFinite => "non-finite rectangle",
+            Self::Unrepresentable => "rectangle exceeds coordinate range",
+            Self::Empty => "zero-area rectangle",
+            Self::OutsidePage => "rectangle is outside the page",
+            Self::MissingRectangle => "link has no rectangles",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkDiagnostic {
+    pub identity: LinkIdentity,
+    pub reason: LinkIssueReason,
+}
+
+#[derive(Debug, Default)]
+pub struct LinkExtraction {
+    pub links: Vec<Link>,
+    pub diagnostics: Vec<LinkDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -785,12 +873,23 @@ struct ImageObject {
 }
 
 #[derive(Clone, Copy)]
+struct LinkRequest {
+    document: usize,
+    page: usize,
+    text: usize,
+    limits: Limits,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct LinkAllocationPlan {
+    policy: LinkPolicy,
+    scanned: u64,
+    diagnostics: u32,
+    fingerprint: [u8; 32],
     bytes: u64,
     count: u32,
     target_bytes: u64,
     maximum_temporary_bytes: u64,
-    vector_capacity: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -1070,28 +1169,19 @@ mod tests {
         }
         fn links(
             &self,
-            _: usize,
-            _: usize,
-            _: usize,
-            _: Limits,
+            _: LinkRequest,
             _: LinkAllocationPlan,
-        ) -> Result<Vec<Link>, Error> {
-            Ok(Vec::new())
+            _: &mut dyn FnMut() -> bool,
+        ) -> Result<LinkExtraction, Error> {
+            Ok(LinkExtraction::default())
         }
         fn link_allocation_bytes(
             &self,
-            _: usize,
-            _: usize,
-            _: usize,
-            _: Limits,
+            _: LinkRequest,
+            policy: LinkPolicy,
+            _: &mut dyn FnMut() -> bool,
         ) -> Result<LinkAllocationPlan, Error> {
-            Ok(LinkAllocationPlan {
-                bytes: 0,
-                count: 0,
-                target_bytes: 0,
-                maximum_temporary_bytes: 0,
-                vector_capacity: 0,
-            })
+            Ok(LinkAllocationPlan { policy, ..LinkAllocationPlan::default() })
         }
         fn image_objects(
             &self,
@@ -1486,8 +1576,8 @@ mod tests {
         ));
     }
 
-    fn minimal_pdf() -> Vec<u8> {
-        let content = b"BT /F1 12 Tf 10 60 Td (Hello PDFium https://example.test/) Tj ET\nq 10 0 0 10 10 10 cm /Im1 Do Q\n";
+    pub(crate) fn minimal_pdf() -> Vec<u8> {
+        let content = b"BT /F1 4 Tf 10 60 Td (Hello PDFium https://example.test/) Tj ET\nq 10 0 0 10 10 10 cm /Im1 Do Q\n";
         let objects = [
             b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
             b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),

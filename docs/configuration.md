@@ -83,6 +83,9 @@ max_archive_entry_bytes = 268435456
 max_archive_compression_ratio = 100
 max_nesting_depth = 256
 max_pages = 10000
+max_pdf_page_objects = 100000
+max_pdf_total_objects = 10000000
+max_pdf_layout_comparisons = 12000000
 max_asset_bytes = 268435456
 max_total_asset_bytes = 1073741824
 max_memory_bytes = "auto"
@@ -233,3 +236,27 @@ Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL�
 | Provider 的 `api_key_env` 值 | 由对应 Provider 在执行时读取 API Key |
 
 环境变量中的 Provider 密钥不得写入日志、JSON 结果、诊断、溯源或 Bundle。
+
+### PDF 预算与链接恢复
+
+`conversion.limits.max_pdf_page_objects` 限制单页原始对象数，默认 100,000，
+取值为 1–10,000,000；`max_pdf_total_objects` 限制同一 PDF 累计对象数，默认
+10,000,000，使用检查溢出的 `u64` 累加。`max_pdf_layout_comparisons` 限制整份
+PDF 的版面比较次数，默认 12,000,000。后两项必须为正数。旧配置省略这些字段时
+使用默认值，CLI 参数覆盖配置；`config get conversion.limits.<字段>` 可查询配置值。
+Web 请求允许降低预算，并以上述默认值为上限。
+
+这些扫描和计算预算独立于最终 IR、页数、内存、资产与超时限制。提高扫描预算不会
+提高其他限制。大型文档可按实际报错显式设置，例如：
+
+```sh
+into-md book.pdf --ocr off --asset-mode omit --max-memory-size 8GiB \
+  --max-pdf-total-objects 10000000 --max-pdf-layout-comparisons 120000000
+```
+
+注释链接和自动网页链接的有限倒序边界会规范化，部分越界会裁剪到页面边界。
+默认 `best-effort` 对非有限、无法表示、零面积、完全越界或局部读取失败的链接
+省略对应矩形，并输出 `pdf.linkOmitted` 诊断，保留正文与其他有效链接。
+`strict` 遇到这些无法恢复的边界会失败。诊断包含从 1 开始的页码、链接来源、
+从 0 开始的原始链接序号及网页链接矩形序号。被省略的链接仍消耗扫描预算；
+超限、取消、超时、无进度枚举或失效句柄始终终止转换。

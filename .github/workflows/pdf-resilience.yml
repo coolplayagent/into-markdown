@@ -1,0 +1,84 @@
+name: PDF resilience
+
+on:
+  pull_request:
+    paths:
+      - 'crates/pdfium/**'
+      - 'crates/converters/src/pdf/**'
+      - 'crates/converters/src/pdf_ocr.rs'
+      - 'crates/core/src/options.rs'
+      - 'tools/pdf-resilience/**'
+      - 'third_party/pdfium/**'
+      - '.github/workflows/pdf-resilience.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pdf-resilience-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary: into-md
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            binary: into-md
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            binary: into-md
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            binary: into-md.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: pdf-resilience-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+      - name: Prepare pinned native runtime and public sample tooling
+        run: |
+          python -m pip install --disable-pip-version-check pypdf==6.10.0
+          python tools/pdf-resilience/runtime.py --target '${{ matrix.target }}' --root '${{ runner.temp }}/pdf-native'
+      - name: Native boundary, converter, and API regressions
+        run: |
+          cargo test --locked -p into-markdown-pdfium --lib -- --include-ignored --test-threads=1
+          cargo test --locked -p into-markdown-converters --lib pdf:: -- --include-ignored --test-threads=1
+          cargo test --locked -p into-markdown native_pdf_runs_through_engine_and_emits_internal_page_anchor -- --ignored
+          cargo test --locked -p into-markdown-cli pdf_limits -- --test-threads=1
+          cargo build --locked -p into-markdown-cli
+      - name: Public PDFs, Chinese paths, batch, strict, and output transactions
+        run: >-
+          python tools/pdf-resilience/run.py
+          --into-md 'target/debug/${{ matrix.binary }}'
+          --work-root '${{ runner.temp }}/pdf-regression'
+          --pdfium-library "$PDFIUM_LIBRARY" --public-samples
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pdf-regression-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/pdf-regression/report.json
+            ${{ runner.temp }}/pdf-regression/*.stderr.jsonl
+          if-no-files-found: ignore

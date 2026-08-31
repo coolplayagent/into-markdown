@@ -56,6 +56,7 @@ pub(crate) fn reconstruct_enriched_pdf(
     let document = std::mem::take(&mut source.document);
     let layout_config = LayoutConfig {
         limits: into_markdown_pdf_layout::LayoutLimits {
+            max_comparisons: options.limits.max_pdf_layout_comparisons,
             max_table_columns: usize::try_from(options.limits.max_table_columns)
                 .unwrap_or(usize::MAX)
                 .min(into_markdown_core::MAX_TABLE_COLUMNS),
