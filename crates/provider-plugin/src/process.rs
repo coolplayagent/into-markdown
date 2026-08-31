@@ -303,7 +303,7 @@ impl ProcessCapability {
                 context,
             )
             .map(|execution| execution.result_json)
-            .map_err(|error| map_error(&self.binding.provider_id, &error))
+            .map_err(|error| map_error(self.kind, &self.binding.provider_id, &error))
     }
 }
 
@@ -818,7 +818,7 @@ fn validate_diarization_result(
         .map_err(|_| unavailable(expected_provider, "diarization provider returned invalid IR"))
 }
 
-fn map_error(provider: &str, error: &PluginError) -> ConversionError {
+fn map_error(kind: CapabilityKind, provider: &str, error: &PluginError) -> ConversionError {
     match error.code {
         PluginErrorCode::Cancelled => ConversionError::Cancelled,
         PluginErrorCode::Timeout => ConversionError::Timeout,
@@ -843,7 +843,7 @@ fn map_error(provider: &str, error: &PluginError) -> ConversionError {
             provider: provider.into(),
             detail: error.detail.clone(),
         },
-        PluginErrorCode::Plugin => {
+        PluginErrorCode::Plugin if kind == CapabilityKind::Ocr => {
             ConversionError::Ocr { provider: provider.into(), detail: error.detail.clone() }
         }
         PluginErrorCode::OcrWidthLimit
@@ -875,6 +875,7 @@ mod tests {
         use super::*;
         let detail = "recognition bound exceeded";
         let typed = map_error(
+            CapabilityKind::Ocr,
             "test.ocr",
             &PluginError { code: PluginErrorCode::OcrRecognitionMemory, detail: detail.into() },
         );
@@ -890,11 +891,29 @@ mod tests {
             PluginErrorCode::OcrPixelLimit,
             PluginErrorCode::OcrTensorLimit,
         ] {
-            let error = map_error("test.ocr", &PluginError { code, detail: detail.into() });
+            let error = map_error(
+                CapabilityKind::Ocr,
+                "test.ocr",
+                &PluginError { code, detail: detail.into() },
+            );
             assert!(!matches!(
                 error,
                 ConversionError::OcrRecognitionMemory { .. }
                     | ConversionError::ComponentUnavailable { .. }
+            ));
+        }
+        for kind in [
+            CapabilityKind::Transcription,
+            CapabilityKind::Diarization,
+            CapabilityKind::LegacyOffice,
+        ] {
+            assert!(matches!(
+                map_error(
+                    kind,
+                    "test.other",
+                    &PluginError { code: PluginErrorCode::Plugin, detail: detail.into() }
+                ),
+                ConversionError::ComponentUnavailable { .. }
             ));
         }
     }

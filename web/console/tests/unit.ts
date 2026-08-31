@@ -1166,6 +1166,8 @@ test("structured OCR failure and omission locations are bounded and preserved", 
   const failed = task("failed");
   failed.failure = { schemaVersion: 1, code: "resourceLimit", reasonCode: "ocrRecognitionMemory", stage: "conversion", retryable: false };
   assert.equal(taskFailureCode(parseTask(failed)), "ocrRecognitionMemory");
+  assert.equal(taskFailureCode(parseTask({ ...failed,
+    failure: { ...failed.failure, reasonCode: "futureResourceReason" } })), "resourceLimit");
   assert.throws(() => parseTask({ ...failed, failure: { ...failed.failure, reasonCode: "<script>" } }), ApiError);
   assert.deepEqual(parseOcrOmissions(JSON.stringify({ diagnostics: [
     { code: "irrelevant", locator: { page: 8 } },

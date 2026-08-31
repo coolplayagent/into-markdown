@@ -5,6 +5,26 @@ fn read_report(path: &Path) -> serde_json::Value {
 }
 
 #[test]
+fn exhausted_automatic_budget_is_a_resource_refusal_before_output_admission() {
+    let root = tempfile::tempdir().unwrap();
+    let mut loaded = config::load(root.path(), &[], true, None, None).unwrap();
+    loaded.memory_snapshot = config::memory::select(Some(16 * 1024_u64.pow(3)), Some(0));
+    let error = resource_usage::prepare(
+        &ConversionArgs {
+            max_memory_size: Some(crate::args::MemorySizeArg::Auto),
+            ..Default::default()
+        },
+        &mut loaded,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "resourceLimit");
+    assert_eq!(error.exit_code(), 5);
+    assert_eq!(error.limit().unwrap().0, "max_memory_bytes");
+    assert!(error.message().contains("availableBytes=Some(0)"));
+    assert!(root.path().read_dir().unwrap().next().is_none());
+}
+
+#[test]
 fn text_batches_publish_real_shared_budget_and_peak_without_job_multiplication() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

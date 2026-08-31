@@ -183,5 +183,7 @@ export function createBatchId(): string {
 }
 
 export function taskFailureCode(task: TaskRecord): string {
-  return task.failure?.reasonCode ?? task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed";
+  const reason = task.failure?.reasonCode;
+  if (reason && Object.hasOwn(DIAGNOSTIC_MESSAGES, reason)) return reason;
+  return task.failure?.code ?? task.diagnostics[0]?.code ?? "conversionFailed";
 }

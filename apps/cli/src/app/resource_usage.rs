@@ -8,13 +8,16 @@ pub(super) fn prepare(
     apply_conversion_overrides(arguments, loaded)?;
     if loaded.options.limits.max_memory_bytes == 0 {
         let snapshot = loaded.memory_snapshot;
-        return Err(CliError::usage(format!(
-            "available memory is insufficient for the shared conversion budget after system reserve (totalBytes={:?}, availableBytes={:?}, systemReserveBytes={}, automatic={})",
-            snapshot.total_bytes,
-            snapshot.available_bytes,
-            snapshot.system_reserve_bytes,
-            snapshot.automatic,
-        )));
+        return Err(into_markdown::ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: format!(
+                "available memory is insufficient for the shared conversion budget after system reserve (totalBytes={:?}, availableBytes={:?}, systemReserveBytes={}, automatic={})",
+                snapshot.total_bytes,
+                snapshot.available_bytes,
+                snapshot.system_reserve_bytes,
+                snapshot.automatic,
+            ),
+        }.into());
     }
     Ok(())
 }

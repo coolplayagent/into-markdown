@@ -13,6 +13,16 @@ import time
 import psutil
 from observations import content
 
+MODES = {
+    'off': ('off', 'auto', 'best-effort'),
+    'auto': ('auto', 'auto', 'best-effort'),
+    '16gib': ('auto', '16GiB', 'best-effort'),
+    'off-16gib': ('off', '16GiB', 'best-effort'),
+    'always': ('always', '16GiB', 'best-effort'),
+    'strict': ('auto', '16GiB', 'strict'),
+    'always-strict': ('always', '16GiB', 'strict'),
+}
+
 
 def sample_processes(process):
     rows = []
@@ -125,6 +135,7 @@ def run(args):
     binary_hash = hashlib.sha256(args.binary.read_bytes()).hexdigest()
     args.output.mkdir(parents=True, exist_ok=True)
     for mode in args.modes.split(','):
+        ocr, memory, policy = MODES[mode]
         for grouping in args.groupings.split(','):
             groups = [[sample] for sample in samples] if grouping == 'single' else [samples]
             for group in groups:
@@ -140,9 +151,8 @@ def run(args):
                     continue
                 directory.mkdir(parents=True, exist_ok=True)
                 paths = [str((args.root / item['path']).resolve()) for item in group]
-                command = [binary, '--no-config', '--log-format', 'json', '--ocr',
-                    'off' if mode == 'off' else 'auto', '--max-memory-size',
-                    '16GiB' if mode == '16gib' else 'auto', '--emit', 'result-json',
+                command = [binary, '--no-config', '--log-format', 'json', '--ocr', ocr,
+                    '--max-memory-size', memory, '--error-policy', policy, '--emit', 'result-json',
                     '--asset-mode', 'embed', '--conflict', 'error', '--timeout-ms', '120000',
                     '--report', str((directory / 'report.json').resolve())]
                 if grouping != 'single':
