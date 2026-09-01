@@ -44,9 +44,6 @@ const OFFICE_REL_TYPE: &str =
 const REL_TYPE_PREFIX: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
 const STRICT_REL_TYPE_PREFIX: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships/";
-const MAX_IMAGE_DIMENSION: u32 = 32_768;
-const MAX_IMAGE_PIXELS: u64 = 100_000_000;
-
 /// Bounded, non-networking Word Open XML converter. Macro parts are never opened.
 #[derive(Debug, Default)]
 pub struct DocxConverter;

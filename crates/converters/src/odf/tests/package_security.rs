@@ -8,8 +8,8 @@ use super::support::{
 use crate::odf::model::MANIFEST_NS;
 use crate::odf::package::{Package, REACHABLE_IMAGE_ALLOCATION_ATTEMPTS, media_type_for};
 use crate::odf::raw_zip::{
-    RAW_LAYOUT_ALLOCATION_ATTEMPTS, conservative_vec_capacity, crc32_ieee, reachable_image_peak,
-    validate_raw_zip_name, validate_zip_directory_layout,
+    RAW_LAYOUT_ALLOCATION_ATTEMPTS, crc32_ieee, image_decode_plan, validate_raw_zip_name,
+    validate_zip_directory_layout,
 };
 use image::ImageFormat;
 use into_markdown_core::{
@@ -211,7 +211,7 @@ fn raw_zip_names_extras_comments_and_index_allocations_fail_closed() {
 }
 
 #[test]
-fn reachable_image_memory_is_authenticated_before_read_and_decoder_creation() {
+fn reachable_image_memory_is_authenticated_before_pixel_materialization() {
     let mut png = Cursor::new(Vec::new());
     image::DynamicImage::new_rgba8(1, 1).write_to(&mut png, ImageFormat::Png).unwrap();
     let content = format!(
@@ -231,8 +231,10 @@ fn reachable_image_memory_is_authenticated_before_read_and_decoder_creation() {
     .unwrap()
     .logical_peak;
     let declared = u64::try_from(png.get_ref().len()).unwrap();
-    let exact =
-        reachable_image_peak(base, conservative_vec_capacity(declared).unwrap(), declared).unwrap();
+    let exact = base
+        .checked_add(declared)
+        .and_then(|value| value.checked_add(image_decode_plan(declared, 1).unwrap()))
+        .unwrap();
 
     reset_allocation_attempts(&REACHABLE_IMAGE_ALLOCATION_ATTEMPTS);
     let output = convert(
@@ -253,7 +255,7 @@ fn reachable_image_memory_is_authenticated_before_read_and_decoder_creation() {
         ),
         Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
     ));
-    assert_eq!(allocation_attempts(&REACHABLE_IMAGE_ALLOCATION_ATTEMPTS), 0);
+    assert_eq!(allocation_attempts(&REACHABLE_IMAGE_ALLOCATION_ATTEMPTS), 1);
 }
 
 #[test]

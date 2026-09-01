@@ -5,9 +5,6 @@ use into_markdown_core::{
 };
 use std::io::Cursor;
 
-const MAX_RASTER_DIMENSION: u32 = 32_768;
-const MAX_RASTER_PIXELS: u64 = 16_000_000;
-
 /// One request-wide budget shared by the CFB envelope and legacy format parser.
 pub(super) struct LegacyBudget<'a> {
     options: &'a ConversionOptions,
@@ -158,8 +155,6 @@ impl<'a> LegacyBudget<'a> {
         let decode_ceiling =
             self.options.limits.max_decompressed_bytes.min(self.options.limits.max_memory_bytes);
         let mut limits = ImageLimits::default();
-        limits.max_image_width = Some(MAX_RASTER_DIMENSION);
-        limits.max_image_height = Some(MAX_RASTER_DIMENSION);
         limits.max_alloc = Some(decode_ceiling);
         let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
         reader.limits(limits.clone());
@@ -167,20 +162,13 @@ impl<'a> LegacyBudget<'a> {
             .into_decoder()
             .map_err(|_| malformed(part, "image decoder rejected the header"))?;
         let (width, height) = decoder.dimensions();
-        let pixels = u64::from(width)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| limit("image_pixels", format!("{part} dimensions overflow")))?;
-        if width == 0
-            || height == 0
-            || width > MAX_RASTER_DIMENSION
-            || height > MAX_RASTER_DIMENSION
-            || pixels > MAX_RASTER_PIXELS
-        {
-            return Err(limit(
-                "image_pixels",
-                format!("{part} has unsafe dimensions {width}x{height}"),
-            ));
+        if width == 0 || height == 0 {
+            return Err(limit("image_pixels", format!("{part} has zero image dimensions")));
         }
+        // The header is now authoritative for strict decoder dimensions; the decoded byte and
+        // request-memory checks below determine whether the image is affordable.
+        limits.max_image_width = Some(width);
+        limits.max_image_height = Some(height);
         decoder
             .set_limits(limits)
             .map_err(|_| limit("image_decode_memory", format!("decoder limits rejected {part}")))?;

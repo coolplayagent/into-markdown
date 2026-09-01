@@ -238,6 +238,11 @@ markdown-postprocess
   DNS ASCII 大小写和单个尾随点，统一 IDN/Punycode 与 IP 文本形式；列表项不含端口，
   目标 URL 端口不参与匹配。
 - 大小接受整数或 `KiB`、`MiB`、`GiB` 后缀。
+- 本地图片与 OCR 源图没有独立的固定单边或总像素上限。宽高必须为非零且所有像素、stride、
+  decoded bytes 与 working-set 计算使用 checked arithmetic；实际准入由
+  `--max-decompressed-size`、`--max-memory-size`、输入/资产额度和当前可用共享预算共同决定。
+  提高这些预算可处理更大的源图，但不会放宽识别模型的文字区域、归一化宽度、张量和输出结构
+  边界。Web 请求继续受服务端固定资源 profile 约束。
 - PPTX 每个 XML 部件默认最多 2,000,000 个非 EOF 事件（开始、空元素、结束、文本等），
   包含未选中的 MCE 分支；`--max-presentation-xml-events` 可调整且必须大于零。
   深度、几何、解压、内存与最终 IR 限制继续独立生效。Web 请求最多取默认值，可下调。

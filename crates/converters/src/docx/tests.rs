@@ -795,9 +795,9 @@ mod tests {
             value[51..55].copy_from_slice(&crc.to_be_bytes());
             value
         };
-        let oversized_header = {
+        let resource_bounded_header = {
             let mut value = valid_png(0);
-            value[16..20].copy_from_slice(&(MAX_IMAGE_DIMENSION + 1).to_be_bytes());
+            value[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
             let crc = png_crc32(&value[12..29]);
             value[29..33].copy_from_slice(&crc.to_be_bytes());
             value
@@ -823,12 +823,23 @@ mod tests {
             }
             other => panic!("expected corrupt JPEG codestream rejection, got {other:?}"),
         }
+        assert!(matches!(
+            convert_docx(
+                &image_package(
+                    "word/media/resource-bounded.png",
+                    "image/png",
+                    &resource_bounded_header,
+                ),
+                &strict_options(),
+                &context(),
+            ),
+            Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
+        ));
         let adversarial = [
             ("word/media/fake.png", "image/png", b"PNG".as_slice()),
             ("word/media/truncated.png", "image/png", &valid_png(0)[..20]),
             ("word/media/corrupt.png", "image/png", corrupt_crc.as_slice()),
             ("word/media/broken-stream.png", "image/png", corrupt_idat.as_slice()),
-            ("word/media/huge.png", "image/png", oversized_header.as_slice()),
             ("word/media/mismatch.png", "image/jpeg", mismatch.as_slice()),
             ("word/media/fake.jpg", "image/jpeg", mismatch.as_slice()),
             ("word/media/truncated.jpg", "image/jpeg", truncated_jpeg.as_slice()),
@@ -848,6 +859,18 @@ mod tests {
                 Err(ConversionError::Malformed { .. })
             ));
         }
+    }
+
+    #[test]
+    fn image_geometry_has_no_independent_fixed_ceiling() {
+        assert!(validate_image_dimensions(40_000, 1, "word/media/wide.png").is_ok());
+        assert!(
+            validate_image_dimensions(20_000, 10_000, "word/media/large.png").is_ok()
+        );
+        assert!(matches!(
+            validate_image_dimensions(0, 1, "word/media/zero.png"),
+            Err(ConversionError::Malformed { .. })
+        ));
     }
 
     #[test]

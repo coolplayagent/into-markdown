@@ -227,7 +227,9 @@ pub struct DetectionConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            max_source_pixels: 100_000_000,
+            // Source admission is owned by the caller's decoded-byte and memory budgets. The
+            // detector still bounds its resized model, contour and score work independently.
+            max_source_pixels: usize::MAX,
             max_model_pixels: 16_000_000,
             max_inference_side: MAX_SIDE_LEN,
             max_contour_events: 16_000_000,

@@ -80,16 +80,11 @@ fn push_word_media_placeholder(
 }
 
 fn validate_image_dimensions(width: u32, height: u32, part: &str) -> Result<(), ConversionError> {
-    let pixels = u64::from(width)
+    u64::from(width)
         .checked_mul(u64::from(height))
         .ok_or_else(|| malformed(Some(part), "image dimensions overflow"))?;
-    if width == 0
-        || height == 0
-        || width > MAX_IMAGE_DIMENSION
-        || height > MAX_IMAGE_DIMENSION
-        || pixels > MAX_IMAGE_PIXELS
-    {
-        return Err(malformed(Some(part), "image dimensions exceed the safe raster envelope"));
+    if width == 0 || height == 0 {
+        return Err(malformed(Some(part), "image dimensions must be non-zero"));
     }
     Ok(())
 }

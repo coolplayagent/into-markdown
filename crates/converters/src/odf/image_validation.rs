@@ -1,4 +1,4 @@
-use crate::odf::model::{MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS, limit, malformed};
+use crate::odf::model::{limit, malformed};
 use crate::odf::raw_zip::image_decode_plan;
 use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits as ImageLimits};
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
@@ -28,6 +28,33 @@ pub(super) fn image_profile(path: &str, media_type: &str) -> Result<ImageFormat,
             "ODF image manifest media type and canonical extension disagree or are unsupported",
         )),
     }
+}
+
+fn validate_decoded_size(
+    width: u32,
+    height: u32,
+    part: &str,
+    options: &ConversionOptions,
+) -> Result<u64, ConversionError> {
+    if width == 0 || height == 0 {
+        return Err(limit("image_pixels", format!("zero dimensions in {part}")));
+    }
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| limit("image_pixels", "image dimensions overflow"))?;
+    let decoded_bytes = pixels
+        .checked_mul(4)
+        .ok_or_else(|| limit("max_decompressed_bytes", "ODF image pixel bytes overflow"))?;
+    if decoded_bytes > options.limits.max_decompressed_bytes {
+        return Err(limit(
+            "max_decompressed_bytes",
+            format!(
+                "decoded image {part}: {decoded_bytes} > {}",
+                options.limits.max_decompressed_bytes
+            ),
+        ));
+    }
+    Ok(pixels)
 }
 
 pub(super) fn validate_image(
@@ -64,35 +91,27 @@ pub(super) fn validate_image(
             "image manifest media type, canonical extension, and sniffed bytes disagree",
         ));
     }
-    // Authenticate the maximum codec/header/decoded-output working set before constructing the
-    // third-party decoder. The dimension-specific value below can only reduce this ceiling.
-    let decoder_ceiling = image_decode_plan(size, MAX_IMAGE_PIXELS)?;
-    let decoder_ceiling_peak = package_peak
-        .checked_add(decoder_ceiling)
-        .ok_or_else(|| limit("max_memory_bytes", "ODF package/image ceiling overflow"))?;
-    if decoder_ceiling_peak > preflight {
+    let decoder_ceiling = preflight.checked_sub(package_peak).ok_or_else(|| {
+        limit("max_memory_bytes", "ODF package has no remaining image decode budget")
+    })?;
+    let minimum_decoder_plan = image_decode_plan(size, 0)?;
+    if minimum_decoder_plan > decoder_ceiling {
         return Err(limit(
             "max_memory_bytes",
             format!(
-                "ODF package/image decoder ceiling {decoder_ceiling_peak} > preflight {preflight}"
+                "ODF image decoder base plan {minimum_decoder_plan} > remaining {decoder_ceiling}"
             ),
         ));
     }
-    let mut decoder = ImageReader::with_format(Cursor::new(bytes), format)
+    let mut initial_limits = ImageLimits::default();
+    initial_limits.max_alloc = Some(decoder_ceiling);
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    reader.limits(initial_limits);
+    let mut decoder = reader
         .into_decoder()
         .map_err(|_| malformed(Some(part), "image decoder rejected the header"))?;
     let (width, height) = decoder.dimensions();
-    let pixels = u64::from(width)
-        .checked_mul(u64::from(height))
-        .ok_or_else(|| limit("image_pixels", "image dimensions overflow"))?;
-    if width == 0
-        || height == 0
-        || width > MAX_IMAGE_DIMENSION
-        || height > MAX_IMAGE_DIMENSION
-        || pixels > MAX_IMAGE_PIXELS
-    {
-        return Err(limit("image_pixels", format!("unsafe dimensions {width}x{height} in {part}")));
-    }
+    let pixels = validate_decoded_size(width, height, part, options)?;
     let mut limits = ImageLimits::default();
     limits.max_image_width = Some(width);
     limits.max_image_height = Some(height);
@@ -117,8 +136,8 @@ pub(super) fn validate_image(
         limit("max_memory_bytes", format!("cannot reserve decoded image: {error}"))
     })?;
     output.resize(total, 0);
-    // The codec is given a strict 16 MP/explicit-allocation ceiling, so its only
-    // non-interruptible slice is deterministically bounded. Check immediately around it.
+    // The codec is bounded by the authenticated request-memory remainder. Check immediately
+    // around its non-interruptible decode slice.
     context.checkpoint()?;
     decoder
         .read_image(&mut output)

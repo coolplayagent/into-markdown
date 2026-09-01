@@ -219,7 +219,7 @@ def odf_fixtures(root: Path) -> list[dict[str, object]]:
         core_bytes = image_archive.getinfo("content.xml").file_size + image_archive.getinfo("META-INF/manifest.xml").file_size
         metadata_bytes = sum(len(info.filename.encode()) * 2 for info in image_archive.infolist())
         package_peak = core_bytes * 64 + metadata_bytes + len(image_archive.infolist()) * 512 + 1024 * 1024 + 16 * 1024
-    image_peak = package_peak + len(dot_png) * 2 + 16_000_000 * 32 + len(dot_png) * 2 + 262_144
+    image_peak = package_peak + len(dot_png) + len(dot_png) * 2 + 32 + 262_144
     image_markdown = f"![dot](<asset-{sha256(dot_png)}.png>)\n"
     add("odt-image-exact", "odt", "limit", "small/odt/image-exact.odt", odt_image_success, "application/vnd.oasis.opendocument.text", limit_expected("reachable image read and decoder require an authenticated exact memory plan", "max_memory_bytes", image_peak - 1, image_peak, "max_memory_bytes", image_markdown))
     odt_central_extra = odf_central_unicode_extra(odt_normal, b"content.xml", b"renamed.xml")

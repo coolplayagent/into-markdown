@@ -43,10 +43,10 @@ PNG/JPEG/GIF/WebP 图片。core part 必须是精确 `text/xml`；目录必须�
 | 样式/列表图混淆 | 样式键至少绑定 family+name，区分 common/styles automatic/content automatic 优先级并检测同 family 父图环；列表正式解析 level/start/continuation，嵌套省略 style 时只继承外层 identity+level，list-header 保留为无 marker 前置块 |
 | 批注范围混淆 | `office:name` ranged annotation 必须唯一、正确嵌套且 start/end 完整配对；重复、悬空、crossing 拒绝。仅保留安全的 `dc:creator`/`dc:date` 与正文 |
 | 单元格公式伪装 | `office:value-type` 与唯一缓存 attribute 严格对应；OpenFormula 只接受 `of:=`，缓存值与 `openformula` Code block 隔离 |
-| 图片尺寸/codec bomb | 先扫描安全 anchor、只物化可达图片；读取前按 declared bytes/capacity 认证，构造 decoder 前按 header/16 MP working set/decoded output 上界认证；manifest MIME+规范扩展+sniff 三向一致并完整 decode |
+| 图片尺寸/codec bomb | 先扫描安全 anchor、只物化可达图片；读取前按 declared bytes/capacity 认证，读取已授权 asset 后按 header 的精确非零尺寸计算 decoded bytes 与 working set，并在像素物化前由请求剩余内存和解压额度认证；manifest MIME+规范扩展+sniff 三向一致并完整 decode |
 | 活动内容或 SSRF | 拒绝脚本、宏、事件、外部图片；超链接只保留惰性安全 scheme |
 | 内存预算 gap/双扣 | SPI 预检 permit 派生同上下文 credit；单一 child lease 在分配前持有，临时析构后中央估算缩账 |
-| 取消/超时拖延 | ZIP 每 16 KiB、XML event、repeat、worksheet/slide checkpoint；codec 前后 checkpoint 且单次 codec 由 16 MP 硬上限约束 |
+| 取消/超时拖延 | ZIP 每 16 KiB、XML event、repeat、worksheet/slide checkpoint；codec 前后 checkpoint，单次 codec 工作量由已认证图片尺寸对应的请求剩余内存和解压额度约束 |
 | 坐标变换溢出 | 每次 affine 父子 compose、每个变换点和最终 bounds/rotation 都必须保持 finite；slide/shape/group 循环逐项 checkpoint |
 
 残余边界：逻辑内存 accounting 约束由本实现拥有或显式规划的分配，不声称等于 allocator metadata 或

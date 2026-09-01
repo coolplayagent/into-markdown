@@ -520,6 +520,31 @@ fn frame_and_pixel_budgets_fail_before_materialization() {
 }
 
 #[test]
+fn wide_static_image_is_admitted_by_resource_budget() {
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(RgbaImage::from_pixel(40_000, 1, Rgba([8, 16, 24, 255])))
+        .write_to(&mut bytes, ImageFormat::Png)
+        .unwrap();
+    let options = options();
+    let output = block_on(convert_image(
+        &input(bytes.into_inner(), "wide.png"),
+        &options,
+        &Services::default(),
+        &context(&options),
+    ))
+    .unwrap();
+    assert_eq!(output.assets.len(), 1);
+    assert_eq!(
+        output.document.metadata.properties.get("image.width").map(String::as_str),
+        Some("40000")
+    );
+    assert_eq!(
+        output.document.metadata.properties.get("image.height").map(String::as_str),
+        Some("1")
+    );
+}
+
+#[test]
 fn cancelled_large_envelope_returns_cancelled_without_a_lease() {
     let mut bytes = encoded(ImageFormat::Png);
     let iend = bytes.len() - 12;
