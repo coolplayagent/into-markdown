@@ -5,6 +5,117 @@ use super::*;
 #[path = "links_tests.rs"]
 mod tests;
 
+enum UriReadError {
+    Malformed(LinkIssueReason),
+    Terminal(Error),
+}
+
+impl From<Error> for UriReadError {
+    fn from(error: Error) -> Self {
+        Self::Terminal(error)
+    }
+}
+
+impl Native {
+    fn action_uri_with_length(
+        &self,
+        document: usize,
+        action: Handle,
+        needed: c_ulong,
+        maximum: u32,
+    ) -> Result<String, UriReadError> {
+        bounded_native_bytes("action_uri", needed, maximum, |buffer, length| unsafe {
+            (self.action_uri)(document as Handle, action, buffer.cast(), length)
+        })
+    }
+
+    fn web_uri_with_length(
+        &self,
+        web: Handle,
+        index: u32,
+        needed: c_int,
+        maximum: u32,
+    ) -> Result<String, UriReadError> {
+        let index =
+            c_int::try_from(index).map_err(|_| invalid("web_uri", "index exceeds C int"))?;
+        if needed <= 0 {
+            return Err(self.error("web_uri").into());
+        }
+        let units = u32::try_from(needed).map_err(|_| invalid("web_uri", "negative length"))?;
+        let bytes = units.checked_mul(2).ok_or_else(|| invalid("web_uri", "length overflow"))?;
+        if bytes > maximum {
+            return Err(Error::ResourceLimit {
+                limit: "max_link_bytes",
+                actual: u64::from(bytes),
+                maximum: u64::from(maximum),
+            }
+            .into());
+        }
+        let mut buffer = try_uninit_boxed_slice::<u16>(units as usize, "web_uri")?;
+        // SAFETY: initialize the full fixed buffer before the native partial-write API.
+        unsafe { std::ptr::write_bytes(buffer.as_mut_ptr().cast::<u16>(), 0, units as usize) };
+        let copied =
+            unsafe { (self.web_link_url)(web, index, buffer.as_mut_ptr().cast::<u16>(), needed) };
+        if copied <= 0 || copied > needed {
+            return Err(invalid("web_uri", "native length changed or was zero").into());
+        }
+        let copied =
+            usize::try_from(copied).map_err(|_| invalid("web_uri", "length does not fit usize"))?;
+        // SAFETY: the complete fixed buffer was initialized with zeroes before the FFI call.
+        let mut buffer = unsafe { buffer.assume_init() }.into_vec();
+        buffer.truncate(copied);
+        if buffer.last() == Some(&0) {
+            let _ = buffer.pop();
+        }
+        if buffer.contains(&0) {
+            return Err(UriReadError::Malformed(LinkIssueReason::EmbeddedNul));
+        }
+        if char::decode_utf16(buffer.iter().copied()).any(|character| character.is_err()) {
+            return Err(UriReadError::Malformed(LinkIssueReason::InvalidEncoding));
+        }
+        decode_utf16(&buffer).map_err(UriReadError::Terminal)
+    }
+}
+
+fn bounded_native_bytes<F>(
+    operation: &'static str,
+    needed: c_ulong,
+    maximum: u32,
+    copy: F,
+) -> Result<String, UriReadError>
+where
+    F: FnOnce(*mut u8, c_ulong) -> c_ulong,
+{
+    let needed_u64 = c_ulong_to_u64(needed);
+    if needed == 0 {
+        return Err(invalid(operation, "zero length").into());
+    }
+    if needed_u64 > u64::from(maximum) {
+        return Err(Error::ResourceLimit {
+            limit: "max_link_bytes",
+            actual: needed_u64,
+            maximum: u64::from(maximum),
+        }
+        .into());
+    }
+    let capacity =
+        usize::try_from(needed).map_err(|_| invalid(operation, "length does not fit usize"))?;
+    let mut buffer = zeroed_boxed_bytes(capacity, operation)?;
+    let copied = copy(buffer.as_mut_ptr(), needed);
+    if copied == 0 || copied > needed {
+        return Err(invalid(operation, "native length changed or was zero").into());
+    }
+    let mut buffer = buffer.into_vec();
+    buffer.truncate(usize::try_from(copied).unwrap_or(capacity));
+    if buffer.last() == Some(&0) {
+        let _ = buffer.pop();
+    }
+    if buffer.contains(&0) {
+        return Err(UriReadError::Malformed(LinkIssueReason::EmbeddedNul));
+    }
+    String::from_utf8(buffer).map_err(|_| UriReadError::Malformed(LinkIssueReason::InvalidEncoding))
+}
+
 #[derive(Clone, Copy)]
 enum Target {
     Annotation { action: Handle, length: c_ulong },
@@ -171,11 +282,21 @@ impl Scan {
 
     fn finish(mut self) -> Result<LinkAllocationPlan, Error> {
         self.plan.fingerprint = self.fingerprint.finalize().into();
+        self.plan.diagnostic_capacity = self
+            .plan
+            .diagnostics
+            .checked_add(if self.plan.policy == LinkPolicy::BestEffort {
+                self.plan.count
+            } else {
+                0
+            })
+            .ok_or_else(|| invalid("link_plan", "diagnostic capacity overflow"))?;
         self.plan.bytes = u64::from(self.plan.count)
             .checked_mul(std::mem::size_of::<Link>() as u64)
             .and_then(|v| {
                 v.checked_add(
-                    u64::from(self.plan.diagnostics) * std::mem::size_of::<LinkDiagnostic>() as u64,
+                    u64::from(self.plan.diagnostic_capacity)
+                        * std::mem::size_of::<LinkDiagnostic>() as u64,
                 )
             })
             .and_then(|v| v.checked_add(self.plan.target_bytes))
@@ -365,7 +486,8 @@ impl Native {
         let LinkRequest { document, limits, .. } = request;
         checkpoint(check)?;
         let mut links = FixedOutput::new(plan.count as usize, "links")?;
-        let mut diagnostics = FixedOutput::new(plan.diagnostics as usize, "link_diagnostics")?;
+        let mut diagnostics =
+            FixedOutput::new(plan.diagnostic_capacity as usize, "link_diagnostics")?;
         let mut target_bytes = 0;
         let actual = self.scan_links(request, plan.policy, check, &mut |item| match item {
             Item::Omitted(diagnostic) => diagnostics.push(diagnostic, "link_diagnostics"),
@@ -379,18 +501,26 @@ impl Native {
                 check_link_plan_bytes(target_bytes, retained, temporary, plan, "links")?;
                 target_bytes += retained;
                 let target = match target {
-                    Target::Annotation { action, length } => {
-                        LinkTarget::ExternalUri(self.action_uri_with_length(
-                            document,
-                            action,
-                            length,
-                            limits.max_link_bytes,
-                        )?)
+                    Target::Annotation { action, length } => self
+                        .action_uri_with_length(document, action, length, limits.max_link_bytes)
+                        .map(LinkTarget::ExternalUri),
+                    Target::Web { links, index, length } => self
+                        .web_uri_with_length(links, index, length, limits.max_link_bytes)
+                        .map(LinkTarget::ExternalUri),
+                    Target::Page(page_index) => Ok(LinkTarget::InternalPage { page_index }),
+                };
+                let target = match target {
+                    Ok(target) => target,
+                    Err(UriReadError::Malformed(reason))
+                        if plan.policy == LinkPolicy::BestEffort =>
+                    {
+                        return diagnostics
+                            .push(LinkDiagnostic { identity, reason }, "link_diagnostics");
                     }
-                    Target::Web { links, index, length } => LinkTarget::ExternalUri(
-                        self.web_uri_with_length(links, index, length, limits.max_link_bytes)?,
-                    ),
-                    Target::Page(page_index) => LinkTarget::InternalPage { page_index },
+                    Err(UriReadError::Malformed(reason)) => {
+                        return Err(Error::Link { identity, reason });
+                    }
+                    Err(UriReadError::Terminal(error)) => return Err(error),
                 };
                 links.push(Link { identity, bounds, target }, "links")
             }
@@ -398,9 +528,11 @@ impl Native {
         if actual != plan {
             return Err(invalid("links", "link scan changed after preflight"));
         }
-        Ok(LinkExtraction {
-            links: links.into_vec("links")?,
-            diagnostics: diagnostics.into_vec("link_diagnostics")?,
-        })
+        let links = if plan.policy == LinkPolicy::BestEffort {
+            links.into_vec_prefix()
+        } else {
+            links.into_vec("links")?
+        };
+        Ok(LinkExtraction { links, diagnostics: diagnostics.into_vec_prefix() })
     }
 }

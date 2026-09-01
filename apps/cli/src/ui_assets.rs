@@ -11,17 +11,17 @@ pub struct Asset {
 pub const INDEX: Asset = Asset {
     path: "/index.html",
     mime: "text/html; charset=utf-8",
-    sha256: "c0404206061e199021efcfa5d50415aa6cd1d158a823997417b26188cdb22b33",
+    sha256: "759799af873765e8012e46dac0f40211a6dff9d41686a2983a97942841fdbc33",
     bytes: include_bytes!("../../../web/console/dist/index.html"),
     immutable: false,
 };
 
 pub const ASSETS: &[Asset] = &[
     Asset {
-        path: "/assets/app.035d6c7e6c4c920c.js",
+        path: "/assets/app.ff87db1fce4c67c3.js",
         mime: "text/javascript; charset=utf-8",
-        sha256: "035d6c7e6c4c920c1ae1ec5edb1e01c627ba6a830cf5e7e8f0ca59987f0b2abb",
-        bytes: include_bytes!("../../../web/console/dist/assets/app.035d6c7e6c4c920c.js"),
+        sha256: "ff87db1fce4c67c3656eb765273785048960a4a394b9edbafb53e9b9f5117cdd",
+        bytes: include_bytes!("../../../web/console/dist/assets/app.ff87db1fce4c67c3.js"),
         immutable: true,
     },
     Asset {
@@ -32,10 +32,10 @@ pub const ASSETS: &[Asset] = &[
         immutable: true,
     },
     Asset {
-        path: "/assets/bootstrap.525a7d2740672f1d.js",
+        path: "/assets/bootstrap.cdb92afa209cd28e.js",
         mime: "text/javascript; charset=utf-8",
-        sha256: "525a7d2740672f1d4f178319911f966b392e838131cd25219fcedc30b44387e0",
-        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.525a7d2740672f1d.js"),
+        sha256: "cdb92afa209cd28e7d4b9d242a00443855db84f1634a8373fcca56baa5c7ddf1",
+        bytes: include_bytes!("../../../web/console/dist/assets/bootstrap.cdb92afa209cd28e.js"),
         immutable: true,
     },
 ];

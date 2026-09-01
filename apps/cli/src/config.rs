@@ -601,7 +601,7 @@ fn resolve_conversion_options(
         options.network.deny_private_networks = value;
     }
     config.limits.apply(&mut options)?;
-    memory::apply_config(&config.limits.max_memory_bytes, &mut options, snapshot)?;
+    memory::apply_config(&config.limits, &mut options, snapshot)?;
     if let Some(value) = &config.output.asset_directory_suffix {
         options.output.asset_directory_suffix.clone_from(value);
     }

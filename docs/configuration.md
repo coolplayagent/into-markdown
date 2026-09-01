@@ -146,6 +146,10 @@ table_repair = "prefer"
 formula_repair = "prefer"
 ```
 
+本地 CLI/Desktop 省略 `max_asset_bytes` 或 `max_total_asset_bytes` 时，会在最终内存参数解析后
+分别从共享预算派生；显式字段保持配置值，命令行字段继续优先。Core API 默认值与 Web 安全
+上限保持固定。自动内存与资产公式见 [CLI 内存策略](cli.md)。
+
 该配置只表达安装选择，不自动授予 ambient 权限。WASI host 还要求由受信安装/调用层提供
 固定 runtime/target、fuel、memory、output/resource 上限，以及逐项 preopen、clock、random
 和 literal-IP TCP grant；缺少的能力保持拒绝。完整清单和协议见
@@ -258,7 +262,8 @@ into-md book.pdf --ocr off --asset-mode omit --max-memory-size 8GiB \
 
 注释链接和自动网页链接的有限倒序边界会规范化，部分越界会裁剪到页面边界。
 默认 `best-effort` 对非有限、无法表示、零面积、完全越界或局部读取失败的链接
-省略对应矩形，并输出 `pdf.linkOmitted` 诊断，保留正文与其他有效链接。
-`strict` 遇到这些无法恢复的边界会失败。诊断包含从 1 开始的页码、链接来源、
+省略对应矩形；含内部 NUL 或无效编码的 URI 会省略整条链接，避免清理后改变目标。
+两类情况都输出 `pdf.linkOmitted` 诊断，并保留正文与其他有效链接。
+`strict` 遇到这些无法恢复的链接会失败。诊断包含从 1 开始的页码、链接来源、
 从 0 开始的原始链接序号及网页链接矩形序号。被省略的链接仍消耗扫描预算；
-超限、取消、超时、无进度枚举或失效句柄始终终止转换。
+URI 长度或其他资源超限、取消、超时、无进度枚举、失效句柄及规划变化始终终止转换。
