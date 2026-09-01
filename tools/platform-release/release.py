@@ -53,6 +53,11 @@ SPEECH_COMPONENTS = [
     "3dspeaker-eres2net-base-onnx-model",
 ]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
+# The provider coordinator and authenticated ONNX worker share this physical
+# process-group ceiling. Real scanned-page samples exceed the former 768 MiB
+# envelope during model startup even though steady-state recognition remains
+# bounded, so keep explicit headroom without removing the sandbox limit.
+OCR_PROCESS_GROUP_MEMORY_BYTES = 2048 * 1024 * 1024
 GGML_CPU_VARIANTS = {
     "x86_64-pc-windows-msvc": (
         "ggml-cpu-x64.dll",
@@ -619,7 +624,7 @@ def package_plugins(
         install_state(models, "pp-ocrv6-tiny-detector-onnx")
         install_state(models, "pp-ocrv6-tiny-recognizer-onnx")
         write_plugin_declarations(ocr, evidence, "official.ocr.ppocrv6", "ocr-plugin", target, OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
-        ocr_manifest = provider_manifest("official.ocr.ppocrv6", target, f"bin/into-md-ocr-provider{suffix}", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(805306368, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
+        ocr_manifest = provider_manifest("official.ocr.ppocrv6", target, f"bin/into-md-ocr-provider{suffix}", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(OCR_PROCESS_GROUP_MEMORY_BYTES, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
         output = packages / "official.ocr.ppocrv6.imp"
         signer = build_provider_package(packager, ocr, ocr_manifest, target, signing_key, output)
         if embedded_ocr is not None:

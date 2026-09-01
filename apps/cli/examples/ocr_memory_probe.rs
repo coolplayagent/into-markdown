@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+const MAX_SIGNED_WORKER_MIB: u64 = 2048;
+
 fn engine(root: &Path, bytes: u64) -> Result<impl OcrEngine + use<>, Box<dyn std::error::Error>> {
     let descriptor = std::fs::read(root.join("provider.json"))?;
     let manifest: PluginManifest = serde_json::from_slice(&descriptor)?;
@@ -57,14 +59,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: ocr_memory_probe RUNTIME_ROOT INPUT WORKER_MIB [auto|always|off best-effort|strict]".into());
     }
     let bytes = args[2].parse::<u64>()?.checked_mul(1024 * 1024).ok_or("quota overflow")?;
-    if bytes == 0 || bytes > 768 * 1024 * 1024 {
-        return Err("probe quota must be between 1 and 768 MiB".into());
+    if bytes == 0 || bytes > MAX_SIGNED_WORKER_MIB * 1024 * 1024 {
+        return Err(format!("probe quota must be between 1 and {MAX_SIGNED_WORKER_MIB} MiB").into());
     }
     let image = std::fs::read(&args[1])?;
     let root = PathBuf::from(&args[0]).canonicalize()?;
     let engine = engine(&root, bytes)?;
     let context = ExecutionContext::new(
-        ExecutionOptions { timeout: Some(Duration::from_secs(120)), ..Default::default() },
+        ExecutionOptions { timeout: Some(Duration::from_secs(3600)), ..Default::default() },
         ResourceLimits::default(),
     );
     let start = Instant::now();
@@ -129,7 +131,7 @@ fn convert(
         "best-effort" => ErrorPolicy::BestEffort,
         _ => return Err("invalid error policy".into()),
     };
-    request.options.output.asset_mode = AssetMode::Embed;
+    request.options.output.asset_mode = AssetMode::Omit;
     let result = futures::executor::block_on(engine.convert_with_context(request, context.clone()));
     let outcome = match result {
         Ok(result) => {

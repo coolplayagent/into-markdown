@@ -37,6 +37,13 @@ from release import (
 
 
 class PlatformReleaseTests(unittest.TestCase):
+    def test_ocr_process_group_ceiling_is_consistent_across_release_assemblers(self) -> None:
+        expected = 2048 * 1024 * 1024
+        self.assertEqual(release_module.OCR_PROCESS_GROUP_MEMORY_BYTES, expected)
+        macos_source = (ROOT / "tools/macos-release/release.py").read_text(encoding="utf-8")
+        self.assertIn("OCR_PROCESS_GROUP_MEMORY_BYTES = 2048 * 1024 * 1024", macos_source)
+        self.assertIn("resources(OCR_PROCESS_GROUP_MEMORY_BYTES", macos_source)
+
     def test_cargo_runtime_authority_binds_current_workspace_manifests(self) -> None:
         authority_path = ROOT / "third_party/licenses/cargo-normal-runtime.json"
         value = json.loads(authority_path.read_text(encoding="utf-8"))

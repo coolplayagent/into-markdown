@@ -230,6 +230,7 @@ fn decode_checkpoint_assets(
             detail: format!("{} > {}", wire_assets.len(), into_markdown_core::MAX_DTO_ASSETS),
         });
     }
+    let omit_payloads = request.options.output.asset_mode == into_markdown_core::AssetMode::Omit;
     let mut total = 0_u64;
     let mut ids = std::collections::BTreeSet::new();
     for wire in &wire_assets {
@@ -242,7 +243,9 @@ fn decode_checkpoint_assets(
             count.checked_mul(u64::try_from(std::mem::size_of::<Asset>()).unwrap_or(u64::MAX))
         })
         .ok_or_else(|| recovery_error("limit", "checkpoint asset vector size overflowed"))?;
-    memory.grow(total)?;
+    if !omit_payloads {
+        memory.grow(total)?;
+    }
     memory.grow(vector_bytes)?;
     let mut assets = Vec::new();
     assets.try_reserve_exact(wire_assets.len()).map_err(|_| ConversionError::ResourceLimit {
@@ -251,6 +254,17 @@ fn decode_checkpoint_assets(
     })?;
     for wire in wire_assets {
         context.checkpoint()?;
+        if omit_payloads {
+            validate_checkpoint_base64_without_materializing(&wire, context)?;
+            assets.push(Asset {
+                id: wire.id,
+                filename: wire.filename,
+                media_type: wire.media_type,
+                bytes: Vec::new(),
+                external_uri: wire.external_uri,
+            });
+            continue;
+        }
         let capacity = usize::try_from(wire.decoded_bytes).map_err(|_| {
             recovery_error("limit", "checkpoint decoded asset length is not representable")
         })?;
@@ -287,6 +301,56 @@ fn decode_checkpoint_assets(
     Ok(assets)
 }
 
+fn validate_checkpoint_base64_without_materializing(
+    wire: &CheckpointAssetWire,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let _memory = context.reserve_memory(48 * 1024)?;
+    let mut scratch = Vec::new();
+    scratch.try_reserve_exact(48 * 1024).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_memory_bytes",
+        detail: "checkpoint base64 validation scratch allocation failed".into(),
+    })?;
+    scratch.resize(48 * 1024, 0);
+    let mut written = 0_u64;
+    for chunk in wire.data_base64.as_bytes().chunks(64 * 1024) {
+        context.checkpoint()?;
+        let decoded = STANDARD
+            .decode_slice(chunk, &mut scratch)
+            .map_err(|_| recovery_error("corrupt", "checkpoint asset base64 is not canonical"))?;
+        written = written
+            .checked_add(u64::try_from(decoded).unwrap_or(u64::MAX))
+            .ok_or_else(|| recovery_error("limit", "checkpoint decoded asset length overflowed"))?;
+    }
+    if written != wire.decoded_bytes {
+        return Err(recovery_error(
+            "corrupt",
+            "checkpoint asset decoded length does not match its declaration",
+        ));
+    }
+    Ok(())
+}
+
+fn discard_omitted_assets(
+    output: ConverterOutput,
+    request: &ConversionRequest,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {
+        output.discard_asset_payloads(context)
+    } else {
+        Ok(output)
+    }
+}
+
+fn required_renderer(
+    engine: &Engine,
+) -> Result<&Arc<dyn into_markdown_core::MarkdownRenderer>, ConversionError> {
+    engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
+        detail: "no Markdown renderer is registered".into(),
+    })
+}
+
 fn preflight_checkpoint_asset<'a>(
     wire: &'a CheckpointAssetWire,
     ids: &mut std::collections::BTreeSet<&'a str>,
@@ -311,7 +375,9 @@ fn preflight_checkpoint_asset<'a>(
                 "checkpoint asset external URI is not canonical HTTP(S)",
             ));
         }
-        None if decoded == 0 => {
+        None if decoded == 0
+            && request.options.output.asset_mode != into_markdown_core::AssetMode::Omit =>
+        {
             return Err(recovery_error(
                 "corrupt",
                 "checkpoint asset has neither bytes nor an external URI",
@@ -598,6 +664,7 @@ pub(super) async fn convert(
             &context,
         )
         .await?;
+        let output = discard_omitted_assets(output, &request, &context)?;
         let output = crate::result_policy::attach_evidence(output, &context)?;
         validate_asset_inventory(&output.document, &output.assets, &request)?;
         validate_diagnostics(&output.diagnostics)?;
@@ -616,10 +683,11 @@ pub(super) async fn convert(
         store.remove_media(token)?;
         output
     };
+    // Checkpoints produced by older builds can still contain omitted payloads.
+    // Compact both newly converted and resumed outputs before rendering.
+    let output = discard_omitted_assets(output, &request, &context)?;
 
-    let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
-        detail: "no Markdown renderer is registered".into(),
-    })?;
+    let renderer = required_renderer(engine)?;
     context.report(ExecutionStage::Rendering, None, None, Some(renderer.id()))?;
     let (markdown, markdown_memory) = invoke_renderer_preflighted(
         renderer.as_ref(),
@@ -739,7 +807,9 @@ fn validate_asset_inventory(
                     "checkpoint asset external URI is not canonical HTTP(S)",
                 ));
             }
-            None if asset.bytes.is_empty() => {
+            None if asset.bytes.is_empty()
+                && request.options.output.asset_mode != into_markdown_core::AssetMode::Omit =>
+            {
                 return Err(recovery_error(
                     "corrupt",
                     "checkpoint asset has neither bytes nor an external URI",
@@ -1872,6 +1942,114 @@ mod tests {
             assert_eq!(enrichments.load(Ordering::SeqCst), expected_attempts);
             assert_eq!(renders.load(Ordering::SeqCst), 0);
         }
+    }
+
+    #[test]
+    fn omitted_asset_payloads_round_trip_through_recovery() {
+        let asset_id = AssetId("omitted-image".into());
+        let fixture = ConverterOutput::new(
+            Document {
+                metadata: into_markdown_core::DocumentMetadata {
+                    title: Some("omitted asset".into()),
+                    ..into_markdown_core::DocumentMetadata::default()
+                },
+                blocks: vec![fixture_node(
+                    "image-node",
+                    Block::Image { asset: asset_id.clone(), alt: Some("diagram".into()) },
+                )],
+                ..Document::default()
+            },
+            vec![Asset {
+                id: asset_id,
+                filename: Some("diagram.png".into()),
+                media_type: "image/png".into(),
+                bytes: vec![0xa5; 64 * 1024],
+                external_uri: None,
+            }],
+            Vec::new(),
+        );
+        let directory = private_tempdir();
+        let token = RecoveryToken::parse("10223344556677889900aabbccddeeff").unwrap();
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let renders = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(true));
+        let request = || {
+            let mut request =
+                ConversionRequest::new(InputRef::bytes(b"fixture".as_slice(), Some("x")));
+            request.options.output.asset_mode = into_markdown_core::AssetMode::Omit;
+            request
+        };
+
+        {
+            let store = RecoveryStore::open(directory.path()).unwrap();
+            let engine = fixture_engine(
+                &fixture,
+                Arc::clone(&conversions),
+                Arc::clone(&renders),
+                Arc::clone(&fail),
+            );
+            let error =
+                block_on(engine.convert_recoverable(request(), &store, &token)).unwrap_err();
+            assert_eq!(error.code(), ErrorCode::Internal);
+            assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Converted);
+        }
+        {
+            let store = RecoveryStore::open(directory.path()).unwrap();
+            let engine = fixture_engine(
+                &fixture,
+                Arc::clone(&conversions),
+                Arc::clone(&renders),
+                Arc::clone(&fail),
+            );
+            let result = block_on(engine.convert_recoverable(request(), &store, &token)).unwrap();
+            assert_eq!(result.assets.len(), 1);
+            assert!(result.assets[0].bytes.is_empty());
+            assert!(result.assets[0].external_uri.is_none());
+        }
+        assert_eq!(conversions.load(Ordering::SeqCst), 1);
+        assert_eq!(renders.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn omitted_payload_from_an_older_checkpoint_is_not_rehydrated() {
+        let mut document = Document::default();
+        document.metadata.title = Some("older omitted asset".into());
+        let fixture = ConverterOutput::new(
+            document,
+            vec![Asset {
+                id: AssetId("older-asset".into()),
+                filename: Some("older.bin".into()),
+                media_type: "application/octet-stream".into(),
+                bytes: vec![0x5a; 1024 * 1024],
+                external_uri: None,
+            }],
+            Vec::new(),
+        );
+        let directory = private_tempdir();
+        let store = RecoveryStore::open(directory.path()).unwrap();
+        let token = RecoveryToken::parse("20223344556677889900aabbccddeeff").unwrap();
+        let mut request = ConversionRequest::new(InputRef::bytes(b"fixture".as_slice(), Some("x")));
+        request.options.output.asset_mode = into_markdown_core::AssetMode::Omit;
+        commit_fixture_checkpoint(
+            &store,
+            &token,
+            TaskPhase::Converted,
+            &fixture,
+            "",
+            &[],
+            &request,
+        );
+        let conversions = Arc::new(AtomicUsize::new(0));
+        let engine = fixture_engine(
+            &fixture,
+            Arc::clone(&conversions),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let result = block_on(engine.convert_recoverable(request, &store, &token)).unwrap();
+        assert_eq!(conversions.load(Ordering::SeqCst), 0);
+        assert_eq!(result.assets.len(), 1);
+        assert!(result.assets[0].bytes.is_empty());
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use super::*;
-use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
 use into_markdown_core::{
     AiCapability, AiInput, AiOutput, AiProvider, AiRequest, BoundOcrResult, BoxFuture,
     ConversionOutcome, ExecutionOptions, Inline, OcrEngine, OcrEvidenceStage, OcrEvidenceStep,
@@ -251,6 +251,71 @@ fn real_ocr_fixture_converts_offline_as_image_only() {
     assert_eq!(output.assets[0].bytes, bytes);
     assert_eq!(output.assets[0].media_type, "image/png");
     assert!(output.diagnostics.is_empty());
+}
+
+#[test]
+fn omitted_image_payload_bypasses_asset_limits_and_retains_only_metadata() {
+    let bytes = encoded(ImageFormat::Png);
+    let mut options = options();
+    options.output.asset_mode = into_markdown_core::AssetMode::Omit;
+    options.limits.max_asset_bytes = 1;
+    options.limits.max_total_asset_bytes = 1;
+    let execution = context(&options);
+    let output = block_on(convert_image(
+        &input(bytes, "omitted.png"),
+        &options,
+        &Services::default(),
+        &execution,
+    ))
+    .unwrap();
+    assert_eq!(output.document.blocks.len(), 1);
+    assert_eq!(output.assets.len(), 1);
+    assert!(output.assets[0].bytes.is_empty());
+    assert!(output.assets[0].external_uri.is_none());
+    drop(output);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn omitted_multiframe_images_do_not_retain_normalized_frame_assets() {
+    for (name, bytes) in [("scan.tiff", multi_tiff()), ("animated.webp", animated_webp())] {
+        let mut options = options();
+        options.output.asset_mode = into_markdown_core::AssetMode::Omit;
+        let output = block_on(convert_image(
+            &input(bytes, name),
+            &options,
+            &Services::default(),
+            &context(&options),
+        ))
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(output.document.blocks.len(), 2, "{name}");
+        assert_eq!(output.assets.len(), 1, "{name}");
+        assert!(output.assets[0].bytes.is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn large_rgb_image_without_pixel_consumers_uses_header_only_memory() {
+    let pixels = RgbImage::from_pixel(1024, 1024, Rgb([20, 40, 60]));
+    let mut encoded = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(pixels).write_to(&mut encoded, ImageFormat::Png).unwrap();
+    let mut options = options();
+    options.output.asset_mode = into_markdown_core::AssetMode::Omit;
+    options.limits.max_memory_bytes = 512 * 1024;
+    options.limits.max_decompressed_bytes = 8 * 1024 * 1024;
+    let execution = context(&options);
+    let output = block_on(convert_image(
+        &input(encoded.into_inner(), "large-rgb.png"),
+        &options,
+        &Services::default(),
+        &execution,
+    ))
+    .unwrap();
+    assert_eq!(output.document.metadata.properties["image.width"], "1024");
+    assert_eq!(output.document.metadata.properties["image.height"], "1024");
+    assert_eq!(output.document.metadata.properties["image.alpha"], "false");
+    assert!(output.assets[0].bytes.is_empty());
+    assert!(execution.resource_usage().shared_lease_peak_bytes < 512 * 1024);
 }
 
 #[test]

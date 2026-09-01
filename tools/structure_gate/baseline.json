@@ -460,15 +460,15 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1285,
+      "lines": 1280,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 208
+          "lines": 207
         },
         {
           "symbol": "plan_enrichment",
-          "lines": 212
+          "lines": 206
         }
       ],
       "allowances": [
@@ -758,7 +758,7 @@
       "functions": [
         {
           "symbol": "convert_image",
-          "lines": 163
+          "lines": 152
         }
       ],
       "allowances": [
@@ -1743,7 +1743,7 @@
     },
     {
       "path": "crates/core/src/spi.rs",
-      "lines": 1613,
+      "lines": 1609,
       "functions": [
         {
           "symbol": "estimate_validation_working_set",
@@ -2130,11 +2130,11 @@
     },
     {
       "path": "crates/render-markdown/src/lib.rs",
-      "lines": 1751,
+      "lines": 1745,
       "functions": [
         {
           "symbol": "plan_assets",
-          "lines": 131
+          "lines": 124
         },
         {
           "symbol": "planned_render_peak",

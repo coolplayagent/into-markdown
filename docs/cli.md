@@ -243,6 +243,16 @@ markdown-postprocess
   `--max-decompressed-size`、`--max-memory-size`、输入/资产额度和当前可用共享预算共同决定。
   提高这些预算可处理更大的源图，但不会放宽识别模型的文字区域、归一化宽度、张量和输出结构
   边界。Web 请求继续受服务端固定资源 profile 约束。
+- 正式 OCR provider 的 coordinator 与 ONNX worker 共享 2 GiB 物理内存硬上限。它独立于源图
+  尺寸准入，识别请求还会被当前请求的共享内存预算进一步收紧；上限保持有限，以便异常模型或
+  子进程稳定返回 `resourceLimit`，不会演变为机器级内存失控。
+- PDF、Office、ODF、EPUB、HTML、Notebook、ZIP 与 MSG 的内嵌图片 OCR 共享逐图片工作集
+  生命周期：完整结构和资产边界先验证，归一化及 provider 工作区只保留当前图片，实际识别
+  正文按产生量占用共享预算。`--asset-mode omit` 会在每个图片身份完成后释放 payload，并在
+  Markdown 渲染前清除其他不输出的资产字节；它适合只需要扫描正文的大型电子书。
+- 单帧、无 alpha 通道且无需 OCR、视觉 AI 或旋转归一化的 PNG、JPEG、BMP 和静态 WebP，
+  在完整封装校验后只读取图像头并直通原始编码，不分配整张 RGBA 像素缓冲。TIFF、动画 WebP
+  以及确实需要推理或归一化的图片仍按完整帧工作集预检；超出共享预算时返回资源限制。
 - PPTX 每个 XML 部件默认最多 2,000,000 个非 EOF 事件（开始、空元素、结束、文本等），
   包含未选中的 MCE 分支；`--max-presentation-xml-events` 可调整且必须大于零。
   深度、几何、解压、内存与最终 IR 限制继续独立生效。Web 请求最多取默认值，可下调。

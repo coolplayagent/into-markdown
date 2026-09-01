@@ -470,25 +470,11 @@ impl OcrEngine for ProcessOcrEngine {
 
 impl ProcessOcrEngine {
     fn wire_memory_bytes(&self) -> u64 {
-        // Two maximum frames, the result JSON and executable hash scratch.
-        5 * self.capability.resources.max_output_bytes + 2 * FRAME_OVERHEAD + 64 * 1024
+        ocr_wire_memory_bytes(self.capability.resources.max_output_bytes)
     }
 
     fn output_plan(&self) -> Result<OcrOutputPlan, ConversionError> {
-        let retained = self.capability.resources.max_output_bytes;
-        let regions = 3_000_u32;
-        let structural = u64::from(regions) * 256;
-        let text = retained.saturating_sub(structural).min(16 * 1024 * 1024);
-        OcrOutputPlan::try_new_with_working(
-            retained,
-            self.capability
-                .resources
-                .max_memory_bytes
-                .min(self.options.limits.max_memory_bytes)
-                .saturating_add(self.wire_memory_bytes()),
-            regions,
-            text,
-        )
+        process_ocr_output_plan(self.capability.resources.max_output_bytes)
     }
 
     fn execute_bound(
@@ -549,6 +535,21 @@ impl ProcessOcrEngine {
         }
         Ok(OcrRecognition::Bound(result))
     }
+}
+
+fn ocr_wire_memory_bytes(retained: u64) -> u64 {
+    // Two maximum frames, the result JSON and executable hash scratch.
+    5 * retained + 2 * FRAME_OVERHEAD + 64 * 1024
+}
+
+fn process_ocr_output_plan(retained: u64) -> Result<OcrOutputPlan, ConversionError> {
+    let regions = 3_000_u32;
+    let structural = u64::from(regions) * 256;
+    let text = retained.saturating_sub(structural).min(16 * 1024 * 1024);
+    // The signed process-group ceiling is enforced outside the host execution
+    // context. Charge only IPC and retained result memory so the child sandbox
+    // is not counted twice against the caller's fixed Core budget.
+    OcrOutputPlan::try_new_with_working(retained, ocr_wire_memory_bytes(retained), regions, text)
 }
 
 impl Transcriber for ProcessTranscriber {
@@ -955,6 +956,15 @@ mod tests {
         if cfg!(target_os = "linux") {
             assert!(process_address_space_limit(u64::MAX, true).is_err());
         }
+    }
+
+    #[test]
+    fn ocr_host_plan_charges_wire_memory_without_the_child_process_ceiling() {
+        let retained = 24 * 1024 * 1024;
+        let plan = process_ocr_output_plan(retained).unwrap();
+        assert_eq!(plan.max_retained_bytes(), retained);
+        assert_eq!(plan.max_working_bytes(), 5 * retained + 2 * FRAME_OVERHEAD + 64 * 1024);
+        assert!(plan.max_working_bytes() < 256 * 1024 * 1024);
     }
 
     #[test]

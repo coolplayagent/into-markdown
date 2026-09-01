@@ -11,6 +11,8 @@ use std::mem::size_of;
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod asset_payloads;
+
 /// Sendable boxed future used to keep service-provider traits object safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -687,12 +689,6 @@ impl ConverterOutput {
                 .unwrap_or(u64::MAX),
             _memory_lease: memory_lease,
         }
-    }
-
-    #[doc(hidden)]
-    #[must_use]
-    pub fn leased_memory_for(&self, context: &ExecutionContext) -> u64 {
-        self.memory_lease.bytes_for(context)
     }
 
     /// Transfer opaque retained-memory ownership from a consumed nested output
