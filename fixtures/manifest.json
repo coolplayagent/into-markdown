@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "56dd146d25296c756d019952dba627310e33e51fabea3e6053dd03b0ae102450",
+    "sha256": "db485418292033aa2988db5f63a57b073afefa7e9c7bfb3beb920b86cef7bf48",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -2086,8 +2086,8 @@
         "description": "reachable image read and decoder require an authenticated exact memory plan",
         "limit": {
           "option": "max_memory_bytes",
-          "failing_value": 513408767,
-          "passing_value": 513408768,
+          "failing_value": 1408731,
+          "passing_value": 1408732,
           "error_limit": "max_memory_bytes",
           "passing_semantic_sha256": "f4193797e682f2c822f38852f5ba0cd7ea0a8a5da2b2805821610c7c7e3bcf13"
         }

@@ -314,8 +314,7 @@ impl Package {
                 planned_reachable_capacity
                     .checked_add(planned_capacity)
                     .ok_or_else(|| limit("max_memory_bytes", "reachable image bytes overflow"))?;
-            let declared_peak =
-                reachable_image_peak(base_peak, planned_reachable_capacity, part.size)?;
+            let declared_peak = reachable_image_peak(base_peak, planned_reachable_capacity)?;
             if declared_peak > self.preflight {
                 return Err(limit(
                     "max_memory_bytes",
@@ -334,7 +333,7 @@ impl Package {
             reachable_capacity = reachable_capacity
                 .checked_add(allocated)
                 .ok_or_else(|| limit("max_memory_bytes", "reachable image bytes overflow"))?;
-            let actual_peak = reachable_image_peak(base_peak, reachable_capacity, part.size)?;
+            let actual_peak = reachable_image_peak(base_peak, reachable_capacity)?;
             if actual_peak > self.preflight {
                 return Err(limit(
                     "max_memory_bytes",

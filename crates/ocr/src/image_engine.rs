@@ -17,7 +17,6 @@ use std::sync::Arc;
 const PROVIDER: &str = "builtin.ocr.ppocrv6-image";
 const DETECTOR_PROVIDER: &str = "builtin.ocr.ppocrv6-detector";
 const RECOGNIZER_PROVIDER: &str = "builtin.ocr.ppocrv6-recognizer";
-const MAX_DIMENSION: u32 = 32_768;
 const MAX_REGIONS: u32 = 3000;
 const MAX_TEXT_BYTES: u64 = 16 * 1024 * 1024;
 const OUTPUT_BYTES_PER_REGION: u64 = 2048;
@@ -179,11 +178,8 @@ impl OcrEngine for PpOcrImageEngine {
         context: &ExecutionContext,
     ) -> Result<OcrOutputPlan, ConversionError> {
         context.checkpoint()?;
-        if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
-            return Err(resource(
-                "image_dimensions",
-                "OCR PNG dimensions are outside product bounds",
-            ));
+        if width == 0 || height == 0 {
+            return Err(resource("image_dimensions", "OCR PNG dimensions must be non-zero"));
         }
         let decoded = u64::from(width)
             .checked_mul(u64::from(height))
@@ -230,8 +226,6 @@ fn decode_normalized_png(
     context.checkpoint()?;
     let mut reader = ImageReader::with_format(Cursor::new(request.image), ImageFormat::Png);
     let mut decoder_limits = image::Limits::default();
-    decoder_limits.max_image_width = Some(MAX_DIMENSION);
-    decoder_limits.max_image_height = Some(MAX_DIMENSION);
     decoder_limits.max_alloc = Some(limits.max_decompressed_bytes.min(limits.max_memory_bytes));
     reader.limits(decoder_limits);
     let decoded = reader.decode().map_err(|error| map_image_error(&error))?;
@@ -263,8 +257,8 @@ fn validate_png_header(
     }
     let width = u32::from_be_bytes(request.image[16..20].try_into().expect("fixed slice"));
     let height = u32::from_be_bytes(request.image[20..24].try_into().expect("fixed slice"));
-    if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(resource("image_dimensions", "OCR PNG dimensions are outside product bounds"));
+    if width == 0 || height == 0 {
+        return Err(resource("image_dimensions", "OCR PNG dimensions must be non-zero"));
     }
     let pixels = u64::from(width)
         .checked_mul(u64::from(height))
@@ -348,7 +342,6 @@ fn language_hint<'a>(languages: &'a [&'a str]) -> Result<Option<&'a str>, Conver
 
 fn source_pixel_limit(limits: &ResourceLimits) -> Result<usize, ConversionError> {
     usize::try_from(limits.max_decompressed_bytes / 4)
-        .map(|pixels| pixels.min(100_000_000))
         .map_err(|_| resource("max_decompressed_bytes", "OCR pixel limit is not representable"))
 }
 
@@ -477,6 +470,16 @@ fn ocr(detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use into_markdown_core::ExecutionOptions;
+
+    fn png_header(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 2, 0, 0, 0]);
+        bytes.extend_from_slice(&[0; 4]);
+        bytes
+    }
 
     #[test]
     fn effective_limits_never_exceed_request_or_service_envelope() {
@@ -498,5 +501,62 @@ mod tests {
         let mut tighter_service = service;
         tighter_service.max_archive_entries = 1;
         assert_eq!(effective_limits(&tighter_service, &request).max_archive_entries, 1);
+    }
+
+    #[test]
+    fn source_dimensions_have_no_fixed_axis_or_pixel_ceiling() {
+        let limits = ResourceLimits::default();
+        let wide = png_header(40_000, 1);
+        assert_eq!(
+            validate_png_header(
+                OcrRequest { image: &wide, media_type: "image/png", languages: &[] },
+                &limits,
+            )
+            .unwrap(),
+            (40_000, 1),
+        );
+
+        let two_hundred_megapixels = png_header(20_000, 10_000);
+        assert_eq!(
+            validate_png_header(
+                OcrRequest {
+                    image: &two_hundred_megapixels,
+                    media_type: "image/png",
+                    languages: &[],
+                },
+                &limits,
+            )
+            .unwrap(),
+            (20_000, 10_000),
+        );
+
+        let mut bounded = limits;
+        bounded.max_decompressed_bytes = 799_999_999;
+        assert!(matches!(
+            validate_png_header(
+                OcrRequest {
+                    image: &two_hundred_megapixels,
+                    media_type: "image/png",
+                    languages: &[],
+                },
+                &bounded,
+            ),
+            Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
+        ));
+    }
+
+    #[test]
+    fn wide_png_decodes_under_the_request_resource_budget() {
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::new_rgba8(40_000, 1).write_to(&mut encoded, ImageFormat::Png).unwrap();
+        let limits = ResourceLimits::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits.clone());
+        let (decoded, _memory) = decode_normalized_png(
+            OcrRequest { image: encoded.get_ref(), media_type: "image/png", languages: &[] },
+            &limits,
+            &context,
+        )
+        .unwrap();
+        assert_eq!(decoded.dimensions(), (40_000, 1));
     }
 }

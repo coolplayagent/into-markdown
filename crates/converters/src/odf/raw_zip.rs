@@ -1,6 +1,5 @@
 use crate::odf::model::{
-    IMAGE_DECODER_HEADER_BYTES, MAX_IMAGE_PIXELS, PACKAGE_BASE_WORKING_BYTES, ZIP_STREAM_CHUNK,
-    limit, malformed,
+    IMAGE_DECODER_HEADER_BYTES, PACKAGE_BASE_WORKING_BYTES, ZIP_STREAM_CHUNK, limit, malformed,
 };
 use into_markdown_core::{ConversionError, ExecutionContext};
 use std::mem::size_of;
@@ -30,14 +29,10 @@ pub(super) fn conservative_vec_capacity(declared_bytes: u64) -> Result<u64, Conv
 pub(super) fn reachable_image_peak(
     base_peak: u64,
     reachable_capacity: u64,
-    current_image_bytes: u64,
 ) -> Result<u64, ConversionError> {
     let loaded = base_peak
         .checked_add(reachable_capacity)
         .ok_or_else(|| limit("max_memory_bytes", "reachable image load plan overflow"))?;
-    let decode = loaded
-        .checked_add(image_decode_plan(current_image_bytes, MAX_IMAGE_PIXELS)?)
-        .ok_or_else(|| limit("max_memory_bytes", "reachable image decode plan overflow"))?;
     let cloned = base_peak
         .checked_add(
             reachable_capacity
@@ -45,7 +40,7 @@ pub(super) fn reachable_image_peak(
                 .ok_or_else(|| limit("max_memory_bytes", "reachable image clone plan overflow"))?,
         )
         .ok_or_else(|| limit("max_memory_bytes", "reachable image clone plan overflow"))?;
-    Ok(decode.max(cloned))
+    Ok(loaded.max(cloned))
 }
 
 pub(super) fn package_logical_peak(

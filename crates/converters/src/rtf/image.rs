@@ -148,7 +148,6 @@ pub(super) fn audit_image(
     context: &ExecutionContext,
     memory: &mut ResourceReservation,
 ) -> Result<(), ConversionError> {
-    const MAX_DIMENSION: u32 = 32_768;
     context.checkpoint()?;
     validate_exact_image_envelope(bytes, media_type, context)?;
     let compressed = u64::try_from(bytes.len())
@@ -176,15 +175,8 @@ pub(super) fn audit_image(
         )?;
         (dimensions, decoder.total_bytes())
     };
-    if dimensions.0 == 0
-        || dimensions.1 == 0
-        || dimensions.0 > MAX_DIMENSION
-        || dimensions.1 > MAX_DIMENSION
-    {
-        return Err(limit(
-            "image_dimensions",
-            format!("{}x{} exceeds the audited image bounds", dimensions.0, dimensions.1),
-        ));
+    if dimensions.0 == 0 || dimensions.1 == 0 {
+        return Err(limit("image_dimensions", "picture dimensions must be non-zero"));
     }
     if decoded_bytes > options.limits.max_decompressed_bytes {
         return Err(limit(
@@ -502,8 +494,10 @@ pub(super) fn set_image_limits<D: image::ImageDecoder>(
     options: &ConversionOptions,
 ) -> Result<(), ConversionError> {
     let mut limits = ImageLimits::default();
-    limits.max_image_width = Some(dimensions.0.min(32_768));
-    limits.max_image_height = Some(dimensions.1.min(32_768));
+    // Bind the decoder to the dimensions authenticated from its own header without imposing an
+    // independent product ceiling. Allocation and decompression budgets remain authoritative.
+    limits.max_image_width = Some(dimensions.0);
+    limits.max_image_height = Some(dimensions.1);
     limits.max_alloc = Some(max_alloc.min(options.limits.max_memory_bytes));
     decoder
         .set_limits(limits)

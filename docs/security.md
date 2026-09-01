@@ -22,6 +22,10 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - `ResourceLimits` 限制输入大小、解压后字节数、归档条目数、嵌套深度、页数和
   保留资源数，并限制实现显式计费的内存与请求临时文件字节数。所有累加使用 checked
   arithmetic，临时文件由执行上下文负责 RAII 清理。
+- raster 图片与 OCR 源图不依赖固定宽高或固定像素阈值。非零尺寸经 checked pixel/stride/
+  decoded/working-set 规划后，由解压、内存、输入和资产预算约束；第三方 decoder 接收已认证
+  头部尺寸及 allocation budget。异常大但稀疏的尺寸声明仍会在实际像素物化前因预算或算术
+  溢出被拒绝。PDFium 页面渲染目标和 OCR 文字区域继续使用各自的 native/model 结构上限。
 - 归档路径必须规范化，拒绝路径穿越和绝对路径，解压时不得跟随符号链接。
 - Outlook MSG 的 CFB/OLE reader 对 DIFAT、FAT、miniFAT、directory sibling/child 图和每条
   stream chain 分别检测循环、越界、重复 sector 所有权与交叉重叠；directory slot、MAPI

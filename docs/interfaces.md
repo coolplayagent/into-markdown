@@ -240,6 +240,11 @@ source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserv
 Web 安全上限保持独立。`--jobs` 不会复制该预算；当前
 converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
 source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
+图片和 OCR 源图不使用独立的固定宽高或像素阈值：格式解析器先认证非零尺寸并用 checked
+arithmetic 计算 decoded bytes、stride 与 working set，再由 `max_decompressed_bytes`、
+`max_memory_bytes`、资产额度和实际可用 credit 决定是否准入。decoder 仍绑定已认证的精确头部
+尺寸和 allocation budget。OCR recognizer 的区域、crop、归一化宽度、张量及输出限制属于模型与
+结构契约，继续独立执行。
 
 `Engine::convert_into(request, sink)` 以 64 KiB 有序块向 `ArtifactSink` 写出 Markdown 和
 资产，并返回 `ConversionSummary`。它避免前端再创建一份完整序列化缓冲；兼容接口

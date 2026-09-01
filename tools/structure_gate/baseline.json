@@ -935,7 +935,7 @@
       "functions": [
         {
           "symbol": "impl Package::load_reachable_images",
-          "lines": 102
+          "lines": 101
         },
         {
           "symbol": "impl Package::open",

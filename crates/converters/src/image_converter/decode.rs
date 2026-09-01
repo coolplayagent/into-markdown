@@ -15,8 +15,6 @@ std::thread_local! {
     static DECODER_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const MAX_DIMENSION: u32 = 32_768;
-
 pub(crate) struct DecodedSet {
     pub(crate) frames: Vec<DecodedFrame>,
     pub(super) color: String,
@@ -360,8 +358,6 @@ fn tiff_working_multiplier(color: TiffColorType) -> Result<u64, ConversionError>
 
 fn image_limits(limits: &ResourceLimits) -> image::Limits {
     let mut image_limits = image::Limits::default();
-    image_limits.max_image_width = Some(MAX_DIMENSION);
-    image_limits.max_image_height = Some(MAX_DIMENSION);
     image_limits.max_alloc = Some(limits.max_decompressed_bytes.min(limits.max_memory_bytes));
     image_limits
 }
@@ -383,12 +379,6 @@ fn validate_dimensions(
 ) -> Result<(), ConversionError> {
     if width == 0 || height == 0 {
         return Err(malformed("image dimensions must be non-zero"));
-    }
-    if width > MAX_DIMENSION || height > MAX_DIMENSION {
-        return Err(resource(
-            "image_dimensions",
-            format!("image dimensions {width}x{height} exceed {MAX_DIMENSION}"),
-        ));
     }
     let decoded = u64::from(width)
         .checked_mul(u64::from(height))
@@ -444,4 +434,25 @@ fn unsupported(detail: impl Into<String>) -> ConversionError {
 
 fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
     ConversionError::ResourceLimit { limit, detail: detail.into() }
+}
+
+#[cfg(test)]
+mod resource_bound_tests {
+    use super::*;
+
+    #[test]
+    fn dimensions_are_bounded_by_decoded_bytes_instead_of_fixed_geometry() {
+        let limits = ResourceLimits::default();
+        assert!(validate_dimensions(40_000, 1, &limits).is_ok());
+        assert!(validate_dimensions(20_000, 10_000, &limits).is_ok());
+
+        let bounded = ResourceLimits { max_decompressed_bytes: 799_999_999, ..limits };
+        assert!(matches!(
+            validate_dimensions(20_000, 10_000, &bounded),
+            Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
+        ));
+        let decoder_limits = image_limits(&bounded);
+        assert_eq!(decoder_limits.max_image_width, None);
+        assert_eq!(decoder_limits.max_image_height, None);
+    }
 }
