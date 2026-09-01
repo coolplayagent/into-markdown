@@ -23,13 +23,13 @@
     },
     {
       "path": "tools/macos-release/release.py",
-      "bytes": 33896,
-      "sha256": "8ec30b741fcc466ee0315a2add28d40775052ede6e23f73c69bc82646dc63abc"
+      "bytes": 34122,
+      "sha256": "ccad8dc2976f5634040c1d736c3480e82834f55af6bf2f79085a12606e805034"
     },
     {
       "path": "tools/platform-release/release.py",
-      "bytes": 41506,
-      "sha256": "538e7db8efd82e3be6dc8215ef3c63db2a5b81fe287f1d6d88eec60245432a86"
+      "bytes": 41883,
+      "sha256": "8eccdf548fa12c8eda5335099ae08ab39ee46b5e202fce72538bb35cbbac35d7"
     }
   ],
   "licenses": [
