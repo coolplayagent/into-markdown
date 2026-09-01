@@ -255,6 +255,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   batch width 上限 3200，输出只接受 finite float32 `[N,T,6906]`，class/timestep/decoded bytes
   具有独立硬上限。所有长循环、batch 和 runtime 前后执行 cancellation/deadline checkpoint；
   任一失败不写缓存、不返回部分识别结果。
+- PDFium 链接规划为 `best-effort` 预留最坏情况下的诊断容量。物化 URI 含内部 NUL 或无效
+  编码时省略整条链接并输出就近 `pdf.linkOmitted`；`strict` 返回类型化链接错误。URI 长度
+  上限、枚举异常、预算和规划变化保持 fail closed。
 - 日志和诊断不得包含文档原始字节、凭据、签名 URL 或不受限制的提供者载荷。
 
 资源限制错误是权威错误，绝不能作为可恢复的解析器错误被吞掉。

@@ -91,6 +91,30 @@ unsafe extern "C" fn null_handle(_: Handle, position: *mut c_int, link: *mut Han
 unsafe extern "C" fn long_uri(_: Handle, _: Handle, _: *mut c_void, _: c_ulong) -> c_ulong {
     1_000_001
 }
+unsafe extern "C" fn embedded_nul_uri(
+    _: Handle,
+    _: Handle,
+    buffer: *mut c_void,
+    length: c_ulong,
+) -> c_ulong {
+    const URI: &[u8] = b"https://safe.example/\0hidden\0";
+    if !buffer.is_null() && usize::try_from(length).is_ok_and(|length| length >= URI.len()) {
+        unsafe { std::ptr::copy_nonoverlapping(URI.as_ptr(), buffer.cast(), URI.len()) };
+    }
+    URI.len() as c_ulong
+}
+unsafe extern "C" fn invalid_utf8_uri(
+    _: Handle,
+    _: Handle,
+    buffer: *mut c_void,
+    length: c_ulong,
+) -> c_ulong {
+    const URI: &[u8] = b"https://safe.example/\xff\0";
+    if !buffer.is_null() && usize::try_from(length).is_ok_and(|length| length >= URI.len()) {
+        unsafe { std::ptr::copy_nonoverlapping(URI.as_ptr(), buffer.cast(), URI.len()) };
+    }
+    URI.len() as c_ulong
+}
 
 #[test]
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
@@ -132,10 +156,38 @@ fn native_issue334_link_faults_and_plan_changes_fail_safely() {
     assert!(native.extract_links(request, plan, &mut || true).is_err());
     native.link_rect = original_rect;
     check_web_faults(&mut native, request);
+    check_target_faults(&mut native, request);
     check_scan_guards(&mut native, request);
     native.close_text_page(text);
     native.close_page(page);
     native.close_document(document);
+}
+
+fn check_target_faults(native: &mut Native, request: LinkRequest) {
+    let original = native.action_uri;
+    for (reader, reason) in [
+        (embedded_nul_uri as GetUri, LinkIssueReason::EmbeddedNul),
+        (invalid_utf8_uri as GetUri, LinkIssueReason::InvalidEncoding),
+    ] {
+        native.action_uri = reader;
+        let plan = native.plan_link_scan(request, LinkPolicy::BestEffort, &mut || true).unwrap();
+        let result = native.extract_links(request, plan, &mut || true).unwrap();
+        assert_eq!(result.links.len(), 1);
+        assert_eq!(
+            result.diagnostics,
+            [LinkDiagnostic { identity: LinkIdentity::Annotation { index: 0 }, reason }]
+        );
+
+        let strict = native.plan_link_scan(request, LinkPolicy::Strict, &mut || true).unwrap();
+        assert!(matches!(
+            native.extract_links(request, strict, &mut || true),
+            Err(Error::Link {
+                identity: LinkIdentity::Annotation { index: 0 },
+                reason: actual,
+            }) if actual == reason
+        ));
+    }
+    native.action_uri = original;
 }
 
 fn check_web_faults(native: &mut Native, request: LinkRequest) {

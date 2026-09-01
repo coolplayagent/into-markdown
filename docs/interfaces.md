@@ -67,12 +67,14 @@ PDFium 边界保留严格便捷接口 `TextPage::plan_links` / `PlannedLinks::ma
 调用方可用 `plan_link_extraction(LinkPolicy, checkpoint)` 规划带策略的链接提取，
 先为 `allocation_bytes()` 预留内存，再用 `materialize_with_checkpoint` 得到
 `LinkExtraction { links, diagnostics }`。规划和物化使用相同枚举与分类，检查扫描数、
-有效结果数、诊断数、URI 分配及分类/几何变化；无进度、失效句柄和资源错误不会降级。
+有效结果数、诊断容量、URI 分配及分类/几何变化；无进度、失效句柄和资源错误不会降级。
 `LinkIdentity` 保留注释或网页来源及原始序号，网页链接还保留矩形序号。
 
-Core 的 `best-effort` 只恢复不可用链接矩形，使用 `pdf.linkOmitted` 和页面 locator
-记录省略；`strict` 对无法恢复的矩形失败。有限倒序和部分越界矩形在两种策略下均
-规范化并保留。其他 PDF 对象继续执行原有几何校验。
+Core 的 `best-effort` 恢复不可用链接矩形以及含内部 NUL 或无效编码的 URI，使用
+`pdf.linkOmitted` 和页面 locator 记录并省略单个链接；规划阶段按最坏情况预留诊断容量。
+`strict` 对这些链接失败。有限倒序和部分越界矩形在两种策略下均规范化并保留。
+URI 长度上限、枚举异常、资源错误与规划变化保持硬错误，其他 PDF 对象继续执行原有
+几何校验。
 
 ## 可选服务
 
@@ -234,6 +236,7 @@ source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserv
 请求额外增长余量；allocator 的 size-class 舍入、元数据及其他 RSS 开销不属于这项
 协作式逻辑预算。Rust 库的确定性 `ResourceLimits::default()` 使用 2 GiB；本地 CLI/Desktop
 按调用开始时的一次机器快照选择批处理共享预算，公式与探测缺口规则见 [CLI 内存策略](cli.md)。
+未显式配置时，本地资产额度从最终共享预算派生；各资产字段的显式值独立优先。
 Web 安全上限保持独立。`--jobs` 不会复制该预算；当前
 converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
 source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
@@ -346,6 +349,10 @@ transition 禁止新增 artifact。进度只允许单调增加；reconcile 对 C
 Windows 使用 Job Object 总内存上限。`OcrRecognitionMemory` 仅表示受控的识别阶段私有
 逻辑预算拒绝，`code()` 保持 `resourceLimit`，`reason_code()` 为 `ocrRecognitionMemory`。
 公共 API 的调用方可据此区分识别额度与全局资源失败，禁止通过错误文本判断降级。
+可选图片的其他识别阶段资源限制通过稳定 limit 名称分类：本地宽度、crop、张量、输出、
+regions 与 decoded 限制，以及进程边界的 `ocrWidthLimit`、`ocrPixelLimit`、
+`ocrTensorLimit`、`ocrStructureLimit`。全局内存、资产、provider frame、协议、进程、取消
+和超时保持终止语义。
 
 Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 huge-page 字段，
 共享普通页面按比例计入，历史进程峰值单独用于测量报告。已退出进程的 ENOENT/ESRCH

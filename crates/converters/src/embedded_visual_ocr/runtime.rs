@@ -30,8 +30,10 @@ pub(super) fn require_scanned_pages(
 }
 
 pub(super) fn locate_omission(diagnostic: &mut Diagnostic, reference_index: usize) {
-    if diagnostic.code == "ocr.optionalRecognitionMemorySkipped"
-        && let Some(locator) = &mut diagnostic.locator
+    if matches!(
+        diagnostic.code.as_str(),
+        "ocr.optionalRecognitionMemorySkipped" | "ocr.optionalRecognitionResourceSkipped"
+    ) && let Some(locator) = &mut diagnostic.locator
         && locator.part.is_none()
     {
         // A logical image reference identifies HTML nodes whose parser cannot
@@ -75,21 +77,47 @@ pub(super) fn has_native_body(
     Ok(false)
 }
 
-pub(super) fn optional_failure(
+pub(super) fn optional_failure_code(
     error: &ConversionError,
     options: &ConversionOptions,
     references: &[VisualRef],
     asset_ids: impl Iterator<Item = AssetId>,
-) -> bool {
-    matches!(error, ConversionError::OcrRecognitionMemory { .. })
-        && options.error_policy == ErrorPolicy::BestEffort
+) -> Option<&'static str> {
+    let code = match error {
+        ConversionError::OcrRecognitionMemory { .. }
+        | ConversionError::ResourceLimit {
+            limit:
+                "ocrRecognitionMemory"
+                | "recognitionMemory"
+                | "recognitionCropMemory"
+                | "recognitionOutputMemory",
+            ..
+        } => "ocr.optionalRecognitionMemorySkipped",
+        ConversionError::ResourceLimit {
+            limit:
+                "recognitionWidth"
+                | "recognitionCropPixels"
+                | "recognitionTensorElements"
+                | "recognitionOutputElements"
+                | "recognitionRegions"
+                | "recognitionDecodedBytes"
+                | "ocrWidthLimit"
+                | "ocrPixelLimit"
+                | "ocrTensorLimit"
+                | "ocrStructureLimit",
+            ..
+        } => "ocr.optionalRecognitionResourceSkipped",
+        _ => return None,
+    };
+    (options.error_policy == ErrorPolicy::BestEffort
         && effective_ocr_policy(options) == OcrPolicy::Auto
         && asset_ids.into_iter().all(|asset| {
             references
                 .iter()
                 .filter(|reference| reference.asset == asset)
                 .all(|reference| reference.optional)
-        })
+        }))
+    .then_some(code)
 }
 
 pub(super) async fn recognize(
@@ -265,6 +293,15 @@ mod tests {
         assert_eq!(second.locator.as_ref().unwrap().byte_start, None);
         locate_omission(&mut second, 3);
         assert_eq!(second.locator.as_ref().unwrap().part.as_deref(), Some("document/image/3"));
+
+        let mut resource = Diagnostic {
+            code: "ocr.optionalRecognitionResourceSkipped".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: "recognition width".into(),
+            locator: Some(SourceLocator { page: Some(2), ..Default::default() }),
+        };
+        locate_omission(&mut resource, 3);
+        assert_eq!(resource.locator.as_ref().unwrap().part.as_deref(), Some("document/image/4"));
     }
 
     #[test]

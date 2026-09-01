@@ -856,8 +856,8 @@ async fn enrich(
                 }
                 cache[group_index] = Some(contribution);
             }
-            Err(error)
-                if runtime::optional_failure(
+            Err(error) => {
+                let Some(code) = runtime::optional_failure_code(
                     &error,
                     options,
                     &references,
@@ -866,12 +866,13 @@ async fn enrich(
                         .enumerate()
                         .filter(|(index, _)| grouping.membership[*index] == group_index)
                         .map(|(_, candidate)| output.assets[candidate.asset_index].id.clone()),
-                ) =>
-            {
+                ) else {
+                    return Err(error);
+                };
                 context.checkpoint()?;
                 cache[group_index] = Some(CachedContribution {
                     diagnostics: vec![Diagnostic {
-                        code: "ocr.optionalRecognitionMemorySkipped".into(),
+                        code: code.into(),
                         severity: DiagnosticSeverity::Warning,
                         message: error.to_string(),
                         locator: None,
@@ -879,7 +880,6 @@ async fn enrich(
                     ..Default::default()
                 });
             }
-            Err(error) => return Err(error),
         }
     }
 

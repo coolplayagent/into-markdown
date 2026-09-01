@@ -4350,7 +4350,7 @@ fn apply_conversion_overrides(
     apply_text_overrides(arguments, &mut loaded.options);
     apply_network_overrides(arguments, &mut loaded.options)?;
     apply_limit_overrides(arguments, &mut loaded.options);
-    config::memory::apply_override(arguments.max_memory_size, loaded);
+    config::memory::apply_overrides(arguments, loaded);
     apply_output_overrides(arguments, &mut loaded.options);
     apply_ai_capability_overrides(arguments, loaded)?;
     if arguments.diarize && loaded.options.ai.audio_transcription == AiMode::Off {

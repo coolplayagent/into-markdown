@@ -497,12 +497,15 @@ test("result dialog provides reading and source views with a closed details draw
   const api: ApiClient = { ...availableApi, async getTask() { return completed; }, async listTasks(filters) { assert.equal(filters?.batchId, completed.batchId); return { tasks: [completed, sibling] }; }, async preview(_id, key) { previewCalls += 1;
     if (key === "f".repeat(32)) return { text: JSON.stringify({ schemaVersion: 1, diagnostics: [
       { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 3, part: "figure.png" } },
+      { code: "ocr.optionalRecognitionResourceSkipped", locator: { page: 7, part: "wide.png" } },
     ] }), truncated: false, contentType: "application/json" };
     return { text: markdown, truncated: true, contentType: "text/markdown" }; } };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
   await waitFor(() => previewCalls === 2 && window.document.body.textContent.includes("figure.png"));
   assert.ok(window.document.querySelector('.document-canvas .preview-notice')?.parentElement?.classList.contains("document-canvas"));
   assert.ok(window.document.querySelector('.document-canvas')?.textContent?.includes("Some images exceeded"));
+  assert.ok(window.document.querySelector('.document-canvas')?.textContent?.includes("width, pixel, tensor, or structure"));
+  assert.ok(window.document.querySelector('.document-canvas')?.textContent?.includes("wide.png"));
   assert.ok(window.document.querySelector('.result-dialog[role="dialog"]'));
   assert.equal(window.document.querySelector(".result-dialog-backdrop")?.parentElement, window.document.body, "the viewport dialog must escape animated route containers");
   assert.ok(window.document.body.textContent.includes("Add documents"), "the workbench remains mounted behind the result");
@@ -1183,6 +1186,11 @@ test("structured OCR failure and omission locations are bounded and preserved", 
   assert.deepEqual(parseOcrOmissions(JSON.stringify({ diagnostics: [
     { code: "irrelevant", locator: { page: 8 } },
     { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 2, part: "chapter/image.png" } },
-  ] })), [{ page: 2, part: "chapter/image.png" }]);
+    { code: "ocr.optionalRecognitionResourceSkipped", locator: { slide: 4, part: "ppt/media/wide.png" } },
+  ] })), [
+    { page: 2, part: "chapter/image.png" },
+    { slide: 4, part: "ppt/media/wide.png", resource: true },
+  ]);
   assert.throws(() => parseOcrOmissions('{"diagnostics":[{"code":"ocr.optionalRecognitionMemorySkipped"}]}'));
+  assert.throws(() => parseOcrOmissions('{"diagnostics":[{"code":"ocr.optionalRecognitionResourceSkipped"}]}'));
 });

@@ -54,6 +54,16 @@ impl<T> FixedOutput<T> {
         let initialized = unsafe { Box::from_raw(raw as *mut [T]) };
         Ok(initialized.into_vec())
     }
+
+    fn into_vec_prefix(self) -> Vec<T> {
+        let this = std::mem::ManuallyDrop::new(self);
+        let initialized = this.initialized;
+        let capacity = this.slots.len();
+        let raw = Box::into_raw(unsafe { std::ptr::read(&raw const this.slots) });
+        // SAFETY: the initialized prefix contains T values, MaybeUninit<T> has
+        // the same layout, and the Vec takes ownership of the exact Box allocation.
+        unsafe { Vec::from_raw_parts((*raw).as_mut_ptr().cast::<T>(), initialized, capacity) }
+    }
 }
 
 impl<T> Drop for FixedOutput<T> {
@@ -670,61 +680,6 @@ impl Native {
         }
         Ok((!value.is_empty()).then_some(value))
     }
-
-    fn action_uri_with_length(
-        &self,
-        document: usize,
-        action: Handle,
-        needed: c_ulong,
-        maximum: u32,
-    ) -> Result<String, Error> {
-        bounded_native_bytes("action_uri", needed, maximum, |buffer, length| unsafe {
-            (self.action_uri)(document as Handle, action, buffer.cast(), length)
-        })
-    }
-
-    fn web_uri_with_length(
-        &self,
-        web: Handle,
-        index: u32,
-        needed: c_int,
-        maximum: u32,
-    ) -> Result<String, Error> {
-        let index =
-            c_int::try_from(index).map_err(|_| invalid("web_uri", "index exceeds C int"))?;
-        if needed <= 0 {
-            return Err(self.error("web_uri"));
-        }
-        let units = u32::try_from(needed).map_err(|_| invalid("web_uri", "negative length"))?;
-        let bytes = units.checked_mul(2).ok_or_else(|| invalid("web_uri", "length overflow"))?;
-        if bytes > maximum {
-            return Err(Error::ResourceLimit {
-                limit: "max_link_bytes",
-                actual: u64::from(bytes),
-                maximum: u64::from(maximum),
-            });
-        }
-        let mut buffer = try_uninit_boxed_slice::<u16>(units as usize, "web_uri")?;
-        // SAFETY: initialize the full fixed buffer before the native partial-write API.
-        unsafe { std::ptr::write_bytes(buffer.as_mut_ptr().cast::<u16>(), 0, units as usize) };
-        let copied =
-            unsafe { (self.web_link_url)(web, index, buffer.as_mut_ptr().cast::<u16>(), needed) };
-        if copied <= 0 || copied > needed {
-            return Err(invalid("web_uri", "native length changed or was zero"));
-        }
-        let copied =
-            usize::try_from(copied).map_err(|_| invalid("web_uri", "length does not fit usize"))?;
-        // SAFETY: the complete fixed buffer was initialized with zeroes before the FFI call.
-        let mut buffer = unsafe { buffer.assume_init() }.into_vec();
-        buffer.truncate(copied);
-        if buffer.last() == Some(&0) {
-            let _ = buffer.pop();
-        }
-        if buffer.contains(&0) {
-            return Err(invalid("web_uri", "embedded NUL"));
-        }
-        decode_utf16(&buffer)
-    }
 }
 
 struct WebLinksGuard {
@@ -820,44 +775,6 @@ fn check_link_plan_bytes(
         return Err(invalid(operation, "native URI size exceeded preflight plan"));
     }
     Ok(())
-}
-
-fn bounded_native_bytes<F>(
-    operation: &'static str,
-    needed: c_ulong,
-    maximum: u32,
-    copy: F,
-) -> Result<String, Error>
-where
-    F: FnOnce(*mut u8, c_ulong) -> c_ulong,
-{
-    let needed_u64 = c_ulong_to_u64(needed);
-    if needed == 0 {
-        return Err(invalid(operation, "zero length"));
-    }
-    if needed_u64 > u64::from(maximum) {
-        return Err(Error::ResourceLimit {
-            limit: "max_link_bytes",
-            actual: needed_u64,
-            maximum: u64::from(maximum),
-        });
-    }
-    let capacity =
-        usize::try_from(needed).map_err(|_| invalid(operation, "length does not fit usize"))?;
-    let mut buffer = zeroed_boxed_bytes(capacity, operation)?;
-    let copied = copy(buffer.as_mut_ptr(), needed);
-    if copied == 0 || copied > needed {
-        return Err(invalid(operation, "native length changed or was zero"));
-    }
-    let mut buffer = buffer.into_vec();
-    buffer.truncate(usize::try_from(copied).unwrap_or(capacity));
-    if buffer.last() == Some(&0) {
-        let _ = buffer.pop();
-    }
-    if buffer.contains(&0) {
-        return Err(invalid(operation, "embedded NUL"));
-    }
-    String::from_utf8(buffer).map_err(|_| invalid(operation, "URI is not valid UTF-8"))
 }
 
 impl Drop for Native {

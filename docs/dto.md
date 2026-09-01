@@ -142,7 +142,9 @@ provider 时计数和额度均为零，拒绝数不得超过请求数，worker �
 受控识别内存拒绝在失败报告中保留 `errorCode: resourceLimit` 与
 `reasonCode: ocrRecognitionMemory`。允许逐图跳过时，结果仍保留原生正文和资产，并通过
 `ocr.optionalRecognitionMemorySkipped` 诊断和其 locator 报告遗漏；结果是否 degraded
-沿用统一结果策略。Web 在相应结果区域显示诊断，在失败文件区域显示结构化原因。
+沿用统一结果策略。宽度、像素、张量和结构等识别阶段资源拒绝使用
+`ocr.optionalRecognitionResourceSkipped`，同样为每个引用提供 locator。Web 在对应内容
+附近显示两类遗漏，在失败文件区域显示结构化原因。
 
 ## 不可信输入边界
 

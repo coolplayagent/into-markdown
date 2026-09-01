@@ -388,9 +388,14 @@ fn current_provider_executable() -> Result<PathBuf, WorkerError> {
 
 fn worker_error(error: &ConversionError) -> WorkerError {
     let code = match error {
-        ConversionError::ResourceLimit { limit: "ocrRecognitionMemory", .. } => {
-            "ocrRecognitionMemory"
-        }
+        ConversionError::ResourceLimit {
+            limit:
+                "ocrRecognitionMemory"
+                | "recognitionMemory"
+                | "recognitionCropMemory"
+                | "recognitionOutputMemory",
+            ..
+        } => "ocrRecognitionMemory",
         ConversionError::ResourceLimit { limit: "recognitionWidth", .. } => "ocrWidthLimit",
         ConversionError::ResourceLimit { limit: "recognitionCropPixels", .. } => "ocrPixelLimit",
         ConversionError::ResourceLimit {
@@ -650,10 +655,15 @@ mod tests {
         };
         assert_eq!(worker_error(&controlled).code, "ocrRecognitionMemory");
         for (limit, expected) in [
+            ("recognitionMemory", "ocrRecognitionMemory"),
+            ("recognitionCropMemory", "ocrRecognitionMemory"),
+            ("recognitionOutputMemory", "ocrRecognitionMemory"),
             ("recognitionWidth", "ocrWidthLimit"),
             ("recognitionCropPixels", "ocrPixelLimit"),
             ("recognitionTensorElements", "ocrTensorLimit"),
+            ("recognitionOutputElements", "ocrTensorLimit"),
             ("recognitionRegions", "ocrStructureLimit"),
+            ("recognitionDecodedBytes", "ocrStructureLimit"),
         ] {
             assert_eq!(
                 worker_error(&ConversionError::ResourceLimit {

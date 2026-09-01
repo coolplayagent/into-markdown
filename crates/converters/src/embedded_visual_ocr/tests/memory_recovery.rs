@@ -147,6 +147,73 @@ fn optional_refusal_preserves_body_assets_other_ocr_and_every_reference_diagnost
 }
 
 #[test]
+fn optional_recognition_stage_limits_preserve_other_content_and_locate_each_reference() {
+    for limit in [
+        "recognitionWidth",
+        "recognitionCropPixels",
+        "recognitionTensorElements",
+        "recognitionOutputElements",
+        "recognitionRegions",
+        "recognitionDecodedBytes",
+        "ocrWidthLimit",
+        "ocrPixelLimit",
+        "ocrTensorLimit",
+        "ocrStructureLimit",
+    ] {
+        let engine = engine(ConversionError::ResourceLimit { limit, detail: "bounded".into() });
+        let services = Services { ocr: Some(engine.clone()), ..Default::default() };
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let result =
+            block_on(enrich(mixed_output(true), InputFormat::Pptx, &options, &services, &context))
+                .unwrap();
+        let json = serde_json::to_string(&result.document).unwrap();
+        assert!(json.contains("native body survives"), "{limit}");
+        assert!(json.contains("embedded words"), "{limit}");
+        assert_eq!(engine.refused.load(Ordering::SeqCst), 1, "{limit}");
+        let omitted: Vec<_> = result
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "ocr.optionalRecognitionResourceSkipped")
+            .collect();
+        assert_eq!(omitted.len(), 3, "{limit}");
+        assert!(omitted.iter().all(|diagnostic| diagnostic.locator.is_some()), "{limit}");
+        drop(result);
+        assert_eq!(context.reserved_memory_bytes(), 0, "{limit}");
+        assert_eq!(context.reserved_temporary_bytes(), 0, "{limit}");
+    }
+}
+
+#[test]
+fn local_recognition_memory_limits_keep_the_compatible_diagnostic() {
+    for limit in [
+        "ocrRecognitionMemory",
+        "recognitionMemory",
+        "recognitionCropMemory",
+        "recognitionOutputMemory",
+    ] {
+        let services = Services {
+            ocr: Some(engine(ConversionError::ResourceLimit { limit, detail: "bounded".into() })),
+            ..Default::default()
+        };
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let result =
+            block_on(enrich(mixed_output(true), InputFormat::Pptx, &options, &services, &context))
+                .unwrap();
+        assert_eq!(
+            result
+                .diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "ocr.optionalRecognitionMemorySkipped")
+                .count(),
+            3,
+            "{limit}"
+        );
+    }
+}
+
+#[test]
 fn strict_forced_and_required_body_refusals_remain_terminal() {
     for (policy, strict, native) in [
         (OcrPolicy::Auto, true, true),
@@ -180,9 +247,10 @@ fn strict_forced_and_required_body_refusals_remain_terminal() {
 fn shared_limits_protocol_cancellation_and_timeout_are_never_optional() {
     for failure in [
         ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: "shared".into() },
+        ConversionError::ResourceLimit { limit: "max_asset_bytes", detail: "asset".into() },
+        ConversionError::ResourceLimit { limit: "max_total_asset_bytes", detail: "assets".into() },
         ConversionError::ResourceLimit { limit: "provider", detail: "legacy worker".into() },
         ConversionError::ResourceLimit { limit: "providerFrameBytes", detail: "frame".into() },
-        ConversionError::ResourceLimit { limit: "recognitionWidth", detail: "width".into() },
         ConversionError::Internal { detail: "protocol".into() },
         ConversionError::Cancelled,
         ConversionError::Timeout,

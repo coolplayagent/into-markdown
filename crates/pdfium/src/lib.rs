@@ -802,7 +802,7 @@ pub struct Link {
     pub target: LinkTarget,
 }
 
-/// Handling of recoverable link geometry failures.
+/// Handling of recoverable link geometry and target failures.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum LinkPolicy {
     #[default]
@@ -834,6 +834,8 @@ pub enum LinkIssueReason {
     Empty,
     OutsidePage,
     MissingRectangle,
+    EmbeddedNul,
+    InvalidEncoding,
 }
 impl std::fmt::Display for LinkIssueReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -844,6 +846,8 @@ impl std::fmt::Display for LinkIssueReason {
             Self::Empty => "zero-area rectangle",
             Self::OutsidePage => "rectangle is outside the page",
             Self::MissingRectangle => "link has no rectangles",
+            Self::EmbeddedNul => "URI contains an embedded NUL",
+            Self::InvalidEncoding => "URI encoding is invalid",
         })
     }
 }
@@ -885,6 +889,7 @@ struct LinkAllocationPlan {
     policy: LinkPolicy,
     scanned: u64,
     diagnostics: u32,
+    diagnostic_capacity: u32,
     fingerprint: [u8; 32],
     bytes: u64,
     count: u32,

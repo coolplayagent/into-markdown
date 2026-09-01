@@ -90,6 +90,7 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
   ocr: "ocrFailure",
   ocrRecognitionMemory: "ocrRecognitionMemoryFailure",
   "ocr.optionalRecognitionMemorySkipped": "ocrMemoryOmission",
+  "ocr.optionalRecognitionResourceSkipped": "ocrResourceOmission",
   ai: "aiFailure",
   network: "networkFailure",
   networkAuthorizationRequired: "authorizationRequired",
