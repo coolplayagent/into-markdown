@@ -23,7 +23,7 @@ SPEC.loader.exec_module(release_metadata)
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_default_release_metadata_version_matches_current_release(self) -> None:
-        self.assertEqual(release_metadata.project_version(), "0.0.5")
+        self.assertEqual(release_metadata.project_version(), "0.0.6")
 
     def test_linux_cxx_execution_uses_a_portable_projection_identity(self) -> None:
         self.assertEqual(release_metadata.build_tool_execution_name("c++"), "cxx")

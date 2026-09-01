@@ -2,7 +2,7 @@
 name: into-markdown
 description: Convert documents, images, audio or video, standard input, directories, and explicitly authorized remote sources into Markdown or structured artifacts with the bundled into-md CLI. Use when the user asks to run Into Markdown or convert source files; do not use for editing existing Markdown, generic summarization, Web UI administration, plugin management, or provider configuration.
 metadata:
-  version: "0.0.5"
+  version: "0.0.6"
 ---
 
 # Into Markdown

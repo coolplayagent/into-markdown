@@ -1,6 +1,6 @@
 module(
     name = "into_markdown",
-    version = "0.0.5",
+    version = "0.0.6",
 )
 
 bazel_dep(name = "rules_rust", version = "0.73.0")
