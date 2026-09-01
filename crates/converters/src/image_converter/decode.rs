@@ -27,6 +27,44 @@ pub(crate) struct DecodedFrame {
     pub(super) has_alpha: bool,
 }
 
+pub(crate) struct StaticHeader {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) color: String,
+    pub(crate) orientation: u8,
+    pub(crate) has_alpha_channel: bool,
+}
+
+/// Inspect a completely audited single-frame image without materializing its
+/// pixel buffer. TIFF uses a separate directory audit and animated WebP needs
+/// frame decoding, so callers only use this for the other static formats.
+pub(crate) fn inspect_static(
+    format: RasterFormat,
+    bytes: &[u8],
+    limits: &ResourceLimits,
+    context: &ExecutionContext,
+) -> Result<StaticHeader, ConversionError> {
+    let image_format =
+        format.image_format().ok_or_else(|| malformed("static decoder format is unavailable"))?;
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), image_format);
+    reader.limits(image_limits(limits));
+    mark_decoder_entry();
+    let mut decoder = reader.into_decoder().map_err(map_image_error)?;
+    let (width, height) = decoder.dimensions();
+    validate_dimensions(width, height, limits)?;
+    let orientation = decoder.orientation().map_err(map_image_error)?.to_exif();
+    let color = decoder.original_color_type();
+    context.checkpoint()?;
+    Ok(StaticHeader {
+        width,
+        height,
+        color: format!("{color:?}"),
+        orientation,
+        has_alpha_channel: image::ColorType::try_from(color)
+            .map_or(true, image::ColorType::has_alpha),
+    })
+}
+
 pub(crate) fn decode(
     format: RasterFormat,
     bytes: &[u8],

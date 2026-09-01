@@ -18,6 +18,7 @@ mod jpeg_input;
 mod memory_plan;
 mod node_budget;
 mod pdf_placement;
+mod resource_lifecycle;
 mod runtime;
 use candidate_index::{
     CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
@@ -26,6 +27,7 @@ use candidate_index::{
 #[cfg(test)]
 use geometry::evidence_bounds;
 use geometry::{remap_ocr_node, remapped_locator};
+use resource_lifecycle::{attach_optional_memory, discard_group_payloads};
 
 const PROVIDER: &str = "builtin.enricher.embedded-visual-ocr";
 const UNSUPPORTED_CODE: &str = "embeddedVisualOcr.unsupportedVisual";
@@ -338,12 +340,6 @@ fn plan_enrichment(
                 "embedded visual bytes exceed the request limit",
             ));
         }
-        checked_add(
-            &mut total,
-            u64::try_from(asset.bytes.len())
-                .map_err(|_| resource("max_memory_bytes", "hash/cache plan overflow"))?,
-            "hash/cache plan overflow",
-        )?;
         candidates.push(OcrCandidate {
             asset_index: index,
             reference_count,
@@ -371,11 +367,14 @@ fn plan_enrichment(
 
     node_budget::NodeBudget::new(count_document_nodes(&output.document.blocks, context)?)?;
     let mut recognition_working_peak = 0_u64;
+    let mut recognition_retained_peak = 0_u64;
     // Only consult provider plans after every knowable input count and envelope
     // bound has passed, so a provider cannot observe a request that preflight
     // must reject.
-    // Retained outputs accumulate across byte identities. Normalization stays
-    // alive during recognition, then drops before the next serial image.
+    // Normalization and provider work are serial. The engine lends this
+    // enricher the remaining request budget, so actual retained OCR output can
+    // grow dynamically while each next image still has to fit beside it. Only
+    // one provider ceiling and its reference copies coexist as a new peak.
     for group in &grouping.groups {
         context.checkpoint()?;
         let candidate = &candidates[group.representative];
@@ -411,15 +410,14 @@ fn plan_enrichment(
             .checked_add(group.asset_copies)
             .and_then(|value| value.checked_add(1))
             .ok_or_else(|| resource("max_memory_bytes", "OCR retained-copy count overflow"))?;
-        checked_add(
-            &mut total,
+        recognition_retained_peak = recognition_retained_peak.max(
             provider_bound
                 .checked_mul(retained_copies)
                 .ok_or_else(|| resource("max_memory_bytes", "OCR output plan overflow"))?,
-            "OCR output plan overflow",
-        )?;
+        );
     }
     checked_add(&mut total, recognition_working_peak, "OCR recognition working-set plan overflow")?;
+    checked_add(&mut total, recognition_retained_peak, "OCR retained-output peak overflow")?;
     let (occupied_id_bytes, collision_scratch) =
         planned_node_id_working_set(&output.document.blocks, context)?;
     checked_add(&mut total, occupied_id_bytes, "occupied OCR node ID plan overflow")?;
@@ -429,7 +427,7 @@ fn plan_enrichment(
         estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?,
         "embedded OCR validation plan overflow",
     )?;
-    Ok(EnrichmentPlan::Reserve(total))
+    resource_lifecycle::bounded_dynamic_plan(total, context)
 }
 
 fn candidate_dimensions_for_policy(
@@ -851,9 +849,7 @@ async fn enrich(
                     grouping.groups[group_index].reference_copies,
                     context,
                 )?;
-                if let Some(memory) = memory {
-                    output.attach_memory_reservation(context, memory)?;
-                }
+                attach_optional_memory(&mut output, context, memory)?;
                 cache[group_index] = Some(contribution);
             }
             Err(error) => {
@@ -881,6 +877,7 @@ async fn enrich(
                 });
             }
         }
+        discard_group_payloads(&mut output, &candidates, &grouping, group_index, options);
     }
 
     let mut contributions_by_asset = BTreeMap::new();
@@ -1968,7 +1965,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_references_increase_the_preflight_plan() {
+    fn duplicate_references_share_the_bounded_dynamic_envelope() {
         let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr), ..Services::default() };
         let mut options = ConversionOptions::default();
@@ -1990,7 +1987,9 @@ mod tests {
         else {
             panic!("active plan expected")
         };
-        assert!(duplicate_plan >= single_plan + 16 * 1024 + 4 * 1024);
+        assert!(single_plan > options.limits.max_memory_bytes - 1024 * 1024);
+        assert!(duplicate_plan > options.limits.max_memory_bytes - 1024 * 1024);
+        assert!(single_plan.abs_diff(duplicate_plan) < 64 * 1024);
     }
 
     #[test]

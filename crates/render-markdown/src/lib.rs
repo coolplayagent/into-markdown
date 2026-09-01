@@ -3,6 +3,7 @@
 //! This crate deliberately renders asset references only. Writing extracted
 //! assets remains the caller's responsibility.
 
+mod asset_validation;
 mod fixed_alloc;
 mod inline;
 mod list;
@@ -120,14 +121,7 @@ pub fn plan_assets(
     assets: &[Asset],
     options: &ConversionOptions,
 ) -> Result<AssetPlan, ConversionError> {
-    document.validate().map_err(|error| ConversionError::Internal {
-        detail: format!(
-            "asset planner received invalid document IR ({} at {}): {}",
-            error.code.as_str(),
-            error.path,
-            error.detail
-        ),
-    })?;
+    asset_validation::validate_document(document)?;
     validate_asset_uri_prefix(options.output.asset_uri_prefix.as_deref())?;
 
     let mut by_id = BTreeMap::new();
@@ -165,7 +159,7 @@ pub fn plan_assets(
             });
         }
         if asset.bytes.is_empty() {
-            validate_external_uri(asset.external_uri.as_deref(), id)?;
+            asset_validation::validate_empty_asset(asset, options, id)?;
             by_id.insert(id.to_owned(), PlannedAssetReference { entry_index: None, source_index });
             continue;
         }
@@ -2525,6 +2519,8 @@ mod tests {
         );
         options.output.asset_mode = AssetMode::Omit;
         assert_eq!(render(&image, std::slice::from_ref(&asset), &options).unwrap(), "a\\]lt \n");
+        let omitted = Asset { bytes: Vec::new(), ..asset };
+        assert_eq!(render(&image, &[omitted], &options).unwrap(), "a\\]lt \n");
     }
 
     #[test]

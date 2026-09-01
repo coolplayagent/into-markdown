@@ -362,7 +362,10 @@ fn dynamically_created_docx_obeys_embedded_visual_ocr_and_asset_modes() {
                 assert!(!result.markdown.contains("data:image/png;base64,"));
             }
             AssetMode::Embed => assert!(result.markdown.contains("data:image/png;base64,")),
-            AssetMode::Omit => assert!(!result.markdown.contains("![")),
+            AssetMode::Omit => {
+                assert!(!result.markdown.contains("!["));
+                assert!(result.assets.iter().all(|asset| asset.bytes.is_empty()));
+            }
         }
     }
     assert_eq!(ocr.0.load(Ordering::SeqCst), 6);

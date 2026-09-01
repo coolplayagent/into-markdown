@@ -11,6 +11,9 @@ SPEC.loader.exec_module(smoke)
 
 
 class OcrSmokeTests(unittest.TestCase):
+    def test_signed_process_group_budget_matches_release_contract(self):
+        self.assertEqual(smoke.SIGNED_WORKER_BYTES, 2048 * 1024**2)
+
     def test_structured_ocr_survives_markdown_escaping_and_rejects_native_only_text(self):
         document = {"markdown": "Clear scans\\.", "document": {"blocks": [{"type": "text",
             "data": {"value": "Clear scans.", "provenance": {"kind": "localOcr"}}}]}}
@@ -26,7 +29,7 @@ class OcrSmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected text"):
             smoke.verify_result(native, report, "Clear scans.", ValueError)
         for field, value in (("requests", 0), ("recognitionMemoryRefusals", 1),
-                             ("workerBudgetMaxBytes", smoke.MEMORY_BYTES)):
+                             ("workerBudgetMaxBytes", smoke.SIGNED_WORKER_BYTES + 1)):
             invalid = copy.deepcopy(report)
             invalid["resourceUsage"]["ocrRuntime"][field] = value
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, "evidence"):

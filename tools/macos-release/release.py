@@ -40,6 +40,9 @@ OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv
 CORE_COMPONENTS = ["pdfium"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
+# Keep the coordinator plus authenticated ONNX worker inside a finite sandbox
+# while allowing the measured startup footprint of ordinary scanned pages.
+OCR_PROCESS_GROUP_MEMORY_BYTES = 2048 * 1024 * 1024
 FIXTURES = [
     "drawio/normal.drawio", "drawio/compressed.drawio",
     "docx/normal.docx", "docx/corrupt.docx", "epub/normal.epub", "msg/normal.msg",
@@ -314,7 +317,7 @@ def package_official_plugins(packages: pathlib.Path, cache: pathlib.Path, releas
             codesign_identity,
         )
         write_plugin_declarations(ocr, evidence, "official.ocr.ppocrv6", "ocr-plugin", OCR_COMPONENTS, [(ROOT / "LICENSE", "paddleocr-Apache-2.0.txt")], projection_tool)
-        ocr_manifest = provider_manifest("official.ocr.ppocrv6", "bin/into-md-ocr-provider", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(805306368, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
+        ocr_manifest = provider_manifest("official.ocr.ppocrv6", "bin/into-md-ocr-provider", ocr, [{"id": "ocr", "kind": "ocr", "providerId": "builtin.ocr.ppocrv6-image", "languages": ["zh-Hans", "zh-Hant", "en"], "mediaTypes": ["image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"], "resources": resources(OCR_PROCESS_GROUP_MEMORY_BYTES, 1073741824, 600000)}], ["Apache-2.0", "MIT"])
         ocr_output = packages / "official.ocr.ppocrv6.imp"
         signer = build_provider_package(packager, ocr, ocr_manifest, signing_key, ocr_output)
         if embedded_ocr is not None:

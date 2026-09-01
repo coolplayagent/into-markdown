@@ -70,6 +70,11 @@ pub(crate) async fn execute(
         &context,
     )
     .await?;
+    let output = if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {
+        output.discard_asset_payloads(&context)?
+    } else {
+        output
+    };
     let output = crate::result_policy::attach_evidence(output, &context)?;
     let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
         detail: "no Markdown renderer is registered".into(),

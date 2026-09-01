@@ -1,12 +1,14 @@
 //! Safe raster-image conversion with bounded local OCR and optional image description.
 
 mod ai;
+mod asset_lifecycle;
 pub(crate) mod decode;
 pub(crate) mod encode;
 pub(crate) mod envelope;
 pub(crate) mod format;
 mod metadata;
 pub(crate) mod ocr;
+mod static_passthrough;
 
 use decode::DecodedFrame;
 use format::RasterFormat;
@@ -97,32 +99,23 @@ async fn convert_image(
         })?;
     let summary = envelope::validate(format, &input.bytes, &options.limits, context)?;
     let density = metadata::density(format, &input.bytes, context)?;
+    let retain_assets = options.output.asset_mode != into_markdown_core::AssetMode::Omit;
+    let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off
+        || options.ai.vision_ocr != AiMode::Off;
+    let ai_enabled = options.ai.image_description != AiMode::Off;
+    if let Some(output) =
+        static_passthrough::try_convert(input, format, summary, density, options, context)?
+    {
+        return Ok(output);
+    }
     let decoded = decode::decode(format, &input.bytes, summary, &options.limits, context)?;
 
-    let original_bytes = input.bytes.len() as u64;
-    if original_bytes > options.limits.max_asset_bytes {
-        return Err(resource(
-            "max_asset_bytes",
-            format!("original image {original_bytes} exceeds max_asset_bytes"),
-        ));
-    }
-    if original_bytes > options.limits.max_total_asset_bytes {
-        return Err(resource(
-            "max_total_asset_bytes",
-            format!("original image {original_bytes} exceeds max_total_asset_bytes"),
-        ));
-    }
-    let mut total_asset_bytes = original_bytes;
-    let original_memory = context.reserve_memory(original_bytes)?;
-    let original_id = AssetId("image-original".into());
-    let mut assets = vec![Asset {
-        id: original_id.clone(),
-        filename: Some(format!("source.{}", format.extension())),
-        media_type: format.media_type().into(),
-        bytes: input.bytes.to_vec(),
-        external_uri: None,
-    }];
-    let mut leases = vec![original_memory];
+    let asset_lifecycle::Inventory {
+        total_bytes: mut total_asset_bytes,
+        original_id,
+        mut assets,
+        mut leases,
+    } = asset_lifecycle::original(input, format, retain_assets, options, context)?;
     let mut diagnostics = Vec::new();
     let mut document = document_metadata(format, summary, &decoded, density);
     let mut recognized_regions = 0_u64;
@@ -131,10 +124,8 @@ async fn convert_image(
     for (index, frame) in decoded.frames.iter().enumerate() {
         context.checkpoint()?;
         let page = u32::try_from(index + 1).map_err(|_| resource("max_pages", "page overflow"))?;
-        let needs_normalized_asset = summary.frames > 1 || decoded.orientation != 1;
-        let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off
-            || options.ai.vision_ocr != AiMode::Off;
-        let ai_enabled = options.ai.image_description != AiMode::Off;
+        let needs_normalized_asset =
+            retain_assets && (summary.frames > 1 || decoded.orientation != 1);
         let needs_normalized =
             needs_normalized_asset || ai_enabled || (ocr_enabled && !frame.has_alpha);
         let normalized = needs_normalized
@@ -248,21 +239,29 @@ async fn convert_image(
 }
 
 fn image_block(asset: AssetId, page: u32, frame: &DecodedFrame) -> BlockNode {
+    image_block_dimensions(asset, page, frame.pixels.width(), frame.pixels.height())
+}
+
+fn image_block_dimensions(asset: AssetId, page: u32, width: u32, height: u32) -> BlockNode {
     BlockNode {
         id: NodeId(format!("image-page-{page}-visual")),
         block: Block::Image { asset, alt: None },
-        provenance: native_provenance(page, frame),
+        provenance: native_provenance_dimensions(page, width, height),
     }
 }
 
 fn native_provenance(page: u32, frame: &DecodedFrame) -> Provenance {
+    native_provenance_dimensions(page, frame.pixels.width(), frame.pixels.height())
+}
+
+fn native_provenance_dimensions(page: u32, width: u32, height: u32) -> Provenance {
     Provenance {
         kind: ProvenanceKind::NativeParser,
         provider: PROVIDER_ID.into(),
         locator: SourceLocator {
             page: Some(page),
-            page_width: Some(f32::from(u16::try_from(frame.pixels.width()).unwrap_or(u16::MAX))),
-            page_height: Some(f32::from(u16::try_from(frame.pixels.height()).unwrap_or(u16::MAX))),
+            page_width: Some(f32::from(u16::try_from(width).unwrap_or(u16::MAX))),
+            page_height: Some(f32::from(u16::try_from(height).unwrap_or(u16::MAX))),
             ..SourceLocator::default()
         },
         confidence: Some(1.0),

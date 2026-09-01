@@ -11,7 +11,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE_ID = "ocr-english-clear-1"
 MEMORY_BYTES = 2 * 1024**3
-SIGNED_WORKER_BYTES = 768 * 1024**2
+SIGNED_WORKER_BYTES = 2048 * 1024**2
 
 
 def fingerprint(path):
