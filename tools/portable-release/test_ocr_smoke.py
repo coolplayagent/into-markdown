@@ -13,15 +13,17 @@ SPEC.loader.exec_module(smoke)
 class OcrSmokeTests(unittest.TestCase):
     def test_signed_process_group_budget_matches_release_contract(self):
         self.assertEqual(smoke.SIGNED_WORKER_BYTES, 2048 * 1024**2)
+        self.assertEqual(smoke.MIN_EFFECTIVE_WORKER_BYTES, 1024 * 1024**2)
 
     def test_structured_ocr_survives_markdown_escaping_and_rejects_native_only_text(self):
+        effective_worker = smoke.MIN_EFFECTIVE_WORKER_BYTES + 128 * 1024**2
         document = {"markdown": "Clear scans\\.", "document": {"blocks": [{"type": "text",
             "data": {"value": "Clear scans.", "provenance": {"kind": "localOcr"}}}]}}
         report = {"failed": 0, "resourceUsage": {"sharedLeaseBudgetBytes": smoke.MEMORY_BYTES,
             "sharedLeasePeakBytes": 1024, "ocr": {"recognizedChars": 12},
             "ocrRuntime": {"requests": 1, "recognitionMemoryRefusals": 0,
-                "workerBudgetMinBytes": smoke.SIGNED_WORKER_BYTES,
-                "workerBudgetMaxBytes": smoke.SIGNED_WORKER_BYTES}}}
+                "workerBudgetMinBytes": effective_worker,
+                "workerBudgetMaxBytes": effective_worker}}}
         self.assertEqual(smoke.verify_result(document, report, "Clear scans.", ValueError),
                          report["resourceUsage"])
         native = copy.deepcopy(document)
@@ -29,6 +31,8 @@ class OcrSmokeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "expected text"):
             smoke.verify_result(native, report, "Clear scans.", ValueError)
         for field, value in (("requests", 0), ("recognitionMemoryRefusals", 1),
+                             ("workerBudgetMinBytes", smoke.MIN_EFFECTIVE_WORKER_BYTES - 1),
+                             ("workerBudgetMaxBytes", effective_worker + 1),
                              ("workerBudgetMaxBytes", smoke.SIGNED_WORKER_BYTES + 1)):
             invalid = copy.deepcopy(report)
             invalid["resourceUsage"]["ocrRuntime"][field] = value

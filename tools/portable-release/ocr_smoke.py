@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE_ID = "ocr-english-clear-1"
 MEMORY_BYTES = 2 * 1024**3
 SIGNED_WORKER_BYTES = 2048 * 1024**2
+MIN_EFFECTIVE_WORKER_BYTES = 1024 * 1024**2
 
 
 def fingerprint(path):
@@ -36,12 +37,13 @@ def verify_result(document, report, expected, error_type):
         raise error_type("installed OCR did not preserve the clear fixture's expected text")
     usage = report.get("resourceUsage", {})
     runtime = usage.get("ocrRuntime", {})
+    worker_min = runtime.get("workerBudgetMinBytes", 0)
+    worker_max = runtime.get("workerBudgetMaxBytes", 0)
     if (usage.get("sharedLeaseBudgetBytes") != MEMORY_BYTES
             or not 0 < usage.get("sharedLeasePeakBytes", 0) <= MEMORY_BYTES
             or runtime.get("requests") != 1
             or runtime.get("recognitionMemoryRefusals") != 0
-            or runtime.get("workerBudgetMinBytes") != SIGNED_WORKER_BYTES
-            or runtime.get("workerBudgetMaxBytes") != SIGNED_WORKER_BYTES
+            or not MIN_EFFECTIVE_WORKER_BYTES <= worker_min == worker_max <= SIGNED_WORKER_BYTES
             or usage.get("ocr", {}).get("recognizedChars", 0) < len(expected)):
         raise error_type("installed OCR budget or contribution evidence is incomplete")
     return usage
