@@ -155,6 +155,12 @@ class PlatformReleaseTests(unittest.TestCase):
             if item["algorithm"] == "SHA256"
         )
         self.assertEqual(expected, hashlib.sha256(app.read_bytes()).hexdigest())
+        self.assertEqual(value["name"], f"into-markdown-web-console-{expected[:16]}")
+        self.assertEqual(
+            value["documentNamespace"],
+            "https://github.com/coolplayagent/into-markdown/spdx/"
+            f"web-console/sha256-{expected}",
+        )
 
     def test_release_version_matches_workspace_and_bazel_module(self) -> None:
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
