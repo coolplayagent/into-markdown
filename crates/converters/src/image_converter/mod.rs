@@ -89,24 +89,12 @@ async fn convert_image(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
-    if input.bytes.len() as u64 > options.limits.max_input_bytes {
-        return Err(resource(
-            "max_input_bytes",
-            format!("image source {} exceeds max_input_bytes", input.bytes.len()),
-        ));
-    }
+    validate_input_size(input, options)?;
     let format =
         format::detect(&input.bytes, context)?.ok_or_else(|| ConversionError::Unsupported {
             detail: "input is not an audited PNG, JPEG, TIFF, WebP, or BMP envelope".into(),
         })?;
-    // In best-effort mode the caller's sequence allowance controls delivery,
-    // while a fixed structural ceiling still audits the complete envelope.
-    let mut audit_limits = options.limits.clone();
-    if options.error_policy == ErrorPolicy::BestEffort {
-        audit_limits.max_pages =
-            audit_limits.max_pages.max(into_markdown_core::ResourceLimits::default().max_pages);
-    }
-    let summary = envelope::validate(format, &input.bytes, &audit_limits, context)?;
+    let summary = audit_summary(format, &input.bytes, options, context)?;
     let density = metadata::density(format, &input.bytes, context)?;
     let retain_assets = options.output.asset_mode != into_markdown_core::AssetMode::Omit;
     let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off
@@ -117,26 +105,8 @@ async fn convert_image(
     {
         return Ok(output);
     }
-    let selected_frames = summary.frames.min(options.limits.max_pages);
-    if selected_frames == 0 {
-        return Err(resource("max_pages", "at least one image frame must be permitted"));
-    }
-    if summary.frames > selected_frames && options.error_policy != ErrorPolicy::BestEffort {
-        return Err(resource(
-            "max_pages",
-            format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
-        ));
-    }
-    let selected_summary =
-        envelope::Summary { frames: selected_frames, animated: summary.animated };
-    let decoded = decode::decode(
-        format,
-        &input.bytes,
-        selected_summary,
-        summary.frames,
-        &options.limits,
-        context,
-    )?;
+    let (selected_frames, decoded) =
+        decode_selected(format, &input.bytes, summary, options, context)?;
 
     let asset_lifecycle::Inventory {
         total_bytes: mut total_asset_bytes,
@@ -145,31 +115,7 @@ async fn convert_image(
         mut leases,
     } = asset_lifecycle::original(input, format, retain_assets, options, context)?;
     let mut diagnostics = Vec::new();
-    if summary.frames > selected_frames {
-        let locator =
-            SourceLocator { page: selected_frames.checked_add(1), ..SourceLocator::default() };
-        let error = resource(
-            "max_pages",
-            format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
-        );
-        let facts = ResourceRecoveryBoundary {
-            scope: ResourceFailureScope::Sequence,
-            unit: ResourceUnitKind::Frame,
-            locator: Some(&locator),
-            rollback_complete: true,
-            fallback_retained: true,
-            committed_units: u64::from(selected_frames),
-            omitted_units: u64::from(summary.frames - selected_frames),
-            limit_source: ResourceLimitSource::Explicit,
-            precise_required: Some(u64::from(summary.frames)),
-            raised_limit: None,
-        };
-        let action = classify_resource_recovery(options.error_policy, &error, facts);
-        let diagnostic =
-            recovery_diagnostic(&error, action, facts, Some(u64::from(options.limits.max_pages)))
-                .ok_or(error)?;
-        diagnostics.push(diagnostic);
-    }
+    diagnostics.extend(frame_truncation(summary, selected_frames, options)?);
     let mut document = document_metadata(format, summary, &decoded, density);
     let mut recognized_regions = 0_u64;
     let mut recognized_chars = 0_u64;
@@ -210,7 +156,7 @@ async fn convert_image(
             }
         }
 
-        let mut ocr = match ocr::recognize(
+        let recognized = ocr::recognize(
             inference_bytes,
             page,
             frame.pixels.width(),
@@ -219,11 +165,8 @@ async fn convert_image(
             services,
             context,
         )
-        .await
-        {
-            Ok(contribution) => contribution,
-            Err(error) => recover_image_ocr(error, page, options)?,
-        };
+        .await;
+        let mut ocr = recognized.or_else(|error| recover_image_ocr(error, page, options))?;
         if let Some(memory) = ocr.memory.take() {
             leases.push(memory);
         }
@@ -293,6 +236,88 @@ async fn convert_image(
     let output = output.account_retained(context)?;
     context.record_ocr_contribution(recognized_regions, recognized_chars)?;
     Ok(output)
+}
+
+fn validate_input_size(
+    input: &ResolvedInput,
+    options: &ConversionOptions,
+) -> Result<(), ConversionError> {
+    if input.bytes.len() as u64 <= options.limits.max_input_bytes {
+        return Ok(());
+    }
+    Err(resource(
+        "max_input_bytes",
+        format!("image source {} exceeds max_input_bytes", input.bytes.len()),
+    ))
+}
+
+fn audit_summary(
+    format: RasterFormat,
+    bytes: &[u8],
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<envelope::Summary, ConversionError> {
+    let mut limits = options.limits.clone();
+    if options.error_policy == ErrorPolicy::BestEffort {
+        limits.max_pages =
+            limits.max_pages.max(into_markdown_core::ResourceLimits::default().max_pages);
+    }
+    envelope::validate(format, bytes, &limits, context)
+}
+
+fn decode_selected(
+    format: RasterFormat,
+    bytes: &[u8],
+    summary: envelope::Summary,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<(u32, decode::DecodedSet), ConversionError> {
+    let selected = summary.frames.min(options.limits.max_pages);
+    if selected == 0 {
+        return Err(resource("max_pages", "at least one image frame must be permitted"));
+    }
+    if summary.frames > selected && options.error_policy != ErrorPolicy::BestEffort {
+        return Err(resource(
+            "max_pages",
+            format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
+        ));
+    }
+    let selected_summary = envelope::Summary { frames: selected, animated: summary.animated };
+    let decoded =
+        decode::decode(format, bytes, selected_summary, summary.frames, &options.limits, context)?;
+    Ok((selected, decoded))
+}
+
+fn frame_truncation(
+    summary: envelope::Summary,
+    selected: u32,
+    options: &ConversionOptions,
+) -> Result<Option<Diagnostic>, ConversionError> {
+    if summary.frames <= selected {
+        return Ok(None);
+    }
+    let locator = SourceLocator { page: selected.checked_add(1), ..SourceLocator::default() };
+    let error = resource(
+        "max_pages",
+        format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
+    );
+    let facts = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::Sequence,
+        unit: ResourceUnitKind::Frame,
+        locator: Some(&locator),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: u64::from(selected),
+        omitted_units: u64::from(summary.frames - selected),
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: Some(u64::from(summary.frames)),
+        raised_limit: None,
+    };
+    let action = classify_resource_recovery(options.error_policy, &error, facts);
+    Ok(Some(
+        recovery_diagnostic(&error, action, facts, Some(u64::from(options.limits.max_pages)))
+            .ok_or(error)?,
+    ))
 }
 
 fn recover_image_ocr(

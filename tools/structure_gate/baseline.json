@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5088,
+      "lines": 5085,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -155,7 +155,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4524,
+      "lines": 4521,
       "functions": [
         {
           "symbol": "impl Upload::finish",
@@ -183,11 +183,11 @@
         },
         {
           "symbol": "run_job",
-          "lines": 208
+          "lines": 205
         },
         {
           "symbol": "run_job::<closure_expression>#2",
-          "lines": 136
+          "lines": 133
         }
       ],
       "allowances": [
@@ -460,11 +460,11 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1280,
+      "lines": 1273,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 207
+          "lines": 199
         },
         {
           "symbol": "plan_enrichment",
@@ -596,7 +596,7 @@
       "functions": [
         {
           "symbol": "convert",
-          "lines": 106
+          "lines": 105
         }
       ],
       "allowances": []
@@ -758,7 +758,7 @@
       "functions": [
         {
           "symbol": "convert_image",
-          "lines": 152
+          "lines": 150
         }
       ],
       "allowances": [
@@ -1170,7 +1170,7 @@
       "functions": [
         {
           "symbol": "convert_presentation",
-          "lines": 293
+          "lines": 279
         }
       ],
       "allowances": [
@@ -1433,7 +1433,7 @@
       "functions": [
         {
           "symbol": "convert_reader",
-          "lines": 346
+          "lines": 344
         }
       ],
       "allowances": [
@@ -1689,7 +1689,7 @@
     },
     {
       "path": "crates/core/src/dto.rs",
-      "lines": 2268,
+      "lines": 2260,
       "functions": [
         {
           "symbol": "impl BundleManifestDto::validate",
@@ -1705,7 +1705,7 @@
     },
     {
       "path": "crates/core/src/execution.rs",
-      "lines": 1177,
+      "lines": 1172,
       "functions": [],
       "allowances": []
     },
@@ -1743,7 +1743,7 @@
     },
     {
       "path": "crates/core/src/spi.rs",
-      "lines": 1609,
+      "lines": 1585,
       "functions": [
         {
           "symbol": "estimate_validation_working_set",

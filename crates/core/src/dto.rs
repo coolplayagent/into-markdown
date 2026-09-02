@@ -32,7 +32,7 @@ use thiserror::Error;
 
 mod batch_report;
 mod resource_usage;
-use resource_usage::{RawMemoryBudgetSnapshot, RawOcrRuntimeUsage};
+use resource_usage::RawBatchResourceUsageDto;
 
 /// Schema version emitted and accepted by application DTOs.
 pub const DTO_SCHEMA_VERSION: u32 = 1;
@@ -535,23 +535,6 @@ struct RawBatchItemDto {
 struct RawBatchOcrUsageDto {
     recognized_regions: u64,
     recognized_chars: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RawBatchResourceUsageDto {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    memory: Option<RawMemoryBudgetSnapshot>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ocr_runtime: Option<RawOcrRuntimeUsage>,
-    shared_lease_budget_bytes: u64,
-    shared_lease_peak_bytes: u64,
-    #[serde(default)]
-    temporary_lease_budget_bytes: u64,
-    #[serde(default)]
-    temporary_lease_peak_bytes: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ocr: Option<RawBatchOcrUsageDto>,
 }
 
 #[derive(Serialize, Deserialize)]

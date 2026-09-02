@@ -4,6 +4,23 @@ use crate::{MemoryBudgetSnapshotDto, OcrRuntimeUsageDto};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct RawBatchResourceUsageDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memory: Option<RawMemoryBudgetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ocr_runtime: Option<RawOcrRuntimeUsage>,
+    pub(super) shared_lease_budget_bytes: u64,
+    pub(super) shared_lease_peak_bytes: u64,
+    #[serde(default)]
+    pub(super) temporary_lease_budget_bytes: u64,
+    #[serde(default)]
+    pub(super) temporary_lease_peak_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ocr: Option<super::RawBatchOcrUsageDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct RawMemoryBudgetSnapshot {
     total_bytes: Option<u64>,
     available_bytes: Option<u64>,

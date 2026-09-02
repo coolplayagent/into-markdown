@@ -165,6 +165,29 @@ pub(super) fn generic_omission_diagnostic(
     recovery_diagnostic(error, action, facts, configured)
 }
 
+pub(super) fn omitted_contribution(
+    error: &ConversionError,
+    code: &'static str,
+    options: &ConversionOptions,
+) -> Result<super::CachedContribution, ConversionError> {
+    let generic =
+        generic_omission_diagnostic(error, options).ok_or_else(|| ConversionError::Internal {
+            detail: "OCR omission did not produce a resource diagnostic".into(),
+        })?;
+    Ok(super::CachedContribution {
+        diagnostics: vec![
+            Diagnostic {
+                code: code.into(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("OCR was omitted and the original visual was retained: {error}"),
+                locator: None,
+            },
+            generic,
+        ],
+        ..Default::default()
+    })
+}
+
 pub(super) async fn recognize(
     asset: &into_markdown_core::Asset,
     ordinal: usize,

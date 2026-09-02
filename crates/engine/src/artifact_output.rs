@@ -2,7 +2,7 @@
 
 use crate::rendering::RenderedArtifacts;
 use into_markdown_core::{
-    ArtifactSink, ArtifactSinkCapabilities, AssetId, AssetStreamInfo, Block, BlockNode,
+    ArtifactSink, ArtifactSinkCapabilities, Asset, AssetId, AssetStreamInfo, Block, BlockNode,
     ConversionError, ConversionOptions, ConversionSummary, Diagnostic, DiagnosticSeverity,
     DocumentStreamEvent, ErrorPolicy, ExecutionContext, InputFormat, SourceLocator, TemporaryFile,
 };
@@ -25,7 +25,15 @@ struct SpooledAsset {
     omitted: bool,
 }
 
-#[allow(clippy::too_many_lines)] // Payload accounting, omission, and diagnostics form one transaction.
+#[derive(Default)]
+struct SpoolState {
+    items: Vec<SpooledAsset>,
+    payload_only: u64,
+    external_only: u64,
+    dual: u64,
+    disabled: bool,
+}
+
 pub(crate) fn spool_assets(
     rendered: &mut RenderedArtifacts,
     options: &ConversionOptions,
@@ -43,118 +51,23 @@ pub(crate) fn spool_assets(
             detail: format!("cannot reserve asset-spool diagnostics: {error}"),
         }
     })?;
-    let mut items = Vec::new();
-    items.try_reserve_exact(rendered.output.assets.len()).map_err(|error| {
+    let mut state = SpoolState::default();
+    state.items.try_reserve_exact(rendered.output.assets.len()).map_err(|error| {
         ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: format!("cannot reserve asset-spool index: {error}"),
         }
     })?;
-    let mut payload_only = 0_u64;
-    let mut external_only = 0_u64;
-    let mut dual = 0_u64;
-    let mut payload_spooling_disabled = false;
     for asset in &mut rendered.output.assets {
-        context.checkpoint()?;
-        let size =
-            u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
-                limit: "max_asset_bytes",
-                detail: "asset payload size is not representable".into(),
-            })?;
-        match (!asset.bytes.is_empty(), asset.external_uri.is_some()) {
-            (true, false) => payload_only += 1,
-            (false, true) => external_only += 1,
-            (true, true) => dual += 1,
-            (false, false) => {}
-        }
-        let digest = (!asset.bytes.is_empty()).then(|| Sha256::digest(&asset.bytes).into());
-        let mut file = None;
-        let mut omitted = false;
-        if !asset.bytes.is_empty() && persist_payloads && !payload_spooling_disabled {
-            match context.temporary_file("into-md-engine-asset").and_then(|mut temporary| {
-                for chunk in asset.bytes.chunks(EMIT_CHUNK_BYTES) {
-                    temporary.write_all_checked(chunk)?;
-                }
-                temporary.flush()?;
-                Ok(temporary)
-            }) {
-                Ok(temporary) => file = Some(temporary),
-                Err(
-                    error @ ConversionError::ResourceLimit { limit: "max_temporary_bytes", .. },
-                ) if options.error_policy == ErrorPolicy::BestEffort => {
-                    omitted = true;
-                    payload_spooling_disabled = true;
-                    payload_only =
-                        payload_only.saturating_sub(u64::from(asset.external_uri.is_none()));
-                    dual = dual.saturating_sub(u64::from(asset.external_uri.is_some()));
-                    if asset.external_uri.is_some() {
-                        external_only = external_only.saturating_add(1);
-                    }
-                    rendered.output.diagnostics.push(Diagnostic {
-                        code: "resource.max_temporary_bytes.unitOmitted".into(),
-                        severity: DiagnosticSeverity::Warning,
-                        message: format!(
-                            "resource limit max_temporary_bytes: configured={}, observed={}, action=omitted 1 asset payload; Markdown reference retained ({error})",
-                            options.limits.max_temporary_bytes, size
-                        ),
-                        locator: locate_asset(&rendered.output.document.blocks, &asset.id).or_else(
-                            || {
-                                Some(SourceLocator {
-                                    part: Some(
-                                        asset
-                                            .filename
-                                            .clone()
-                                            .unwrap_or_else(|| asset.id.0.clone()),
-                                    ),
-                                    ..SourceLocator::default()
-                                })
-                            },
-                        ),
-                    });
-                }
-                Err(error) => return Err(error),
-            }
-        } else if !asset.bytes.is_empty() && persist_payloads {
-            omitted = true;
-            payload_only = payload_only.saturating_sub(u64::from(asset.external_uri.is_none()));
-            dual = dual.saturating_sub(u64::from(asset.external_uri.is_some()));
-            if asset.external_uri.is_some() {
-                external_only = external_only.saturating_add(1);
-            }
-            rendered.output.diagnostics.push(Diagnostic {
-                code: "resource.max_temporary_bytes.unitOmitted".into(),
-                severity: DiagnosticSeverity::Warning,
-                message: format!(
-                    "resource limit max_temporary_bytes: configured={}, observed={size}, action=omitted 1 subsequent asset payload; Markdown reference retained",
-                    options.limits.max_temporary_bytes
-                ),
-                locator: locate_asset(&rendered.output.document.blocks, &asset.id).or_else(|| {
-                    Some(SourceLocator {
-                        part: Some(
-                            asset.filename.clone().unwrap_or_else(|| asset.id.0.clone()),
-                        ),
-                        ..SourceLocator::default()
-                    })
-                }),
-            });
-        }
-        let omit_asset = omitted && asset.external_uri.is_none();
-        items.push(SpooledAsset {
-            info: AssetStreamInfo {
-                id: asset.id.clone(),
-                filename: asset.filename.clone(),
-                media_type: asset.media_type.clone(),
-                size: if omitted { 0 } else { size },
-                external_uri: asset.external_uri.clone(),
-                content_sha256: if omitted { None } else { digest },
-            },
-            file,
-            omitted: omit_asset,
-        });
-        // The spool now owns the publishable payload (or the diagnostic owns
-        // its omission). Release this asset before staging the next one so
-        // long asset sequences do not keep a second long-lived RAM copy.
-        asset.bytes = Vec::new();
+        spool_asset(
+            asset,
+            &rendered.output.document.blocks,
+            &mut rendered.output.diagnostics,
+            options,
+            persist_payloads,
+            context,
+            &mut state,
+        )?;
     }
     let result_content = into_markdown_core::classify_result(
         &rendered.output.document,
@@ -164,9 +77,117 @@ pub(crate) fn spool_assets(
     )?;
     let output = std::mem::take(&mut rendered.output).discard_asset_payloads(context)?;
     rendered.output = output;
-    rendered.asset_spool =
-        Some(AssetSpool { items, content: result_content, payload_only, external_only, dual });
+    rendered.asset_spool = Some(AssetSpool {
+        items: state.items,
+        content: result_content,
+        payload_only: state.payload_only,
+        external_only: state.external_only,
+        dual: state.dual,
+    });
     Ok(())
+}
+
+fn spool_asset(
+    asset: &mut Asset,
+    blocks: &[BlockNode],
+    diagnostics: &mut Vec<Diagnostic>,
+    options: &ConversionOptions,
+    persist_payloads: bool,
+    context: &ExecutionContext,
+    state: &mut SpoolState,
+) -> Result<(), ConversionError> {
+    context.checkpoint()?;
+    let size = u64::try_from(asset.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
+        limit: "max_asset_bytes",
+        detail: "asset payload size is not representable".into(),
+    })?;
+    match (!asset.bytes.is_empty(), asset.external_uri.is_some()) {
+        (true, false) => state.payload_only += 1,
+        (false, true) => state.external_only += 1,
+        (true, true) => state.dual += 1,
+        (false, false) => {}
+    }
+    let digest = (!asset.bytes.is_empty()).then(|| Sha256::digest(&asset.bytes).into());
+    let mut file = None;
+    let mut refusal = None;
+    let omitted = if asset.bytes.is_empty() || !persist_payloads {
+        false
+    } else if state.disabled {
+        true
+    } else {
+        match write_temporary_payload(asset, context) {
+            Ok(temporary) => {
+                file = Some(temporary);
+                false
+            }
+            Err(error @ ConversionError::ResourceLimit { limit: "max_temporary_bytes", .. })
+                if options.error_policy == ErrorPolicy::BestEffort =>
+            {
+                state.disabled = true;
+                refusal = Some(error);
+                true
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    if omitted {
+        state.payload_only =
+            state.payload_only.saturating_sub(u64::from(asset.external_uri.is_none()));
+        state.dual = state.dual.saturating_sub(u64::from(asset.external_uri.is_some()));
+        state.external_only =
+            state.external_only.saturating_add(u64::from(asset.external_uri.is_some()));
+        diagnostics.push(temporary_omission(asset, blocks, options, size, refusal.as_ref()));
+    }
+    state.items.push(SpooledAsset {
+        info: AssetStreamInfo {
+            id: asset.id.clone(),
+            filename: asset.filename.clone(),
+            media_type: asset.media_type.clone(),
+            size: if omitted { 0 } else { size },
+            external_uri: asset.external_uri.clone(),
+            content_sha256: if omitted { None } else { digest },
+        },
+        file,
+        omitted: omitted && asset.external_uri.is_none(),
+    });
+    asset.bytes = Vec::new();
+    Ok(())
+}
+
+fn write_temporary_payload(
+    asset: &Asset,
+    context: &ExecutionContext,
+) -> Result<TemporaryFile, ConversionError> {
+    let mut temporary = context.temporary_file("into-md-engine-asset")?;
+    for chunk in asset.bytes.chunks(EMIT_CHUNK_BYTES) {
+        temporary.write_all_checked(chunk)?;
+    }
+    temporary.flush()?;
+    Ok(temporary)
+}
+
+fn temporary_omission(
+    asset: &Asset,
+    blocks: &[BlockNode],
+    options: &ConversionOptions,
+    size: u64,
+    refusal: Option<&ConversionError>,
+) -> Diagnostic {
+    let suffix = refusal.map_or("subsequent payload".into(), ToString::to_string);
+    Diagnostic {
+        code: "resource.max_temporary_bytes.unitOmitted".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "resource limit max_temporary_bytes: configured={}, observed={size}, action=omitted 1 asset payload; Markdown reference retained ({suffix})",
+            options.limits.max_temporary_bytes
+        ),
+        locator: locate_asset(blocks, &asset.id).or_else(|| {
+            Some(SourceLocator {
+                part: Some(asset.filename.clone().unwrap_or_else(|| asset.id.0.clone())),
+                ..SourceLocator::default()
+            })
+        }),
+    }
 }
 
 pub(crate) fn emit(

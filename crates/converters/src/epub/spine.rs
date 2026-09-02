@@ -305,51 +305,16 @@ pub(super) async fn convert(
         detail: "the engine did not provide EPUB chapter dispatch".into(),
     })?;
     let mut chapters = Vec::new();
-    let mut skipped_non_linear = 0;
+    let skipped_non_linear = package.spine.iter().filter(|item| !item.linear).count();
     let mut recovery = RecoveryInventory::new(context)?;
     let mut navigation = None;
-    let mut offline = options.clone();
-    offline.network.enabled = false;
-    offline.network.allowed_hosts.clear();
+    let offline = offline_options(options);
     let dispatch = ChapterDispatch { options: &offline, nested: nested.as_ref(), context };
-    let linear_count = package.spine.iter().filter(|item| item.linear).count();
-    let selected_linear = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
-    if linear_count > selected_linear {
-        let first_omitted = package
-            .spine
-            .iter()
-            .filter(|item| item.linear)
-            .nth(selected_linear)
-            .and_then(|item| package.item(&item.idref).ok())
-            .map_or(package.path.as_str(), |item| item.path.as_str());
-        let error = ConversionError::ResourceLimit {
-            limit: "max_pages",
-            detail: format!("{linear_count} EPUB chapters > {}", options.limits.max_pages),
-        };
-        if options.error_policy == ErrorPolicy::Strict {
-            return Err(error);
-        }
-        recovery.diagnostic(
-            "resource.max_pages.sequenceTruncated",
-            DiagnosticSeverity::Warning,
-            first_omitted,
-            format_args!(
-                "resource limit max_pages: configured={}, observed={linear_count}, action=kept {selected_linear} chapters and omitted {} subsequent chapters",
-                options.limits.max_pages,
-                linear_count.saturating_sub(selected_linear)
-            ),
-        )?;
-    }
-    let mut seen_linear = 0_usize;
-    for itemref in &package.spine {
+    let selected_linear = chapter_limit(package, options, &mut recovery)?;
+    for (linear_index, itemref) in package.spine.iter().filter(|item| item.linear).enumerate() {
         budget.checkpoint()?;
-        if !itemref.linear {
-            skipped_non_linear += 1;
-            continue;
-        }
-        seen_linear = seen_linear.saturating_add(1);
         let original = package.item(&itemref.idref)?;
-        if seen_linear > selected_linear {
+        if linear_index >= selected_linear {
             recovery.omit(&original.path, None)?;
             continue;
         }
@@ -430,6 +395,50 @@ pub(super) async fn convert(
         recovery,
         navigation,
     )
+}
+
+fn offline_options(options: &ConversionOptions) -> ConversionOptions {
+    let mut offline = options.clone();
+    offline.network.enabled = false;
+    offline.network.allowed_hosts.clear();
+    offline
+}
+
+fn chapter_limit(
+    package: &Package,
+    options: &ConversionOptions,
+    recovery: &mut RecoveryInventory,
+) -> Result<usize, ConversionError> {
+    let observed = package.spine.iter().filter(|item| item.linear).count();
+    let selected = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    if observed <= selected {
+        return Ok(selected);
+    }
+    let first_omitted = package
+        .spine
+        .iter()
+        .filter(|item| item.linear)
+        .nth(selected)
+        .and_then(|item| package.item(&item.idref).ok())
+        .map_or(package.path.as_str(), |item| item.path.as_str());
+    let error = ConversionError::ResourceLimit {
+        limit: "max_pages",
+        detail: format!("{observed} EPUB chapters > {}", options.limits.max_pages),
+    };
+    if options.error_policy == ErrorPolicy::Strict {
+        return Err(error);
+    }
+    recovery.diagnostic(
+        "resource.max_pages.sequenceTruncated",
+        DiagnosticSeverity::Warning,
+        first_omitted,
+        format_args!(
+            "resource limit max_pages: configured={}, observed={observed}, action=kept {selected} chapters and omitted {} subsequent chapters",
+            options.limits.max_pages,
+            observed.saturating_sub(selected)
+        ),
+    )?;
+    Ok(selected)
 }
 
 fn finish(

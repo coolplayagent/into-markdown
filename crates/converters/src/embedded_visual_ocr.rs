@@ -866,26 +866,7 @@ async fn enrich(
                     return Err(error);
                 };
                 context.checkpoint()?;
-                let generic =
-                    runtime::generic_omission_diagnostic(&error, options).ok_or_else(|| {
-                        ConversionError::Internal {
-                            detail: "OCR omission did not produce a resource diagnostic".into(),
-                        }
-                    })?;
-                cache[group_index] = Some(CachedContribution {
-                    diagnostics: vec![
-                        Diagnostic {
-                            code: code.into(),
-                            severity: DiagnosticSeverity::Warning,
-                            message: format!(
-                                "OCR was omitted and the original visual was retained: {error}"
-                            ),
-                            locator: None,
-                        },
-                        generic,
-                    ],
-                    ..Default::default()
-                });
+                cache[group_index] = Some(runtime::omitted_contribution(&error, code, options)?);
             }
         }
         discard_group_payloads(&mut output, &candidates, &grouping, group_index, options);

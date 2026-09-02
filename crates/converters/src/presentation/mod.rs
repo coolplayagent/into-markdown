@@ -222,45 +222,8 @@ fn convert_presentation(
             locator: None,
         });
     }
-    if omitted_slide_references > 0 {
-        state.diagnostics.try_reserve(1).map_err(|error| {
-            limit("max_memory_bytes", format!("cannot reserve slide omission diagnostic: {error}"))
-        })?;
-        state.diagnostics.push(Diagnostic {
-            code: "office.relationshipOmitted".into(),
-            severity: DiagnosticSeverity::Warning,
-            message: format!(
-                "{omitted_slide_references} slide-list entries without relationships were omitted"
-            ),
-            locator: Some(into_markdown_core::SourceLocator {
-                part: Some(main_part.clone()),
-                ..into_markdown_core::SourceLocator::default()
-            }),
-        });
-    }
-    if truncated_slides > 0 {
-        state.diagnostics.try_reserve(1).map_err(|error| {
-            limit(
-                "max_memory_bytes",
-                format!("cannot reserve slide truncation diagnostic: {error}"),
-            )
-        })?;
-        state.diagnostics.push(Diagnostic {
-            code: "resource.max_pages.sequenceTruncated".into(),
-            severity: DiagnosticSeverity::Warning,
-            message: format!(
-                "resource limit max_pages: configured={}, observed={}, action=kept {} slides and omitted {truncated_slides} subsequent slides",
-                options.limits.max_pages,
-                usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX).saturating_add(truncated_slides),
-                options.limits.max_pages,
-            ),
-            locator: Some(into_markdown_core::SourceLocator {
-                slide: options.limits.max_pages.checked_add(1),
-                part: Some(main_part.clone()),
-                ..into_markdown_core::SourceLocator::default()
-            }),
-        });
-    }
+    record_slide_reference_omissions(&mut state, &main_part, omitted_slide_references)?;
+    record_slide_truncation(&mut state, options, &main_part, truncated_slides)?;
     for (index, slide_reference) in slides.into_iter().enumerate() {
         context.checkpoint()?;
         let slide_number =
@@ -498,6 +461,60 @@ fn convert_presentation(
         .with_source_content_evidence(evidence);
     let Package { memory, .. } = package;
     output.certify_preflight_reservation(context, memory)
+}
+
+fn record_slide_truncation(
+    state: &mut ParseState,
+    options: &ConversionOptions,
+    main_part: &str,
+    omitted: usize,
+) -> Result<(), ConversionError> {
+    if omitted == 0 {
+        return Ok(());
+    }
+    state.diagnostics.try_reserve(1).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve slide truncation diagnostic: {error}"))
+    })?;
+    let kept = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    state.diagnostics.push(Diagnostic {
+        code: "resource.max_pages.sequenceTruncated".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "resource limit max_pages: configured={}, observed={}, action=kept {} slides and omitted {omitted} subsequent slides",
+            options.limits.max_pages,
+            kept.saturating_add(omitted),
+            options.limits.max_pages,
+        ),
+        locator: Some(into_markdown_core::SourceLocator {
+            slide: options.limits.max_pages.checked_add(1),
+            part: Some(main_part.into()),
+            ..into_markdown_core::SourceLocator::default()
+        }),
+    });
+    Ok(())
+}
+
+fn record_slide_reference_omissions(
+    state: &mut ParseState,
+    main_part: &str,
+    omitted: usize,
+) -> Result<(), ConversionError> {
+    if omitted == 0 {
+        return Ok(());
+    }
+    state.diagnostics.try_reserve(1).map_err(|error| {
+        limit("max_memory_bytes", format!("cannot reserve slide omission diagnostic: {error}"))
+    })?;
+    state.diagnostics.push(Diagnostic {
+        code: "office.relationshipOmitted".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("{omitted} slide-list entries without relationships were omitted"),
+        locator: Some(into_markdown_core::SourceLocator {
+            part: Some(main_part.into()),
+            ..into_markdown_core::SourceLocator::default()
+        }),
+    });
+    Ok(())
 }
 
 #[cfg(test)]

@@ -2677,15 +2677,11 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 "task input or persisted request changed after authentication".into(),
             ));
         }
-        let mut execution = ExecutionOptions {
-            cancellation: job.cancellation.clone(),
-            timeout: Some(deadline.saturating_duration_since(Instant::now())),
-            progress_listener: Some(Arc::new(EventProgressListener {
-                shared: Arc::downgrade(shared),
-                id: job.id.clone(),
-            })),
-            resource_adaptation: into_markdown::AdaptiveResourceLimits::default(),
-        };
+        let mut execution = limits::execution_options(
+            job.cancellation.clone(),
+            deadline.saturating_duration_since(Instant::now()),
+            Arc::new(EventProgressListener { shared: Arc::downgrade(shared), id: job.id.clone() }),
+        );
         let input = InputRef::bytes(Arc::<[u8]>::from(bytes), Some(persisted.name.clone()));
         let routed_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {
             let services = shared.media_services.assemble(&persisted.options).map_err(|error| {
