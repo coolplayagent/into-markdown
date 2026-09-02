@@ -12,6 +12,12 @@ fn binary() -> PathBuf {
         .expect("Cargo or Bazel must provide the into-md binary")
 }
 
+fn isolated_command() -> Command {
+    let mut command = Command::new(binary());
+    command.args(["--no-config", "--max-memory-size", "512MiB"]);
+    command
+}
+
 #[test]
 fn genuine_empty_sources_commit_existing_targets_with_complete_reports() {
     let temporary = tempfile::tempdir().unwrap();
@@ -26,8 +32,8 @@ fn genuine_empty_sources_commit_existing_targets_with_complete_reports() {
     std::fs::write(&markdown, b"\xef\xbb\xbf\n").unwrap();
     std::fs::write(&docx, empty_docx()).unwrap();
 
-    let result = Command::new(binary())
-        .args(["--no-config", "--output-dir"])
+    let result = isolated_command()
+        .args(["--output-dir"])
         .arg(&output)
         .args(["--report"])
         .arg(&report)
@@ -57,12 +63,7 @@ fn empty_stdout_is_explicit_in_reports_and_structured_output() {
     let report = temporary.path().join("stdout-report.json");
     std::fs::write(&input, b"\n").unwrap();
 
-    let markdown = Command::new(binary())
-        .args(["--no-config", "--report"])
-        .arg(&report)
-        .arg(&input)
-        .output()
-        .unwrap();
+    let markdown = isolated_command().args(["--report"]).arg(&report).arg(&input).output().unwrap();
     assert!(markdown.status.success());
     assert!(markdown.stdout.is_empty());
     let report: serde_json::Value =
@@ -70,11 +71,8 @@ fn empty_stdout_is_explicit_in_reports_and_structured_output() {
     assert_eq!(report["items"][0]["outcome"], "complete");
     assert_eq!(report["items"][0]["reasonCode"], "emptySource");
 
-    let structured = Command::new(binary())
-        .args(["--no-config", "--emit", "result-json"])
-        .arg(&input)
-        .output()
-        .unwrap();
+    let structured =
+        isolated_command().args(["--emit", "result-json"]).arg(&input).output().unwrap();
     assert!(structured.status.success());
     let result: serde_json::Value = serde_json::from_slice(&structured.stdout).unwrap();
     assert_eq!(result["markdown"], "");
@@ -97,8 +95,8 @@ fn empty_content_fails_batch_without_committing_a_false_success_target() {
     std::fs::write(&good, b"usable").unwrap();
     std::fs::write(&omitted, omitted_only_rtf()).unwrap();
 
-    let result = Command::new(binary())
-        .args(["--no-config", "--output-dir"])
+    let result = isolated_command()
+        .args(["--output-dir"])
         .arg(&output)
         .args(["--report"])
         .arg(&report)
@@ -130,8 +128,8 @@ fn empty_content_single_file_still_writes_a_failed_report_and_no_target() {
     let report = temporary.path().join("report.json");
     std::fs::write(&input, omitted_only_rtf()).unwrap();
 
-    let result = Command::new(binary())
-        .args(["--no-config", "--output"])
+    let result = isolated_command()
+        .args(["--output"])
         .arg(&output)
         .args(["--report"])
         .arg(&report)
@@ -151,12 +149,7 @@ fn empty_content_stdout_still_writes_a_failed_report_and_no_stdout() {
     let report = temporary.path().join("report.json");
     std::fs::write(&input, omitted_only_rtf()).unwrap();
 
-    let result = Command::new(binary())
-        .args(["--no-config", "--report"])
-        .arg(&report)
-        .arg(&input)
-        .output()
-        .unwrap();
+    let result = isolated_command().args(["--report"]).arg(&report).arg(&input).output().unwrap();
 
     assert_eq!(result.status.code(), Some(10), "{}", String::from_utf8_lossy(&result.stderr));
     assert!(result.stdout.is_empty());
@@ -180,8 +173,8 @@ fn recoverable_omission_commits_nonempty_degraded_output() {
     let report = temporary.path().join("report.json");
     std::fs::write(&input, br"{\rtf1\ansi visible \unknowncontrol42 text}").unwrap();
 
-    let result = Command::new(binary())
-        .args(["--no-config", "--output-dir"])
+    let result = isolated_command()
+        .args(["--output-dir"])
         .arg(&output)
         .args(["--report"])
         .arg(&report)
@@ -231,11 +224,7 @@ fn empty_worksheet_retains_its_name_and_paging_diagnostic() {
     let temporary = tempfile::tempdir().unwrap();
     let input = temporary.path().join("empty.xlsx");
     std::fs::write(&input, empty_xlsx()).unwrap();
-    let result = Command::new(binary())
-        .args(["--no-config", "--emit", "result-json"])
-        .arg(input)
-        .output()
-        .unwrap();
+    let result = isolated_command().args(["--emit", "result-json"]).arg(input).output().unwrap();
     assert!(result.status.success());
     let result: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert!(result["markdown"].as_str().unwrap().contains("Empty"));

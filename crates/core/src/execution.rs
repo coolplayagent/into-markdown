@@ -2,6 +2,7 @@ mod resource_usage;
 use crate::{ConversionError, InputFormat, ResourceLimits};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
@@ -155,6 +156,45 @@ pub struct ExecutionOptions {
     pub timeout: Option<Duration>,
     /// Optional progress observer.
     pub progress_listener: Option<Arc<dyn ProgressListener>>,
+    /// Optional local-application soft-limit adaptation. Library and Web
+    /// callers retain fixed limits through the disabled default.
+    pub resource_adaptation: AdaptiveResourceLimits,
+}
+
+/// Local-only authority to raise selected default soft limits once while the
+/// immutable request memory envelope remains in force.
+#[derive(Debug, Clone, Default)]
+pub struct AdaptiveResourceLimits {
+    implicit: BTreeSet<&'static str>,
+    ceilings: ResourceLimits,
+    enabled: bool,
+}
+
+impl AdaptiveResourceLimits {
+    /// Create a local adaptation policy for fields that were not explicitly
+    /// configured by the caller.
+    #[must_use]
+    pub fn local(
+        implicit: impl IntoIterator<Item = &'static str>,
+        ceilings: ResourceLimits,
+    ) -> Self {
+        Self { implicit: implicit.into_iter().collect(), ceilings, enabled: true }
+    }
+
+    fn ceiling(&self, limit: &'static str) -> Option<u64> {
+        self.enabled.then(|| match limit {
+            "max_decompressed_bytes" => self.ceilings.max_decompressed_bytes,
+            "max_archive_entries" => u64::from(self.ceilings.max_archive_entries),
+            "max_pages" => u64::from(self.ceilings.max_pages),
+            "max_asset_bytes" => self.ceilings.max_asset_bytes,
+            "max_total_asset_bytes" => self.ceilings.max_total_asset_bytes,
+            "max_temporary_bytes" => self.ceilings.max_temporary_bytes,
+            "max_table_rows" => self.ceilings.max_table_rows,
+            "max_table_columns" => self.ceilings.max_table_columns,
+            "max_table_cells" => self.ceilings.max_table_cells,
+            _ => 0,
+        })
+    }
 }
 
 impl fmt::Debug for ExecutionOptions {
@@ -164,6 +204,7 @@ impl fmt::Debug for ExecutionOptions {
             .field("cancellation", &self.cancellation)
             .field("timeout", &self.timeout)
             .field("progress_listener", &self.progress_listener.as_ref().map(|_| "registered"))
+            .field("resource_adaptation", &self.resource_adaptation)
             .finish()
     }
 }
@@ -257,6 +298,14 @@ struct ExecutionShared {
     resources: SharedResourceAccounting,
     temporary_directory: PathBuf,
     media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
+    adaptation: AdaptiveResourceState,
+}
+
+#[derive(Debug)]
+struct AdaptiveResourceState {
+    policy: AdaptiveResourceLimits,
+    attempted: Mutex<BTreeSet<&'static str>>,
+    raised: Mutex<BTreeMap<&'static str, u64>>,
 }
 
 #[derive(Default)]
@@ -373,6 +422,11 @@ impl ExecutionContext {
             resources,
             temporary_directory,
             media_checkpoint: Mutex::new(None),
+            adaptation: AdaptiveResourceState {
+                policy: options.resource_adaptation,
+                attempted: Mutex::new(BTreeSet::new()),
+                raised: Mutex::new(BTreeMap::new()),
+            },
         });
         if let Some(deadline) = timer_deadline {
             let weak = Arc::downgrade(&shared);
@@ -679,6 +733,45 @@ impl ExecutionContext {
     #[must_use]
     pub fn resource_limits(&self) -> &ResourceLimits {
         &self.shared.limits
+    }
+
+    /// Return a validated raised soft limit, or the configured value when the
+    /// local caller did not authorize adaptation for this field.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn effective_soft_limit(&self, limit: &'static str, configured: u64) -> u64 {
+        lock_unpoisoned(&self.shared.adaptation.raised).get(limit).copied().unwrap_or(configured)
+    }
+
+    /// Raise one implicit soft limit at most once after an exact preflight.
+    /// The request-wide memory budget is immutable and
+    /// `additional_memory_required` must fit the currently available shared
+    /// credit. Exact preflights for resources that are already leased pass
+    /// zero because raising their admission threshold allocates no new bytes.
+    #[doc(hidden)]
+    pub fn try_raise_soft_limit(
+        &self,
+        limit: &'static str,
+        configured: u64,
+        required: u64,
+        additional_memory_required: u64,
+    ) -> Result<Option<u64>, ConversionError> {
+        self.checkpoint()?;
+        if required <= configured
+            || !self.shared.adaptation.policy.implicit.contains(limit)
+            || additional_memory_required > self.available_memory_bytes()
+        {
+            return Ok(None);
+        }
+        let ceiling = self.shared.adaptation.policy.ceiling(limit).unwrap_or(0);
+        let mut attempted = lock_unpoisoned(&self.shared.adaptation.attempted);
+        if attempted.contains(limit) || required > ceiling || ceiling == 0 {
+            return Ok(None);
+        }
+        attempted.insert(limit);
+        drop(attempted);
+        lock_unpoisoned(&self.shared.adaptation.raised).insert(limit, required);
+        Ok(Some(required))
     }
 
     /// Whether this context already spends from an enclosing preflight credit.

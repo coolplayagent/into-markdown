@@ -4,7 +4,7 @@ mod policy;
 use into_markdown_core::{
     Asset, ConversionError, ConversionOptions, ConverterEventSink, ConverterOutput, Document,
     EnrichmentPlan, ExecutionContext, InputFormat, LocalBoxFuture, OutputEnricher, Services,
-    estimate_validation_working_set,
+    TransactionalEnrichmentOutcome, estimate_validation_working_set,
 };
 
 pub(crate) const EMBEDDED_OCR: &str = "builtin.enricher.embedded-visual-ocr";
@@ -47,8 +47,8 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
             })?;
             // As in nested conversion, the enclosing native invocation already
             // holds the global admission. Child credits cannot back new credits.
-            // Preserve native PDF pages at the preflight boundary. The global
-            // aggregate path and all runtime errors remain terminal.
+            // The transient page is a rollback boundary: a local OCR preflight
+            // refusal can retain the untouched native page and continue.
             let plan = enricher
                 .planned_enrichment_bytes(
                     &output,
@@ -75,18 +75,18 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
             let plan = match plan {
                 Ok(plan) => plan,
                 Err(error)
-                    if matches!(error, ConversionError::ResourceLimit { .. })
-                        && policy::optional_page(&output, self, enricher)? =>
+                    if policy::recovery(&output, self, enricher, &error)
+                        == into_markdown_core::ResourceRecoveryAction::OmitUnit =>
                 {
-                    policy::push_skipped(&mut output, &error)?;
+                    policy::push_omitted(&mut output, &error)?;
                     return Ok(output);
                 }
                 Err(error) => return Err(error),
             };
             let EnrichmentPlan::Reserve(_) = plan else { return Ok(output) };
-            let output = self
+            let outcome = self
                 .context
-                .run(enricher.enrich(
+                .run(enricher.enrich_transactionally(
                     output,
                     self.converter_id,
                     self.format,
@@ -95,6 +95,17 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
                     self.context,
                 ))
                 .await??;
+            let output = match outcome {
+                TransactionalEnrichmentOutcome::Completed(output) => output,
+                TransactionalEnrichmentOutcome::RolledBack { mut output, error }
+                    if policy::recovery(&output, self, enricher, &error)
+                        == into_markdown_core::ResourceRecoveryAction::OmitUnit =>
+                {
+                    policy::push_omitted(&mut output, &error)?;
+                    return Ok(output);
+                }
+                TransactionalEnrichmentOutcome::RolledBack { error, .. } => return Err(error),
+            };
             let validation = estimate_validation_working_set(
                 &output.document,
                 &output.assets,

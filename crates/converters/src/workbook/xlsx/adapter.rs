@@ -5,7 +5,8 @@ use crate::workbook::xlsx::regions::{MergeRange, SparseRegion};
 use crate::workbook::xlsx::sheet_index::{read_cells_into, read_layout};
 use crate::workbook::xlsx::staging::{StagingTelemetry, StagingWriter};
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ConverterOutput, ExecutionContext, SourceLocator,
+    ConversionError, ConversionOptions, ConverterOutput, Diagnostic, DiagnosticSeverity,
+    ErrorPolicy, ExecutionContext, SourceLocator,
 };
 use std::io::{BufReader, Cursor};
 use std::sync::{Arc, Mutex};
@@ -16,11 +17,19 @@ pub(in crate::workbook) fn convert_xlsx(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
+    let observed_sheets = preflight.sheet_order.len();
+    let selected_sheets = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    if observed_sheets > selected_sheets && options.error_policy == ErrorPolicy::Strict {
+        return Err(limit(
+            "max_pages",
+            format!("{observed_sheets} workbook sheets > {}", options.limits.max_pages),
+        ));
+    }
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|error| malformed(None, format!("cannot reopen authenticated XLSX: {error}")))?;
     let layouts = prepare_layouts(&mut archive, preflight, options, context)?;
     let staged = stage_sheets(&mut archive, layouts, preflight, options, context)?;
-    let (mut document, diagnostics) = emit(
+    let (mut document, mut diagnostics) = emit(
         staged.prepared,
         preflight.xml_display_profile.as_ref().ok_or_else(|| {
             malformed(Some("xl/styles.xml"), "prepared display profile is missing")
@@ -30,6 +39,21 @@ pub(in crate::workbook) fn convert_xlsx(
         options,
         context,
     )?;
+    if observed_sheets > selected_sheets {
+        diagnostics.push(Diagnostic {
+            code: "resource.max_pages.sequenceTruncated".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "resource limit max_pages: configured={}, observed={observed_sheets}, action=kept {selected_sheets} sheets and omitted {} subsequent sheets",
+                options.limits.max_pages,
+                observed_sheets.saturating_sub(selected_sheets)
+            ),
+            locator: preflight.sheet_order.get(selected_sheets).map(|sheet| SourceLocator {
+                sheet: Some(sheet.clone()),
+                ..SourceLocator::default()
+            }),
+        });
+    }
     let telemetry = collect_telemetry(&staged.telemetry_handles)?;
     attach_telemetry(&mut document, telemetry, preflight);
     if telemetry.staged_bytes > options.limits.max_temporary_bytes {
@@ -63,7 +87,11 @@ fn prepare_layouts(
     context: &ExecutionContext,
 ) -> Result<Vec<LayoutPlan>, ConversionError> {
     let mut layouts = Vec::new();
-    for name in &preflight.sheet_order {
+    for name in preflight
+        .sheet_order
+        .iter()
+        .take(usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX))
+    {
         context.checkpoint()?;
         let (part, expected_cells) = preflight.xml_sheets.get(name).ok_or_else(|| {
             malformed(Some("xl/workbook.xml"), format!("worksheet {name} was not prepared"))

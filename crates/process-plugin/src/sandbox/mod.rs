@@ -169,7 +169,7 @@ impl SandboxChild {
             })?;
             if bytes > limit {
                 return Err(PluginError::new(
-                    PluginErrorCode::ResourceLimit,
+                    PluginErrorCode::ProcessMemoryLimit,
                     format!("plugin process-group memory {bytes} exceeds {limit} bytes"),
                 ));
             }
@@ -189,7 +189,7 @@ impl SandboxChild {
                 // SAFETY: `process_group(0)` created a group whose ID is the child PID; a negative
                 // PID addresses precisely that group. SIGKILL requires no pointer validity.
                 unsafe {
-                    let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    let _ = libc::kill(-child.id().cast_signed(), libc::SIGKILL);
                 }
                 let _ = child.kill();
                 let _ = child.wait();

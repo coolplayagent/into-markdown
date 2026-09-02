@@ -546,6 +546,10 @@ struct RawBatchResourceUsageDto {
     ocr_runtime: Option<RawOcrRuntimeUsage>,
     shared_lease_budget_bytes: u64,
     shared_lease_peak_bytes: u64,
+    #[serde(default)]
+    temporary_lease_budget_bytes: u64,
+    #[serde(default)]
+    temporary_lease_peak_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ocr: Option<RawBatchOcrUsageDto>,
 }
@@ -855,6 +859,8 @@ fn encode_batch_report(value: &BatchReportDto) -> RawBatchReportDto {
             ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
+            temporary_lease_budget_bytes: usage.temporary_lease_budget_bytes,
+            temporary_lease_peak_bytes: usage.temporary_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| RawBatchOcrUsageDto {
                 recognized_regions: ocr.recognized_regions,
                 recognized_chars: ocr.recognized_chars,
@@ -1943,6 +1949,8 @@ fn decode_batch_report(value: serde_json::Value) -> Result<BatchReportDto, DtoEr
             ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
+            temporary_lease_budget_bytes: usage.temporary_lease_budget_bytes,
+            temporary_lease_peak_bytes: usage.temporary_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| BatchOcrUsageDto {
                 recognized_regions: ocr.recognized_regions,
                 recognized_chars: ocr.recognized_chars,
@@ -3230,6 +3238,8 @@ mod tests {
                 ocr_runtime: None,
                 shared_lease_budget_bytes: 2_147_483_648,
                 shared_lease_peak_bytes: 123_456_789,
+                temporary_lease_budget_bytes: 4_294_967_296,
+                temporary_lease_peak_bytes: 987_654,
                 ocr: Some(BatchOcrUsageDto { recognized_regions: 2, recognized_chars: 7 }),
             }),
         )
@@ -3240,6 +3250,8 @@ mod tests {
         assert!(json.contains(r#""wallDurationMs":15.72"#));
         assert!(json.contains(r#""sharedLeaseBudgetBytes":2147483648"#));
         assert!(json.contains(r#""sharedLeasePeakBytes":123456789"#));
+        assert!(json.contains(r#""temporaryLeaseBudgetBytes":4294967296"#));
+        assert!(json.contains(r#""temporaryLeasePeakBytes":987654"#));
         assert!(json.contains(r#""recognizedRegions":2"#));
         assert!(json.contains(r#""recognizedChars":7"#));
         assert_eq!(BatchReportDto::from_json(&json).unwrap(), report);
@@ -3259,6 +3271,8 @@ mod tests {
             ocr_runtime: None,
             shared_lease_budget_bytes: 10,
             shared_lease_peak_bytes: 5,
+            temporary_lease_budget_bytes: 20,
+            temporary_lease_peak_bytes: 4,
             ocr: Some(BatchOcrUsageDto { recognized_regions: 0, recognized_chars: 0 }),
         };
         assert!(
@@ -3274,6 +3288,10 @@ mod tests {
             (
                 BatchResourceUsageDto { shared_lease_peak_bytes: 11, ..valid.clone() },
                 "$.resourceUsage.sharedLeasePeakBytes",
+            ),
+            (
+                BatchResourceUsageDto { temporary_lease_peak_bytes: 21, ..valid.clone() },
+                "$.resourceUsage.temporaryLeasePeakBytes",
             ),
             (
                 BatchResourceUsageDto {

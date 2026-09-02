@@ -46,6 +46,8 @@ fn write_report<W: Write>(
             ocr_runtime: usage.ocr_runtime.map(Into::into),
             shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
             shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
+            temporary_lease_budget_bytes: usage.temporary_lease_budget_bytes,
+            temporary_lease_peak_bytes: usage.temporary_lease_peak_bytes,
             ocr: usage.ocr.map(|ocr| RawBatchOcrUsageDto {
                 recognized_regions: ocr.recognized_regions,
                 recognized_chars: ocr.recognized_chars,

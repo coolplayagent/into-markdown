@@ -27,6 +27,8 @@ pub enum PluginErrorCode {
     Plugin,
     /// A host or provider resource budget was exceeded.
     ResourceLimit,
+    /// The host terminated the owned process group at its physical-memory ceiling.
+    ProcessMemoryLimit,
     /// Controlled rejection of the worker-private OCR recognition memory budget.
     OcrRecognitionMemory,
     /// Controlled provider report that its optional component is unavailable.
@@ -57,6 +59,7 @@ impl PluginErrorCode {
             Self::InvalidResult => "pluginInvalidResult",
             Self::Plugin => "pluginError",
             Self::ResourceLimit => "pluginResourceLimit",
+            Self::ProcessMemoryLimit => "processMemoryLimit",
             Self::OcrRecognitionMemory => "ocrRecognitionMemory",
             Self::ComponentUnavailable => "componentUnavailable",
             Self::OcrWidthLimit => "ocrWidthLimit",
@@ -98,6 +101,7 @@ pub(crate) fn terminal_error_code(code: &str) -> PluginErrorCode {
         "ocrTensorLimit" => PluginErrorCode::OcrTensorLimit,
         "ocrStructureLimit" => PluginErrorCode::OcrStructureLimit,
         "resourceLimit" => PluginErrorCode::ResourceLimit,
+        "processMemoryLimit" => PluginErrorCode::ProcessMemoryLimit,
         "cancelled" => PluginErrorCode::Cancelled,
         "timeout" => PluginErrorCode::Timeout,
         _ => PluginErrorCode::Plugin,

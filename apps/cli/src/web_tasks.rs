@@ -2684,6 +2684,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 shared: Arc::downgrade(shared),
                 id: job.id.clone(),
             })),
+            resource_adaptation: into_markdown::AdaptiveResourceLimits::default(),
         };
         let input = InputRef::bytes(Arc::<[u8]>::from(bytes), Some(persisted.name.clone()));
         let routed_engine = if persisted.workflow == WebWorkflow::MeetingTranscript {

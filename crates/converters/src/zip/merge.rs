@@ -137,6 +137,38 @@ impl<'a> MergeState<'a> {
         Ok(())
     }
 
+    pub(super) fn resource_failure(
+        &mut self,
+        path: &str,
+        error: &ConversionError,
+        configured: Option<u64>,
+    ) -> Result<(), ConversionError> {
+        let Some((limit, _)) = error.limit() else {
+            return self.failure(path, error);
+        };
+        reserve_append(
+            &mut self.output.diagnostics,
+            1,
+            self.memory.as_mut().ok_or_else(memory_unavailable)?,
+        )?;
+        let code = charged_format(self.memory()?, format_args!("resource.{limit}.unitOmitted"))?;
+        let configured = configured.map_or_else(|| "unknown".into(), |value| value.to_string());
+        let message = charged_format(
+            self.memory()?,
+            format_args!(
+                "resource limit {limit}: configured={configured}, observed=unknown, action=omitted 1 archiveMember; archive member {path:?} retained as a located omission ({error})"
+            ),
+        )?;
+        let part = charged_format(self.memory()?, format_args!("{path}"))?;
+        self.output.diagnostics.push(Diagnostic {
+            code,
+            severity: DiagnosticSeverity::Warning,
+            message,
+            locator: Some(SourceLocator { part: Some(part), ..SourceLocator::default() }),
+        });
+        Ok(())
+    }
+
     pub(super) fn finish(mut self) -> Result<ConverterOutput, ConversionError> {
         if self.output.document.blocks.is_empty() {
             self.output.document = Document::default();

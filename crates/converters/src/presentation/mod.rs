@@ -199,7 +199,7 @@ fn convert_presentation(
             "officeDocument does not target a supported PresentationML main part",
         ));
     }
-    let (slides, omitted_slide_references) = {
+    let (slides, omitted_slide_references, truncated_slides) = {
         let main_bytes = package.load_for_parse(&main_part, options, context)?;
         preflight_xml(main_bytes, &main_part, XmlProfile::Presentation, options, context)?;
         parse_slide_order(main_bytes, &main_part, options, context)?
@@ -233,6 +233,29 @@ fn convert_presentation(
                 "{omitted_slide_references} slide-list entries without relationships were omitted"
             ),
             locator: Some(into_markdown_core::SourceLocator {
+                part: Some(main_part.clone()),
+                ..into_markdown_core::SourceLocator::default()
+            }),
+        });
+    }
+    if truncated_slides > 0 {
+        state.diagnostics.try_reserve(1).map_err(|error| {
+            limit(
+                "max_memory_bytes",
+                format!("cannot reserve slide truncation diagnostic: {error}"),
+            )
+        })?;
+        state.diagnostics.push(Diagnostic {
+            code: "resource.max_pages.sequenceTruncated".into(),
+            severity: DiagnosticSeverity::Warning,
+            message: format!(
+                "resource limit max_pages: configured={}, observed={}, action=kept {} slides and omitted {truncated_slides} subsequent slides",
+                options.limits.max_pages,
+                usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX).saturating_add(truncated_slides),
+                options.limits.max_pages,
+            ),
+            locator: Some(into_markdown_core::SourceLocator {
+                slide: options.limits.max_pages.checked_add(1),
                 part: Some(main_part.clone()),
                 ..into_markdown_core::SourceLocator::default()
             }),

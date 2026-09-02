@@ -673,6 +673,29 @@ impl ConverterOutput {
             .iter()
             .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_some())
             .count();
+        self.into_conversion_summary_with_asset_counts(
+            format,
+            markdown_bytes,
+            content,
+            u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
+            u64::try_from(external_only_assets).unwrap_or(u64::MAX),
+            u64::try_from(dual_representation_assets).unwrap_or(u64::MAX),
+        )
+    }
+
+    /// Consume an emitted output whose payloads were moved to authenticated
+    /// temporary files after rendering.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn into_conversion_summary_with_asset_counts(
+        self,
+        format: InputFormat,
+        markdown_bytes: u64,
+        content: crate::ResultContent,
+        payload_only_assets: u64,
+        external_only_assets: u64,
+        dual_representation_assets: u64,
+    ) -> ConversionSummary {
         let Self { assets, diagnostics, memory_lease, .. } = self;
         let outcome = crate::conversion_outcome(&diagnostics);
         ConversionSummary {
@@ -683,10 +706,9 @@ impl ConverterOutput {
             assets: u64::try_from(assets.len()).unwrap_or(u64::MAX),
             processing_duration_ms: None,
             content: Some(content),
-            payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
-            external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),
-            dual_representation_assets: u64::try_from(dual_representation_assets)
-                .unwrap_or(u64::MAX),
+            payload_only_assets,
+            external_only_assets,
+            dual_representation_assets,
             _memory_lease: memory_lease,
         }
     }
@@ -1386,6 +1408,23 @@ pub enum EnrichmentPlan {
     Reserve(u64),
 }
 
+/// Transaction result for an enricher that can return an untouched unit after
+/// a localized runtime resource refusal.
+#[derive(Debug)]
+pub enum TransactionalEnrichmentOutcome {
+    /// Enrichment completed and produced the replacement output.
+    Completed(ConverterOutput),
+    /// The enricher released its transient work and returned the original
+    /// output unchanged. Callers still decide whether the typed error is
+    /// recoverable for the current unit and policy.
+    RolledBack {
+        /// Original converter output at the transaction boundary.
+        output: ConverterOutput,
+        /// Typed runtime failure that caused the rollback.
+        error: ConversionError,
+    },
+}
+
 /// Transactional post-conversion enrichment with a mandatory preflight plan.
 pub trait OutputEnricher: Send + Sync {
     /// Stable implementation ID.
@@ -1425,6 +1464,26 @@ pub trait OutputEnricher: Send + Sync {
         services: &'a Services,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
+
+    /// Enrich a unit while optionally proving that a runtime refusal rolled
+    /// back to the untouched input. The default retains the established
+    /// terminal-error contract; implementations must opt in by returning
+    /// [`TransactionalEnrichmentOutcome::RolledBack`].
+    fn enrich_transactionally<'a>(
+        &'a self,
+        output: ConverterOutput,
+        converter_id: &'a str,
+        format: InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<TransactionalEnrichmentOutcome, ConversionError>> {
+        Box::pin(async move {
+            self.enrich(output, converter_id, format, options, services, context)
+                .await
+                .map(TransactionalEnrichmentOutcome::Completed)
+        })
+    }
 }
 
 /// Render the unified IR through a single Markdown policy.

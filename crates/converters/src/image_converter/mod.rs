@@ -14,9 +14,11 @@ use decode::DecodedFrame;
 use format::RasterFormat;
 use into_markdown_core::{
     AiMode, Asset, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions,
-    Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
-    FormatCandidate, InputFormat, NodeId, ProbeOutcome, Provenance, ProvenanceKind, ResolvedInput,
-    Services, SourceLocator,
+    Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ErrorPolicy,
+    ExecutionContext, FormatCandidate, InputFormat, NodeId, ProbeOutcome, Provenance,
+    ProvenanceKind, ResolvedInput, ResourceFailureScope, ResourceLimitSource,
+    ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, Services, SourceLocator,
+    classify_resource_recovery, recovery_diagnostic,
 };
 
 const PROVIDER_ID: &str = "builtin.converter.image";
@@ -97,7 +99,14 @@ async fn convert_image(
         format::detect(&input.bytes, context)?.ok_or_else(|| ConversionError::Unsupported {
             detail: "input is not an audited PNG, JPEG, TIFF, WebP, or BMP envelope".into(),
         })?;
-    let summary = envelope::validate(format, &input.bytes, &options.limits, context)?;
+    // In best-effort mode the caller's sequence allowance controls delivery,
+    // while a fixed structural ceiling still audits the complete envelope.
+    let mut audit_limits = options.limits.clone();
+    if options.error_policy == ErrorPolicy::BestEffort {
+        audit_limits.max_pages =
+            audit_limits.max_pages.max(into_markdown_core::ResourceLimits::default().max_pages);
+    }
+    let summary = envelope::validate(format, &input.bytes, &audit_limits, context)?;
     let density = metadata::density(format, &input.bytes, context)?;
     let retain_assets = options.output.asset_mode != into_markdown_core::AssetMode::Omit;
     let ocr_enabled = options.ocr.policy != into_markdown_core::OcrPolicy::Off
@@ -108,7 +117,26 @@ async fn convert_image(
     {
         return Ok(output);
     }
-    let decoded = decode::decode(format, &input.bytes, summary, &options.limits, context)?;
+    let selected_frames = summary.frames.min(options.limits.max_pages);
+    if selected_frames == 0 {
+        return Err(resource("max_pages", "at least one image frame must be permitted"));
+    }
+    if summary.frames > selected_frames && options.error_policy != ErrorPolicy::BestEffort {
+        return Err(resource(
+            "max_pages",
+            format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
+        ));
+    }
+    let selected_summary =
+        envelope::Summary { frames: selected_frames, animated: summary.animated };
+    let decoded = decode::decode(
+        format,
+        &input.bytes,
+        selected_summary,
+        summary.frames,
+        &options.limits,
+        context,
+    )?;
 
     let asset_lifecycle::Inventory {
         total_bytes: mut total_asset_bytes,
@@ -117,6 +145,31 @@ async fn convert_image(
         mut leases,
     } = asset_lifecycle::original(input, format, retain_assets, options, context)?;
     let mut diagnostics = Vec::new();
+    if summary.frames > selected_frames {
+        let locator =
+            SourceLocator { page: selected_frames.checked_add(1), ..SourceLocator::default() };
+        let error = resource(
+            "max_pages",
+            format!("{} image frame(s) > {}", summary.frames, options.limits.max_pages),
+        );
+        let facts = ResourceRecoveryBoundary {
+            scope: ResourceFailureScope::Sequence,
+            unit: ResourceUnitKind::Frame,
+            locator: Some(&locator),
+            rollback_complete: true,
+            fallback_retained: true,
+            committed_units: u64::from(selected_frames),
+            omitted_units: u64::from(summary.frames - selected_frames),
+            limit_source: ResourceLimitSource::Explicit,
+            precise_required: Some(u64::from(summary.frames)),
+            raised_limit: None,
+        };
+        let action = classify_resource_recovery(options.error_policy, &error, facts);
+        let diagnostic =
+            recovery_diagnostic(&error, action, facts, Some(u64::from(options.limits.max_pages)))
+                .ok_or(error)?;
+        diagnostics.push(diagnostic);
+    }
     let mut document = document_metadata(format, summary, &decoded, density);
     let mut recognized_regions = 0_u64;
     let mut recognized_chars = 0_u64;
@@ -157,7 +210,7 @@ async fn convert_image(
             }
         }
 
-        let mut ocr = ocr::recognize(
+        let mut ocr = match ocr::recognize(
             inference_bytes,
             page,
             frame.pixels.width(),
@@ -166,7 +219,11 @@ async fn convert_image(
             services,
             context,
         )
-        .await?;
+        .await
+        {
+            Ok(contribution) => contribution,
+            Err(error) => recover_image_ocr(error, page, options)?,
+        };
         if let Some(memory) = ocr.memory.take() {
             leases.push(memory);
         }
@@ -238,6 +295,70 @@ async fn convert_image(
     Ok(output)
 }
 
+fn recover_image_ocr(
+    error: ConversionError,
+    page: u32,
+    options: &ConversionOptions,
+) -> Result<ocr::OcrContribution, ConversionError> {
+    let locator = SourceLocator { page: Some(page), ..SourceLocator::default() };
+    let facts = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::VisualRecognition,
+        unit: ResourceUnitKind::Frame,
+        locator: Some(&locator),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: u64::from(page.saturating_sub(1)),
+        omitted_units: 1,
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: None,
+        raised_limit: None,
+    };
+    let action = classify_resource_recovery(options.error_policy, &error, facts);
+    if action != ResourceRecoveryAction::OmitUnit {
+        return Err(error);
+    }
+    let legacy = match &error {
+        ConversionError::OcrRecognitionMemory { .. }
+        | ConversionError::ResourceLimit {
+            limit:
+                "max_memory_bytes"
+                | "ocrRecognitionMemory"
+                | "recognitionMemory"
+                | "recognitionCropMemory"
+                | "recognitionOutputMemory",
+            ..
+        } => "ocr.optionalRecognitionMemorySkipped",
+        _ => "ocr.optionalRecognitionResourceSkipped",
+    };
+    let configured = error.limit().and_then(|(limit, _)| match limit {
+        "max_memory_bytes" => Some(options.limits.max_memory_bytes),
+        _ => None,
+    });
+    let generic = recovery_diagnostic(&error, action, facts, configured).ok_or_else(|| {
+        ConversionError::Internal {
+            detail: "image OCR omission did not produce a resource diagnostic".into(),
+        }
+    })?;
+    Ok(ocr::OcrContribution {
+        nodes: vec![],
+        diagnostics: vec![
+            Diagnostic {
+                code: legacy.into(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!(
+                    "OCR was omitted and the original image frame was retained: {error}"
+                ),
+                locator: Some(locator),
+            },
+            generic,
+        ],
+        accepted_text: false,
+        memory: None,
+        recognized_regions: 0,
+        recognized_chars: 0,
+    })
+}
+
 fn image_block(asset: AssetId, page: u32, frame: &DecodedFrame) -> BlockNode {
     image_block_dimensions(asset, page, frame.pixels.width(), frame.pixels.height())
 }
@@ -277,6 +398,10 @@ fn document_metadata(
     let mut document = Document::default();
     document.metadata.properties.insert("image.format".into(), format.extension().into());
     document.metadata.properties.insert("image.frames".into(), summary.frames.to_string());
+    document
+        .metadata
+        .properties
+        .insert("image.framesConverted".into(), decoded.frames.len().to_string());
     document.metadata.properties.insert("image.animated".into(), summary.animated.to_string());
     document
         .metadata

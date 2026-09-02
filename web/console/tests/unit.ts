@@ -498,6 +498,7 @@ test("result dialog provides reading and source views with a closed details draw
     if (key === "f".repeat(32)) return { text: JSON.stringify({ schemaVersion: 1, diagnostics: [
       { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 3, part: "figure.png" } },
       { code: "ocr.optionalRecognitionResourceSkipped", locator: { page: 7, part: "wide.png" } },
+      { code: "resource.ocrWidthLimit.unitOmitted", locator: { page: 7, part: "wide.png" } },
     ] }), truncated: false, contentType: "application/json" };
     return { text: markdown, truncated: true, contentType: "text/markdown" }; } };
   const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
@@ -1187,6 +1188,7 @@ test("structured OCR failure and omission locations are bounded and preserved", 
     { code: "irrelevant", locator: { page: 8 } },
     { code: "ocr.optionalRecognitionMemorySkipped", locator: { page: 2, part: "chapter/image.png" } },
     { code: "ocr.optionalRecognitionResourceSkipped", locator: { slide: 4, part: "ppt/media/wide.png" } },
+    { code: "resource.ocrWidthLimit.unitOmitted", locator: { slide: 4, part: "ppt/media/wide.png" } },
   ] })), [
     { page: 2, part: "chapter/image.png" },
     { slide: 4, part: "ppt/media/wide.png", resource: true },

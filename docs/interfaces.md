@@ -237,6 +237,8 @@ source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserv
 协作式逻辑预算。Rust 库的确定性 `ResourceLimits::default()` 使用 2 GiB；本地 CLI/Desktop
 按调用开始时的一次机器快照选择批处理共享预算，公式与探测缺口规则见 [CLI 内存策略](cli.md)。
 未显式配置时，本地资产额度从最终共享预算派生；各资产字段的显式值独立优先。
+CLI 可在精确资产预检后把未显式设置的单项/总资产软额度各提升一次，但提升值仍受调用开始时
+固定的 `max_memory_bytes` 约束；显式额度、Core API 与 Web 安全 profile 不参与自适应。
 Web 安全上限保持独立。`--jobs` 不会复制该预算；当前
 converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
 source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
@@ -250,7 +252,13 @@ arithmetic 计算 decoded bytes、stride 与 working set，再由 `max_decompres
 资产，并返回 `ConversionSummary`。它避免前端再创建一份完整序列化缓冲；兼容接口
 `convert()` 仍返回聚合的 `ConversionResult`，适合小文件或需要完整 IR 的调用方。CLI 的
 Markdown、IR JSON、result JSON 与 bundle 均先流式写入受 `max_temporary_bytes` 约束的
-同文件系统临时文件，再由输出事务分块哈希、同步并原子提交。
+同文件系统临时文件，再由输出事务分块哈希、同步并原子提交。流式接口在 Markdown 形成后把
+每项资产写入请求临时文件，校验 SHA-256，清除 Core `ConverterOutput` 中的 payload 并再向
+sink 分块发送。best-effort 的临时空间拒绝保留 Markdown/IR 引用并产生就近
+`resource.max_temporary_bytes.unitOmitted`；strict 终止。
+渲染预检中的显式单项/总资产额度也遵循内容单元边界：best-effort 把超限 payload 改为
+安全外部引用或带 alt 的就地段落，释放对应共享租约并继续；总额度诊断记录后续遗漏数量。
+strict 保持失败，Core API 与 Web 不获得额度自动提升权限。
 大型 XLS、XLSX 与 XLSB 工作簿在完整表格 IR 会超过统一节点上限时，转换器改用有界的 2048 行
 TSV page blocks；页块保持工作表、行和列顺序，Tab、换行、反斜杠和反引号采用可逆转义，
 渲染器对该受约束块使用专用内存计划。最终 artifact 仍是一个 Markdown 文件，结果以
@@ -356,8 +364,14 @@ Windows 使用 Job Object 总内存上限。`OcrRecognitionMemory` 仅表示受�
 公共 API 的调用方可据此区分识别额度与全局资源失败，禁止通过错误文本判断降级。
 可选图片的其他识别阶段资源限制通过稳定 limit 名称分类：本地宽度、crop、张量、输出、
 regions 与 decoded 限制，以及进程边界的 `ocrWidthLimit`、`ocrPixelLimit`、
-`ocrTensorLimit`、`ocrStructureLimit`。全局内存、资产、provider frame、协议、进程、取消
-和超时保持终止语义。
+`ocrTensorLimit`、`ocrStructureLimit`。识别作用域的 `max_memory_bytes` 仅在已经证明单页/单图
+回滚完成时可降级；请求级共享内存、资产、provider frame、协议、进程、取消和超时保持终止
+语义。`best-effort` 的集中恢复决策只接受具备事务回滚、稳定 locator 与可用原图/正文/占位的
+页面、图片、帧、章节、幻灯片、工作表、表格、附件和已认证归档成员。统一诊断为
+`resource.<limit>.limitRaised`、`resource.<limit>.unitOmitted` 和
+`resource.<limit>.sequenceTruncated`。页级 enricher 的运行期拒绝只有在
+`TransactionalEnrichmentOutcome::RolledBack` 显式交还未修改页面后才能进入该决策；默认
+`OutputEnricher::enrich` 错误、取消、超时和未交还页面的错误保持终止。
 
 Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 huge-page 字段，
 共享普通页面按比例计入，历史进程峰值单独用于测量报告。已退出进程的 ENOENT/ESRCH
@@ -373,5 +387,6 @@ Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 hug
 完成编码封装验证后使用头部元数据直接构造结果；源文件仍受请求内存和输入字节上限约束，
 但不会额外物化整张 RGBA 缓冲。多帧 TIFF、动画 WebP 和像素消费者继续按聚合或单帧峰值
 显式预检，无法在额度内执行时返回类型化资源限制。
-PDF 原生页沿用逐页预检降级：必须有本页原生正文，扫描页标记会阻止降级。
-通用容器增强器的全局预检与工作租约不足保持失败，逐图片运行期恢复由识别错误分类决定。
+PDF 原生页和扫描页都以单页 OCR 为事务；局部识别限制释放该页临时资源，保留页面边界与
+视觉内容/占位后继续。通用容器增强器的请求级预检与工作租约不足保持失败，逐图片运行期
+恢复由识别错误作用域和已验证事务边界共同决定。

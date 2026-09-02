@@ -4161,6 +4161,7 @@ fn run_conversion(
 
     let execution = into_markdown::ExecutionOptions {
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
+        resource_adaptation: config::memory::local_resource_adaptation(&arguments, &loaded),
         ..into_markdown::ExecutionOptions::default()
     };
     let explicit_format = arguments.format.as_deref().map(parse_format).transpose()?;

@@ -56,6 +56,8 @@ fn typed_report_matches_existing_bytes_for_optional_fields_and_outcomes() {
             ocr_runtime: None,
             shared_lease_budget_bytes: 1024,
             shared_lease_peak_bytes: 512,
+            temporary_lease_budget_bytes: 2048,
+            temporary_lease_peak_bytes: 256,
             ocr: Some(BatchOcrUsageDto { recognized_regions: 1, recognized_chars: 2 }),
         }),
     )

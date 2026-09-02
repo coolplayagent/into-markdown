@@ -866,13 +866,24 @@ async fn enrich(
                     return Err(error);
                 };
                 context.checkpoint()?;
+                let generic =
+                    runtime::generic_omission_diagnostic(&error, options).ok_or_else(|| {
+                        ConversionError::Internal {
+                            detail: "OCR omission did not produce a resource diagnostic".into(),
+                        }
+                    })?;
                 cache[group_index] = Some(CachedContribution {
-                    diagnostics: vec![Diagnostic {
-                        code: code.into(),
-                        severity: DiagnosticSeverity::Warning,
-                        message: error.to_string(),
-                        locator: None,
-                    }],
+                    diagnostics: vec![
+                        Diagnostic {
+                            code: code.into(),
+                            severity: DiagnosticSeverity::Warning,
+                            message: format!(
+                                "OCR was omitted and the original visual was retained: {error}"
+                            ),
+                            locator: None,
+                        },
+                        generic,
+                    ],
                     ..Default::default()
                 });
             }
@@ -1047,7 +1058,8 @@ fn normalize(
             detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
         });
     }
-    let decoded = decode::decode(raster, source, summary, &options.limits, context)?;
+    let decoded =
+        decode::decode(raster, source, summary, summary.frames, &options.limits, context)?;
     let frame = decoded.frames.first().ok_or_else(|| ConversionError::Malformed {
         part: asset.filename.clone(),
         detail: "embedded raster decoder returned no frame".into(),
@@ -1195,7 +1207,7 @@ fn collect_references(
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                collect_references(blocks, output, input_format, context)?
+                collect_references(blocks, output, input_format, context)?;
             }
             _ => {}
         }

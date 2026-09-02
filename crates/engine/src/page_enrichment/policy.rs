@@ -1,94 +1,136 @@
-//! PDF's optional native-page preflight policy, before any image recognition.
+//! Recovery policy for one transactional native PDF page.
 
 use super::*;
 use into_markdown_core::{
-    AiMode, Block, BlockNode, Diagnostic, DiagnosticSeverity, ErrorPolicy, Inline, OcrPolicy,
-    ProvenanceKind,
+    Diagnostic, DiagnosticSeverity, ResourceFailureScope, ResourceLimitSource,
+    ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, classify_resource_recovery,
+    recovery_diagnostic,
 };
 
-pub(super) fn optional_page(
+pub(super) fn recovery(
     output: &ConverterOutput,
     sink: &PageEnrichmentSink<'_>,
     enricher: &dyn OutputEnricher,
-) -> Result<bool, ConversionError> {
-    if sink.format != InputFormat::Pdf
-        || sink.options.error_policy != ErrorPolicy::BestEffort
-        || enricher.id() != super::EMBEDDED_OCR
-    {
-        return Ok(false);
+    error: &ConversionError,
+) -> ResourceRecoveryAction {
+    if sink.format != InputFormat::Pdf || enricher.id() != super::EMBEDDED_OCR {
+        return ResourceRecoveryAction::Fail;
     }
-    let effective = match sink.options.ai.vision_ocr {
-        AiMode::Only => OcrPolicy::Always,
-        AiMode::Fallback | AiMode::Prefer if sink.options.ocr.policy == OcrPolicy::Off => {
-            OcrPolicy::Auto
-        }
-        _ => sink.options.ocr.policy,
-    };
-    if effective != OcrPolicy::Auto {
-        return Ok(false);
-    }
-    for diagnostic in &output.diagnostics {
-        sink.context.checkpoint()?;
-        if diagnostic.code == "pdf.scannedPage" {
-            return Ok(false);
-        }
-    }
-    native_body(&output.document.blocks, sink)
+    let locator = page_locator(output);
+    classify_resource_recovery(
+        sink.options.error_policy,
+        error,
+        ResourceRecoveryBoundary {
+            scope: ResourceFailureScope::VisualRecognition,
+            unit: ResourceUnitKind::Page,
+            locator: locator.as_ref(),
+            rollback_complete: true,
+            // The native page and its visual assets are still owned by this
+            // sink. Bodyless scan pages therefore have a useful visual fallback.
+            fallback_retained: true,
+            committed_units: 0,
+            omitted_units: 1,
+            limit_source: ResourceLimitSource::Explicit,
+            precise_required: None,
+            raised_limit: None,
+        },
+    )
 }
 
-fn native_body(
-    nodes: &[BlockNode],
-    sink: &PageEnrichmentSink<'_>,
-) -> Result<bool, ConversionError> {
-    for node in nodes {
-        sink.context.checkpoint()?;
-        if node.provenance.kind != ProvenanceKind::NativeParser
-            || (node.provenance.provider != sink.converter_id
-                && node.provenance.provider != "builtin.pdf.layout")
-        {
-            continue;
-        }
-        let body = match &node.block {
-            Block::Paragraph(inlines) => inlines.iter().any(native_inline),
-            Block::Code { text, .. } => printable(text),
-            Block::Page { blocks, .. } => native_body(blocks, sink)?,
-            _ => false,
-        };
-        if body {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn native_inline(inline: &Inline) -> bool {
-    match inline {
-        Inline::Text { value, .. } => printable(value),
-        Inline::SourceText { value, provenance, .. } => {
-            provenance.kind == ProvenanceKind::NativeParser && printable(value)
-        }
-        Inline::Link { content, .. } => content.iter().any(native_inline),
-        _ => false,
-    }
-}
-
-fn printable(text: &str) -> bool {
-    text.chars().any(|c| !c.is_whitespace() && !c.is_control())
-}
-
-pub(super) fn push_skipped(
+pub(super) fn push_omitted(
     output: &mut ConverterOutput,
     error: &ConversionError,
 ) -> Result<(), ConversionError> {
-    output.diagnostics.try_reserve(1).map_err(|allocation| ConversionError::ResourceLimit {
+    let locator = page_locator(output);
+    let facts = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::VisualRecognition,
+        unit: ResourceUnitKind::Page,
+        locator: locator.as_ref(),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: 0,
+        omitted_units: 1,
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: None,
+        raised_limit: None,
+    };
+    let generic = recovery_diagnostic(error, ResourceRecoveryAction::OmitUnit, facts, None)
+        .ok_or_else(|| ConversionError::Internal {
+            detail: "page recovery selected an error without a resource diagnostic".into(),
+        })?;
+    output.diagnostics.try_reserve(2).map_err(|allocation| ConversionError::ResourceLimit {
         limit: "max_memory_bytes",
-        detail: format!("cannot reserve optional OCR diagnostic: {allocation}"),
+        detail: format!("cannot reserve page OCR omission diagnostics: {allocation}"),
     })?;
     output.diagnostics.push(Diagnostic {
-        code: "presentation.optionalOcrSkipped".into(),
+        code: legacy_ocr_code(error).into(),
         severity: DiagnosticSeverity::Warning,
-        message: format!("optional embedded OCR was skipped: {error}"),
-        locator: output.document.blocks.first().map(|node| node.provenance.locator.clone()),
+        message: format!("page OCR was omitted and the original visual was retained: {error}"),
+        locator: locator.clone(),
     });
+    output.diagnostics.push(generic);
     Ok(())
+}
+
+fn legacy_ocr_code(error: &ConversionError) -> &'static str {
+    match error {
+        ConversionError::OcrRecognitionMemory { .. }
+        | ConversionError::ResourceLimit {
+            limit:
+                "max_memory_bytes"
+                | "ocrRecognitionMemory"
+                | "recognitionMemory"
+                | "recognitionCropMemory"
+                | "recognitionOutputMemory",
+            ..
+        } => "ocr.optionalRecognitionMemorySkipped",
+        _ => "ocr.optionalRecognitionResourceSkipped",
+    }
+}
+
+fn page_locator(output: &ConverterOutput) -> Option<into_markdown_core::SourceLocator> {
+    output
+        .document
+        .blocks
+        .first()
+        .map(|node| node.provenance.locator.clone())
+        .or_else(|| output.diagnostics.iter().find_map(|item| item.locator.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use into_markdown_core::{
+        Block, BlockNode, Document, NodeId, Provenance, ProvenanceKind, SourceLocator,
+    };
+
+    #[test]
+    fn omission_preserves_legacy_and_generic_diagnostics_at_the_page() {
+        let locator = SourceLocator { page: Some(7), ..Default::default() };
+        let mut output = ConverterOutput::new(
+            Document {
+                blocks: vec![BlockNode {
+                    id: NodeId("page".into()),
+                    block: Block::Page { number: 7, blocks: vec![] },
+                    provenance: Provenance {
+                        kind: ProvenanceKind::NativeParser,
+                        provider: "fixture".into(),
+                        locator: locator.clone(),
+                        confidence: None,
+                    },
+                }],
+                ..Default::default()
+            },
+            vec![],
+            vec![],
+        );
+        push_omitted(
+            &mut output,
+            &ConversionError::ResourceLimit { limit: "ocrWidthLimit", detail: "fixture".into() },
+        )
+        .unwrap();
+        assert_eq!(output.diagnostics[0].code, "ocr.optionalRecognitionResourceSkipped");
+        assert_eq!(output.diagnostics[1].code, "resource.ocrWidthLimit.unitOmitted");
+        assert!(output.diagnostics.iter().all(|item| item.locator == Some(locator.clone())));
+    }
 }

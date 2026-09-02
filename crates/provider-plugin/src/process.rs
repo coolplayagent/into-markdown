@@ -834,6 +834,16 @@ fn map_error(kind: CapabilityKind, provider: &str, error: &PluginError) -> Conve
         PluginErrorCode::ResourceLimit => {
             ConversionError::ResourceLimit { limit: "provider", detail: error.detail.clone() }
         }
+        PluginErrorCode::ProcessMemoryLimit if kind == CapabilityKind::Ocr => {
+            ConversionError::OcrRecognitionMemory {
+                provider: provider.to_owned(),
+                detail: error.detail.clone(),
+            }
+        }
+        PluginErrorCode::ProcessMemoryLimit => ConversionError::ResourceLimit {
+            limit: "providerProcessMemory",
+            detail: error.detail.clone(),
+        },
         PluginErrorCode::Protocol | PluginErrorCode::InvalidResult => {
             ConversionError::ProviderProtocol {
                 provider: provider.into(),

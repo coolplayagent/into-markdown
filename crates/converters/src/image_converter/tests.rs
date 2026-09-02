@@ -418,6 +418,7 @@ fn structural_work_and_animated_frame_limits_fail_before_codec_entry() {
 
     let mut options = options();
     options.limits.max_pages = 1;
+    options.error_policy = into_markdown_core::ErrorPolicy::Strict;
     let context = context(&options);
     let error = block_on(convert_image(
         &input(animated_webp_envelope(2), "animated.webp"),
@@ -563,14 +564,32 @@ fn frame_and_pixel_budgets_fail_before_materialization() {
     let bytes = multi_tiff();
     let mut page_options = options();
     page_options.limits.max_pages = 1;
-    let error = block_on(convert_image(
+    let output = block_on(convert_image(
         &input(bytes.clone(), "pages.tiff"),
         &page_options,
         &Services::default(),
         &context(&page_options),
     ))
-    .unwrap_err();
-    assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
+    .unwrap();
+    assert_eq!(output.document.blocks.len(), 1);
+    assert_eq!(output.document.metadata.properties["image.frames"], "2");
+    assert_eq!(output.document.metadata.properties["image.framesConverted"], "1");
+    assert!(output.diagnostics.iter().any(|item| {
+        item.code == "resource.max_pages.sequenceTruncated"
+            && item.locator.as_ref().is_some_and(|locator| locator.page == Some(2))
+    }));
+
+    let mut strict_pages = page_options.clone();
+    strict_pages.error_policy = into_markdown_core::ErrorPolicy::Strict;
+    assert!(matches!(
+        block_on(convert_image(
+            &input(bytes.clone(), "strict-pages.tiff"),
+            &strict_pages,
+            &Services::default(),
+            &context(&strict_pages),
+        )),
+        Err(ConversionError::ResourceLimit { limit: "max_pages", .. })
+    ));
 
     let mut pixel_options = options();
     pixel_options.limits.max_decompressed_bytes = 1;
@@ -944,6 +963,8 @@ enum ProviderExecutionFailure {
     ResourceLimit,
     Ocr,
     ComponentUnavailable,
+    RecognitionMemory,
+    RecognitionWidth,
 }
 
 struct FailingOcr {
@@ -995,9 +1016,84 @@ impl OcrEngine for FailingOcr {
                         detail: "provider disappeared".into(),
                     }
                 }
+                ProviderExecutionFailure::RecognitionMemory => {
+                    ConversionError::OcrRecognitionMemory {
+                        provider: self.id().into(),
+                        detail: "private recognition budget".into(),
+                    }
+                }
+                ProviderExecutionFailure::RecognitionWidth => ConversionError::ResourceLimit {
+                    limit: "ocrWidthLimit",
+                    detail: "recognizer width".into(),
+                },
             })
         })
     }
+}
+
+#[test]
+fn standalone_image_best_effort_retains_visual_for_auto_and_always_resource_refusals() {
+    for (policy, failure, generic) in [
+        (
+            OcrPolicy::Auto,
+            ProviderExecutionFailure::RecognitionMemory,
+            "resource.ocrRecognitionMemory.unitOmitted",
+        ),
+        (
+            OcrPolicy::Always,
+            ProviderExecutionFailure::RecognitionWidth,
+            "resource.ocrWidthLimit.unitOmitted",
+        ),
+        (
+            OcrPolicy::Always,
+            ProviderExecutionFailure::ResourceLimit,
+            "resource.max_memory_bytes.unitOmitted",
+        ),
+    ] {
+        let mut options = options();
+        options.ocr.policy = policy;
+        let context = context(&options);
+        let services =
+            Services { ocr: Some(Arc::new(FailingOcr { failure })), ..Services::default() };
+        let output = block_on(convert_image(
+            &input(encoded(ImageFormat::Png), "large-diagram.png"),
+            &options,
+            &services,
+            &context,
+        ))
+        .unwrap();
+        assert!(output.diagnostics.iter().any(|item| {
+            item.code == generic && item.locator.as_ref().is_some_and(|item| item.page == Some(1))
+        }));
+        let Block::Page { blocks, .. } = &output.document.blocks[0].block else {
+            panic!("image page expected")
+        };
+        assert!(blocks.iter().any(|node| matches!(node.block, Block::Image { .. })));
+        drop(output);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+fn standalone_image_strict_keeps_recognition_resource_refusals_terminal() {
+    let mut options = options();
+    options.ocr.policy = OcrPolicy::Always;
+    options.error_policy = into_markdown_core::ErrorPolicy::Strict;
+    let context = context(&options);
+    let services = Services {
+        ocr: Some(Arc::new(FailingOcr { failure: ProviderExecutionFailure::RecognitionMemory })),
+        ..Services::default()
+    };
+    assert!(matches!(
+        block_on(convert_image(
+            &input(encoded(ImageFormat::Png), "strict.png"),
+            &options,
+            &services,
+            &context,
+        )),
+        Err(ConversionError::OcrRecognitionMemory { .. })
+    ));
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 #[test]

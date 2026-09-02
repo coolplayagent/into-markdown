@@ -4,7 +4,9 @@ use super::entry_policy::EntryKind;
 use super::merge::MergeState;
 use into_markdown_core::{
     BoxFuture, ConversionError, ConversionOptions, ConverterOutput, ErrorCode, FormatHint,
-    NestedConversionRequest, ResolvedInput, Services, SourceContentEvidence, SourceMetadata,
+    NestedConversionRequest, ResolvedInput, ResourceFailureScope, ResourceLimitSource,
+    ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, Services,
+    SourceContentEvidence, SourceLocator, SourceMetadata, classify_resource_recovery,
 };
 use std::sync::Arc;
 
@@ -113,6 +115,14 @@ impl RecursiveConverter<'_> {
                             }
                         }
                     }
+                    Err(error) if recover_member_resource(self.options, &path, &error) => {
+                        self.merge.resource_failure(
+                            &path,
+                            &error,
+                            configured_limit(self.options, &error),
+                        )?;
+                        self.stats.failure(error);
+                    }
                     Err(error) if is_terminal(&error) => return Err(error),
                     Err(error) => {
                         self.merge.failure(&path, &error)?;
@@ -122,6 +132,46 @@ impl RecursiveConverter<'_> {
             }
             Ok(())
         })
+    }
+}
+
+fn recover_member_resource(
+    options: &ConversionOptions,
+    path: &str,
+    error: &ConversionError,
+) -> bool {
+    let locator = SourceLocator { part: Some(path.into()), ..SourceLocator::default() };
+    let boundary = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::ContentUnit,
+        unit: ResourceUnitKind::ArchiveMember,
+        locator: Some(&locator),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: 0,
+        omitted_units: 1,
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: None,
+        raised_limit: None,
+    };
+    classify_resource_recovery(options.error_policy, error, boundary)
+        == ResourceRecoveryAction::OmitUnit
+}
+
+fn configured_limit(options: &ConversionOptions, error: &ConversionError) -> Option<u64> {
+    let ConversionError::ResourceLimit { limit, .. } = error else {
+        return None;
+    };
+    match *limit {
+        "max_pages" => Some(u64::from(options.limits.max_pages)),
+        "max_archive_entries" => Some(u64::from(options.limits.max_archive_entries)),
+        "max_asset_bytes" => Some(options.limits.max_asset_bytes),
+        "max_total_asset_bytes" => Some(options.limits.max_total_asset_bytes),
+        "max_table_rows" => Some(options.limits.max_table_rows),
+        "max_table_columns" => Some(options.limits.max_table_columns),
+        "max_table_cells" => Some(options.limits.max_table_cells),
+        "max_decompressed_bytes" => Some(options.limits.max_decompressed_bytes),
+        "max_temporary_bytes" | "max_temp_bytes" => Some(options.limits.max_temporary_bytes),
+        _ => None,
     }
 }
 

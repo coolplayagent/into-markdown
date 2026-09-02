@@ -7,10 +7,12 @@ use super::xhtml::{self, Footnote};
 use super::xhtml_security;
 use crate::zip_converter::archive_api::SafeArchive;
 use into_markdown_core::{
-    ConversionError, ConversionOptions, ConverterOutput, Diagnostic, DiagnosticSeverity,
-    ErrorPolicy, ExecutionContext, FormatHint, InputFormat, NestedConversionRequest,
-    NestedConversionService, ResolvedInput, ResourceReservation, Services, SourceLocator,
-    SourceMetadata,
+    Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput, Diagnostic,
+    DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext, FormatHint, Inline, InputFormat,
+    NestedConversionRequest, NestedConversionService, NodeId, Provenance, ProvenanceKind,
+    ResolvedInput, ResourceFailureScope, ResourceLimitSource, ResourceRecoveryAction,
+    ResourceRecoveryBoundary, ResourceReservation, ResourceUnitKind, Services, SourceLocator,
+    SourceMetadata, classify_resource_recovery,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
@@ -49,12 +51,11 @@ impl ChapterDispatch<'_> {
     async fn convert(
         &self,
         item: &ManifestItem,
-        original: &ManifestItem,
         prepared: xhtml::PreparedXhtml,
         recovery: &mut RecoveryInventory,
     ) -> Result<Option<Chapter>, ConversionError> {
-        let (input, hint, _shared_memory) = chapter_input(item, &prepared, self.context)?;
-        let mut output = match self
+        let (input, hint, shared_memory) = chapter_input(item, &prepared, self.context)?;
+        let converted = self
             .nested
             .convert(
                 NestedConversionRequest {
@@ -65,9 +66,23 @@ impl ChapterDispatch<'_> {
                 },
                 self.context,
             )
-            .await
-        {
+            .await;
+        drop(input);
+        drop(shared_memory);
+        let mut output = match converted {
             Ok(output) => output,
+            Err(error) if recover_chapter_resource(self.options, &item.path, &error) => {
+                recovery.diagnostic(
+                    "resource.max_memory_bytes.unitOmitted",
+                    DiagnosticSeverity::Warning,
+                    &item.path,
+                    format_args!(
+                        "resource limit max_memory_bytes: configured={}, observed=unknown, action=omitted 1 chapter; placeholder retained: {error}",
+                        self.options.limits.max_memory_bytes
+                    ),
+                )?;
+                return Ok(Some(omitted_placeholder_chapter(item, prepared, "resource limit")));
+            }
             Err(error)
                 if self.options.error_policy == ErrorPolicy::BestEffort
                     && matches!(
@@ -81,8 +96,11 @@ impl ChapterDispatch<'_> {
                     &item.path,
                     &error,
                 )?;
-                recovery.omit(&original.path, Some(&item.path))?;
-                return Ok(None);
+                return Ok(Some(omitted_placeholder_chapter(
+                    item,
+                    prepared,
+                    "unsupported or malformed chapter content",
+                )));
             }
             Err(error) => return Err(error),
         };
@@ -96,6 +114,70 @@ impl ChapterDispatch<'_> {
             footnotes: prepared.footnotes,
             resource_paths: prepared.resource_paths,
         }))
+    }
+}
+
+fn recover_chapter_resource(
+    options: &ConversionOptions,
+    path: &str,
+    error: &ConversionError,
+) -> bool {
+    if !matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }) {
+        return false;
+    }
+    let locator = SourceLocator { part: Some(path.into()), ..SourceLocator::default() };
+    classify_resource_recovery(
+        options.error_policy,
+        error,
+        ResourceRecoveryBoundary {
+            scope: ResourceFailureScope::ContentUnit,
+            unit: ResourceUnitKind::Chapter,
+            locator: Some(&locator),
+            rollback_complete: true,
+            fallback_retained: true,
+            committed_units: 0,
+            omitted_units: 1,
+            limit_source: ResourceLimitSource::Explicit,
+            precise_required: None,
+            raised_limit: None,
+        },
+    ) == ResourceRecoveryAction::OmitUnit
+}
+
+fn omitted_placeholder_chapter(
+    item: &ManifestItem,
+    prepared: xhtml::PreparedXhtml,
+    reason: &str,
+) -> Chapter {
+    let path = item.path.clone();
+    let locator = SourceLocator { part: Some(path.clone()), ..SourceLocator::default() };
+    let placeholder = BlockNode {
+        id: NodeId(format!("epub-resource-omitted-{}", path.replace('/', "-"))),
+        block: Block::Paragraph(vec![Inline::Text {
+            value: format!(
+                "[Chapter content omitted ({reason}); source location retained: {path}]"
+            ),
+            marks: Vec::new(),
+        }]),
+        provenance: Provenance {
+            kind: ProvenanceKind::NativeParser,
+            provider: EPUB_ID.into(),
+            locator,
+            confidence: Some(1.0),
+        },
+    };
+    Chapter {
+        path,
+        output: ConverterOutput::new(
+            Document { blocks: vec![placeholder], ..Document::default() },
+            Vec::new(),
+            Vec::new(),
+        ),
+        references: prepared.references,
+        internal_targets: prepared.internal_targets,
+        anchors: prepared.anchors,
+        footnotes: prepared.footnotes,
+        resource_paths: prepared.resource_paths,
     }
 }
 
@@ -230,13 +312,47 @@ pub(super) async fn convert(
     offline.network.enabled = false;
     offline.network.allowed_hosts.clear();
     let dispatch = ChapterDispatch { options: &offline, nested: nested.as_ref(), context };
+    let linear_count = package.spine.iter().filter(|item| item.linear).count();
+    let selected_linear = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    if linear_count > selected_linear {
+        let first_omitted = package
+            .spine
+            .iter()
+            .filter(|item| item.linear)
+            .nth(selected_linear)
+            .and_then(|item| package.item(&item.idref).ok())
+            .map_or(package.path.as_str(), |item| item.path.as_str());
+        let error = ConversionError::ResourceLimit {
+            limit: "max_pages",
+            detail: format!("{linear_count} EPUB chapters > {}", options.limits.max_pages),
+        };
+        if options.error_policy == ErrorPolicy::Strict {
+            return Err(error);
+        }
+        recovery.diagnostic(
+            "resource.max_pages.sequenceTruncated",
+            DiagnosticSeverity::Warning,
+            first_omitted,
+            format_args!(
+                "resource limit max_pages: configured={}, observed={linear_count}, action=kept {selected_linear} chapters and omitted {} subsequent chapters",
+                options.limits.max_pages,
+                linear_count.saturating_sub(selected_linear)
+            ),
+        )?;
+    }
+    let mut seen_linear = 0_usize;
     for itemref in &package.spine {
         budget.checkpoint()?;
         if !itemref.linear {
             skipped_non_linear += 1;
             continue;
         }
+        seen_linear = seen_linear.saturating_add(1);
         let original = package.item(&itemref.idref)?;
+        if seen_linear > selected_linear {
+            recovery.omit(&original.path, None)?;
+            continue;
+        }
         let Some(item) = select_spine_item(
             package,
             original,
@@ -302,7 +418,7 @@ pub(super) async fn convert(
             &mut recovery,
         )?;
         drop(entry);
-        if let Some(chapter) = dispatch.convert(item, original, prepared, &mut recovery).await? {
+        if let Some(chapter) = dispatch.convert(item, prepared, &mut recovery).await? {
             chapters.push(chapter);
         }
     }
@@ -549,5 +665,35 @@ mod tests {
         assert_eq!(error.code(), ErrorCode::Malformed);
         drop(inventory);
         assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn omitted_chapter_placeholder_is_visible_located_and_valid() {
+        let context = context(64 * 1024);
+        let item = ManifestItem {
+            id: "chapter".into(),
+            path: "OPS/chapter.xhtml".into(),
+            media_type: "application/xhtml+xml".into(),
+            properties: BTreeSet::new(),
+            fallback: None,
+        };
+        let prepared = xhtml::PreparedXhtml {
+            bytes: Vec::new(),
+            references: BTreeMap::new(),
+            internal_targets: BTreeSet::new(),
+            anchors: BTreeSet::new(),
+            footnotes: Vec::new(),
+            resource_paths: BTreeSet::new(),
+            active_content_removed: false,
+            _memory: context.reserve_memory(0).unwrap(),
+        };
+        let chapter = omitted_placeholder_chapter(&item, prepared, "resource limit");
+        chapter.output.document.validate().unwrap();
+        let node = chapter.output.document.blocks.first().unwrap();
+        assert_eq!(node.provenance.locator.part.as_deref(), Some("OPS/chapter.xhtml"));
+        let Block::Paragraph(content) = &node.block else { panic!("paragraph expected") };
+        assert!(
+            matches!(content.first(), Some(Inline::Text { value, .. }) if value.contains("resource limit"))
+        );
     }
 }
