@@ -11,6 +11,7 @@ mod links;
 mod pages;
 mod runtime;
 mod stream;
+pub(crate) mod working_visual;
 
 #[cfg(test)]
 mod tests;

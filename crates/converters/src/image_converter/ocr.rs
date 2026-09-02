@@ -1,11 +1,11 @@
 //! Policy-bound OCR routing and evidence-preserving IR construction.
 
 use into_markdown_core::{
-    AiMode, Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic,
-    DiagnosticSeverity, Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage,
-    OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest,
-    OcrResult, OcrSourceRegion, Provenance, ProvenanceKind, ResourceReservation, Services,
-    SourceLocator, SourcePoint, estimate_retained_output,
+    Asset, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity,
+    Document, ExecutionContext, Inline, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
+    OcrInputIdentity, OcrOutputPlan, OcrPolicy, OcrRecognition, OcrRequest, OcrResult,
+    OcrSourceRegion, Provenance, ProvenanceKind, ResourceReservation, Services, SourceLocator,
+    SourcePoint, estimate_retained_output,
 };
 
 const MERGE_PROVIDER: &str = "builtin.converter.image.ocr-merge";
@@ -61,7 +61,7 @@ async fn recognize_inner(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<OcrContribution, ConversionError> {
-    let policy = effective_ocr_policy(options);
+    let policy = crate::embedded_visual_ocr::effective_ocr_policy(options);
     if policy == OcrPolicy::Off {
         return Ok(empty());
     }
@@ -202,16 +202,6 @@ async fn recognize_inner(
         recognized_regions,
         recognized_chars,
     })
-}
-
-fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
-    match options.ai.vision_ocr {
-        AiMode::Only => OcrPolicy::Always,
-        AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
-            OcrPolicy::Auto
-        }
-        _ => options.ocr.policy,
-    }
 }
 
 fn materialize_remote_unbound(

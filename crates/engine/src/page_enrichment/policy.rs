@@ -1,6 +1,6 @@
 //! Recovery policy for one transactional native PDF page.
 
-use super::*;
+use super::{ConversionError, ConverterOutput, InputFormat, OutputEnricher, PageEnrichmentSink};
 use into_markdown_core::{
     Diagnostic, DiagnosticSeverity, ResourceFailureScope, ResourceLimitSource,
     ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, classify_resource_recovery,

@@ -217,20 +217,17 @@ impl OcrEngine for PdfGeometryOcr {
             context.checkpoint()?;
             let (width, height) = dimensions?;
             let is_page_render = width > 10 && height > 10;
-            let regions = (!is_page_render)
-                .then(|| OcrRegion {
-                    text: "embedded second".into(),
-                    polygon: [
-                        (0.0, 0.0),
-                        (width as f32, 0.0),
-                        (width as f32, height as f32),
-                        (0.0, height as f32),
-                    ],
-                    confidence: 0.99,
-                })
-                .into_iter()
-                .collect();
-            let confidences = if is_page_render { Vec::new() } else { vec![0.99] };
+            let regions = vec![OcrRegion {
+                text: if is_page_render { "page recognized" } else { "embedded second" }.into(),
+                polygon: [
+                    (0.0, 0.0),
+                    (width as f32, 0.0),
+                    (width as f32, height as f32),
+                    (0.0, height as f32),
+                ],
+                confidence: 0.99,
+            }];
+            let confidences = vec![0.99];
             let identity = OcrInputIdentity::try_new(digest, width, height, 0);
             Ok(OcrRecognition::Bound(BoundOcrResult::try_new_for_input(
                 OcrResult { regions, provider: "test.api.pdf-geometry-ocr".into() },
@@ -510,21 +507,34 @@ fn dynamically_created_pdf_merges_native_and_embedded_ocr_geometry_and_deduplica
     let ocr = Arc::new(PdfGeometryOcr(AtomicUsize::new(0)));
     let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
     let engine = default_engine_with_services(services).unwrap();
-    let mut request = ConversionRequest::new(InputRef::bytes(
-        pdf_with_native_text_and_two_images(),
-        Some("dynamic-embedded.pdf"),
-    ));
-    request.options.ocr.policy = OcrPolicy::Always;
-    let result = block_on(engine.convert(request)).unwrap();
-    // One request is the PDF page OCR pass. The embedded stage makes one request
-    // for red and one for green; the second green drawing reuses that result.
-    assert_eq!(ocr.0.load(Ordering::SeqCst), 3);
-    assert_eq!(result.markdown.matches("native words").count(), 1);
-    assert_eq!(result.markdown.matches("embedded second").count(), 3);
-    assert!(
-        result.markdown.find("native words").unwrap()
-            < result.markdown.find("embedded second").unwrap()
-    );
+    for mode in [AssetMode::Extract, AssetMode::Embed] {
+        let input = pdf_with_native_text_and_two_images();
+        let mut baseline =
+            ConversionRequest::new(InputRef::bytes(input.clone(), Some("dynamic-embedded.pdf")));
+        baseline.options.ocr.policy = OcrPolicy::Off;
+        baseline.options.output.asset_mode = mode;
+        let baseline = block_on(engine.convert(baseline)).unwrap();
+
+        let mut request =
+            ConversionRequest::new(InputRef::bytes(input, Some("dynamic-embedded.pdf")));
+        request.options.ocr.policy = OcrPolicy::Always;
+        request.options.output.asset_mode = mode;
+        let result = block_on(engine.convert(request)).unwrap();
+
+        assert_eq!(ocr.0.load(Ordering::SeqCst), usize::from(mode == AssetMode::Embed) + 1);
+        assert_eq!(result.markdown.matches("native words").count(), 1);
+        assert_eq!(result.markdown.matches("page recognized").count(), 1);
+        assert!(!result.markdown.contains("embedded second"));
+        assert_eq!(result.assets.len(), 2);
+        assert_eq!(
+            result.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>(),
+            baseline.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>()
+        );
+        let serialized = serde_json::to_string(&result.document).unwrap();
+        assert!(!serialized.contains("pdf-page-render-"));
+        assert!(!serialized.contains("ocr-render"));
+        assert!(!serialized.contains("page render for OCR"));
+    }
 }
 
 fn pdf_with_native_text_and_two_images() -> Vec<u8> {
@@ -593,6 +603,10 @@ fn assert_dynamic_file_ocr_references(
     let ocr = Arc::new(SourceBoundOcr(AtomicUsize::new(0)));
     let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
     let engine = default_engine_with_services(services).unwrap();
+    let mut baseline_request = ConversionRequest::new(InputRef::Path(file.path().to_path_buf()));
+    baseline_request.options.ocr.policy = OcrPolicy::Off;
+    baseline_request.options.output.asset_mode = AssetMode::Extract;
+    let baseline = block_on(engine.convert(baseline_request)).unwrap();
     let mut request = ConversionRequest::new(InputRef::Path(file.path().to_path_buf()));
     request.options.ocr.policy = OcrPolicy::Always;
     request.options.output.asset_mode = AssetMode::Extract;
@@ -622,6 +636,11 @@ fn assert_dynamic_file_ocr_references(
         );
     }
     assert_eq!(ocr.0.load(Ordering::SeqCst), recognized_assets, "{suffix}");
+    assert_eq!(
+        result.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>(),
+        baseline.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>(),
+        "{suffix}: OCR working bytes must not change the published asset inventory"
+    );
     let mut ocr_nodes = Vec::new();
     collect_ocr_nodes(&result.document.blocks, &mut ocr_nodes);
     assert_eq!(ocr_nodes.len(), references, "{suffix}: OCR IR reference count");

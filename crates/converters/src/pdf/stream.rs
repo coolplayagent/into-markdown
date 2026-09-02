@@ -1,27 +1,18 @@
-//! Page-bounded OCR-only pixel lifetime; final semantic ownership moves once.
+//! Page-bounded PDF OCR working pixels; only publishable source assets survive.
 
 use super::{
-    PdfConverter, convert_pdf_admitted, image_pixels_required, open_document, pages,
-    runtime::acquire_pdf_conversion,
+    PdfConverter, convert_pdf_admitted, open_document, pages, runtime::acquire_pdf_conversion,
 };
 use into_markdown_core::{
-    AiMode, AssetMode, Block, BlockNode, ConversionError, ConversionOptions, ConverterEventSink,
-    ConverterOutput, ConverterStream, ConverterStreamCompletion, ConverterStreamMode, Diagnostic,
-    ExecutionContext, FormatCandidate, LocalBoxFuture, ResolvedInput, Services, StreamConsumerKind,
-    estimate_retained_output, stream_converter_output,
+    Asset, AssetId, AssetMode, Block, BlockNode, ConversionError, ConversionOptions,
+    ConverterEventSink, ConverterOutput, ConverterStream, ConverterStreamCompletion,
+    ConverterStreamMode, Diagnostic, ExecutionContext, FormatCandidate, LocalBoxFuture, OcrPolicy,
+    ResolvedInput, Services, StreamConsumerKind, stream_converter_output,
 };
+use std::collections::HashSet;
 
-fn ocr_only_pixels(options: &ConversionOptions) -> bool {
-    options.output.asset_mode == AssetMode::Omit
-        && image_pixels_required(options)
-        && [
-            options.ai.image_description,
-            options.ai.layout_repair,
-            options.ai.table_repair,
-            options.ai.formula_repair,
-        ]
-        .iter()
-        .all(|mode| *mode == AiMode::Off)
+fn page_ocr_requested(options: &ConversionOptions) -> bool {
+    crate::embedded_visual_ocr::effective_ocr_policy(options) != OcrPolicy::Off
 }
 
 impl ConverterStream for PdfConverter {
@@ -32,7 +23,7 @@ impl ConverterStream for PdfConverter {
         options: &ConversionOptions,
         _: StreamConsumerKind,
     ) -> ConverterStreamMode {
-        if ocr_only_pixels(options) {
+        if page_ocr_requested(options) {
             ConverterStreamMode::Native
         } else {
             ConverterStreamMode::AggregateAdapter
@@ -51,11 +42,16 @@ impl ConverterStream for PdfConverter {
         Box::pin(async move {
             let path = self.runtime_path()?;
             let _permit = acquire_pdf_conversion(context).await?;
-            if !ocr_only_pixels(options) || !sink.supports_page_enrichment() {
+            if !page_ocr_requested(options) {
                 return stream_converter_output(
                     convert_pdf_admitted(&path, input, options, context)?,
                     sink,
                 );
+            }
+            if !sink.supports_page_enrichment() {
+                let output = convert_pdf_admitted(&path, input, options, context)?;
+                let output = super::working_visual::discard(output, context)?;
+                return stream_converter_output(output, sink);
             }
             let runtime = pages::load_runtime(&path, options)?;
             let pdf = open_document(&runtime, input, context)?;
@@ -63,6 +59,7 @@ impl ConverterStream for PdfConverter {
             let selected_pages = observed_pages.min(options.limits.max_pages);
             let mut counts = pages::Counts::default();
             let mut output = ConverterOutput::default();
+            let mut published_asset_ids = HashSet::new();
             if observed_pages > selected_pages {
                 output
                     .diagnostics
@@ -72,15 +69,30 @@ impl ConverterStream for PdfConverter {
                 context.checkpoint()?;
                 sink.checkpoint()?;
                 let page = pages::PdfOutput::new(1, context)?
-                    .extract_page(&pdf, page_index, options, context, &mut counts, true)?
+                    .extract_page(
+                        &pdf,
+                        page_index,
+                        options,
+                        context,
+                        &mut counts,
+                        options.output.asset_mode == AssetMode::Omit,
+                    )?
                     .finish(options, context)?;
                 let page = sink.enrich_page(page).await?;
-                append_consumed_page(&mut output, page, context)?;
-                // Reset only after the page's actual bitmap allocations AND
-                // their leases were destroyed. Permanent asset modes never use
-                // this branch and keep document-wide byte/dedup accounting.
-                counts.asset_bytes = 0;
+                append_page(
+                    &mut output,
+                    page,
+                    options.output.asset_mode,
+                    &mut published_asset_ids,
+                    context,
+                )?;
+                // Every page must carry the payloads needed by its own OCR
+                // transaction. The final collector performs document-wide
+                // content-ID deduplication after those working bytes are gone.
                 counts.asset_ids.clear();
+                if options.output.asset_mode == AssetMode::Omit {
+                    counts.asset_bytes = 0;
+                }
             }
             // Keep document-wide native/OCR layout and running-matter policy,
             // now over semantic text only, without retaining page pixels.
@@ -90,19 +102,22 @@ impl ConverterStream for PdfConverter {
     }
 }
 
-fn append_consumed_page(
+fn append_page(
     output: &mut ConverterOutput,
-    mut page: ConverterOutput,
+    page: ConverterOutput,
+    asset_mode: AssetMode,
+    published_asset_ids: &mut HashSet<AssetId>,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     context.checkpoint()?;
-    remove_images(&mut page.document.blocks, context)?;
-    page.assets = Vec::new();
-    let retained = estimate_retained_output(&page.document, &page.assets, &page.diagnostics)?;
-    let compact = context.reserve_memory(retained)?;
-    // Replace the now-freed pixel/codec/layout peak leases with only the live
-    // semantic output. Ownership is covered throughout the transition.
-    let mut page = page.certify_preflight_reservation(context, compact)?;
+    let mut page = super::working_visual::discard(page, context)?;
+    if asset_mode == AssetMode::Omit {
+        remove_images(&mut page.document.blocks, context)?;
+        page.assets.clear();
+    } else {
+        page.assets.retain(|asset| published_asset_ids.insert(asset.id.clone()));
+    }
+    let mut page = page.reconcile_retained_output(context)?;
     let growth = page
         .document
         .blocks
@@ -111,6 +126,7 @@ fn append_consumed_page(
         .and_then(|bytes| {
             bytes.checked_add(page.diagnostics.len().checked_mul(size_of::<Diagnostic>())?)
         })
+        .and_then(|bytes| bytes.checked_add(page.assets.len().checked_mul(size_of::<Asset>())?))
         .and_then(|bytes| bytes.checked_mul(2))
         .and_then(|bytes| u64::try_from(bytes).ok())
         .ok_or_else(|| super::resource("max_memory_bytes", "PDF page collector growth overflow"))?;
@@ -123,8 +139,12 @@ fn append_consumed_page(
     output.diagnostics.try_reserve(page.diagnostics.len()).map_err(|_| {
         super::resource("max_memory_bytes", "PDF diagnostic collector allocation failed")
     })?;
+    output.assets.try_reserve(page.assets.len()).map_err(|_| {
+        super::resource("max_memory_bytes", "PDF asset collector allocation failed")
+    })?;
     output.document.blocks.append(&mut page.document.blocks);
     output.diagnostics.append(&mut page.diagnostics);
+    output.assets.append(&mut page.assets);
     output.absorb_memory_lease(&mut page, context)?;
     output.attach_memory_reservation(context, growth)
 }
@@ -162,18 +182,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_ocr_only_omitted_pixels_use_page_consumption() {
+    fn every_pdf_ocr_mode_uses_page_consumption() {
         let mut options = ConversionOptions::default();
         options.output.asset_mode = AssetMode::Omit;
-        assert!(ocr_only_pixels(&options));
+        assert!(page_ocr_requested(&options));
         options.ocr.policy = into_markdown_core::OcrPolicy::Off;
-        assert!(!ocr_only_pixels(&options));
-        options.ai.vision_ocr = AiMode::Only;
-        assert!(ocr_only_pixels(&options));
-        options.ai.image_description = AiMode::Prefer;
-        assert!(!ocr_only_pixels(&options));
-        options.ai.image_description = AiMode::Off;
+        assert!(!page_ocr_requested(&options));
+        options.ai.vision_ocr = into_markdown_core::AiMode::Only;
+        assert!(page_ocr_requested(&options));
         options.output.asset_mode = AssetMode::Extract;
-        assert!(!ocr_only_pixels(&options));
+        assert!(page_ocr_requested(&options));
+        options.output.asset_mode = AssetMode::Embed;
+        assert!(page_ocr_requested(&options));
     }
 }

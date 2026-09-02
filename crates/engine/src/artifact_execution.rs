@@ -2,7 +2,7 @@
 
 use crate::{
     Engine, PreparedArtifactConversion, artifact_output, invoke_converter_preflighted,
-    invoke_enrichers, rendering, stream_execution,
+    invoke_enrichers_skipping, rendering, stream_execution,
 };
 use into_markdown_core::{
     ArtifactSink, ConversionError, ConversionSummary, ConverterStreamMode, ExecutionStage,
@@ -37,8 +37,8 @@ pub(crate) async fn execute(
             StreamConsumerKind::Immediate,
         ) == ConverterStreamMode::Native
     });
-    let output = if let Some(stream) = native {
-        stream_execution::invoke_native_immediate(
+    let (output, completed_page_ocr) = if let Some(stream) = native {
+        let native = stream_execution::invoke_native_immediate(
             stream,
             source.input(),
             &attempt.candidate,
@@ -47,27 +47,34 @@ pub(crate) async fn execute(
             &engine.enrichers,
             &context,
         )
-        .await?
+        .await?;
+        (native.output, native.completed_page_ocr)
     } else {
-        invoke_converter_preflighted(
-            attempt.converter.as_ref(),
-            source.input(),
-            &attempt.candidate,
+        (
+            invoke_converter_preflighted(
+                attempt.converter.as_ref(),
+                source.input(),
+                &attempt.candidate,
+                &request.options,
+                &engine.services,
+                &context,
+                |_| Ok(()),
+            )
+            .await?,
+            false,
+        )
+    };
+    let output = invoke_enrichers_skipping(
+        &engine.enrichers,
+        output,
+        crate::EnricherInvocation::after_page_enrichment(
+            attempt.converter.id(),
+            attempt.candidate.format,
             &request.options,
             &engine.services,
             &context,
-            |_| Ok(()),
-        )
-        .await?
-    };
-    let output = invoke_enrichers(
-        &engine.enrichers,
-        output,
-        attempt.converter.id(),
-        attempt.candidate.format,
-        &request.options,
-        &engine.services,
-        &context,
+            completed_page_ocr.then_some(crate::page_enrichment::EMBEDDED_OCR),
+        ),
     )
     .await?;
     let output = if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {

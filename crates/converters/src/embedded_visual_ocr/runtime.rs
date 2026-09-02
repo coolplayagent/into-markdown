@@ -2,7 +2,7 @@
 
 use super::*;
 use into_markdown_core::{
-    ErrorPolicy, Inline, ProvenanceKind, ResourceFailureScope, ResourceLimitSource,
+    ErrorPolicy, Inline, Provenance, ProvenanceKind, ResourceFailureScope, ResourceLimitSource,
     ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, classify_resource_recovery,
     recovery_diagnostic,
 };
@@ -198,7 +198,7 @@ pub(super) async fn recognize(
     let normalized = match normalize(asset, options, context) {
         Ok(value) => value,
         Err(error)
-            if effective_ocr_policy(options) == OcrPolicy::Auto
+            if super::effective_ocr_policy(options) == OcrPolicy::Auto
                 && options.error_policy == ErrorPolicy::BestEffort
                 && auto_degradable_normalization(&error) =>
         {
@@ -236,7 +236,7 @@ pub(super) async fn recognize(
             )
         });
     if let Err(error) = plan {
-        if effective_ocr_policy(options) == OcrPolicy::Auto
+        if super::effective_ocr_policy(options) == OcrPolicy::Auto
             && options.error_policy == ErrorPolicy::BestEffort
             && matches!(error, ConversionError::ComponentUnavailable { .. })
         {

@@ -4,7 +4,7 @@ use futures::executor::block_on;
 use into_markdown_core::{
     ArtifactSink, AssetStreamInfo, Block, BoundOcrResult, BoxFuture, CancellationToken,
     ConversionError, ConversionOptions, ConversionRequest, ConverterOutput, EnrichmentPlan,
-    ExecutionContext, ExecutionOptions, FormatHint, InputFormat, InputRef, OcrEngine,
+    ErrorPolicy, ExecutionContext, ExecutionOptions, FormatHint, InputFormat, InputRef, OcrEngine,
     OcrEvidenceStage, OcrEvidenceStep, OcrInputIdentity, OcrOutputPlan, OcrRecognition, OcrRegion,
     OcrRequest, OcrResult, OutputEnricher, Services,
 };
@@ -13,8 +13,16 @@ use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy, Default)]
+enum FirstFailure {
+    #[default]
+    None,
+    ComponentUnavailable,
+    RecognitionMemory,
+}
+
 #[derive(Default)]
-struct Recognizer(AtomicUsize, bool);
+struct Recognizer(AtomicUsize, FirstFailure);
 
 impl OcrEngine for Recognizer {
     fn id(&self) -> &'static str {
@@ -61,11 +69,22 @@ impl OcrEngine for Recognizer {
             })
             .await;
             let ordinal = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-            if self.1 && ordinal == 1 {
-                return Err(ConversionError::ComponentUnavailable {
-                    component: "ocr".into(),
-                    detail: "test provider temporarily unavailable".into(),
-                });
+            if ordinal == 1 {
+                match self.1 {
+                    FirstFailure::ComponentUnavailable => {
+                        return Err(ConversionError::ComponentUnavailable {
+                            component: "ocr".into(),
+                            detail: "test provider temporarily unavailable".into(),
+                        });
+                    }
+                    FirstFailure::RecognitionMemory => {
+                        return Err(ConversionError::OcrRecognitionMemory {
+                            provider: "test.page-ocr".into(),
+                            detail: "test worker reached its fixed allowance".into(),
+                        });
+                    }
+                    FirstFailure::None => {}
+                }
             }
             let image = image::load_from_memory(request.image).unwrap();
             let identity = OcrInputIdentity::try_new(
@@ -286,6 +305,35 @@ fn collecting_consumes_ocr_pixels_per_page_and_releases_leases() {
     }
 }
 
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn thousand_page_scan_never_retains_more_than_one_page_render() {
+    let pages = Arc::new(ObservedPages::default());
+    let ocr = Arc::new(Recognizer::default());
+    let engine = engine(pages.clone(), ocr.clone());
+    let mut conversion = request(1);
+    conversion.input = InputRef::Bytes {
+        data: Arc::from(scanned_page_variants(1_000, true)),
+        name: Some("thousand-pages.pdf".into()),
+    };
+    conversion.options.limits.max_pages = 1_000;
+    let context =
+        ExecutionContext::new(ExecutionOptions::default(), conversion.options.limits.clone());
+    let result = block_on(engine.convert_with_context(conversion, context.clone())).unwrap();
+    assert_eq!(result.document.blocks.len(), 1_000);
+    assert!(result.assets.is_empty());
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 1, "identical pages reuse recognition");
+    let entries = pages.entries.lock().unwrap();
+    assert_eq!(entries.len(), 1_000);
+    assert!(entries.iter().all(|(_, live_page_pixels, _)| *live_page_pixels < 400_000));
+    assert!(entries.iter().map(|(_, pixels, _)| pixels).sum::<usize>() > 100_000_000);
+    assert!(!serde_json::to_string(&result.document).unwrap().contains("ocr-render"));
+    drop(entries);
+    drop(result);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+    assert_eq!(context.reserved_temporary_bytes(), 0);
+}
+
 #[derive(Default)]
 struct MarkdownSink(Vec<u8>);
 impl ArtifactSink for MarkdownSink {
@@ -367,19 +415,35 @@ fn prepared_path_is_single_execution_and_keeps_body_in_page_order() {
 
 #[test]
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
-fn permanent_assets_still_obey_document_total_budget() {
+fn permanent_assets_keep_originals_without_charging_ocr_page_renders() {
     for mode in [into_markdown_core::AssetMode::Extract, into_markdown_core::AssetMode::Embed] {
-        let mut request = request(3);
-        request.options.output.asset_mode = mode;
+        let mut conversion = request(3);
+        conversion.options.output.asset_mode = mode;
         let pages = Arc::new(ObservedPages::default());
-        let engine = engine(pages.clone(), Arc::new(Recognizer::default()));
+        let ocr = Arc::new(Recognizer::default());
+        let engine = engine(pages.clone(), ocr.clone());
         let context =
-            ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
+            ExecutionContext::new(ExecutionOptions::default(), conversion.options.limits.clone());
+        let result = block_on(engine.convert_with_context(conversion, context.clone())).unwrap();
+        assert_eq!(result.assets.len(), 3);
+        assert!(result.assets.iter().all(|asset| asset.id.0.starts_with("pdf-image-")));
+        assert!(!serde_json::to_string(&result.document).unwrap().contains("ocr-render"));
+        assert!(!result.markdown.contains("page render for OCR"));
+        assert_eq!(result.markdown.matches("recognized body").count(), 3);
+        assert_eq!(ocr.0.load(Ordering::SeqCst), 3);
+        assert_eq!(pages.entries.lock().unwrap().len(), 3);
+        drop(result);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+
+        let mut limited = request(3);
+        limited.options.output.asset_mode = mode;
+        limited.options.limits.max_total_asset_bytes = 100;
+        let context =
+            ExecutionContext::new(ExecutionOptions::default(), limited.options.limits.clone());
         assert!(matches!(
-            block_on(engine.convert_with_context(request, context.clone())),
+            block_on(engine.convert_with_context(limited, context.clone())),
             Err(ConversionError::ResourceLimit { limit: "max_total_asset_bytes", .. })
         ));
-        assert!(pages.entries.lock().unwrap().is_empty());
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
 }
@@ -438,8 +502,11 @@ fn identical_scanned_pages_reuse_recognition_without_retaining_pixels() {
 
 fn check_repeated_pages(unavailable_first: bool) {
     let pages = Arc::new(ObservedPages::default());
-    let ocr = Arc::new(Recognizer(AtomicUsize::new(0), unavailable_first));
-    let engine = engine(pages.clone(), ocr.clone());
+    let ocr = Arc::new(Recognizer(
+        AtomicUsize::new(0),
+        if unavailable_first { FirstFailure::ComponentUnavailable } else { FirstFailure::None },
+    ));
+    let conversion_engine = engine(pages.clone(), ocr.clone());
     let mut request = request(4);
     request.input = InputRef::Bytes {
         data: Arc::from(scanned_page_variants(4, true)),
@@ -447,7 +514,8 @@ fn check_repeated_pages(unavailable_first: bool) {
     };
     let context =
         ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
-    let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
+    let result =
+        block_on(conversion_engine.convert_with_context(request, context.clone())).unwrap();
     let unavailable = usize::from(unavailable_first);
     let body = format!("recognized body {}", 1 + unavailable);
     assert_eq!(ocr.0.load(Ordering::SeqCst), 1 + unavailable);
@@ -478,4 +546,54 @@ fn check_repeated_pages(unavailable_first: bool) {
     drop(result);
     assert_eq!(context.reserved_memory_bytes(), 0);
     assert_eq!(context.reserved_temporary_bytes(), 0);
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn best_effort_permanent_assets_survive_page_ocr_memory_failure_without_working_renders() {
+    let pages = Arc::new(ObservedPages::default());
+    let ocr = Arc::new(Recognizer(AtomicUsize::new(0), FirstFailure::RecognitionMemory));
+    let conversion_engine = engine(pages.clone(), ocr.clone());
+    let mut conversion = request(3);
+    conversion.options.output.asset_mode = into_markdown_core::AssetMode::Extract;
+    conversion.options.ocr.policy = into_markdown_core::OcrPolicy::Always;
+    conversion.options.error_policy = ErrorPolicy::BestEffort;
+    let context =
+        ExecutionContext::new(ExecutionOptions::default(), conversion.options.limits.clone());
+    let result =
+        block_on(conversion_engine.convert_with_context(conversion, context.clone())).unwrap();
+    assert_eq!(result.assets.len(), 3);
+    assert!(result.assets.iter().all(|asset| asset.id.0.starts_with("pdf-image-")));
+    assert_eq!(result.markdown.matches("recognized body").count(), 2);
+    assert_eq!(ocr.0.load(Ordering::SeqCst), 3);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "ocr.optionalRecognitionMemorySkipped")
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "resource.ocrRecognitionMemory.unitOmitted")
+    );
+    let serialized = serde_json::to_string(&result.document).unwrap();
+    assert!(!serialized.contains("pdf-page-render-"));
+    assert!(!serialized.contains("ocr-render"));
+    assert_eq!(pages.entries.lock().unwrap().len(), 3);
+    drop(result);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+
+    let pages = Arc::new(ObservedPages::default());
+    let engine =
+        engine(pages, Arc::new(Recognizer(AtomicUsize::new(0), FirstFailure::RecognitionMemory)));
+    let mut strict = request(1);
+    strict.options.output.asset_mode = into_markdown_core::AssetMode::Extract;
+    strict.options.ocr.policy = into_markdown_core::OcrPolicy::Always;
+    strict.options.error_policy = ErrorPolicy::Strict;
+    assert!(matches!(
+        block_on(engine.convert(strict)),
+        Err(ConversionError::OcrRecognitionMemory { .. })
+    ));
 }
