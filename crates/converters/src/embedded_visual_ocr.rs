@@ -2,10 +2,12 @@
 
 use crate::image_converter::{decode, encode, envelope, format};
 use image::{AnimationDecoder, ImageDecoder};
+#[cfg(test)]
+use into_markdown_core::Provenance;
 use into_markdown_core::{
     AiMode, AssetId, Block, BlockNode, BoxFuture, ConversionError, ConversionOptions,
     ConverterOutput, Diagnostic, DiagnosticSeverity, EnrichmentPlan, ExecutionContext, InputFormat,
-    NodeId, OcrInputIdentity, OcrPolicy, OutputEnricher, Provenance, ResourceReservation, Services,
+    NodeId, OcrInputIdentity, OcrPolicy, OutputEnricher, ResourceReservation, Services,
     SourceLocator, estimate_validation_working_set,
 };
 use sha2::{Digest, Sha256};
@@ -20,6 +22,7 @@ mod node_budget;
 mod pdf_placement;
 mod resource_lifecycle;
 mod runtime;
+mod visual_refs;
 use candidate_index::{
     CandidateBuffer, OcrCandidate, ReferenceIndex, candidate_index_plan, group_candidates,
     validate_visual_references_without_index,
@@ -28,6 +31,7 @@ use candidate_index::{
 use geometry::evidence_bounds;
 use geometry::{remap_ocr_node, remapped_locator};
 use resource_lifecycle::{attach_optional_memory, discard_group_payloads};
+use visual_refs::VisualRef;
 
 const PROVIDER: &str = "builtin.enricher.embedded-visual-ocr";
 const UNSUPPORTED_CODE: &str = "embeddedVisualOcr.unsupportedVisual";
@@ -245,8 +249,22 @@ fn plan_enrichment(
     if reference_count == 0 {
         return Ok(EnrichmentPlan::Skip);
     }
+    let selection =
+        match visual_refs::plan(output, reference_count, reference_id_bytes, input_format, context)
+        {
+            Ok(selection) => selection,
+            Err(error @ ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }) => {
+                validate_visual_references_without_index(output, context)?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
+    if selection.references.is_empty() {
+        return Ok(EnrichmentPlan::Skip);
+    }
     let mut reference_counts =
-        match ReferenceIndex::new(reference_count, reference_id_bytes, context) {
+        match ReferenceIndex::new(selection.references.len(), selection.selected_id_bytes, context)
+        {
             Ok(index) => index,
             Err(error @ ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }) => {
                 validate_visual_references_without_index(output, context)?;
@@ -254,37 +272,27 @@ fn plan_enrichment(
             }
             Err(error) => return Err(error),
         };
-    for_each_visual_reference(&output.document.blocks, context, &mut |asset_id| {
-        reference_counts.record(asset_id)
-    })?;
+    for reference in &selection.references {
+        context.checkpoint()?;
+        reference_counts.record(&reference.asset)?;
+    }
+    let working_assets = selection.working_assets;
+    let reference_vector_bytes = selection.planned_bytes;
+    drop(selection.memory);
     reference_counts.validate_assets(&output.assets, context)?;
     if effective_ocr_policy(options) == OcrPolicy::Always {
-        let mut supported_references = 0_u64;
-        for asset in &output.assets {
-            if asset.bytes.is_empty() || asset.external_uri.is_some() || !supported_raster(asset) {
-                continue;
-            }
-            supported_references = supported_references
-                .checked_add(reference_counts.count(&asset.id).unwrap_or(0))
-                .ok_or_else(|| {
-                    resource(
-                        "max_archive_entries",
-                        "embedded visual reference count is not representable",
-                    )
-                })?;
-        }
-        if supported_references > u64::from(options.limits.max_archive_entries) {
-            return Err(resource(
-                "max_archive_entries",
-                "embedded visual references exceed the request limit",
-            ));
-        }
+        visual_refs::enforce_supported_reference_limit(
+            &output.assets,
+            &reference_counts,
+            options.limits.max_archive_entries,
+        )?;
     }
 
     let mut candidates = CandidateBuffer::new(reference_counts.unique_len(), context)?;
     let mut references = 0_u64;
     let mut candidate_bytes = 0_u64;
     let mut total = reference_counts.planned_bytes();
+    checked_add(&mut total, reference_vector_bytes, "OCR reference retained plan overflow")?;
     checked_add(
         &mut total,
         candidates.planned_bytes(),
@@ -329,17 +337,12 @@ fn plan_enrichment(
             })?,
             "embedded OCR reference plan overflow",
         )?;
-        candidate_bytes = candidate_bytes
-            .checked_add(u64::try_from(asset.bytes.len()).map_err(|_| {
-                resource("max_total_asset_bytes", "embedded visual byte count is not representable")
-            })?)
-            .ok_or_else(|| resource("max_total_asset_bytes", "embedded visual bytes overflow"))?;
-        if candidate_bytes > options.limits.max_total_asset_bytes {
-            return Err(resource(
-                "max_total_asset_bytes",
-                "embedded visual bytes exceed the request limit",
-            ));
-        }
+        visual_refs::account_published_bytes(
+            &mut candidate_bytes,
+            asset,
+            &working_assets,
+            options,
+        )?;
         candidates.push(OcrCandidate {
             asset_index: index,
             reference_count,
@@ -694,13 +697,6 @@ fn for_each_visual_reference(
     Ok(())
 }
 
-#[derive(Clone)]
-struct VisualRef {
-    optional: bool,
-    asset: AssetId,
-    provenance: Provenance,
-}
-
 #[derive(Clone, Default)]
 struct CachedContribution {
     nodes: Vec<BlockNode>,
@@ -730,8 +726,7 @@ async fn enrich(
     {
         return Ok(output);
     }
-    let mut references = Vec::new();
-    collect_references(&output.document.blocks, &mut references, input_format, context)?;
+    let (mut references, working_assets) = visual_refs::select(&output, input_format, context)?;
     runtime::require_scanned_pages(&mut references, &output.diagnostics, input_format, context)?;
     if references.is_empty() {
         return Ok(output);
@@ -783,7 +778,7 @@ async fn enrich(
         context,
     )?;
     if reference_counts.is_empty() {
-        return Ok(output);
+        return visual_refs::discard_working(output, input_format, context);
     }
     let mut candidates = CandidateBuffer::new(eligible_assets.len(), context)?;
     let mut referenced_assets = BTreeSet::new();
@@ -804,17 +799,12 @@ async fn enrich(
         if !referenced_assets.insert(reference.asset.clone()) {
             continue;
         }
-        compressed_bytes = compressed_bytes
-            .checked_add(u64::try_from(asset.bytes.len()).map_err(|_| {
-                resource("max_total_asset_bytes", "embedded visual byte count is not representable")
-            })?)
-            .ok_or_else(|| resource("max_total_asset_bytes", "embedded visual bytes overflow"))?;
-        if compressed_bytes > options.limits.max_total_asset_bytes {
-            return Err(resource(
-                "max_total_asset_bytes",
-                "embedded visual bytes exceed the request limit",
-            ));
-        }
+        visual_refs::account_published_bytes(
+            &mut compressed_bytes,
+            asset,
+            &working_assets,
+            options,
+        )?;
         let digest = checkpointed_sha256(&asset.bytes, context)?;
         candidates.push(OcrCandidate {
             asset_index: *asset_index,
@@ -910,8 +900,11 @@ async fn enrich(
             }
         }
     }
-    if input_format == InputFormat::Pdf && !contributions_by_asset.is_empty() {
-        output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
+    if input_format == InputFormat::Pdf {
+        output = crate::pdf::working_visual::remove_assets(output, &working_assets, context)?;
+        if !contributions_by_asset.is_empty() {
+            output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
+        }
     }
     if let Some(engine) = &services.ocr {
         for contribution in cache.into_iter().flatten() {
@@ -933,7 +926,7 @@ fn embedded_visual_ocr_enabled(input_format: InputFormat, options: &ConversionOp
             && matches!(input_format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls))
 }
 
-fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
+pub(crate) fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
     match options.ai.vision_ocr {
         AiMode::Only => OcrPolicy::Always,
         AiMode::Fallback | AiMode::Prefer if options.ocr.policy == OcrPolicy::Off => {
@@ -1149,53 +1142,6 @@ fn checkpointed_sha256(
     Ok(digest.finalize().into())
 }
 
-fn collect_references(
-    nodes: &[BlockNode],
-    output: &mut Vec<VisualRef>,
-    input_format: InputFormat,
-    context: &ExecutionContext,
-) -> Result<(), ConversionError> {
-    for (index, node) in nodes.iter().enumerate() {
-        if index % 256 == 0 {
-            context.checkpoint()?;
-        }
-        match &node.block {
-            Block::Image { asset, .. } => {
-                output.push(VisualRef {
-                    optional: runtime::has_native_body(
-                        nodes,
-                        &node.provenance,
-                        input_format,
-                        context,
-                    )?,
-                    asset: asset.clone(),
-                    provenance: node.provenance.clone(),
-                });
-            }
-            Block::List { items, .. } => {
-                for item in items {
-                    collect_references(&item.blocks, output, input_format, context)?;
-                }
-            }
-            Block::Table { rows, .. } => {
-                for row in rows {
-                    for cell in &row.cells {
-                        collect_references(&cell.blocks, output, input_format, context)?;
-                    }
-                }
-            }
-            Block::Footnote { blocks, .. }
-            | Block::Page { blocks, .. }
-            | Block::Slide { blocks, .. }
-            | Block::Sheet { blocks, .. } => {
-                collect_references(blocks, output, input_format, context)?;
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 fn rebuild_nodes(
     nodes: Vec<BlockNode>,
     cache: &BTreeMap<AssetId, CachedContribution>,
@@ -1247,6 +1193,11 @@ fn rebuild_nodes(
             }
             _ => {}
         }
+        let role = if input_format == InputFormat::Pdf {
+            crate::pdf::working_visual::classify(&node)?
+        } else {
+            crate::pdf::working_visual::VisualRole::Published
+        };
         let contribution = match &node.block {
             Block::Image { asset, .. }
                 if input_format != InputFormat::Pdf
@@ -1258,7 +1209,9 @@ fn rebuild_nodes(
         };
         let source_id = node.id.clone();
         let source_provenance = node.provenance.clone();
-        rebuilt.push(node);
+        if role == crate::pdf::working_visual::VisualRole::Published {
+            rebuilt.push(node);
+        }
         if let Some(contribution) = contribution {
             for (ocr_index, template) in contribution.nodes.into_iter().enumerate() {
                 if ocr_index % 256 == 0 {

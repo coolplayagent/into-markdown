@@ -380,7 +380,7 @@ fn native_admission_has_stable_exact_minus_one_and_releases_on_drop() {
     ))
     .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(output.document.blocks.len(), 8);
+    assert_eq!(output.output.document.blocks.len(), 8);
     drop(output);
     assert_eq!(exact.available_memory_bytes(), plan);
 }

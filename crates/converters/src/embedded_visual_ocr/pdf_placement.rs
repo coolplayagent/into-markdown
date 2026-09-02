@@ -1,11 +1,34 @@
 //! PDF layout needs page coordinates, unlike other containers' local OCR evidence.
 
-use super::{VisualRef, effective_ocr_policy, geometry};
+use super::{VisualRef, geometry};
+use crate::pdf::working_visual::VisualRole;
 use into_markdown_core::{
     AssetId, ConversionError, ConversionOptions, Diagnostic, DiagnosticSeverity, ErrorPolicy,
     ExecutionContext, OcrPolicy,
 };
 use std::collections::BTreeSet;
+
+pub(super) fn select_page_sources(
+    references: &mut Vec<VisualRef>,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let mut rendered_pages = BTreeSet::new();
+    for reference in references.iter() {
+        context.checkpoint()?;
+        if reference.role == VisualRole::OcrPageRender {
+            let page =
+                reference.provenance.locator.page.ok_or_else(|| ConversionError::Internal {
+                    detail: "PDF OCR page render has no page locator".into(),
+                })?;
+            rendered_pages.insert(page);
+        }
+    }
+    references.retain(|reference| {
+        reference.role == VisualRole::OcrPageRender
+            || reference.provenance.locator.page.is_none_or(|page| !rendered_pages.contains(&page))
+    });
+    Ok(())
+}
 
 pub(super) fn filter_references(
     references: &mut Vec<VisualRef>,
@@ -25,7 +48,7 @@ pub(super) fn filter_references(
         }
         let detail = "PDF image OCR omitted: its image-to-page coordinate transform is unavailable";
         if options.error_policy != ErrorPolicy::BestEffort
-            || effective_ocr_policy(options) != OcrPolicy::Auto
+            || super::effective_ocr_policy(options) != OcrPolicy::Auto
         {
             return Err(ConversionError::Unsupported { detail: detail.into() });
         }

@@ -399,8 +399,8 @@ impl Engine {
                 StreamConsumerKind::Collecting,
             ) == ConverterStreamMode::Native
         });
-        let output = if let Some(stream) = native_stream {
-            stream_execution::invoke_native_collecting(
+        let (output, completed_page_ocr) = if let Some(stream) = native_stream {
+            let native = stream_execution::invoke_native_collecting(
                 stream,
                 source.input(),
                 &attempt.candidate,
@@ -409,27 +409,34 @@ impl Engine {
                 &self.enrichers,
                 &context,
             )
-            .await?
+            .await?;
+            (native.output, native.completed_page_ocr)
         } else {
-            invoke_converter_preflighted(
-                attempt.converter.as_ref(),
-                source.input(),
-                &attempt.candidate,
+            (
+                invoke_converter_preflighted(
+                    attempt.converter.as_ref(),
+                    source.input(),
+                    &attempt.candidate,
+                    &request.options,
+                    &self.services,
+                    &context,
+                    |_| Ok(()),
+                )
+                .await?,
+                false,
+            )
+        };
+        let output = invoke_enrichers_skipping(
+            &self.enrichers,
+            output,
+            EnricherInvocation::after_page_enrichment(
+                attempt.converter.id(),
+                attempt.candidate.format,
                 &request.options,
                 &self.services,
                 &context,
-                |_| Ok(()),
-            )
-            .await?
-        };
-        let output = invoke_enrichers(
-            &self.enrichers,
-            output,
-            attempt.converter.id(),
-            attempt.candidate.format,
-            &request.options,
-            &self.services,
-            &context,
+                completed_page_ocr.then_some(page_enrichment::EMBEDDED_OCR),
+            ),
         )
         .await?;
         let output = if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {
@@ -514,15 +521,55 @@ fn preserve_utf8_markdown(
 
 pub(crate) async fn invoke_enrichers(
     enrichers: &[Arc<dyn OutputEnricher>],
-    mut output: ConverterOutput,
+    output: ConverterOutput,
     converter_id: &str,
     format: into_markdown_core::InputFormat,
     options: &ConversionOptions,
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
+    invoke_enrichers_skipping(
+        enrichers,
+        output,
+        EnricherInvocation { converter_id, format, options, services, context, completed: None },
+    )
+    .await
+}
+
+pub(crate) struct EnricherInvocation<'a> {
+    converter_id: &'a str,
+    format: into_markdown_core::InputFormat,
+    options: &'a ConversionOptions,
+    services: &'a Services,
+    context: &'a ExecutionContext,
+    completed: Option<&'a str>,
+}
+
+impl<'a> EnricherInvocation<'a> {
+    pub(crate) fn after_page_enrichment(
+        converter_id: &'a str,
+        format: into_markdown_core::InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+        completed: Option<&'a str>,
+    ) -> Self {
+        Self { converter_id, format, options, services, context, completed }
+    }
+}
+
+pub(crate) async fn invoke_enrichers_skipping(
+    enrichers: &[Arc<dyn OutputEnricher>],
+    mut output: ConverterOutput,
+    invocation: EnricherInvocation<'_>,
+) -> Result<ConverterOutput, ConversionError> {
+    let EnricherInvocation { converter_id, format, options, services, context, completed } =
+        invocation;
     for enricher in enrichers {
         context.checkpoint()?;
+        if completed == Some(enricher.id()) {
+            continue;
+        }
         let plan = enricher.planned_enrichment_bytes(
             &output,
             converter_id,

@@ -271,8 +271,9 @@ impl PdfOutput {
             .count();
         let scanned =
             printable < MIN_NATIVE_TEXT_CHARS && coverage.ratio() >= MIN_SCAN_IMAGE_COVERAGE;
-        let render_requested = options.ocr.policy == OcrPolicy::Always
-            || (options.ocr.policy == OcrPolicy::Auto && scanned);
+        let ocr_policy = crate::embedded_visual_ocr::effective_ocr_policy(options);
+        let render_requested =
+            ocr_policy == OcrPolicy::Always || (ocr_policy == OcrPolicy::Auto && scanned);
         for image in images {
             context.checkpoint()?;
             // A full displayed-page render already includes every embedded
@@ -351,9 +352,8 @@ impl PdfOutput {
             let (encoded, encoded_memory) = rendered_bitmap_to_bmp(&bitmap, options, context)?;
             drop(bitmap);
             drop(bitmap_memory);
-            account_asset(&encoded, &mut counts.asset_bytes, options)?;
             retain_output_bytes(context, &mut retained_memory, asset_record_overhead()?)?;
-            let id = content_asset_id("pdf-page-render", &encoded)?;
+            let id = content_asset_id(super::working_visual::ASSET_KIND, &encoded)?;
             counts
                 .asset_ids
                 .try_reserve(1)
@@ -392,7 +392,7 @@ impl PdfOutput {
             rendered_provenance.locator.rotation_degrees = Some(0.0);
             blocks.push(BlockNode {
                 id: NodeId(format!("pdf-page-{page_number}-ocr-render")),
-                block: Block::Image { asset: AssetId(id), alt: Some("page render for OCR".into()) },
+                block: super::working_visual::image_block(id),
                 provenance: rendered_provenance,
             });
         }

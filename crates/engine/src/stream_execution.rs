@@ -20,7 +20,7 @@ pub(crate) async fn invoke_native_collecting(
     services: &Services,
     enrichers: &[Arc<dyn OutputEnricher>],
     context: &ExecutionContext,
-) -> Result<ConverterOutput, ConversionError> {
+) -> Result<NativeExecution, ConversionError> {
     invoke_native(NativeRequest {
         converter,
         input,
@@ -42,7 +42,7 @@ pub(crate) async fn invoke_native_immediate(
     services: &Services,
     enrichers: &[Arc<dyn OutputEnricher>],
     context: &ExecutionContext,
-) -> Result<ConverterOutput, ConversionError> {
+) -> Result<NativeExecution, ConversionError> {
     invoke_native(NativeRequest {
         converter,
         input,
@@ -67,7 +67,12 @@ struct NativeRequest<'a> {
     consumer: StreamConsumerKind,
 }
 
-async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, ConversionError> {
+pub(crate) struct NativeExecution {
+    pub(crate) output: ConverterOutput,
+    pub(crate) completed_page_ocr: bool,
+}
+
+async fn invoke_native(request: NativeRequest<'_>) -> Result<NativeExecution, ConversionError> {
     let NativeRequest {
         converter,
         input,
@@ -82,7 +87,9 @@ async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, Co
     let mut admission = context.reserve_memory(plan)?;
     let credited = context.with_memory_credit(&mut admission)?;
     let mut sink = CollectingArtifactSink::new(&credited);
-    let completion = {
+    let page_enricher =
+        enrichers.iter().find(|enricher| enricher.id() == EMBEDDED_OCR).map(AsRef::as_ref);
+    let (completion, completed_page_ocr) = {
         let mut page_services = services.clone();
         if candidate.format == into_markdown_core::InputFormat::Pdf {
             page_services.ocr = services.ocr.as_ref().map(|provider| {
@@ -92,22 +99,21 @@ async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, Co
         }
         let mut pages = PageEnrichmentSink {
             destination: &mut sink,
-            enricher: enrichers
-                .iter()
-                .find(|enricher| enricher.id() == EMBEDDED_OCR)
-                .map(AsRef::as_ref),
+            enricher: page_enricher,
             converter_id: converter.id(),
             format: candidate.format,
             options,
             services: &page_services,
             context: &credited,
+            enrichment_attempted: false,
         };
-        context
+        let completion = context
             .run(
                 converter
                     .convert_stream(input, candidate, options, services, &credited, &mut pages),
             )
-            .await??
+            .await??;
+        (completion, pages.enrichment_attempted)
     };
     let output = sink.finish(completion)?;
     let retained = estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
@@ -128,5 +134,8 @@ async fn invoke_native(request: NativeRequest<'_>) -> Result<ConverterOutput, Co
     drop(validation_guard);
     drop(retained_guard);
     drop(credited);
-    output.certify_preflight_reservation(context, admission)
+    Ok(NativeExecution {
+        output: output.certify_preflight_reservation(context, admission)?,
+        completed_page_ocr,
+    })
 }

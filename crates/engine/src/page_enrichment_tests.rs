@@ -103,6 +103,7 @@ fn enrich(
         options,
         services: &services,
         context,
+        enrichment_attempted: false,
     };
     let mut future = std::pin::pin!(sink.enrich_page(output));
     let mut task = std::task::Context::from_waker(std::task::Waker::noop());

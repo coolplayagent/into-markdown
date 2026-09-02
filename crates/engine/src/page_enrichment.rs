@@ -17,6 +17,7 @@ pub(crate) struct PageEnrichmentSink<'a> {
     pub(crate) options: &'a ConversionOptions,
     pub(crate) services: &'a Services,
     pub(crate) context: &'a ExecutionContext,
+    pub(crate) enrichment_attempted: bool,
 }
 
 impl ConverterEventSink for PageEnrichmentSink<'_> {
@@ -40,6 +41,7 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
         &mut self,
         mut output: ConverterOutput,
     ) -> LocalBoxFuture<'_, Result<ConverterOutput, ConversionError>> {
+        self.enrichment_attempted = true;
         Box::pin(async move {
             self.context.checkpoint()?;
             let enricher = self.enricher.ok_or_else(|| ConversionError::Internal {
