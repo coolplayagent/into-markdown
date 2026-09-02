@@ -128,7 +128,7 @@ fn combined_provider_and_child_memory_is_terminal_and_releases_request_resources
             &context,
         )
         .unwrap_err();
-    assert_eq!(error.code, PluginErrorCode::ResourceLimit, "{error}");
+    assert_eq!(error.code, PluginErrorCode::ProcessMemoryLimit, "{error}");
     assert_eq!(context.reserved_memory_bytes(), 0);
     assert_eq!(context.reserved_temporary_bytes(), 0);
     assert_eq!(harness.execute_with_context(b"ok", &context).unwrap().result.markdown, "ok");

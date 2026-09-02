@@ -365,12 +365,27 @@ fn convert_pdf_admitted(
     context.checkpoint()?;
     let runtime = pages::load_runtime(runtime_path, options)?;
     let pdf = open_document(&runtime, input, context)?;
-    let mut output = pages::PdfOutput::new(pdf.page_count(), context)?;
+    let observed_pages = pdf.page_count();
+    let selected_pages = observed_pages.min(options.limits.max_pages);
+    let mut output = pages::PdfOutput::new(selected_pages, context)?;
+    output.record_page_truncation(observed_pages, selected_pages)?;
     let mut counts = pages::Counts::default();
-    for page_index in 0..pdf.page_count() {
+    for page_index in 0..selected_pages {
         output = output.extract_page(&pdf, page_index, options, context, &mut counts, false)?;
     }
     output.finish(options, context)
+}
+
+fn page_truncation_diagnostic(observed: u32, selected: u32) -> Diagnostic {
+    Diagnostic {
+        code: "resource.max_pages.sequenceTruncated".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "resource limit max_pages: configured={selected}, observed={observed}, action=kept {selected} pages and omitted {} subsequent pages",
+            observed.saturating_sub(selected)
+        ),
+        locator: Some(SourceLocator { page: selected.checked_add(1), ..SourceLocator::default() }),
+    }
 }
 
 fn open_document<'a>(

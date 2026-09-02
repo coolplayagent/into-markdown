@@ -50,6 +50,10 @@ pub struct BatchResourceUsageDto {
     pub shared_lease_budget_bytes: u64,
     /// Historical shared memory lease high-water mark.
     pub shared_lease_peak_bytes: u64,
+    /// Actual batch-wide shared temporary-storage lease budget.
+    pub temporary_lease_budget_bytes: u64,
+    /// Historical shared temporary-storage lease high-water mark.
+    pub temporary_lease_peak_bytes: u64,
     /// OCR contribution evidence when OCR was enabled for the invocation.
     pub ocr: Option<BatchOcrUsageDto>,
 }

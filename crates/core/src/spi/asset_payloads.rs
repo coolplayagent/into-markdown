@@ -18,6 +18,16 @@ impl ConverterOutput {
         for asset in &mut self.assets {
             asset.bytes = Vec::new();
         }
+        self.reconcile_retained_output(context)
+    }
+
+    /// Reconcile the retained lease after a caller has transactionally removed
+    /// selected asset payloads while preserving the remaining inventory.
+    #[doc(hidden)]
+    pub fn reconcile_retained_output(
+        mut self,
+        context: &ExecutionContext,
+    ) -> Result<Self, ConversionError> {
         let required = estimate_retained_output(&self.document, &self.assets, &self.diagnostics)?;
         if self.memory_lease.leases.iter().any(|lease| !lease.belongs_to_memory_context(context)) {
             return Err(ConversionError::Internal {
@@ -31,9 +41,11 @@ impl ConverterOutput {
             keep -= retained;
         }
         if keep != 0 {
-            return Err(ConversionError::Internal {
-                detail: "omitted asset payloads were not fully memory-accounted".into(),
-            });
+            // Legacy/source-compatible converters may return an unaccounted
+            // output that the engine normally certifies at the next boundary.
+            // Once payload ownership has been dropped, close that metadata
+            // deficit directly against the same request context.
+            self.memory_lease.push(context.reserve_memory(keep)?)?;
         }
         self.memory_lease.accounted_bytes = required;
         Ok(self)

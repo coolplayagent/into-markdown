@@ -79,7 +79,11 @@ pub(super) fn load_runtime(
         options.limits.max_asset_bytes.min(options.limits.max_memory_bytes).min(400_000_000);
     let limits = Limits {
         max_document_bytes: options.limits.max_input_bytes.min(1024 * 1024 * 1024),
-        max_pages: options.limits.max_pages,
+        max_pages: if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort {
+            options.limits.max_pages.max(into_markdown_core::ResourceLimits::default().max_pages)
+        } else {
+            options.limits.max_pages
+        },
         max_text_units_per_page: u32::try_from(into_markdown_core::MAX_DOCUMENT_INLINES)
             .unwrap_or(u32::MAX),
         max_render_dimension: MAX_RENDER_DIMENSION,
@@ -124,6 +128,24 @@ impl PdfOutput {
             path_evidence,
             path_memory,
         })
+    }
+
+    pub(super) fn record_page_truncation(
+        &mut self,
+        observed: u32,
+        selected: u32,
+    ) -> Result<(), ConversionError> {
+        if observed <= selected {
+            return Ok(());
+        }
+        self.diagnostics.try_reserve(1).map_err(|error| {
+            resource(
+                "max_memory_bytes",
+                format!("cannot reserve PDF truncation diagnostic: {error}"),
+            )
+        })?;
+        self.diagnostics.push(super::page_truncation_diagnostic(observed, selected));
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]

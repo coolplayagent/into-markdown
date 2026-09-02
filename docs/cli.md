@@ -268,20 +268,31 @@ markdown-postprocess
   总资产额度取 clamp(B / 2, 1 GiB, 4 GiB)，单项资产额度取
   min(clamp(B / 4, 256 MiB, 2 GiB), 总资产额度)；配置文件与命令行对两个字段的显式值
   分别优先。Core API 默认值与 Web 安全上限保持固定。
+- 本地未显式配置的 `max_asset_bytes` 与 `max_total_asset_bytes` 是软额度。转换器得到完整
+  资产清单后，可在不改变 B 的前提下对每个字段精确提升一次；提升值不得超过 B，并产生
+  `resource.<limit>.limitRaised`。配置文件或命令行的显式值始终是不可突破的用户边界。
+  `max_memory_bytes`、解压/嵌套安全额度及 Web/Core API 额度不会自动提升。
 - 超过统一 IR 节点阈值的大型 XLS、XLSX 与 XLSB 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
   block，所有块仍写入同一个最终 Markdown，并报告 `spreadsheet.largeTablePaged`。普通
   工作簿继续输出 GFM table；分页不会放宽 `max_table_rows`、`max_table_cells` 或 ZIP
   解压边界，发布门禁可显式提高这些结构上限，同时继续由共享内存预算约束实际处理。
-- `best-effort` 是默认错误策略，可恢复非关键格式兼容问题。有效 `auto` 下，若当前页面或
-  内容单元已有原生正文，识别阶段的私有内存、宽度、crop 像素、张量、输出、regions 和
-  decoded 上限可逐图跳过；隔离进程结构化报告的 `ocrWidthLimit`、`ocrPixelLimit`、
-  `ocrTensorLimit` 与 `ocrStructureLimit` 使用相同边界。内存拒绝继续产生
+- `best-effort` 是默认错误策略，表示在固定安全预算内交付可定位的部分结果。OCR `auto`
+  和 `always` 遇到单页/单图的识别私有内存、识别作用域 `max_memory_bytes`、宽度、crop
+  像素、张量、输出、regions 和 decoded 上限时，回滚该视觉单元并保留原图、原生正文或
+  就地占位；扫描页和无原生正文页同样继续后续内容。隔离进程结构化报告的
+  `ocrWidthLimit`、`ocrPixelLimit`、`ocrTensorLimit` 与 `ocrStructureLimit` 使用相同边界。
+  内存拒绝继续产生
   `ocr.optionalRecognitionMemorySkipped`，其他识别资源拒绝产生
   `ocr.optionalRecognitionResourceSkipped`；两者都携带引用位置，正文、资产及其他图片成功
-  识别的贡献保留。同内容图片在本次转换内共用成功或跳过结果。`strict`、强制 OCR、承载
-  必要正文的图片、全局内存与资产额度、provider frame、协议、进程、取消和超时保持失败
-  语义。既有 auto 组件不可用诊断与动画图片路由保持原有边界。外部资源不会下载，也不
-  自动重试。
+  识别的贡献保留。同内容图片在本次转换内共用识别结果，但每个引用都有 locator。
+  页、帧、幻灯片、工作表和章节等已认证有序序列达到软额度时保留已完成单元，并产生
+  `resource.<limit>.sequenceTruncated`；独立附件、关系或 ZIP 成员可回滚时使用
+  `resource.<limit>.unitOmitted`。单项资产超限时保留外部引用或就地 alt 占位；总资产额度
+  达到后保留已接纳 payload 并截断后续 payload。`strict` 在第一个同类错误处失败。
+- 源文件准入、必要根结构、加密、压缩炸弹/越界/嵌套安全、共享内存无法容纳固定诊断或
+  最终渲染、provider 崩溃/协议错误、取消、超时以及输出提交 I/O 保持终止。CLI 流式产物
+  在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM；
+  临时空间不足时 best-effort 保留引用并省略后续 payload，strict 失败。
 - `--zip-charset` 只在 ZIP 缺少有效 Unicode Path extra field 和 UTF-8 标志时生效；支持
   `encoding_rs` 标签（包括 GB18030 与 Shift-JIS），未指定时使用 CP437。
 - `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回

@@ -30,7 +30,7 @@ pub(super) fn parse_slide_order(
     part: &str,
     options: &ConversionOptions,
     context: &ExecutionContext,
-) -> Result<(Vec<SlideReference>, usize), ConversionError> {
+) -> Result<(Vec<SlideReference>, usize, usize), ConversionError> {
     let mut reader = NsReader::from_reader(bytes);
     let mut result = Vec::new();
     let capacity = bytes.len().min(usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX));
@@ -39,6 +39,7 @@ pub(super) fn parse_slide_order(
     })?;
     let mut mc = McSelection::default();
     let mut omitted = 0_usize;
+    let mut truncated = 0_usize;
     loop {
         context.checkpoint()?;
         let event =
@@ -50,11 +51,17 @@ pub(super) fn parse_slide_order(
             Event::Start(element) | Event::Empty(element)
                 if local(element.name().as_ref()) == "sldId" =>
             {
-                if u32::try_from(result.len()).unwrap_or(u32::MAX) >= options.limits.max_pages {
-                    return Err(limit("max_pages", "presentation slide count exceeds budget"));
-                }
                 match required_attr_ns(&reader, &element, R_NS, "id", part) {
-                    Ok(relationship_id) => result.push(SlideReference { relationship_id }),
+                    Ok(relationship_id)
+                        if u32::try_from(result.len()).unwrap_or(u32::MAX)
+                            < options.limits.max_pages =>
+                    {
+                        result.push(SlideReference { relationship_id });
+                    }
+                    Ok(_) if options.error_policy == into_markdown_core::ErrorPolicy::Strict => {
+                        return Err(limit("max_pages", "presentation slide count exceeds budget"));
+                    }
+                    Ok(_) => truncated = truncated.saturating_add(1),
                     Err(error)
                         if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
                             && matches!(error, ConversionError::Malformed { .. }) =>
@@ -70,7 +77,7 @@ pub(super) fn parse_slide_order(
             _ => {}
         }
     }
-    Ok((result, omitted))
+    Ok((result, omitted, truncated))
 }
 
 pub(super) fn slide_is_hidden(

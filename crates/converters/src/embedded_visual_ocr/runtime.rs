@@ -1,7 +1,11 @@
 //! Recognition is transactional per byte identity; only controlled worker refusals are optional.
 
 use super::*;
-use into_markdown_core::{ErrorPolicy, Inline, ProvenanceKind};
+use into_markdown_core::{
+    ErrorPolicy, Inline, ProvenanceKind, ResourceFailureScope, ResourceLimitSource,
+    ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, classify_resource_recovery,
+    recovery_diagnostic,
+};
 
 pub(super) fn require_scanned_pages(
     references: &mut [VisualRef],
@@ -33,12 +37,15 @@ pub(super) fn locate_omission(diagnostic: &mut Diagnostic, reference_index: usiz
     if matches!(
         diagnostic.code.as_str(),
         "ocr.optionalRecognitionMemorySkipped" | "ocr.optionalRecognitionResourceSkipped"
-    ) && let Some(locator) = &mut diagnostic.locator
-        && locator.part.is_none()
+    ) || (diagnostic.code.starts_with("resource.") && diagnostic.code.ends_with(".unitOmitted"))
     {
-        // A logical image reference identifies HTML nodes whose parser cannot
-        // supply a source part or byte span. Preserve all available page geometry.
-        locator.part = Some(format!("document/image/{}", reference_index + 1));
+        if let Some(locator) = &mut diagnostic.locator
+            && locator.part.is_none()
+        {
+            // A logical image reference identifies HTML nodes whose parser cannot
+            // supply a source part or byte span. Preserve all available page geometry.
+            locator.part = Some(format!("document/image/{}", reference_index + 1));
+        }
     }
 }
 
@@ -80,14 +87,15 @@ pub(super) fn has_native_body(
 pub(super) fn optional_failure_code(
     error: &ConversionError,
     options: &ConversionOptions,
-    references: &[VisualRef],
-    asset_ids: impl Iterator<Item = AssetId>,
+    _references: &[VisualRef],
+    _asset_ids: impl Iterator<Item = AssetId>,
 ) -> Option<&'static str> {
     let code = match error {
         ConversionError::OcrRecognitionMemory { .. }
         | ConversionError::ResourceLimit {
             limit:
-                "ocrRecognitionMemory"
+                "max_memory_bytes"
+                | "ocrRecognitionMemory"
                 | "recognitionMemory"
                 | "recognitionCropMemory"
                 | "recognitionOutputMemory",
@@ -109,15 +117,75 @@ pub(super) fn optional_failure_code(
         } => "ocr.optionalRecognitionResourceSkipped",
         _ => return None,
     };
-    (options.error_policy == ErrorPolicy::BestEffort
-        && effective_ocr_policy(options) == OcrPolicy::Auto
-        && asset_ids.into_iter().all(|asset| {
-            references
-                .iter()
-                .filter(|reference| reference.asset == asset)
-                .all(|reference| reference.optional)
-        }))
-    .then_some(code)
+    let locator = SourceLocator::default();
+    (classify_resource_recovery(
+        options.error_policy,
+        error,
+        ResourceRecoveryBoundary {
+            scope: ResourceFailureScope::VisualRecognition,
+            unit: ResourceUnitKind::Image,
+            locator: Some(&locator),
+            rollback_complete: true,
+            fallback_retained: true,
+            committed_units: 0,
+            omitted_units: 1,
+            limit_source: ResourceLimitSource::Explicit,
+            precise_required: None,
+            raised_limit: None,
+        },
+    ) == ResourceRecoveryAction::OmitUnit)
+        .then_some(code)
+}
+
+pub(super) fn generic_omission_diagnostic(
+    error: &ConversionError,
+    options: &ConversionOptions,
+) -> Option<Diagnostic> {
+    let locator = SourceLocator::default();
+    let facts = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::VisualRecognition,
+        unit: ResourceUnitKind::Image,
+        locator: Some(&locator),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: 0,
+        omitted_units: 1,
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: None,
+        raised_limit: None,
+    };
+    let action = classify_resource_recovery(options.error_policy, error, facts);
+    let configured = match error.limit().map(|(limit, _)| limit) {
+        Some("max_memory_bytes") => Some(options.limits.max_memory_bytes),
+        Some("max_asset_bytes") => Some(options.limits.max_asset_bytes),
+        Some("max_total_asset_bytes") => Some(options.limits.max_total_asset_bytes),
+        Some("max_pages") => Some(u64::from(options.limits.max_pages)),
+        _ => None,
+    };
+    recovery_diagnostic(error, action, facts, configured)
+}
+
+pub(super) fn omitted_contribution(
+    error: &ConversionError,
+    code: &'static str,
+    options: &ConversionOptions,
+) -> Result<super::CachedContribution, ConversionError> {
+    let generic =
+        generic_omission_diagnostic(error, options).ok_or_else(|| ConversionError::Internal {
+            detail: "OCR omission did not produce a resource diagnostic".into(),
+        })?;
+    Ok(super::CachedContribution {
+        diagnostics: vec![
+            Diagnostic {
+                code: code.into(),
+                severity: DiagnosticSeverity::Warning,
+                message: format!("OCR was omitted and the original visual was retained: {error}"),
+                locator: None,
+            },
+            generic,
+        ],
+        ..Default::default()
+    })
 }
 
 pub(super) async fn recognize(

@@ -69,12 +69,15 @@ pub(crate) fn decode(
     format: RasterFormat,
     bytes: &[u8],
     summary: Summary,
+    source_frames: u32,
     limits: &ResourceLimits,
     context: &ExecutionContext,
 ) -> Result<DecodedSet, ConversionError> {
     match (format, summary.animated) {
-        (RasterFormat::Tiff, _) => decode_tiff(bytes, summary, limits, context),
-        (RasterFormat::WebP, true) => decode_webp_animation(bytes, summary, limits, context),
+        (RasterFormat::Tiff, _) => decode_tiff(bytes, summary, source_frames, limits, context),
+        (RasterFormat::WebP, true) => {
+            decode_webp_animation(bytes, summary, source_frames, limits, context)
+        }
         _ => decode_static(format, bytes, limits, context),
     }
 }
@@ -114,6 +117,7 @@ fn decode_static(
 fn decode_webp_animation(
     bytes: &[u8],
     summary: Summary,
+    _source_frames: u32,
     limits: &ResourceLimits,
     context: &ExecutionContext,
 ) -> Result<DecodedSet, ConversionError> {
@@ -134,12 +138,12 @@ fn decode_webp_animation(
         .ok_or_else(|| resource("max_decompressed_bytes", "animated WebP pixel size overflow"))?;
     enforce_decompressed(total_pixel_bytes, limits)?;
     let memory = context.reserve_memory(allocation)?;
-    let source_frames = webp_decoder.into_frames();
+    let frame_stream = webp_decoder.into_frames();
     let mut frames = Vec::new();
     frames
         .try_reserve_exact(summary.frames as usize)
         .map_err(|_| resource("max_memory_bytes", "animated WebP frame allocation failed"))?;
-    for (index, frame) in source_frames.enumerate() {
+    for (index, frame) in frame_stream.take(summary.frames as usize).enumerate() {
         context.checkpoint()?;
         if index >= summary.frames as usize {
             return Err(malformed("WebP decoder produced more frames than its envelope"));
@@ -151,7 +155,7 @@ fn decode_webp_animation(
         frames.push(DecodedFrame { pixels, has_alpha });
     }
     if frames.len() != summary.frames as usize {
-        return Err(malformed("WebP decoder did not exhaust every declared frame"));
+        return Err(malformed("WebP decoder produced fewer frames than the selected sequence"));
     }
     Ok(DecodedSet {
         frames,
@@ -164,6 +168,7 @@ fn decode_webp_animation(
 fn decode_tiff(
     bytes: &[u8],
     summary: Summary,
+    source_frames: u32,
     limits: &ResourceLimits,
     context: &ExecutionContext,
 ) -> Result<DecodedSet, ConversionError> {
@@ -196,7 +201,7 @@ fn decode_tiff(
             audit.next_image().map_err(map_tiff_error)?;
         }
     }
-    if audit.more_images() {
+    if summary.frames == source_frames && audit.more_images() {
         return Err(malformed("TIFF decoder found more directories than its envelope"));
     }
     enforce_decompressed(decoded_bytes, limits)?;
@@ -232,7 +237,7 @@ fn decode_tiff(
             decoder.next_image().map_err(map_tiff_error)?;
         }
     }
-    if decoder.more_images() {
+    if summary.frames == source_frames && decoder.more_images() {
         return Err(malformed("TIFF decoder was not exhausted"));
     }
     Ok(DecodedSet {
@@ -405,7 +410,10 @@ fn tiff_limits(limits: &ResourceLimits) -> Result<TiffLimits, ConversionError> {
         .map_err(|_| resource("max_memory_bytes", "TIFF decoder limit is not representable"))?;
     let mut decoder_limits = TiffLimits::default();
     decoder_limits.decoding_buffer_size = allocation;
-    decoder_limits.intermediate_buffer_size = allocation.min(64 * 1024 * 1024);
+    // A valid TIFF may store the complete image in one strip. Binding this to
+    // a smaller fixed constant rejects high-resolution exports even when the
+    // caller explicitly grants enough decompression and request memory.
+    decoder_limits.intermediate_buffer_size = allocation;
     decoder_limits.ifd_value_size = allocation.min(16 * 1024 * 1024);
     Ok(decoder_limits)
 }
@@ -477,6 +485,20 @@ fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
 #[cfg(test)]
 mod resource_bound_tests {
     use super::*;
+
+    #[test]
+    fn tiff_segment_limit_tracks_the_request_budget_without_a_fixed_64_mib_cap() {
+        let granted = 512 * 1024 * 1024;
+        let limits = ResourceLimits {
+            max_memory_bytes: granted,
+            max_decompressed_bytes: granted,
+            ..ResourceLimits::default()
+        };
+        let decoder = tiff_limits(&limits).unwrap();
+        assert_eq!(decoder.decoding_buffer_size, granted as usize);
+        assert_eq!(decoder.intermediate_buffer_size, granted as usize);
+        assert_eq!(decoder.ifd_value_size, 16 * 1024 * 1024);
+    }
 
     #[test]
     fn dimensions_are_bounded_by_decoded_bytes_instead_of_fixed_geometry() {

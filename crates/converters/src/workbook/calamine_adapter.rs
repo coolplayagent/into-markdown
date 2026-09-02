@@ -13,8 +13,8 @@ use crate::workbook::xlsb::merges::extract_xlsb_merges;
 use calamine::{Data, Dimensions, Range, Reader, SheetType, SheetVisible, Xls, Xlsb};
 use into_markdown_core::{
     Block, BlockNode, Cell, ConversionError, ConversionOptions, ConverterOutput, Diagnostic,
-    DiagnosticSeverity, Document, ExecutionContext, Inline, NodeId, SourceLocator, TableAlignment,
-    TableRow,
+    DiagnosticSeverity, Document, ErrorPolicy, ExecutionContext, Inline, NodeId, SourceLocator,
+    TableAlignment, TableRow,
 };
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
@@ -109,12 +109,10 @@ where
     let mut document = Document::default();
     let mut diagnostics = Vec::new();
     let mut sheet_blocks = Vec::<(String, Vec<BlockNode>)>::new();
-    let authenticated_cells = authenticated_bounds.values().fold(0_u64, |total, (row, column)| {
-        total.saturating_add((u64::from(*row) + 1).saturating_mul(u64::from(*column) + 1))
-    });
-    let paged_workbook = requires_paged_grid(authenticated_cells, 1);
+    let selected_sheets = sheet_limit(sheets, options, &mut diagnostics)?;
+    let paged_workbook = is_paged_workbook(authenticated_bounds);
     let mut legacy = LegacyHintCursor::new(legacy_hints);
-    for (sheet_index, sheet) in sheets.iter().enumerate() {
+    for (sheet_index, sheet) in sheets.iter().take(selected_sheets).enumerate() {
         context.checkpoint()?;
         document
             .metadata
@@ -448,6 +446,45 @@ where
         });
     }
     Ok(ConverterOutput::new(document, assets, diagnostics))
+}
+
+fn is_paged_workbook(bounds: &BTreeMap<String, CellCoordinate>) -> bool {
+    let cells = bounds.values().fold(0_u64, |total, (row, column)| {
+        total.saturating_add((u64::from(*row) + 1).saturating_mul(u64::from(*column) + 1))
+    });
+    requires_paged_grid(cells, 1)
+}
+
+fn sheet_limit(
+    sheets: &[calamine::Sheet],
+    options: &ConversionOptions,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<usize, ConversionError> {
+    let selected = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    if sheets.len() <= selected {
+        return Ok(selected);
+    }
+    if options.error_policy == ErrorPolicy::Strict {
+        return Err(limit(
+            "max_pages",
+            format!("{} workbook sheets > {}", sheets.len(), options.limits.max_pages),
+        ));
+    }
+    diagnostics.push(Diagnostic {
+        code: "resource.max_pages.sequenceTruncated".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!(
+            "resource limit max_pages: configured={}, observed={}, action=kept {selected} sheets and omitted {} subsequent sheets",
+            options.limits.max_pages,
+            sheets.len(),
+            sheets.len().saturating_sub(selected)
+        ),
+        locator: sheets.get(selected).map(|sheet| SourceLocator {
+            sheet: Some(sheet.name.clone()),
+            ..SourceLocator::default()
+        }),
+    });
+    Ok(selected)
 }
 
 fn combined_bounds(

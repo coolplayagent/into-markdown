@@ -866,15 +866,7 @@ async fn enrich(
                     return Err(error);
                 };
                 context.checkpoint()?;
-                cache[group_index] = Some(CachedContribution {
-                    diagnostics: vec![Diagnostic {
-                        code: code.into(),
-                        severity: DiagnosticSeverity::Warning,
-                        message: error.to_string(),
-                        locator: None,
-                    }],
-                    ..Default::default()
-                });
+                cache[group_index] = Some(runtime::omitted_contribution(&error, code, options)?);
             }
         }
         discard_group_payloads(&mut output, &candidates, &grouping, group_index, options);
@@ -1047,7 +1039,8 @@ fn normalize(
             detail: "animated or multi-page embedded raster is not eligible for OCR".into(),
         });
     }
-    let decoded = decode::decode(raster, source, summary, &options.limits, context)?;
+    let decoded =
+        decode::decode(raster, source, summary, summary.frames, &options.limits, context)?;
     let frame = decoded.frames.first().ok_or_else(|| ConversionError::Malformed {
         part: asset.filename.clone(),
         detail: "embedded raster decoder returned no frame".into(),
@@ -1195,7 +1188,7 @@ fn collect_references(
             | Block::Page { blocks, .. }
             | Block::Slide { blocks, .. }
             | Block::Sheet { blocks, .. } => {
-                collect_references(blocks, output, input_format, context)?
+                collect_references(blocks, output, input_format, context)?;
             }
             _ => {}
         }

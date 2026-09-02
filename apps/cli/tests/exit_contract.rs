@@ -53,8 +53,14 @@ fn binary() -> PathBuf {
         .expect("Cargo or Bazel must provide the into-md binary")
 }
 
+fn isolated_command() -> Command {
+    let mut command = Command::new(binary());
+    command.args(["--max-memory-size", "512MiB"]);
+    command
+}
+
 fn run(arguments: &[&str]) -> (i32, String) {
-    let output = Command::new(binary()).args(arguments).output().unwrap();
+    let output = isolated_command().args(arguments).output().unwrap();
     (
         output.status.code().expect("CLI must exit normally"),
         String::from_utf8(output.stderr).unwrap(),
@@ -62,7 +68,7 @@ fn run(arguments: &[&str]) -> (i32, String) {
 }
 
 fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
-    let mut child = Command::new(binary())
+    let mut child = isolated_command()
         .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -87,7 +93,7 @@ fn run_isolated_ocr_capability_verify() -> std::process::Output {
         use std::os::unix::fs::DirBuilderExt as _;
         std::fs::DirBuilder::new().mode(0o700).create(&user_data).unwrap();
     }
-    Command::new(binary())
+    isolated_command()
         .args(["--no-config", "capabilities", "verify", "ocr", "--json"])
         .current_dir(project)
         .env("APPDATA", &user_data)
@@ -158,9 +164,17 @@ fn real_cli_relabels_a_meeting_ir_without_running_transcription() {
         ..into_markdown::Document::default()
     };
     std::fs::write(&input, document.to_json().unwrap()).unwrap();
-    let result = Command::new(binary())
+    let config = root.join("limits.toml");
+    std::fs::write(
+        &config,
+        "schema_version = 1\n[conversion.limits]\nmax_memory_bytes = 536870912\n",
+    )
+    .unwrap();
+    let result = isolated_command()
         .args([
             "--no-config",
+            "--config",
+            config.to_str().unwrap(),
             "transcript",
             "relabel",
             input.to_str().unwrap(),
@@ -193,7 +207,7 @@ fn plugin_list_uses_only_isolated_production_user_data() {
     }
     let outside_sentinel = temporary.path().join("outside-sentinel");
     std::fs::write(&outside_sentinel, b"unchanged").unwrap();
-    let output = Command::new(binary())
+    let output = isolated_command()
         .args(["--no-config", "plugins", "--json"])
         .current_dir(&project)
         .env("APPDATA", &user_data)
@@ -292,7 +306,7 @@ fn image_description_cli_uses_real_provider_only_under_explicit_mode_and_network
     }
     server.join().unwrap();
 
-    let absent = Command::new(binary())
+    let absent = isolated_command()
         .args([
             "--no-config",
             image.to_str().unwrap(),
@@ -315,7 +329,7 @@ fn run_image_description(
     mode: &str,
     allow_network: bool,
 ) -> std::process::Output {
-    let mut command = Command::new(binary());
+    let mut command = isolated_command();
     command.args([
         "--no-config",
         "--config",
@@ -386,7 +400,7 @@ fn presentationml_extensions_complete_real_cli_conversion() {
         let fixture = fixture(relative);
         let input = directory.path().join(fixture.file_name().unwrap());
         std::fs::copy(fixture, &input).unwrap();
-        let output = Command::new(binary())
+        let output = isolated_command()
             .args(["--no-config", "--ocr", "off", input.to_str().unwrap()])
             .output()
             .unwrap();
@@ -422,10 +436,10 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
     let config = directory.path().join("provider.toml");
     std::fs::write(
         &config,
-        format!("schema_version = 1\n[providers.local]\ntype = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\nmodel = \"model\"\napi_key_env = \"PROVIDER_TEST_KEY\"\ncapabilities = [\"image-description\"]\nallowed_hosts = [\"127.0.0.1\"]\nallow_private_network = true\n"),
+        format!("schema_version = 1\n[conversion.limits]\nmax_memory_bytes = 536870912\n[providers.local]\ntype = \"openai-compatible\"\nbase_url = \"http://{address}/v1\"\nmodel = \"model\"\napi_key_env = \"PROVIDER_TEST_KEY\"\ncapabilities = [\"image-description\"]\nallowed_hosts = [\"127.0.0.1\"]\nallow_private_network = true\n"),
     ).unwrap();
 
-    let denied = Command::new(binary())
+    let denied = isolated_command()
         .args([
             "--no-config",
             "--config",
@@ -443,7 +457,7 @@ fn provider_test_requires_double_authorization_and_never_emits_secret() {
     assert!(!denied.stdout.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
     assert!(!denied.stderr.windows(canary.len()).any(|bytes| bytes == canary.as_bytes()));
 
-    let output = Command::new(binary())
+    let output = isolated_command()
         .args([
             "--no-config",
             "--config",
@@ -488,8 +502,7 @@ fn real_cli_converts_txt_files_and_explicit_charset_stdin() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("mixed.txt");
     std::fs::write(&path, "中文\r\nEnglish\n\nCafe\u{301} 😀\n").unwrap();
-    let output =
-        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    let output = isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "中文  \nEnglish\n\nCafe\u{301} 😀\n");
 
@@ -508,8 +521,7 @@ fn real_cli_converts_notebook_without_executing_active_content() {
     )
     .unwrap();
 
-    let output =
-        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    let output = isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let markdown = String::from_utf8(output.stdout).unwrap();
     assert!(markdown.contains("```python\nNEVER_EXECUTE()\n```"));
@@ -526,7 +538,7 @@ fn real_cli_converts_rtf_file_stdin_json_and_bundle_without_active_services() {
     );
     std::fs::write(&path, &rtf).unwrap();
 
-    let markdown = Command::new(binary())
+    let markdown = isolated_command()
         .args(["--no-config", "--asset-mode", "embed", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -544,7 +556,7 @@ fn real_cli_converts_rtf_file_stdin_json_and_bundle_without_active_services() {
     assert!(stdin.status.success(), "{}", String::from_utf8_lossy(&stdin.stderr));
     assert!(String::from_utf8_lossy(&stdin.stdout).contains("before"));
 
-    let result = Command::new(binary())
+    let result = isolated_command()
         .args([
             "--no-config",
             "--emit",
@@ -561,7 +573,7 @@ fn real_cli_converts_rtf_file_stdin_json_and_bundle_without_active_services() {
     assert_eq!(result["assets"][0]["mediaType"], "image/png");
     assert!(!result["assets"][0]["dataBase64"].as_str().unwrap().is_empty());
 
-    let bundle = Command::new(binary())
+    let bundle = isolated_command()
         .args(["--no-config", "--emit", "bundle", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -622,15 +634,14 @@ fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result
     let path = directory.path().join("diagram.md");
     std::fs::write(&path, "![diagram](https://cdn.example.com/diagram.png)\n").unwrap();
 
-    let output =
-        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    let output = isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "![diagram](https://cdn.example.com/diagram.png)\n"
     );
 
-    let output = Command::new(binary())
+    let output = isolated_command()
         .args(["--no-config", "--emit", "result-json", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -640,7 +651,7 @@ fn real_cli_keeps_external_markdown_images_offline_in_default_extract_and_result
     assert_eq!(result["assets"][0]["externalUri"], "https://cdn.example.com/diagram.png");
     assert!(!directory.path().join("diagram_assets").exists());
 
-    let bundle = Command::new(binary())
+    let bundle = isolated_command()
         .args(["--no-config", "--emit", "bundle", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -660,7 +671,7 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
         let path = directory.path().join(name);
         std::fs::write(&path, contents).unwrap();
         let output =
-            Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+            isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         assert!(!String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
         assert!(!String::from_utf8_lossy(&output.stdout).starts_with("# XML"));
@@ -675,7 +686,7 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     let json_path = directory.path().join("misleading.txt");
     std::fs::write(&json_path, &large_json).unwrap();
     let output =
-        Command::new(binary()).args(["--no-config", json_path.to_str().unwrap()]).output().unwrap();
+        isolated_command().args(["--no-config", json_path.to_str().unwrap()]).output().unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("# JSON"));
 
@@ -686,7 +697,7 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     let csv_path = directory.path().join("table.txt");
     std::fs::write(&csv_path, b"name,age\nAlice,42\nBob,30\n").unwrap();
     let output =
-        Command::new(binary()).args(["--no-config", csv_path.to_str().unwrap()]).output().unwrap();
+        isolated_command().args(["--no-config", csv_path.to_str().unwrap()]).output().unwrap();
     assert_eq!(output.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&output.stdout).contains("**name**"));
 
@@ -740,14 +751,28 @@ fn json_depth_4096_never_uses_the_process_stack() {
 #[test]
 fn full_input_unicode_controls_never_auto_detect_as_text() {
     let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("limits.toml");
+    std::fs::write(
+        &config,
+        "schema_version = 1\n[conversion.limits]\nmax_memory_bytes = 536870912\n",
+    )
+    .unwrap();
     for (name, suffix) in [("del", b"\x7f".as_slice()), ("c1", b"\xc2\x80".as_slice())] {
         let path = directory.path().join(name);
         let mut contents = vec![b'A'; 70 * 1024];
         contents.extend_from_slice(suffix);
         std::fs::write(&path, contents).unwrap();
 
-        let detected = Command::new(binary())
-            .args(["formats", "detect", "--no-config", "--json", path.to_str().unwrap()])
+        let detected = isolated_command()
+            .args([
+                "formats",
+                "detect",
+                "--no-config",
+                "--config",
+                config.to_str().unwrap(),
+                "--json",
+                path.to_str().unwrap(),
+            ])
             .output()
             .unwrap();
         assert!(detected.status.success(), "{}", String::from_utf8_lossy(&detected.stderr));
@@ -761,7 +786,7 @@ fn full_input_unicode_controls_never_auto_detect_as_text() {
         );
 
         let converted =
-            Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+            isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
         assert!(!converted.status.success());
     }
 
@@ -770,7 +795,7 @@ fn full_input_unicode_controls_never_auto_detect_as_text() {
     safe.extend_from_slice(" 安全文本\tline\r\n".as_bytes());
     std::fs::write(&safe_path, safe).unwrap();
     let converted =
-        Command::new(binary()).args(["--no-config", safe_path.to_str().unwrap()]).output().unwrap();
+        isolated_command().args(["--no-config", safe_path.to_str().unwrap()]).output().unwrap();
     assert!(converted.status.success(), "{}", String::from_utf8_lossy(&converted.stderr));
 }
 
@@ -779,8 +804,7 @@ fn excessive_txt_inlines_exit_as_resource_limit_not_internal() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("too-many-lines.txt");
     std::fs::write(&path, "x\n".repeat(500_001)).unwrap();
-    let output =
-        Command::new(binary()).args(["--no-config", path.to_str().unwrap()]).output().unwrap();
+    let output = isolated_command().args(["--no-config", path.to_str().unwrap()]).output().unwrap();
     assert_eq!(output.status.code(), Some(5));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("resourceLimit"));
@@ -800,20 +824,17 @@ fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("图.drawio");
     std::fs::write(&file, source).unwrap();
-    let output = Command::new(binary()).arg(&file).args(["--no-config"]).output().unwrap();
+    let output = isolated_command().arg(&file).args(["--no-config"]).output().unwrap();
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("## Connections"));
-    let xml = Command::new(binary())
-        .arg(&file)
-        .args(["--no-config", "--format", "xml"])
-        .output()
-        .unwrap();
+    let xml =
+        isolated_command().arg(&file).args(["--no-config", "--format", "xml"]).output().unwrap();
     assert!(xml.status.success());
     assert!(String::from_utf8_lossy(&xml.stdout).contains("xml-attribute"));
     let second = dir.path().join("second.xml");
     std::fs::write(&second, source).unwrap();
     let batch_dir = dir.path().join("converted");
-    let batch = Command::new(binary())
+    let batch = isolated_command()
         .arg(&file)
         .arg(&second)
         .args(["--no-config", "--output-dir"])
@@ -825,7 +846,7 @@ fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
         assert!(std::fs::read_to_string(batch_dir.join(name)).unwrap().contains("## Connections"));
     }
     std::fs::write(&file, b"<ordinary/>").unwrap();
-    let bad = Command::new(binary())
+    let bad = isolated_command()
         .arg(&file)
         .args(["--no-config", "--log-format", "json"])
         .output()
@@ -837,19 +858,33 @@ fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
 #[test]
 fn format_admission_is_shared_by_detect_convert_stdin_and_batch() {
     let directory = tempfile::tempdir().unwrap();
+    let config = directory.path().join("limits.toml");
+    std::fs::write(
+        &config,
+        "schema_version = 1\n[conversion.limits]\nmax_memory_bytes = 536870912\n",
+    )
+    .unwrap();
     let bad = directory.path().join("unsupported.py");
     let good = directory.path().join("source.html");
     std::fs::write(&bad, "print('keep as unsupported')").unwrap();
     std::fs::write(&good, "<main><p><b><strong><a href=' '>kept label</a></strong></b></p></main>")
         .unwrap();
-    let detected = Command::new(binary())
-        .args(["--no-config", "formats", "detect", "--json", bad.to_str().unwrap()])
+    let detected = isolated_command()
+        .args([
+            "--no-config",
+            "--config",
+            config.to_str().unwrap(),
+            "formats",
+            "detect",
+            "--json",
+            bad.to_str().unwrap(),
+        ])
         .output()
         .unwrap();
     assert!(!detected.status.success());
     assert!(String::from_utf8_lossy(&detected.stderr).contains("unsupported"));
     for policy in ["strict", "best-effort"] {
-        let output = Command::new(binary())
+        let output = isolated_command()
             .args(["--no-config", "--error-policy", policy, good.to_str().unwrap()])
             .output()
             .unwrap();
@@ -868,7 +903,7 @@ fn format_admission_is_shared_by_detect_convert_stdin_and_batch() {
     assert!(output.status.success());
     assert_eq!(output.stdout, b"explicit text\n");
     let report = directory.path().join("batch.json");
-    let output = Command::new(binary())
+    let output = isolated_command()
         .args([
             "--no-config",
             "--output-dir",

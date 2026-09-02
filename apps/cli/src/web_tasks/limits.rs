@@ -1,5 +1,20 @@
 use super::{MAX_FILE_BYTES, MAX_WEB_MEMORY_BYTES, MAX_WEB_TEMPORARY_BYTES, WebTaskError};
-use into_markdown::ResourceLimits;
+use into_markdown::{CancellationToken, ExecutionOptions, ProgressListener, ResourceLimits};
+use std::sync::Arc;
+use std::time::Duration;
+
+pub(super) fn execution_options(
+    cancellation: CancellationToken,
+    timeout: Duration,
+    progress_listener: Arc<dyn ProgressListener>,
+) -> ExecutionOptions {
+    ExecutionOptions {
+        cancellation,
+        timeout: Some(timeout),
+        progress_listener: Some(progress_listener),
+        ..ExecutionOptions::default()
+    }
+}
 
 pub(super) fn validate(limits: &ResourceLimits) -> Result<(), WebTaskError> {
     if limits.max_input_bytes == 0 || limits.max_input_bytes > MAX_FILE_BYTES {

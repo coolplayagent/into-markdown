@@ -214,11 +214,11 @@ fn local_recognition_memory_limits_keep_the_compatible_diagnostic() {
 }
 
 #[test]
-fn strict_forced_and_required_body_refusals_remain_terminal() {
-    for (policy, strict, native) in [
-        (OcrPolicy::Auto, true, true),
-        (OcrPolicy::Always, false, true),
-        (OcrPolicy::Auto, false, false),
+fn strict_refusals_remain_terminal_while_forced_and_bodyless_best_effort_degrade() {
+    for (policy, strict, native, succeeds) in [
+        (OcrPolicy::Auto, true, true, false),
+        (OcrPolicy::Always, false, true, true),
+        (OcrPolicy::Auto, false, false, true),
     ] {
         let engine = engine(refusal());
         let services = Services { ocr: Some(engine), ..Default::default() };
@@ -228,16 +228,19 @@ fn strict_forced_and_required_body_refusals_remain_terminal() {
             options.error_policy = ErrorPolicy::Strict;
         }
         let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-        assert!(
-            block_on(enrich(
-                mixed_output(native),
-                InputFormat::Docx,
-                &options,
-                &services,
-                &context
-            ))
-            .is_err()
-        );
+        let result = block_on(enrich(
+            mixed_output(native),
+            InputFormat::Docx,
+            &options,
+            &services,
+            &context,
+        ));
+        assert_eq!(result.is_ok(), succeeds);
+        if let Ok(output) = result {
+            assert!(output.diagnostics.iter().any(|item| {
+                item.code == "resource.ocrRecognitionMemory.unitOmitted" && item.locator.is_some()
+            }));
+        }
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_eq!(context.reserved_temporary_bytes(), 0);
     }
@@ -246,7 +249,6 @@ fn strict_forced_and_required_body_refusals_remain_terminal() {
 #[test]
 fn shared_limits_protocol_cancellation_and_timeout_are_never_optional() {
     for failure in [
-        ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: "shared".into() },
         ConversionError::ResourceLimit { limit: "max_asset_bytes", detail: "asset".into() },
         ConversionError::ResourceLimit { limit: "max_total_asset_bytes", detail: "assets".into() },
         ConversionError::ResourceLimit { limit: "provider", detail: "legacy worker".into() },
@@ -269,7 +271,29 @@ fn shared_limits_protocol_cancellation_and_timeout_are_never_optional() {
 }
 
 #[test]
-fn text_on_another_page_does_not_authorize_shared_asset_omission() {
+fn recognition_scoped_shared_memory_refusal_omits_only_the_visual() {
+    let services = Services {
+        ocr: Some(engine(ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: "recognition transaction".into(),
+        })),
+        ..Default::default()
+    };
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let result =
+        block_on(enrich(mixed_output(false), InputFormat::Docx, &options, &services, &context))
+            .unwrap();
+    assert!(result.diagnostics.iter().any(|item| {
+        item.code == "resource.max_memory_bytes.unitOmitted" && item.locator.is_some()
+    }));
+    assert!(serde_json::to_string(&result.document).unwrap().contains("asset-a"));
+    drop(result);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
+fn text_on_another_page_is_irrelevant_when_the_failed_visual_itself_is_retained() {
     let mut source = mixed_output(true);
     let mut second = output().document.blocks.remove(0);
     second.id = NodeId("another-page".into());
@@ -277,12 +301,20 @@ fn text_on_another_page_does_not_authorize_shared_asset_omission() {
     let services = Services { ocr: Some(engine(refusal())), ..Default::default() };
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    assert!(block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).is_err());
+    let result =
+        block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "resource.ocrRecognitionMemory.unitOmitted")
+    );
+    drop(result);
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 #[test]
-fn scanned_pdf_page_with_native_footer_still_requires_ocr() {
+fn scanned_pdf_page_with_native_footer_retains_visual_when_ocr_is_omitted() {
     let mut source = mixed_output(true);
     let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else { unreachable!() };
     blocks[0].block = Block::Paragraph(vec![Inline::Text { value: "2".into(), marks: vec![] }]);
@@ -295,9 +327,17 @@ fn scanned_pdf_page_with_native_footer_still_requires_ocr() {
     let services = Services { ocr: Some(engine(refusal())), ..Default::default() };
     let options = ConversionOptions::default();
     let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-    let error =
-        block_on(enrich(source, InputFormat::Pdf, &options, &services, &context)).unwrap_err();
-    assert!(matches!(error, ConversionError::OcrRecognitionMemory { .. }));
+    let result = block_on(enrich(source, InputFormat::Pdf, &options, &services, &context)).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|item| item.code == "resource.ocrRecognitionMemory.unitOmitted")
+    );
+    let json = serde_json::to_string(&result.document).unwrap();
+    assert!(json.contains("asset-a"));
+    assert!(json.contains("embedded words"));
+    drop(result);
     assert_eq!(context.reserved_memory_bytes(), 0);
     assert_eq!(context.reserved_temporary_bytes(), 0);
 }

@@ -4159,10 +4159,7 @@ fn run_conversion(
         return Ok(());
     }
 
-    let execution = into_markdown::ExecutionOptions {
-        timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
-        ..into_markdown::ExecutionOptions::default()
-    };
+    let execution = config::memory::local_execution_options(&arguments, &loaded);
     let explicit_format = arguments.format.as_deref().map(parse_format).transpose()?;
     let output_context =
         into_markdown::ExecutionContext::new(execution.clone(), loaded.options.limits.clone());

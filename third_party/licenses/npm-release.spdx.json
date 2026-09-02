@@ -57,8 +57,8 @@
   "files": [
     {
       "SPDXID": "SPDXRef-File-console-app",
-      "fileName": "./web/console/dist/assets/app.ff87db1fce4c67c3.js",
-      "checksums": [{"algorithm":"SHA256","checksumValue":"ff87db1fce4c67c3656eb765273785048960a4a394b9edbafb53e9b9f5117cdd"}],
+      "fileName": "./web/console/dist/assets/app.ea7b34ab5ca6c3aa.js",
+      "checksums": [{"algorithm":"SHA256","checksumValue":"ea7b34ab5ca6c3aaf23f651fca9b601e4cd30de9bbae17a0cacdcb1369731e05"}],
       "licenseConcluded": "NOASSERTION",
       "licenseInfoInFiles": ["ISC", "MIT"],
       "copyrightText": "NOASSERTION"

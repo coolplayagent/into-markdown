@@ -4,6 +4,23 @@ use crate::{MemoryBudgetSnapshotDto, OcrRuntimeUsageDto};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct RawBatchResourceUsageDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memory: Option<RawMemoryBudgetSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ocr_runtime: Option<RawOcrRuntimeUsage>,
+    pub(super) shared_lease_budget_bytes: u64,
+    pub(super) shared_lease_peak_bytes: u64,
+    #[serde(default)]
+    pub(super) temporary_lease_budget_bytes: u64,
+    #[serde(default)]
+    pub(super) temporary_lease_peak_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) ocr: Option<super::RawBatchOcrUsageDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct RawMemoryBudgetSnapshot {
     total_bytes: Option<u64>,
     available_bytes: Option<u64>,
@@ -80,6 +97,12 @@ pub(super) fn validate(usage: &BatchResourceUsageDto) -> Result<(), DtoError> {
             "shared lease peak cannot exceed its budget",
         ));
     }
+    if usage.temporary_lease_peak_bytes > usage.temporary_lease_budget_bytes {
+        return Err(invalid(
+            "temporaryLeasePeakBytes",
+            "temporary lease peak cannot exceed its budget",
+        ));
+    }
     if usage.ocr.is_some_and(|ocr| (ocr.recognized_regions == 0) != (ocr.recognized_chars == 0)) {
         return Err(DtoError::new(
             DtoErrorCode::InvalidField,
@@ -146,6 +169,8 @@ mod tests {
             }),
             shared_lease_budget_bytes: 16,
             shared_lease_peak_bytes: 12,
+            temporary_lease_budget_bytes: 32,
+            temporary_lease_peak_bytes: 8,
             ocr: None,
         }
     }

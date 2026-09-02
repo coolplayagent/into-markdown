@@ -148,7 +148,8 @@ formula_repair = "prefer"
 
 本地 CLI/Desktop 省略 `max_asset_bytes` 或 `max_total_asset_bytes` 时，会在最终内存参数解析后
 分别从共享预算派生；显式字段保持配置值，命令行字段继续优先。Core API 默认值与 Web 安全
-上限保持固定。自动内存与资产公式见 [CLI 内存策略](cli.md)。
+上限保持固定。精确资产预检可把未显式字段各提升一次，最高不超过本次调用固定的共享内存
+预算；显式字段不会自动提高。自动内存、派生额度与恢复边界见 [CLI 内存策略](cli.md)。
 
 该配置只表达安装选择，不自动授予 ambient 权限。WASI host 还要求由受信安装/调用层提供
 固定 runtime/target、fuel、memory、output/resource 上限，以及逐项 preopen、clock、random

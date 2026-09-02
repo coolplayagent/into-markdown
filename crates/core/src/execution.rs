@@ -1,5 +1,7 @@
+mod adaptation;
 mod resource_usage;
 use crate::{ConversionError, InputFormat, ResourceLimits};
+pub use adaptation::AdaptiveResourceLimits;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
@@ -155,17 +157,9 @@ pub struct ExecutionOptions {
     pub timeout: Option<Duration>,
     /// Optional progress observer.
     pub progress_listener: Option<Arc<dyn ProgressListener>>,
-}
-
-impl fmt::Debug for ExecutionOptions {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ExecutionOptions")
-            .field("cancellation", &self.cancellation)
-            .field("timeout", &self.timeout)
-            .field("progress_listener", &self.progress_listener.as_ref().map(|_| "registered"))
-            .finish()
-    }
+    /// Optional local-application soft-limit adaptation. Library and Web
+    /// callers retain fixed limits through the disabled default.
+    pub resource_adaptation: AdaptiveResourceLimits,
 }
 
 /// Request-scoped cancellation, deadline, progress, and resource accounting.
@@ -257,6 +251,7 @@ struct ExecutionShared {
     resources: SharedResourceAccounting,
     temporary_directory: PathBuf,
     media_checkpoint: Mutex<Option<crate::media_checkpoint::SharedMediaCheckpointBackend>>,
+    adaptation: adaptation::AdaptiveResourceState,
 }
 
 #[derive(Default)]
@@ -373,6 +368,7 @@ impl ExecutionContext {
             resources,
             temporary_directory,
             media_checkpoint: Mutex::new(None),
+            adaptation: options.resource_adaptation.into_state(),
         });
         if let Some(deadline) = timer_deadline {
             let weak = Arc::downgrade(&shared);

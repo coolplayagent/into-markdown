@@ -22,6 +22,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - `ResourceLimits` 限制输入大小、解压后字节数、归档条目数、嵌套深度、页数和
   保留资源数，并限制实现显式计费的内存与请求临时文件字节数。所有累加使用 checked
   arithmetic，临时文件由执行上下文负责 RAII 清理。
+- 本地调用方只能为未显式设置的资产软额度授予一次精确提升权限；提升不能改变请求开始时的
+  `max_memory_bytes`，也不能提高解压、嵌套、归档完整性、模型结构或 Web profile 上限。
+  显式额度始终不可突破。
 - raster 图片与 OCR 源图不依赖固定宽高或固定像素阈值。非零尺寸经 checked pixel/stride/
   decoded/working-set 规划后，由解压、内存、输入和资产预算约束；第三方 decoder 接收已认证
   头部尺寸及 allocation budget。异常大但稀疏的尺寸声明仍会在实际像素物化前因预算或算术
@@ -264,7 +267,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   上限、枚举异常、预算和规划变化保持 fail closed。
 - 日志和诊断不得包含文档原始字节、凭据、签名 URL 或不受限制的提供者载荷。
 
-资源限制错误是权威错误，绝不能作为可恢复的解析器错误被吞掉。
+资源限制错误必须进入集中恢复决策，不能作为普通解析器错误被吞掉。只有已经回滚、具有稳定
+locator 且保留原图、正文或占位的最小内容单元可在 best-effort 下省略或截断；请求级内存、
+输入准入、根结构、加密、压缩安全、provider/协议、取消、超时和输出提交错误始终终止。
 
 ## 输出资源与文件系统
 
@@ -275,6 +280,12 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
   stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
   FIFO、设备、符号链接和 Windows reparse point 均拒绝。
+- 流式 CLI 产物在渲染后把资产 payload 写入请求临时文件并清除长期 RAM 副本；文件写入受
+  `max_temporary_bytes`、RAII 删除和最终事务约束。best-effort 只能省略无法暂存的 payload，
+  必须保留引用与就近诊断；最终提交失败仍终止并回滚整个输出事务。
+- 单项或累计资产额度拒绝只在已经认证资产边界后恢复：安全外部 URI 保持引用，纯 payload
+  资产把对应图片节点改成带 alt 的可见占位并释放租约。总额度按资产顺序保留已接纳 payload，
+  其后遗漏数量进入固定容量诊断；strict 不执行该转换。
 - 输出事务只恢复带随机 nonce、固定签名、版本、精确 root/相对目标清单和排他锁的
   私有 registry 条目。每个物理目标父目录包含固定名称、由 no-replace hard link 发布的
   管理器 lease，绑定父目录 dev/inode、root 身份和事务内受签名标记；既有目标身份另绑定

@@ -5,7 +5,9 @@ use crate::odf::styles::StyleCatalog;
 use crate::odf::text::ParseMode;
 use crate::odf::xml::XmlNode;
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, ExecutionContext, Inline, SourceLocator,
+    Block, ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, Inline,
+    ResourceFailureScope, ResourceLimitSource, ResourceRecoveryAction, ResourceRecoveryBoundary,
+    ResourceUnitKind, SourceLocator, recovery_diagnostic,
 };
 
 pub(super) fn parse_presentation(
@@ -18,13 +20,8 @@ pub(super) fn parse_presentation(
 ) -> Result<(), ConversionError> {
     let styles = &catalog.text;
     let pages: Vec<_> = payload.children().filter(|child| child.is(DRAW_NS, "page")).collect();
-    if u32::try_from(pages.len()).unwrap_or(u32::MAX) > options.limits.max_pages {
-        return Err(limit(
-            "max_pages",
-            format!("{} slides > {}", pages.len(), options.limits.max_pages),
-        ));
-    }
-    for (index, page) in pages.into_iter().enumerate() {
+    let selected = presentation_page_limit(pages.len(), state, options)?;
+    for (index, page) in pages.into_iter().take(selected).enumerate() {
         context.checkpoint()?;
         let number = u32::try_from(index + 1)
             .map_err(|_| limit("max_pages", "slide number cannot be represented"))?;
@@ -89,6 +86,49 @@ pub(super) fn parse_presentation(
         state.document.blocks.push(slide);
     }
     Ok(())
+}
+
+fn presentation_page_limit(
+    page_count: usize,
+    state: &mut ParseState,
+    options: &ConversionOptions,
+) -> Result<usize, ConversionError> {
+    let observed = u32::try_from(page_count).unwrap_or(u32::MAX);
+    let selected = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+    if observed <= options.limits.max_pages {
+        return Ok(selected);
+    }
+    let error = limit("max_pages", format!("{page_count} slides > {}", options.limits.max_pages));
+    if options.error_policy == ErrorPolicy::Strict {
+        return Err(error);
+    }
+    let locator = SourceLocator {
+        slide: options.limits.max_pages.checked_add(1),
+        part: Some("content.xml".into()),
+        ..Default::default()
+    };
+    let facts = ResourceRecoveryBoundary {
+        scope: ResourceFailureScope::Sequence,
+        unit: ResourceUnitKind::Slide,
+        locator: Some(&locator),
+        rollback_complete: true,
+        fallback_retained: true,
+        committed_units: u64::from(options.limits.max_pages),
+        omitted_units: u64::from(observed - options.limits.max_pages),
+        limit_source: ResourceLimitSource::Explicit,
+        precise_required: Some(u64::from(observed)),
+        raised_limit: None,
+    };
+    state.diagnostics.push(
+        recovery_diagnostic(
+            &error,
+            ResourceRecoveryAction::TruncateSequence,
+            facts,
+            Some(u64::from(options.limits.max_pages)),
+        )
+        .ok_or(error)?,
+    );
+    Ok(selected)
 }
 
 fn master_text(

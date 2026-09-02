@@ -12,6 +12,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 mod asset_payloads;
+mod enrichment;
+pub use enrichment::{EnrichmentPlan, TransactionalEnrichmentOutcome};
 
 /// Sendable boxed future used to keep service-provider traits object safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -646,49 +648,6 @@ impl ConverterOutput {
             provenance,
             memory_lease,
         ))
-    }
-
-    /// Consume an emitted converter output while retaining diagnostics and
-    /// their authenticated request-memory ownership in the bounded summary.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn into_conversion_summary(
-        self,
-        format: InputFormat,
-        markdown_bytes: u64,
-        content: crate::ResultContent,
-    ) -> ConversionSummary {
-        let payload_only_assets = self
-            .assets
-            .iter()
-            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_none())
-            .count();
-        let external_only_assets = self
-            .assets
-            .iter()
-            .filter(|asset| asset.bytes.is_empty() && asset.external_uri.is_some())
-            .count();
-        let dual_representation_assets = self
-            .assets
-            .iter()
-            .filter(|asset| !asset.bytes.is_empty() && asset.external_uri.is_some())
-            .count();
-        let Self { assets, diagnostics, memory_lease, .. } = self;
-        let outcome = crate::conversion_outcome(&diagnostics);
-        ConversionSummary {
-            format: Some(format),
-            outcome,
-            diagnostics,
-            markdown_bytes,
-            assets: u64::try_from(assets.len()).unwrap_or(u64::MAX),
-            processing_duration_ms: None,
-            content: Some(content),
-            payload_only_assets: u64::try_from(payload_only_assets).unwrap_or(u64::MAX),
-            external_only_assets: u64::try_from(external_only_assets).unwrap_or(u64::MAX),
-            dual_representation_assets: u64::try_from(dual_representation_assets)
-                .unwrap_or(u64::MAX),
-            _memory_lease: memory_lease,
-        }
     }
 
     /// Transfer opaque retained-memory ownership from a consumed nested output
@@ -1374,18 +1333,6 @@ pub trait Converter: Send + Sync {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
 }
 
-/// Transactional post-conversion enrichment before validation checkpoints and rendering.
-///
-/// Implementations consume the complete converter output and must return either a fully
-/// validated replacement or an error. This prevents partially enriched output from escaping.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EnrichmentPlan {
-    /// This enricher is an exact no-op for the request and is not invoked.
-    Skip,
-    /// Reserve this incremental peak before invoking the enricher.
-    Reserve(u64),
-}
-
 /// Transactional post-conversion enrichment with a mandatory preflight plan.
 pub trait OutputEnricher: Send + Sync {
     /// Stable implementation ID.
@@ -1425,6 +1372,30 @@ pub trait OutputEnricher: Send + Sync {
         services: &'a Services,
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>>;
+
+    /// Enrich a unit while optionally proving that a runtime refusal rolled
+    /// back to the untouched input. The default retains the established
+    /// terminal-error contract; implementations must opt in by returning
+    /// [`TransactionalEnrichmentOutcome::RolledBack`].
+    fn enrich_transactionally<'a>(
+        &'a self,
+        output: ConverterOutput,
+        converter_id: &'a str,
+        format: InputFormat,
+        options: &'a ConversionOptions,
+        services: &'a Services,
+        context: &'a ExecutionContext,
+    ) -> BoxFuture<'a, Result<TransactionalEnrichmentOutcome, ConversionError>> {
+        enrichment::default_transaction(
+            self,
+            output,
+            converter_id,
+            format,
+            options,
+            services,
+            context,
+        )
+    }
 }
 
 /// Render the unified IR through a single Markdown policy.

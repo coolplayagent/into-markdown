@@ -31,6 +31,8 @@ pub(super) fn report(
     into_markdown::BatchResourceUsageDto {
         shared_lease_budget_bytes: usage.shared_lease_budget_bytes,
         shared_lease_peak_bytes: usage.shared_lease_peak_bytes,
+        temporary_lease_budget_bytes: usage.temporary_lease_budget_bytes,
+        temporary_lease_peak_bytes: usage.temporary_lease_peak_bytes,
         memory: Some(memory_snapshot),
         ocr_runtime: Some(output_context.ocr_runtime_usage()),
         ocr: ocr_enabled.then_some(into_markdown::BatchOcrUsageDto {

@@ -59,9 +59,16 @@ impl ConverterStream for PdfConverter {
             }
             let runtime = pages::load_runtime(&path, options)?;
             let pdf = open_document(&runtime, input, context)?;
+            let observed_pages = pdf.page_count();
+            let selected_pages = observed_pages.min(options.limits.max_pages);
             let mut counts = pages::Counts::default();
             let mut output = ConverterOutput::default();
-            for page_index in 0..pdf.page_count() {
+            if observed_pages > selected_pages {
+                output
+                    .diagnostics
+                    .push(super::page_truncation_diagnostic(observed_pages, selected_pages));
+            }
+            for page_index in 0..selected_pages {
                 context.checkpoint()?;
                 sink.checkpoint()?;
                 let page = pages::PdfOutput::new(1, context)?

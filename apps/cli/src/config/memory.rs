@@ -82,6 +82,38 @@ pub(crate) fn apply_overrides(
     );
 }
 
+pub(crate) fn local_resource_adaptation(
+    arguments: &crate::args::ConversionArgs,
+    loaded: &super::LoadedConfig,
+) -> into_markdown::AdaptiveResourceLimits {
+    let mut implicit = Vec::with_capacity(2);
+    if loaded.effective.conversion.limits.max_asset_bytes.is_none()
+        && arguments.max_asset_size.is_none()
+    {
+        implicit.push("max_asset_bytes");
+    }
+    if loaded.effective.conversion.limits.max_total_asset_bytes.is_none()
+        && arguments.max_total_asset_size.is_none()
+    {
+        implicit.push("max_total_asset_bytes");
+    }
+    let mut ceilings = loaded.options.limits.clone();
+    ceilings.max_asset_bytes = ceilings.max_memory_bytes;
+    ceilings.max_total_asset_bytes = ceilings.max_memory_bytes;
+    into_markdown::AdaptiveResourceLimits::local(implicit, ceilings)
+}
+
+pub(crate) fn local_execution_options(
+    arguments: &crate::args::ConversionArgs,
+    loaded: &super::LoadedConfig,
+) -> into_markdown::ExecutionOptions {
+    into_markdown::ExecutionOptions {
+        timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
+        resource_adaptation: local_resource_adaptation(arguments, loaded),
+        ..into_markdown::ExecutionOptions::default()
+    }
+}
+
 pub(crate) fn apply_adaptive_asset_defaults(
     max_asset_explicit: bool,
     max_total_asset_explicit: bool,

@@ -17,8 +17,13 @@ mod media_checkpoint;
 mod nested;
 mod ocr_binding;
 mod options;
+mod resource_recovery;
 mod resource_usage;
 mod result_policy;
+pub use resource_recovery::{
+    ResourceFailureScope, ResourceLimitSource, ResourceRecoveryAction, ResourceRecoveryBoundary,
+    ResourceUnitKind, classify_resource_recovery, recoverable_limit, recovery_diagnostic,
+};
 pub use resource_usage::{
     BatchOcrUsageDto, BatchResourceUsageDto, MemoryBudgetSnapshotDto, OcrRuntimeUsageDto,
 };
@@ -40,9 +45,9 @@ pub use dto::{
 };
 pub use error::{ConversionError, ErrorCode};
 pub use execution::{
-    CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions, ExecutionResourceUsage,
-    ExecutionStage, PreflightMemoryCredit, ProgressEvent, ProgressListener, ResourceReservation,
-    TemporaryFile,
+    AdaptiveResourceLimits, CancellationToken, CheckedFuture, ExecutionContext, ExecutionOptions,
+    ExecutionResourceUsage, ExecutionStage, PreflightMemoryCredit, ProgressEvent, ProgressListener,
+    ResourceReservation, TemporaryFile,
 };
 pub use format::{FormatCandidate, InputFormat, RarSignature};
 pub use input::{
@@ -84,7 +89,7 @@ pub use spi::{
     DiarizationResult, Diarizer, DocumentPatch, EnrichmentPlan, LegacyOfficeNormalizer,
     LegacyOfficeRequest, LegacyOfficeResult, MarkdownRenderer, OcrEngine, OcrRequest,
     OutputEnricher, PatchOperation, ProbeOutcome, Services, SourceResolver, Tensor, TensorRuntime,
-    Transcriber, TranscriptionRequest, TranscriptionResult,
+    TransactionalEnrichmentOutcome, Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 #[doc(hidden)]
 pub use spi::{

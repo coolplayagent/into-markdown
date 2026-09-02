@@ -99,6 +99,8 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
   "resourceUsage": {
     "sharedLeaseBudgetBytes": 2147483648,
     "sharedLeasePeakBytes": 123456789,
+    "temporaryLeaseBudgetBytes": 4294967296,
+    "temporaryLeasePeakBytes": 987654,
     "ocr": {
       "recognizedRegions": 2,
       "recognizedChars": 21
@@ -124,10 +126,12 @@ DTO 解码错误为 `invalidField`、`invalidBase64`、`duplicateId` 和 `resour
 
 `resourceUsage` 是一次 CLI invocation 的共享资源快照，不按并发 `jobs` 倍增。
 `sharedLeasePeakBytes` 是根 `ExecutionContext` 与全部 fork 的真实历史高水位，拒绝的
-reserve 不抬高它，且任务释放 lease 后仍保留。OCR 计数只累计经过非空/置信度过滤、
+reserve 不抬高它，且任务释放 lease 后仍保留。`temporaryLeasePeakBytes` 同样记录请求临时
+文件的历史高水位；两个 peak 都必须小于等于对应 budget。OCR 计数只累计经过非空/置信度过滤、
 原生文本去重并完成结构化合并的 region 与 Unicode scalar；OCR 已启用但无命中时两个
 字段都为 `0`，关闭时省略 `ocr`。旧 schema 1 报告可缺少 `resourceUsage`；新生产者
-必须提供大于零的 budget，并保证 `0 <= peak <= budget`。
+必须提供大于零的共享内存 budget，并保证每组 `0 <= peak <= budget`；旧报告缺少临时字段时
+按零使用量解码。
 
 可选 `memory` 字段记录 `totalBytes`、`availableBytes`（缺失时 null）、`systemReserveBytes`、
 `autoBudgetBytes`、`effectiveBudgetBytes` 与 `automatic`。有效预算必须等于共享预算，
@@ -145,6 +149,13 @@ provider 时计数和额度均为零，拒绝数不得超过请求数，worker �
 沿用统一结果策略。宽度、像素、张量和结构等识别阶段资源拒绝使用
 `ocr.optionalRecognitionResourceSkipped`，同样为每个引用提供 locator。Web 在对应内容
 附近显示两类遗漏，在失败文件区域显示结构化原因。
+
+所有资源弹性诊断使用有限后缀：`resource.<limit>.limitRaised`（Info）、
+`resource.<limit>.unitOmitted`（Warning）与 `resource.<limit>.sequenceTruncated`（Warning）。
+遗漏与截断诊断携带页面、幻灯片、工作表、章节、附件或成员 locator；message 固定记录原额度、
+可得的观测需求、最终动作与遗漏计数。Warning 会使批量 `outcome` 成为 `degraded`。
+旧 OCR 两个诊断继续与统一诊断同时输出，供既有消费者兼容；Web 按 locator 去重并优先显示
+统一资源提示。
 
 ## 不可信输入边界
 

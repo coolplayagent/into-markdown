@@ -111,6 +111,9 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
 };
 
 export function diagnosticLabel(code: string, t: (key: MessageKey) => string): string {
+  if (/^resource\.[A-Za-z0-9_]+\.(?:limitRaised|unitOmitted|sequenceTruncated)$/.test(code)) {
+    return t(code.endsWith("limitRaised") ? "resourceLimitFailure" : "ocrResourceOmission");
+  }
   return t(DIAGNOSTIC_MESSAGES[code] ?? "conversionFailedReason");
 }
 

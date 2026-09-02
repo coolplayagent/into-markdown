@@ -79,7 +79,7 @@ pub(crate) async fn execute(
     let renderer = engine.renderer.as_ref().ok_or_else(|| ConversionError::Internal {
         detail: "no Markdown renderer is registered".into(),
     })?;
-    let artifacts = rendering::render_artifacts(rendering::RenderRequest {
+    let mut artifacts = rendering::render_artifacts(rendering::RenderRequest {
         renderer: renderer.as_ref(),
         output,
         source: source.input(),
@@ -88,6 +88,7 @@ pub(crate) async fn execute(
         context: &context,
     })
     .await?;
+    artifact_output::spool_assets(&mut artifacts, &request.options, capabilities.assets, &context)?;
     let processing_duration = preparation_duration.saturating_add(execution_timer.elapsed());
     let mut summary =
         artifact_output::emit(artifacts, attempt.candidate.format, capabilities, sink, &context)?;

@@ -5,7 +5,9 @@ use crate::odf::styles::StyleMap;
 use crate::odf::text::ParseMode;
 use crate::odf::xml::XmlNode;
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, ExecutionContext, SourceLocator,
+    Block, ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, ResourceFailureScope,
+    ResourceLimitSource, ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind,
+    SourceLocator, recovery_diagnostic,
 };
 
 pub(super) fn parse_spreadsheet(
@@ -17,13 +19,55 @@ pub(super) fn parse_spreadsheet(
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     let tables: Vec<_> = payload.children().filter(|child| child.is(TABLE_NS, "table")).collect();
-    if u64::try_from(tables.len()).unwrap_or(u64::MAX) > u64::from(options.limits.max_pages) {
+    let observed = u64::try_from(tables.len()).unwrap_or(u64::MAX);
+    if observed > u64::from(options.limits.max_pages) && options.error_policy == ErrorPolicy::Strict
+    {
         return Err(limit(
             "max_pages",
             format!("{} worksheets > {}", tables.len(), options.limits.max_pages),
         ));
     }
-    for (index, table) in tables.into_iter().enumerate() {
+    if observed > u64::from(options.limits.max_pages) {
+        let first_omitted = usize::try_from(options.limits.max_pages).unwrap_or(usize::MAX);
+        let name = tables
+            .get(first_omitted)
+            .and_then(|table| table.attr(TABLE_NS, "name"))
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || format!("Sheet {}", options.limits.max_pages.saturating_add(1)),
+                str::to_owned,
+            );
+        let locator = SourceLocator {
+            sheet: Some(name),
+            part: Some("content.xml".into()),
+            ..Default::default()
+        };
+        let error = limit(
+            "max_pages",
+            format!("{} worksheets > {}", tables.len(), options.limits.max_pages),
+        );
+        let facts = ResourceRecoveryBoundary {
+            scope: ResourceFailureScope::Sequence,
+            unit: ResourceUnitKind::Sheet,
+            locator: Some(&locator),
+            rollback_complete: true,
+            fallback_retained: true,
+            committed_units: u64::from(options.limits.max_pages),
+            omitted_units: observed - u64::from(options.limits.max_pages),
+            limit_source: ResourceLimitSource::Explicit,
+            precise_required: Some(observed),
+            raised_limit: None,
+        };
+        let diagnostic = recovery_diagnostic(
+            &error,
+            ResourceRecoveryAction::TruncateSequence,
+            facts,
+            Some(u64::from(options.limits.max_pages)),
+        )
+        .ok_or(error)?;
+        state.diagnostics.push(diagnostic);
+    }
+    for (index, table) in tables.into_iter().take(options.limits.max_pages as usize).enumerate() {
         context.checkpoint()?;
         let name = table
             .attr(TABLE_NS, "name")
