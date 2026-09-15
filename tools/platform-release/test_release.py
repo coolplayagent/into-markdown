@@ -682,7 +682,7 @@ class PlatformReleaseTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/platform-modular-release.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("dnf install --assumeyes binutils clang-libs", workflow)
+        self.assertIn("dnf install --assumeyes --nobest binutils clang-libs", workflow)
         self.assertIn('echo "LIBCLANG_PATH=$(dirname "$libclang_path")"', workflow)
 
     def test_linux_x86_release_binds_a_compiler_for_every_ggml_variant(self) -> None:
