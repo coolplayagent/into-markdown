@@ -391,7 +391,7 @@ def run_packaged_pdfium_negative_cases(
         runner = runner_factory(copied_binary, environment, work)
         result = runner.call(
             f"packaged-pdfium-{scenario}",
-            conversion_arguments(source, output, ["--ocr", "off", "--no-config"]),
+            conversion_arguments(source, output, ["--ocr", "off", "--no-config", "--error-policy", "strict"]),
             succeed=False,
         )
         detail = bounded(result.stderr + result.stdout).lower().replace("_", "")

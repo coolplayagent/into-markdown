@@ -6,6 +6,7 @@ exports_files([
     "native_acceptance.py",
     "drawio_smoke.py",
     "ocr_smoke.py",
+    "pdf_runtime_smoke.py",
     "post_release_scenarios.py",
     "release_artifacts.py",
 ])
