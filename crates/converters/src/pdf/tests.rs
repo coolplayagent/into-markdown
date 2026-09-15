@@ -1089,6 +1089,34 @@ fn rotated_pdf() -> Vec<u8> {
     assemble_pdf(&objects)
 }
 
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn clipped_image_with_native_text_uses_page_ocr() {
+    let path = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY"));
+    let input = ResolvedInput {
+        bytes: Arc::from(one_page_fixture(
+            b"BT /F1 8 Tf 10 160 Td (Native text remains available) Tj ET\nq 100.05 0 0 200.05 0 0 cm /Im1 Do Q\n", true)),
+        metadata: SourceMetadata::default(),
+    };
+    for (policy, render) in [(OcrPolicy::Auto, true), (OcrPolicy::Off, false)] {
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = policy;
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            options.limits.clone(),
+        );
+        let output = convert_pdf(&path, &input, &options, &context).unwrap();
+        assert_eq!(
+            output.assets.iter().any(|asset| asset.id.0.starts_with("pdf-page-render-")),
+            render
+        );
+        assert_eq!(output.diagnostics.iter().any(|d| d.code == "pdf.pageOcrPlacement"), render);
+        assert!(!output.diagnostics.iter().any(|d| d.code == "pdf.scannedPage"));
+        drop(output);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+}
+
 fn text_only_pdf() -> Vec<u8> {
     one_page_fixture(b"BT /F1 12 Tf 10 160 Td (Text only page) Tj ET\n", false)
 }

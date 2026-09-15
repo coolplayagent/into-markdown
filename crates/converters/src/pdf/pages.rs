@@ -241,9 +241,15 @@ impl PdfOutput {
             materialize_after_reserve(context, image_plan_bytes, || {
                 image_plan.materialize().map_err(map_pdfium_error)
             })?;
+        let mut needs_page_frame = false;
         for image in &images {
             context.checkpoint()?;
-            coverage.add(normalize_rect(image.bounds(), &info)?, &info);
+            let bounds = normalize_rect(image.bounds(), &info)?;
+            coverage.add(bounds, &info);
+            let mut locator = page_locator(page_number, &info);
+            locator.bounds = Some(bounds);
+            needs_page_frame |=
+                crate::embedded_visual_ocr::source_coordinate_frame(&locator).is_none();
         }
         let printable = characters
             .iter()
@@ -252,8 +258,8 @@ impl PdfOutput {
         let scanned =
             printable < MIN_NATIVE_TEXT_CHARS && coverage.ratio() >= MIN_SCAN_IMAGE_COVERAGE;
         let ocr_policy = crate::embedded_visual_ocr::effective_ocr_policy(options);
-        let render_requested =
-            ocr_policy == OcrPolicy::Always || (ocr_policy == OcrPolicy::Auto && scanned);
+        let render_requested = ocr_policy == OcrPolicy::Always
+            || (ocr_policy == OcrPolicy::Auto && (scanned || needs_page_frame));
         for image in images {
             context.checkpoint()?;
             // A full displayed-page render already includes every embedded
@@ -374,6 +380,15 @@ impl PdfOutput {
                 id: NodeId(format!("pdf-page-{page_number}-ocr-render")),
                 block: super::working_visual::image_block(id),
                 provenance: rendered_provenance,
+            });
+        }
+        if render_requested && needs_page_frame {
+            retain_output_bytes(context, &mut retained_memory, diagnostic_overhead()?)?;
+            diagnostics.push(Diagnostic {
+                code: "pdf.pageOcrPlacement".into(),
+                severity: DiagnosticSeverity::Info,
+                message: "Image placement uses displayed-page OCR to preserve clipping and page coordinates".into(),
+                locator: Some(page_locator(page_number, &info)),
             });
         }
         if scanned {

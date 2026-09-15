@@ -30,6 +30,7 @@ use candidate_index::{
 };
 #[cfg(test)]
 use geometry::evidence_bounds;
+pub(crate) use geometry::source_coordinate_frame;
 use geometry::{remap_ocr_node, remapped_locator};
 use resource_lifecycle::{attach_optional_memory, discard_group_payloads};
 use visual_refs::VisualRef;
