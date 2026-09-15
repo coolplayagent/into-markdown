@@ -22,6 +22,13 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def strip_generated_html(text):
+    """Remove rendering tags while retaining escaped text and comparisons."""
+    return re.sub(
+        r'(?<!\\)</?(?:a|sup|sub|br|table|thead|tbody|tr|td|th|div|span)'
+        r'(?:\s+[^<>\n]*)?\s*/?>', '', text)
+
+
 def nested_original_checks(source, case):
     parts = sorted({(d.get("locator") or {}).get("part")
         for item in case.get("items", []) for d in item.get("diagnostics", [])
@@ -87,7 +94,7 @@ def inspect(markdown, expected_pages):
         body = re.sub(r'^## Page \d+\s*$', '', body, flags=re.M)
         body = re.sub(r'!\[.*?\]\(<[^>]+>\)', '', body)
         body = re.sub(r'^PDF [^\n]*retained [^\n]*$', '', body, flags=re.M)
-        body = re.sub(r'<[^>]*>', '', body)
+        body = strip_generated_html(body)
         evidence.append(dict(page=page, textChars=len(re.sub(r'\s', '', body)),
                              images=images, originalPdfReferences=original))
     empty = [p['page'] for p in evidence if not (p['textChars'] or p['images'] or p['originalPdfReferences'])]

@@ -8,12 +8,13 @@ import re
 import unicodedata
 
 from quality_gate import check_ocr, digest
+from arxiv import strip_generated_html
 
 
 def recognized_text(text):
     text = re.sub(r'!\[[^\]]*\]\([^\n]*?\)', '', text)
     text = re.sub(r'^## Image frame \d+\s*$', '', text, flags=re.M)
-    text = re.sub(r'<[^>]+>', '', text)
+    text = strip_generated_html(text)
     text = re.sub(r'\\([^\w\s])', r'\1', text)
     return ' '.join(unicodedata.normalize('NFKC', html.unescape(text)).split())
 

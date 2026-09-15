@@ -22,6 +22,11 @@ web_spec.loader.exec_module(web_module)
 
 
 class CoverageTests(unittest.TestCase):
+    def test_markup_cleanup_retains_literal_angles_and_intervening_body(self):
+        text = '<a id="pdf-page-1"></a>one < two\nbody words\nthree > four'
+        self.assertEqual(corpus.strip_generated_html(text), 'one < two\nbody words\nthree > four')
+        self.assertEqual(corpus.strip_generated_html(r'\<a literal\> x<sup>2</sup>'), r'\<a literal\> x2')
+
     def test_whole_source_pdf_recovery_covers_pages_only_after_hash_verification(self):
         with tempfile.TemporaryDirectory() as directory:
             source = pathlib.Path(directory) / "wrapped.pdf"
@@ -204,7 +209,7 @@ quality = importlib.util.module_from_spec(quality_spec)
 quality_spec.loader.exec_module(quality)
 
 import sys
-with patch.dict(sys.modules, {'quality_gate': quality}):
+with patch.dict(sys.modules, {'quality_gate': quality, 'arxiv': corpus}):
     comparison_spec = importlib.util.spec_from_file_location('compare_ocr', pathlib.Path(__file__).with_name('compare_ocr.py'))
     comparison = importlib.util.module_from_spec(comparison_spec)
     comparison_spec.loader.exec_module(comparison)
