@@ -66,6 +66,11 @@ def build(output):
         if mode == 'auto':
             case['requiredText'].append(golden['ground_truth_nfc'])
             case['exactTextCounts'] = {golden['ground_truth_nfc']: 1}
+            case['ocrMinimums'] = dict(imagesAttempted=1, imagesCompleted=1, imagesWithText=1)
+            case['ocrMaximums'] = dict(imagesFailed=0, imagesSkipped=0)
+        else:
+            case['forbiddenText'] = [golden['ground_truth_nfc']]
+            case['ocrMaximums'] = dict(imagesAttempted=0)
         cases.append(case)
     (output / 'expectations.json').write_text(json.dumps({'schemaVersion': 1, 'cases': cases}, indent=2) + '\n')
     (output / 'authority.json').write_text(json.dumps(dict(imageSha256=golden['fixture_sha256'],
