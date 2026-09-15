@@ -2,7 +2,7 @@ use super::*;
 use into_markdown_core::{CellRef, OcrPolicy, SourceLocator, TimeRange};
 
 #[test]
-fn existing_exact_source_locator_struct_literal_remains_source_compatible() {
+fn source_locator_legacy_json_omits_optional_baseline() {
     let locator = SourceLocator {
         byte_start: Some(1),
         byte_end: Some(2),
@@ -14,6 +14,7 @@ fn existing_exact_source_locator_struct_literal_remains_source_compatible() {
         character_index: Some(0),
         font_name: Some("Font".into()),
         font_size: Some(12.0),
+        text_baseline: None,
         rotation_degrees: Some(0.0),
         page_width: Some(600.0),
         page_height: Some(800.0),
@@ -21,6 +22,7 @@ fn existing_exact_source_locator_struct_literal_remains_source_compatible() {
         part: Some("part.xml".into()),
     };
     assert_eq!(locator.page, Some(1));
+    assert!(serde_json::to_value(&locator).unwrap().get("textBaseline").is_none());
 }
 
 #[test]
