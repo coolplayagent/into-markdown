@@ -8,6 +8,8 @@ use into_markdown_core::{
     ResourceRecoveryAction, ResourceRecoveryBoundary, ResourceUnitKind, Services,
     SourceContentEvidence, SourceLocator, SourceMetadata, classify_resource_recovery,
 };
+use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 const ZIP_CONVERTER_ID: &str = "builtin.converter.zip";
@@ -25,6 +27,7 @@ pub(super) async fn convert<'a>(
         budget: ArchiveBudget::new(options, context),
         merge: MergeState::new(context)?,
         stats: WalkStats::default(),
+        ancestors: BTreeSet::new(),
     };
     walker.walk_archive(bytes, 1, "").await?;
     if walker.stats.leaves != 0 && walker.stats.converted == 0 {
@@ -47,6 +50,7 @@ struct RecursiveConverter<'a> {
     budget: ArchiveBudget<'a>,
     merge: MergeState<'a>,
     stats: WalkStats,
+    ancestors: BTreeSet<[u8; 32]>,
 }
 
 impl RecursiveConverter<'_> {
@@ -57,14 +61,108 @@ impl RecursiveConverter<'_> {
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<(), ConversionError>> {
         Box::pin(async move {
-            let mut archive = Archive::open(bytes, depth, &mut self.budget)?;
-            let entries = archive.take_entries();
+            self.budget.context().checkpoint()?;
+            let hash: [u8; 32] = Sha256::digest(bytes).into();
+            if self.ancestors.contains(&hash) {
+                return self.retain_cycle(bytes, prefix);
+            }
+            let _identity_memory = self.budget.context().reserve_memory(128)?;
+            self.ancestors.insert(hash);
+            let result = self.walk_members(bytes, depth, prefix).await;
+            self.ancestors.remove(&hash);
+            if matches!(result, Err(ConversionError::Encrypted))
+                && !prefix.is_empty()
+                && self.options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+            {
+                self.retain_archive(bytes, prefix, "This nested archive requires a password. Its complete original is attached; readable sibling members continue converting.")?;
+                self.stats.failure(ConversionError::Encrypted);
+                return Ok(());
+            }
+            result
+        })
+    }
+
+    fn retain_cycle(&mut self, bytes: &[u8], path: &str) -> Result<(), ConversionError> {
+        let reason = "Nested archive repeats an ancestor byte for byte. The complete original member is attached; its already visited contents are retained once.";
+        if self.options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+            return Err(ConversionError::Malformed {
+                part: Some(path.into()),
+                detail: reason.into(),
+            });
+        }
+        self.retain_archive(bytes, path, reason)?;
+        self.stats.success();
+        Ok(())
+    }
+
+    fn retain_archive(
+        &mut self,
+        bytes: &[u8],
+        path: &str,
+        reason: &str,
+    ) -> Result<(), ConversionError> {
+        let context = self.budget.context();
+        let _input_memory = context.reserve_memory(
+            (bytes.len() as u64).saturating_add(path.len() as u64).saturating_add(128),
+        )?;
+        let input = ResolvedInput {
+            bytes: Arc::from(bytes),
+            metadata: SourceMetadata {
+                name: Some(if path.is_empty() { "original.zip".into() } else { path.into() }),
+                ..SourceMetadata::default()
+            },
+        };
+        let output = crate::media::source_attachment::empty_body(
+            &input,
+            self.options,
+            context,
+            "application/zip",
+            reason,
+            ConverterOutput::default(),
+        )?;
+        self.merge.append(path, output)?;
+        Ok(())
+    }
+
+    fn open_members<'a>(
+        &mut self,
+        bytes: &'a [u8],
+        depth: u16,
+        prefix: &str,
+    ) -> Result<(Archive<'a>, Vec<EntryMeta>), ConversionError> {
+        let mut archive = Archive::open_recovering(
+            bytes,
+            depth,
+            &mut self.budget,
+            self.options.error_policy == into_markdown_core::ErrorPolicy::BestEffort,
+        )?;
+        let entries = archive.take_entries();
+        if entries.iter().any(|entry| entry.encrypted) {
+            self.retain_archive(bytes, prefix,
+                "Encrypted members require a password. Readable members are converted below; the complete original archive retains the encrypted content.")?;
+        }
+        Ok((archive, entries))
+    }
+
+    fn walk_members<'a>(
+        &'a mut self,
+        bytes: &'a [u8],
+        depth: u16,
+        prefix: &'a str,
+    ) -> BoxFuture<'a, Result<(), ConversionError>> {
+        Box::pin(async move {
+            let (mut archive, entries) = self.open_members(bytes, depth, prefix)?;
             for entry in entries {
                 self.budget.context().checkpoint()?;
                 if entry.kind == EntryKind::Directory {
                     continue;
                 }
                 let (path, _path_memory) = joined_path(prefix, &entry.name, self.budget.context())?;
+                if entry.encrypted {
+                    self.merge.encrypted_member(&path)?;
+                    self.stats.failure(ConversionError::Encrypted);
+                    continue;
+                }
                 let data = match archive.read_entry(&entry, &mut self.budget) {
                     Ok(data) => data,
                     Err(error) if is_terminal(&error) => return Err(error),
@@ -84,7 +182,13 @@ impl RecursiveConverter<'_> {
                         })?;
                     match self.walk_archive(&data.bytes, next_depth, &path).await {
                         Ok(()) => {}
-                        Err(error) if is_terminal(&error) => return Err(error),
+                        Err(error)
+                            if is_terminal(&error)
+                                || self.options.error_policy
+                                    == into_markdown_core::ErrorPolicy::Strict =>
+                        {
+                            return Err(error);
+                        }
                         Err(error) => {
                             self.merge.failure(&path, &error)?;
                             self.stats.failure(error);
@@ -241,6 +345,7 @@ async fn convert_member(
                 input: &input,
                 hint: &hint,
                 options,
+                enrich_output: true,
                 excluded_converter_ids: EXCLUDED_ZIP,
             },
             budget.context(),
@@ -324,4 +429,73 @@ fn try_owned(
 
 fn memory_limit(detail: impl Into<String>) -> ConversionError {
     ConversionError::ResourceLimit { limit: "max_memory_bytes", detail: detail.into() }
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use super::*;
+    use into_markdown_core::{
+        ConversionOutcome, ErrorPolicy, ExecutionContext, ExecutionOptions, conversion_outcome,
+    };
+
+    #[test]
+    fn repeated_ancestor_retains_one_original_and_strict_rejects_cycle() {
+        let bytes = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+        for policy in [ErrorPolicy::BestEffort, ErrorPolicy::Strict] {
+            let options = ConversionOptions { error_policy: policy, ..Default::default() };
+            let context =
+                ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+            let services = Services::default();
+            let hash: [u8; 32] = Sha256::digest(bytes).into();
+            let mut walker = RecursiveConverter {
+                options: &options,
+                services: &services,
+                budget: ArchiveBudget::new(&options, &context),
+                merge: MergeState::new(&context).unwrap(),
+                stats: WalkStats::default(),
+                ancestors: BTreeSet::from([hash]),
+            };
+            let result = futures::executor::block_on(walker.walk_archive(bytes, 2, "inner.zip"));
+            if policy == ErrorPolicy::Strict {
+                assert!(matches!(result, Err(ConversionError::Malformed { .. })));
+            } else {
+                result.unwrap();
+                assert_eq!(walker.stats.converted, 1);
+                let output = walker.merge.finish().unwrap();
+                assert_eq!(output.assets.len(), 1);
+                assert_eq!(output.assets[0].bytes, bytes);
+                assert_eq!(conversion_outcome(&output.diagnostics), ConversionOutcome::Degraded);
+                assert_eq!(
+                    output.diagnostics[0].locator.as_ref().unwrap().part.as_deref(),
+                    Some("inner.zip")
+                );
+                output.document.validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn identical_siblings_are_traversed_without_cycle_or_retained_identity() {
+        let bytes = b"PK\x05\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let services = Services::default();
+        let mut walker = RecursiveConverter {
+            options: &options,
+            services: &services,
+            budget: ArchiveBudget::new(&options, &context),
+            merge: MergeState::new(&context).unwrap(),
+            stats: WalkStats::default(),
+            ancestors: BTreeSet::new(),
+        };
+        for path in ["one.zip", "two.zip"] {
+            futures::executor::block_on(walker.walk_archive(bytes, 2, path)).unwrap();
+            assert!(walker.ancestors.is_empty());
+        }
+        let output = walker.merge.finish().unwrap();
+        assert!(output.assets.is_empty());
+        assert!(output.diagnostics.is_empty());
+        drop(output);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
 }

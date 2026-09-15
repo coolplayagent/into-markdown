@@ -75,26 +75,8 @@ deny_private_networks = true
 zip_charset = "gb18030"
 
 [conversion.limits]
-max_input_bytes = 536870912
-max_decompressed_bytes = 1073741824
-max_archive_entries = 100000
-max_archive_depth = 16
-max_archive_entry_bytes = 268435456
-max_archive_compression_ratio = 100
-max_nesting_depth = 256
-max_pages = 10000
-max_presentation_xml_events = 2000000
-max_pdf_page_objects = 100000
-max_pdf_total_objects = 10000000
-max_pdf_layout_comparisons = 12000000
-max_asset_bytes = 268435456
-max_total_asset_bytes = 1073741824
-max_memory_bytes = "auto" # 每次调用探测一次，共享预算；CLI --max-memory-size 优先
-max_temporary_bytes = 4294967296
-max_table_rows = 100000
-max_table_columns = 16384
-max_table_cells = 1000000
-max_field_bytes = 16777216
+max_memory_bytes = "auto" # 在运行转换服务的机器上计算；CLI --max-memory-size 优先
+# 其余限制按需添加。省略字段使用 CLI 与 Web 共用的默认策略。
 
 [conversion.output]
 emit = "markdown"
@@ -147,8 +129,8 @@ formula_repair = "prefer"
 ```
 
 本地 CLI/Desktop 省略 `max_asset_bytes` 或 `max_total_asset_bytes` 时，会在最终内存参数解析后
-分别从共享预算派生；显式字段保持配置值，命令行字段继续优先。Core API 默认值与 Web 安全
-上限保持固定。精确资产预检可把未显式字段各提升一次，最高不超过本次调用固定的共享内存
+分别从共享预算派生；显式字段保持配置值，命令行字段继续优先。Web 省略的字段使用同一
+服务端策略，Core API 保留确定性的库默认预算。精确资产预检可把未显式字段各提升一次，最高不超过本次调用固定的共享内存
 预算；显式字段不会自动提高。自动内存、派生额度与恢复边界见 [CLI 内存策略](cli.md)。
 
 该配置只表达安装选择，不自动授予 ambient 权限。WASI host 还要求由受信安装/调用层提供
@@ -245,21 +227,17 @@ Provider。每一层仍会拒绝未知字段并校验该层实际提供的 URL�
 
 ### PDF 预算与链接恢复
 
-`conversion.limits.max_pdf_page_objects` 限制单页原始对象数，默认 100,000，
-取值为 1–10,000,000；`max_pdf_total_objects` 限制同一 PDF 累计对象数，默认
-10,000,000，使用检查溢出的 `u64` 累加。`max_pdf_layout_comparisons` 限制每次整份
-PDF 版面重建的比较次数，默认 12,000,000；原生提取和 OCR 重建各自计数。
-后两项必须为正数。旧配置省略这些字段时
-使用默认值，CLI 参数覆盖配置；`config get conversion.limits.<字段>` 可查询配置值。
-Web 请求允许降低预算，并以上述默认值为上限。
+`conversion.limits.max_pdf_page_objects` 允许用户限制单页原始对象数，取值为
+1–2,147,483,647，默认采用 PDFium 原生计数范围。`max_pdf_total_objects` 默认采用
+JSON 精确整数范围，累计计数检查溢出。`max_pdf_layout_comparisons` 限制每页每次
+PDF 版面重建的比较次数，默认 12,000,000；原生提取和 OCR 重建分别计数。
+这些字段均拒绝零值。CLI 参数覆盖配置；`config get conversion.limits.<字段>` 可查询配置值。
+Web 与 CLI 共用默认策略，高级设置只提交用户修改的字段。
 
-这些扫描和计算预算独立于最终 IR、页数、内存、资产与超时限制。提高扫描预算不会
-提高其他限制。大型文档可按实际报错显式设置，例如：
-
-```sh
-into-md book.pdf --ocr off --asset-mode omit --max-memory-size 8GiB \
-  --max-pdf-total-objects 10000000 --max-pdf-layout-comparisons 120000000
-```
+默认 `best-effort` 逐页保留可用内容。排版或 OCR 无法继续时，按原生正文、页面图像、
+带页码的原 PDF 附件恢复，输出 `Degraded` 和对应阶段的警告，CLI 成功退出。
+页面物理尺寸按比例映射到渲染分辨率；内嵌图片的解码使用实际内存预算，
+输出资产大小在编码后检查。用户设置的资源上限、取消、超时和输出写入错误继续生效。
 
 注释链接和自动网页链接的有限倒序边界会规范化，部分越界会裁剪到页面边界。
 默认 `best-effort` 对非有限、无法表示、零面积、完全越界或局部读取失败的链接
@@ -267,4 +245,7 @@ into-md book.pdf --ocr off --asset-mode omit --max-memory-size 8GiB \
 两类情况都输出 `pdf.linkOmitted` 诊断，并保留正文与其他有效链接。
 `strict` 遇到这些无法恢复的链接会失败。诊断包含从 1 开始的页码、链接来源、
 从 0 开始的原始链接序号及网页链接矩形序号。被省略的链接仍消耗扫描预算；
-URI 长度或其他资源超限、取消、超时、无进度枚举、失效句柄及规划变化始终终止转换。
+局部提取异常进入页面恢复流程；取消、超时和输出写入失败保持真实错误状态。
+
+
+文档节点和内联节点的默认验证范围由可寻址容量决定，实际转换仍按请求内存预算计量。表格行数与单元格数的默认值使用 JSON 可精确表达的整数范围，显式设置的较小限制继续生效。大型工作表可分块处理；分块大小只控制工作集，不截断文档总量。Web 高级设置留空时省略字段，服务端与 CLI 使用同一套默认策略，自动内存预算来自转换服务所在机器。

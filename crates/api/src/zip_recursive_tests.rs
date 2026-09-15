@@ -55,6 +55,19 @@ fn convert(
     block_on(default_engine().unwrap().convert(request))
 }
 
+fn strict_options() -> ConversionOptions {
+    ConversionOptions { error_policy: crate::ErrorPolicy::Strict, ..Default::default() }
+}
+
+fn assert_original_recovery(bytes: Vec<u8>) {
+    let result =
+        convert(bytes.clone(), ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+    assert_eq!(result.assets.len(), 1);
+    assert_eq!(result.assets[0].bytes, bytes);
+    assert!(result.diagnostics.iter().any(|d| d.code == "conversion.recovery.originalFile"));
+}
+
 #[test]
 fn mixed_entries_are_sorted_and_nested_archives_share_the_pipeline() {
     let inner = archive(&[("c.txt", b"inner")], false);
@@ -87,10 +100,9 @@ fn one_crc_failure_is_diagnostic_and_preserves_other_members() {
 #[test]
 fn traversal_depth_ratio_and_cancellation_are_hard_boundaries() {
     let traversal = archive(&[("../escape.txt", b"no")], false);
+    assert_original_recovery(traversal.clone());
     assert_eq!(
-        convert(traversal, ConversionOptions::default(), ExecutionOptions::default())
-            .unwrap_err()
-            .code(),
+        convert(traversal, strict_options(), ExecutionOptions::default()).unwrap_err().code(),
         ErrorCode::Malformed
     );
 
@@ -161,8 +173,9 @@ fn empty_is_valid_but_all_failed_members_are_not_pseudo_success() {
     assert_eq!(result.diagnostics[0].code, "emptySource");
 
     let unsupported = archive(&[("unknown.bin", b"\0\x01\x02")], false);
+    assert_original_recovery(unsupported.clone());
     assert!(matches!(
-        convert(unsupported, ConversionOptions::default(), ExecutionOptions::default()),
+        convert(unsupported, strict_options(), ExecutionOptions::default()),
         Err(ConversionError::Unsupported { .. } | ConversionError::NoConverter { .. })
     ));
 }
@@ -174,13 +187,24 @@ fn empty_zip_bytes_named_as_xlsx_never_fall_back_to_generic_zip_success() {
         let mut request =
             ConversionRequest::new(InputRef::bytes(invalid_xlsx.clone(), Some("invalid.xlsx")));
         request.options.error_policy = policy;
-        let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::Malformed);
+        let result = block_on(default_engine().unwrap().convert(request));
+        if policy == crate::ErrorPolicy::Strict {
+            assert_eq!(result.unwrap_err().code(), ErrorCode::Malformed);
+        } else {
+            let result = result.unwrap();
+            assert_ne!(result.assets[0].media_type, "application/zip");
+            assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+            assert_eq!(result.assets[0].bytes, invalid_xlsx);
+        }
     }
 
     let nested = archive(&[("invalid.xlsx", &invalid_xlsx)], false);
-    let error =
-        convert(nested, ConversionOptions::default(), ExecutionOptions::default()).unwrap_err();
+    let recovered =
+        convert(nested.clone(), ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(recovered.assets[0].bytes, invalid_xlsx);
+    assert!(recovered.diagnostics.iter().any(|d| d.code == "conversion.recovery.originalFile"
+        && d.locator.as_ref().and_then(|l| l.part.as_deref()) == Some("invalid.xlsx")));
+    let error = convert(nested, strict_options(), ExecutionOptions::default()).unwrap_err();
     assert!(matches!(
         error,
         ConversionError::Malformed { .. }
@@ -200,7 +224,12 @@ fn empty_zip_bytes_with_six_package_extensions_never_become_empty_zip_successes(
         "invalid.ods",
         "invalid.odp",
     ] {
-        let request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+        let mut request = ConversionRequest::new(InputRef::bytes(bytes.clone(), Some(name)));
+        let recovered = block_on(default_engine().unwrap().convert(request.clone())).unwrap();
+        assert_ne!(recovered.assets[0].media_type, "application/zip");
+        assert_eq!(recovered.outcome(), ConversionOutcome::Degraded);
+        assert_eq!(recovered.assets[0].bytes, bytes);
+        request.options.error_policy = crate::ErrorPolicy::Strict;
         let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
         assert_ne!(error.reason_code(), "emptySource", "{name} was washed into an empty ZIP");
     }
@@ -379,7 +408,7 @@ fn unsupported_members_are_reported_and_renamed_documents_keep_their_identity() 
 }
 
 #[test]
-fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
+fn rar_original_recovery_preserves_members_and_strict_errors() {
     for signature in [b"Rar!\x1a\x07\x00".as_slice(), b"Rar!\x1a\x07\x01\x00".as_slice()] {
         for name in [
             "input.rar",
@@ -390,7 +419,12 @@ fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
             "input.md",
             "input.js",
         ] {
-            let request = ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
+            let mut request =
+                ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some(name)));
+            let recovered = block_on(default_engine().unwrap().convert(request.clone())).unwrap();
+            assert_eq!(recovered.outcome(), ConversionOutcome::Degraded);
+            assert_eq!(recovered.assets[0].bytes, signature);
+            request.options.error_policy = crate::ErrorPolicy::Strict;
             let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
             assert_eq!(error.code(), ErrorCode::Unsupported, "{name}: {error}");
             assert!(error.to_string().contains("extract"));
@@ -408,14 +442,18 @@ fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
         }
     }
     for signature in [b"Rar!\x1a".as_slice(), b"Rar!\x1a\x07\x01".as_slice()] {
-        let request =
+        let mut request =
             ConversionRequest::new(InputRef::bytes(signature.to_vec(), Some("truncated.rar")));
+        let recovered = block_on(default_engine().unwrap().convert(request.clone())).unwrap();
+        assert_eq!(recovered.assets[0].bytes, signature);
+        request.options.error_policy = crate::ErrorPolicy::Strict;
         let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
         assert_eq!(error.code(), ErrorCode::Malformed);
         assert!(error.to_string().contains("truncated"));
     }
     let mut plain =
         ConversionRequest::new(InputRef::bytes(b"ordinary Rar! text".to_vec(), Some("plain.rar")));
+    plain.options.error_policy = crate::ErrorPolicy::Strict;
     assert_eq!(
         block_on(default_engine().unwrap().convert(plain.clone())).unwrap_err().code(),
         ErrorCode::Unsupported
@@ -438,14 +476,17 @@ fn rar_signatures_are_terminal_and_nested_failures_keep_good_members() {
     let mut forced =
         ConversionRequest::new(InputRef::bytes(b"Rar!\x1a\x07\x00".to_vec(), Some("actual.rar")));
     forced.hint.format = Some(InputFormat::Json);
+    forced.options.error_policy = crate::ErrorPolicy::Strict;
     let error = block_on(default_engine().unwrap().convert(forced)).unwrap_err();
     assert_ne!(error.reason_code(), "archiveExtractionRequired");
     assert_eq!(error.code(), ErrorCode::Malformed);
     let only = archive(&[("only.rar", b"Rar!\x1a\x07\x00")], false);
+    let recovered =
+        convert(only.clone(), ConversionOptions::default(), ExecutionOptions::default()).unwrap();
+    assert_eq!(recovered.outcome(), ConversionOutcome::Degraded);
+    assert_eq!(recovered.assets[0].bytes, b"Rar!\x1a\x07\x00");
     assert_eq!(
-        convert(only, ConversionOptions::default(), ExecutionOptions::default())
-            .unwrap_err()
-            .code(),
+        convert(only, strict_options(), ExecutionOptions::default()).unwrap_err().code(),
         ErrorCode::Unsupported
     );
 }
@@ -479,14 +520,11 @@ fn unicode_archive_names_survive_provenance_and_unsafe_aliases_fail() {
             [(a, b"a".as_slice()), (b, b"b".as_slice())],
             [(b, b"b".as_slice()), (a, b"a".as_slice())],
         ] {
+            assert_original_recovery(archive(&entries, false));
             assert_eq!(
-                convert(
-                    archive(&entries, false),
-                    ConversionOptions::default(),
-                    ExecutionOptions::default()
-                )
-                .unwrap_err()
-                .code(),
+                convert(archive(&entries, false), strict_options(), ExecutionOptions::default())
+                    .unwrap_err()
+                    .code(),
                 ErrorCode::Malformed
             );
         }
@@ -494,19 +532,29 @@ fn unicode_archive_names_survive_provenance_and_unsafe_aliases_fail() {
 }
 
 #[test]
-fn recoverable_rar_retains_the_same_terminal_diagnostic() {
+fn recoverable_rar_replays_original_delivery_and_preserves_strict_diagnostic() {
     let directory = tempfile::tempdir().unwrap();
     let store = crate::RecoveryStore::open(directory.path().join("recovery")).unwrap();
-    let token = store.create_token().unwrap();
     let engine = default_engine().unwrap();
-    for _ in 0..2 {
-        let request = ConversionRequest::new(InputRef::bytes(
-            b"Rar!\x1a\x07\x01\x00".to_vec(),
-            Some("renamed.zip"),
-        ));
-        let error = block_on(engine.convert_recoverable(request, &store, &token)).unwrap_err();
-        assert_eq!(error.code(), ErrorCode::Unsupported);
-        assert_eq!(error.reason_code(), "archiveExtractionRequired");
+    for policy in [crate::ErrorPolicy::BestEffort, crate::ErrorPolicy::Strict] {
+        let token = store.create_token().unwrap();
+        for _ in 0..2 {
+            let mut request = ConversionRequest::new(InputRef::bytes(
+                b"Rar!\x1a\x07\x01\x00".to_vec(),
+                Some("renamed.zip"),
+            ));
+            request.options.error_policy = policy;
+            let result = block_on(engine.convert_recoverable(request, &store, &token));
+            if policy == crate::ErrorPolicy::Strict {
+                let error = result.unwrap_err();
+                assert_eq!(error.code(), ErrorCode::Unsupported);
+                assert_eq!(error.reason_code(), "archiveExtractionRequired");
+            } else {
+                let result = result.unwrap();
+                assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+                assert_eq!(result.assets[0].bytes, b"Rar!\x1a\x07\x01\x00");
+            }
+        }
     }
 }
 

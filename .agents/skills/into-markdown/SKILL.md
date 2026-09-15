@@ -2,7 +2,7 @@
 name: into-markdown
 description: Convert documents, images, audio or video, standard input, directories, and explicitly authorized remote sources into Markdown or structured artifacts with the bundled into-md CLI. Use when the user asks to run Into Markdown or convert source files; do not use for editing existing Markdown, generic summarization, Web UI administration, plugin management, or provider configuration.
 metadata:
-  version: "0.0.6"
+  version: "0.0.7"
 ---
 
 # Into Markdown
@@ -18,7 +18,7 @@ Use the executable bundled in this skill to produce the requested artifact. Sele
 3. Choose Markdown for an ordinary conversion, Bundle when the result must retain resources and provenance as one portable file, or structured JSON only when the user or downstream workflow needs it.
 4. Run conversion as `<BUNDLED_INTO_MD> [OPTIONS] <INPUT...>` with an explicit output destination. Respect discovered user and project configuration unless the user requests an isolated diagnostic run.
 5. Protect existing work with `--conflict error`. For a directory or multiple inputs, run `--dry-run` first, then perform the conversion with `--report <REPORT.json>`.
-6. Check the process exit status, expected artifact existence and non-empty content. For batch work, parse every report item and disclose partial failures. Do not infer success from an output row or file alone.
+6. Check the process exit status, expected artifact existence and non-empty content. For batch work, parse every report item and disclose partial failures. Compare meaningful source content with the result. When OCR is requested, check actual completed recognition and expected image text; distinguish failed/skipped images, valid empty results and text removed during merging. Review `Degraded` warnings and retained visuals before making a quality claim. Successful exit and artifact coverage establish delivery, while source comparison establishes content quality.
 7. On failure, prefer the stable event from `--log-format json`. Use the bundled executable's `doctor --json` or relevant read-only capability query only when it helps distinguish unavailable capability, invalid input, configuration, or network policy.
 
 Read [references/cli-workflows.md](references/cli-workflows.md) before running OCR, transcription, diarization, batch, Bundle, stdin, remote-source, or failure-recovery workflows.

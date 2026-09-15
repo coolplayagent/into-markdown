@@ -80,12 +80,19 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
                     if policy::recovery(&output, self, enricher, &error)
                         == into_markdown_core::ResourceRecoveryAction::OmitUnit =>
                 {
+                    record_unattempted_images(&output, self.context);
                     policy::push_omitted(&mut output, &error)?;
                     return Ok(output);
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    record_unattempted_images(&output, self.context);
+                    return Err(error);
+                }
             };
-            let EnrichmentPlan::Reserve(_) = plan else { return Ok(output) };
+            let EnrichmentPlan::Reserve(_) = plan else {
+                record_unattempted_images(&output, self.context);
+                return Ok(output);
+            };
             let outcome = self
                 .context
                 .run(enricher.enrich_transactionally(
@@ -120,6 +127,12 @@ impl ConverterEventSink for PageEnrichmentSink<'_> {
             output.account_retained(self.context)
         })
     }
+}
+
+pub(crate) fn record_unattempted_images(output: &ConverterOutput, context: &ExecutionContext) {
+    let sources =
+        output.assets.iter().filter(|asset| asset.media_type.starts_with("image/")).count() as u64;
+    context.record_ocr_images(0, 0, 0, sources);
 }
 
 #[cfg(test)]

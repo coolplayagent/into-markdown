@@ -5,6 +5,7 @@ mod artifact_output;
 mod collecting;
 mod fixed_alloc;
 mod nested;
+mod nested_enrichment;
 mod page_enrichment;
 mod page_ocr_cache;
 mod preparation;
@@ -171,6 +172,7 @@ impl EngineBuilder {
         let nested = nested::NestedDispatcher::new(
             self.registry.format_detectors.clone(),
             self.registry.converters.clone(),
+            self.enrichers.clone(),
             self.services.clone(),
         );
         self.services.nested = Some(nested);
@@ -391,54 +393,15 @@ impl Engine {
         // A successful probe makes conversion authoritative. Conversion errors
         // are returned immediately rather than being hidden by another parser.
         context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
-        let native_stream = attempt.converter.stream_support().filter(|stream| {
-            stream.stream_mode_for(
+        let output = self
+            .convert_and_enrich(
+                &attempt,
                 source.input(),
-                &attempt.candidate,
                 &request.options,
-                StreamConsumerKind::Collecting,
-            ) == ConverterStreamMode::Native
-        });
-        let (output, completed_page_ocr) = if let Some(stream) = native_stream {
-            let native = stream_execution::invoke_native_collecting(
-                stream,
-                source.input(),
-                &attempt.candidate,
-                &request.options,
-                &self.services,
-                &self.enrichers,
                 &context,
+                StreamConsumerKind::Collecting,
             )
             .await?;
-            (native.output, native.completed_page_ocr)
-        } else {
-            (
-                invoke_converter_preflighted(
-                    attempt.converter.as_ref(),
-                    source.input(),
-                    &attempt.candidate,
-                    &request.options,
-                    &self.services,
-                    &context,
-                    |_| Ok(()),
-                )
-                .await?,
-                false,
-            )
-        };
-        let output = invoke_enrichers_skipping(
-            &self.enrichers,
-            output,
-            EnricherInvocation::after_page_enrichment(
-                attempt.converter.id(),
-                attempt.candidate.format,
-                &request.options,
-                &self.services,
-                &context,
-                completed_page_ocr.then_some(page_enrichment::EMBEDDED_OCR),
-            ),
-        )
-        .await?;
         let output = if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {
             output.discard_asset_payloads(&context)?
         } else {
@@ -458,6 +421,7 @@ impl Engine {
         })
         .await?;
         let processing_duration = preparation_duration.saturating_add(execution_timer.elapsed());
+        result.set_ocr_runtime_usage(Some(context.ocr_runtime_usage()));
         result.set_processing_duration_ms(processing_duration.as_secs_f64() * 1_000.0);
         // Keep the resolver's source-memory lease through conversion,
         // rendering, and result assembly. The artifact boundary owns the
@@ -519,6 +483,7 @@ fn preserve_utf8_markdown(
     Ok((markdown, memory))
 }
 
+#[cfg(test)]
 pub(crate) async fn invoke_enrichers(
     enrichers: &[Arc<dyn OutputEnricher>],
     output: ConverterOutput,
@@ -577,8 +542,24 @@ pub(crate) async fn invoke_enrichers_skipping(
             options,
             services,
             context,
-        )?;
-        let EnrichmentPlan::Reserve(plan) = plan else { continue };
+        );
+        let plan = match plan {
+            Ok(EnrichmentPlan::Reserve(plan)) => plan,
+            result => {
+                if enricher.id() == page_enrichment::EMBEDDED_OCR
+                    && !matches!(
+                        format,
+                        into_markdown_core::InputFormat::Image
+                            | into_markdown_core::InputFormat::Zip
+                            | into_markdown_core::InputFormat::Rar
+                    )
+                {
+                    page_enrichment::record_unattempted_images(&output, context);
+                }
+                result?;
+                continue;
+            }
+        };
         let mut memory = context.reserve_memory(plan)?;
         let credited_context = context.with_memory_credit(&mut memory)?;
         output = context
@@ -718,6 +699,7 @@ struct Attempt {
     explicit: bool,
     confidence: f32,
     priority: i32,
+    probe_error: Option<ConversionError>,
 }
 
 fn normalize_confidence(confidence: f32) -> f32 {
@@ -824,6 +806,7 @@ fn fixed_provenance(value: &Provenance) -> Result<Provenance, ConversionError> {
                 .map(|value| try_clone_string(value, "provenance font allocation failed"))
                 .transpose()?,
             font_size: value.locator.font_size,
+            text_baseline: value.locator.text_baseline,
             rotation_degrees: value.locator.rotation_degrees,
             page_width: value.locator.page_width,
             page_height: value.locator.page_height,
@@ -1633,9 +1616,33 @@ mod tests {
             .register_format_detector(Arc::new(TextDetector))
             .register_converter(Arc::new(NotApplicable));
         let engine = builder.build().unwrap();
-        let request = ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let mut request =
+            ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        request.options.error_policy = into_markdown_core::ErrorPolicy::Strict;
         let error = block_on(engine.convert(request)).unwrap_err();
         assert_eq!(error.code(), into_markdown_core::ErrorCode::NoConverter);
+    }
+
+    #[test]
+    fn rejected_probe_delivers_same_original_in_aggregate_and_artifact_paths() {
+        let mut builder = EngineBuilder::new().renderer(Arc::new(ChunkedRenderer));
+        builder
+            .registry_mut()
+            .register_source_resolver(Arc::new(BytesResolver))
+            .register_format_detector(Arc::new(TextDetector))
+            .register_converter(Arc::new(NotApplicable));
+        let engine = builder.build().unwrap();
+        let request =
+            || ConversionRequest::new(InputRef::bytes(b"hello".as_slice(), Some("x.txt")));
+        let result = block_on(engine.convert(request())).unwrap();
+        assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+        assert_eq!(result.assets.len(), 1);
+        assert_eq!(result.assets[0].bytes, b"hello");
+        let mut sink = RecordingSink::default();
+        let summary = block_on(engine.convert_into(request(), &mut sink)).unwrap();
+        assert_eq!(summary.outcome, result.outcome());
+        assert_eq!(summary.assets, 1);
+        assert_eq!(summary.diagnostics, result.diagnostics);
     }
 
     #[test]
@@ -2275,3 +2282,6 @@ mod tests {
         assert_eq!(error.code(), into_markdown_core::ErrorCode::Timeout);
     }
 }
+
+mod conversion;
+mod source_recovery;

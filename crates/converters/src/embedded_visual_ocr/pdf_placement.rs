@@ -68,3 +68,20 @@ pub(super) fn filter_references(
     });
     Ok(())
 }
+
+pub(super) fn recovery_text_label(
+    id: into_markdown_core::NodeId,
+    provenance: &into_markdown_core::Provenance,
+) -> into_markdown_core::BlockNode {
+    into_markdown_core::BlockNode {
+        id,
+        provenance: provenance.clone(),
+        block: into_markdown_core::Block::Heading {
+            level: 4,
+            content: vec![into_markdown_core::Inline::Text {
+                value: "Page image text (including figure and table labels)".into(),
+                marks: Vec::new(),
+            }],
+        },
+    }
+}

@@ -1,6 +1,5 @@
 //! Strict namespace-aware XML helpers for EPUB package documents.
 
-use super::budget::EpubBudget;
 use into_markdown_core::ConversionError;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::ResolveResult;
@@ -165,7 +164,6 @@ pub(super) fn attributes_typed(
         validate_xml_chars(&value, "attribute").map_err(AttributeError::Fatal)?;
         output.push(Attribute { namespace: key.0, local: key.1, value });
     }
-    EpubBudget::attributes(output.len()).map_err(AttributeError::Fatal)?;
     Ok(output)
 }
 

@@ -5,9 +5,14 @@ use into_markdown_core::{
 
 const CHECKPOINT_ITEMS: usize = 256;
 const CHECKPOINT_BYTES: usize = 4 * 1024;
-const ATOM_HIGH_WATER: u64 = 1_536;
-const NODE_HIGH_WATER: u64 = 2_048;
-const PATH_BOUND_HIGH_WATER: u64 = 128;
+// Account for the structures used by collection, grouping and materialization.
+const ATOM_WORKING_BYTES: u64 = (2 * std::mem::size_of::<crate::model::Atom>()
+    + std::mem::size_of::<crate::model::Line>()
+    + 8 * std::mem::size_of::<usize>()) as u64;
+const NODE_WORKING_BYTES: u64 =
+    (std::mem::size_of::<BlockNode>() + std::mem::size_of::<crate::model::RebuiltBlock>()) as u64;
+const PATH_WORKING_BYTES: u64 =
+    (2 * std::mem::size_of::<into_markdown_core::Rect>() + 4 * std::mem::size_of::<usize>()) as u64;
 
 #[cfg(test)]
 type CheckpointHook = Option<Box<dyn FnMut()>>;
@@ -74,15 +79,15 @@ impl<'a> LayoutBudget<'a> {
             .map_err(|_| memory("layout text byte count"))?
             .checked_mul(4)
             .and_then(|value| {
-                value.checked_add(u64::try_from(counts.atoms).ok()?.checked_mul(ATOM_HIGH_WATER)?)
+                value
+                    .checked_add(u64::try_from(counts.atoms).ok()?.checked_mul(ATOM_WORKING_BYTES)?)
             })
             .and_then(|value| {
-                value.checked_add(u64::try_from(counts.nodes).ok()?.checked_mul(NODE_HIGH_WATER)?)
+                value
+                    .checked_add(u64::try_from(counts.nodes).ok()?.checked_mul(NODE_WORKING_BYTES)?)
             })
             .and_then(|value| {
-                value.checked_add(
-                    u64::try_from(path_bounds).ok()?.checked_mul(PATH_BOUND_HIGH_WATER)?,
-                )
+                value.checked_add(u64::try_from(path_bounds).ok()?.checked_mul(PATH_WORKING_BYTES)?)
             })
             .and_then(|value| value.checked_add(64 * 1024))
             .ok_or_else(|| memory("layout working-set overflow"))?;

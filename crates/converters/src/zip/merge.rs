@@ -70,9 +70,10 @@ impl<'a> MergeState<'a> {
             self.memory.as_mut().ok_or_else(memory_unavailable)?,
             format_args!("{scope}-heading"),
         )?;
+        let heading_path = if path.is_empty() { "Original archive" } else { path };
         let heading_text = charged_format(
             self.memory.as_mut().ok_or_else(memory_unavailable)?,
-            format_args!("{path}"),
+            format_args!("{heading_path}"),
         )?;
         let mut heading_content = Vec::new();
         reserve_append(
@@ -94,7 +95,11 @@ impl<'a> MergeState<'a> {
         self.output.document.blocks.append(&mut child.document.blocks);
         self.output.assets.append(&mut child.assets);
         for diagnostic in &mut child.diagnostics {
-            prefix_locator(diagnostic.locator.as_mut(), path, self.memory()?)?;
+            prefix_locator(
+                Some(diagnostic.locator.get_or_insert_with(SourceLocator::default)),
+                path,
+                self.memory()?,
+            )?;
         }
         self.output.diagnostics.append(&mut child.diagnostics);
         merge_metadata(
@@ -134,6 +139,23 @@ impl<'a> MergeState<'a> {
             message,
             locator: Some(SourceLocator { part: Some(part), ..SourceLocator::default() }),
         });
+        Ok(())
+    }
+
+    pub(super) fn encrypted_member(&mut self, path: &str) -> Result<(), ConversionError> {
+        self.failure(path, &ConversionError::Encrypted)?;
+        let code = charged_format(self.memory()?, format_args!("zip.entry.encryptedRetained"))?;
+        let message = charged_format(
+            self.memory()?,
+            format_args!(
+                "Encrypted member {path:?} is retained in the attached original archive; a password is required to read it."
+            ),
+        )?;
+        if let Some(diagnostic) = self.output.diagnostics.last_mut() {
+            diagnostic.code = code;
+            diagnostic.message = message;
+            diagnostic.severity = DiagnosticSeverity::Warning;
+        }
         Ok(())
     }
 
@@ -316,6 +338,9 @@ fn prefix_locator(
     path: &str,
     memory: &mut ResourceReservation,
 ) -> Result<(), ConversionError> {
+    if path.is_empty() {
+        return Ok(());
+    }
     let Some(locator) = locator else { return Ok(()) };
     locator.part = Some(match locator.part.take() {
         Some(child) => charged_format(memory, format_args!("{path}/{child}"))?,
@@ -332,7 +357,11 @@ fn container_provenance(
         kind: ProvenanceKind::Metadata,
         provider: charged_format(memory, format_args!("builtin.converter.zip"))?,
         locator: SourceLocator {
-            part: Some(charged_format(memory, format_args!("{path}"))?),
+            part: if path.is_empty() {
+                None
+            } else {
+                Some(charged_format(memory, format_args!("{path}"))?)
+            },
             ..SourceLocator::default()
         },
         confidence: Some(1.0),

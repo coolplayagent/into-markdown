@@ -113,6 +113,20 @@ fn collect_blips<'a>(
             .ok_or_else(|| malformed("Workbook/drawing", "truncated Escher record body"))?;
         if options & 0x000f == ESCHER_CONTAINER_VERSION {
             collect_blips(body, depth.saturating_add(1), budget, output)?;
+        } else if kind == 0xf007 {
+            // MS-ODRAW OfficeArtFBSE: a 36-byte header and optional UTF-16 name
+            // precede the embedded BLIP record. The FBSE itself has recVer 2.
+            let name_bytes = usize::from(
+                *body
+                    .get(33)
+                    .ok_or_else(|| malformed("Workbook/drawing", "truncated FBSE header"))?,
+            );
+            let embedded = body
+                .get(36 + name_bytes..)
+                .ok_or_else(|| malformed("Workbook/drawing", "truncated FBSE name"))?;
+            if !embedded.is_empty() {
+                collect_blips(embedded, depth.saturating_add(1), budget, output)?;
+            }
         } else if matches!(kind, ESCHER_BLIP_JPEG | ESCHER_BLIP_PNG) {
             let (signature, media_type) = if kind == ESCHER_BLIP_PNG {
                 (b"\x89PNG\r\n\x1a\n".as_slice(), "image/png")
@@ -176,6 +190,28 @@ mod tests {
         let retained = retain(&drawing_record(&image), ErrorPolicy::Strict).unwrap();
         assert_eq!(retained.assets.len(), 1);
         assert_eq!(retained.assets[0].bytes, image);
+    }
+
+    #[test]
+    fn fbse_embedded_blip_and_optional_name_preserve_image() {
+        let image = png();
+        let record = drawing_record(&image);
+        let blip = &record[4..];
+        for name in [&[][..], &[b'A', 0, 0, 0][..]] {
+            let mut body = vec![0; 36];
+            body[33] = name.len() as u8;
+            body.extend_from_slice(name);
+            body.extend_from_slice(blip);
+            let mut escher = 2_u16.to_le_bytes().to_vec();
+            escher.extend_from_slice(&0xf007_u16.to_le_bytes());
+            escher.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            escher.extend_from_slice(&body);
+            let mut workbook = Vec::new();
+            push_biff_record(&mut workbook, MSO_DRAWING_GROUP, &escher).unwrap();
+            let output = retain(&workbook, ErrorPolicy::Strict).unwrap();
+            assert_eq!(output.assets.len(), 1);
+            assert_eq!(output.assets[0].bytes, image);
+        }
     }
 
     #[test]

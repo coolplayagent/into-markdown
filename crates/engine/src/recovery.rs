@@ -5,15 +5,16 @@ mod store;
 pub use store::{RecoveryStore, RecoveryToken, TaskCheckpoint, TaskPhase};
 
 use super::{
-    Attempt, Engine, collect_provenance_preflighted, invoke_converter_preflighted,
-    invoke_enrichers, invoke_renderer_preflighted, measured_input_bytes, normalize_confidence,
+    Engine, collect_provenance_preflighted, invoke_renderer_preflighted, measured_input_bytes,
     provenance_inventory_bytes,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+#[cfg(test)]
+use into_markdown_core::ProbeOutcome;
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionRequest, ConversionResult,
     ConverterOutput, Diagnostic, Document, ErrorCode, ExecutionContext, ExecutionStage,
-    MediaCheckpoint, MediaCheckpointBackend, ProbeOutcome, Provenance, RecoveredMediaCheckpoint,
+    MediaCheckpoint, MediaCheckpointBackend, Provenance, RecoveredMediaCheckpoint,
     ResourceReservation, SourceLocator, SourceMetadata, canonical_external_asset_uri,
     estimate_retained_result, estimate_validation_working_set,
 };
@@ -32,12 +33,16 @@ enum CheckpointPayloadWire {
         document: Document,
         assets: Vec<CheckpointAssetWire>,
         diagnostics: Vec<Diagnostic>,
+        #[serde(default)]
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
     },
     Succeeded {
         document: Document,
         markdown: String,
         assets: Vec<CheckpointAssetWire>,
         diagnostics: Vec<Diagnostic>,
+        #[serde(default)]
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
         provenance: Vec<Provenance>,
     },
 }
@@ -48,12 +53,14 @@ enum CheckpointPayload {
         document: Document,
         assets: Vec<Asset>,
         diagnostics: Vec<Diagnostic>,
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
     },
     Succeeded {
         document: Document,
         markdown: String,
         assets: Vec<Asset>,
         diagnostics: Vec<Diagnostic>,
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
         provenance: Vec<Provenance>,
     },
 }
@@ -79,12 +86,14 @@ enum CheckpointPayloadRef<'a> {
         document: &'a Document,
         assets: CheckpointAssetsRef<'a>,
         diagnostics: &'a [Diagnostic],
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
     },
     Succeeded {
         document: &'a Document,
         markdown: &'a str,
         assets: CheckpointAssetsRef<'a>,
         diagnostics: &'a [Diagnostic],
+        ocr_runtime: Option<into_markdown_core::OcrRuntimeUsageDto>,
         provenance: &'a [Provenance],
     },
 }
@@ -149,20 +158,29 @@ impl CheckpointPayloadWire {
     ) -> Result<CheckpointPayload, ConversionError> {
         Ok(match self {
             Self::Media { checkpoint } => CheckpointPayload::Media(checkpoint),
-            Self::Converted { document, assets, diagnostics } => CheckpointPayload::Converted {
-                document,
-                assets: decode_checkpoint_assets(assets, context, memory, request)?,
-                diagnostics,
-            },
-            Self::Succeeded { document, markdown, assets, diagnostics, provenance } => {
-                CheckpointPayload::Succeeded {
+            Self::Converted { document, assets, diagnostics, ocr_runtime } => {
+                CheckpointPayload::Converted {
                     document,
-                    markdown,
                     assets: decode_checkpoint_assets(assets, context, memory, request)?,
                     diagnostics,
-                    provenance,
+                    ocr_runtime,
                 }
             }
+            Self::Succeeded {
+                document,
+                markdown,
+                assets,
+                diagnostics,
+                provenance,
+                ocr_runtime,
+            } => CheckpointPayload::Succeeded {
+                document,
+                markdown,
+                assets: decode_checkpoint_assets(assets, context, memory, request)?,
+                diagnostics,
+                provenance,
+                ocr_runtime,
+            },
         })
     }
 }
@@ -500,7 +518,14 @@ pub(super) async fn convert(
     let existing = match existing {
         Some(store::LoadedCheckpoint {
             payload:
-                CheckpointPayload::Succeeded { document, markdown, assets, diagnostics, provenance },
+                CheckpointPayload::Succeeded {
+                    document,
+                    markdown,
+                    assets,
+                    diagnostics,
+                    provenance,
+                    ocr_runtime,
+                },
             metadata,
             memory,
         }) => {
@@ -546,7 +571,8 @@ pub(super) async fn convert(
                 &context,
                 memory,
             )?;
-            let result = validate_recovered_success(engine, &request, &context, result).await?;
+            let mut result = validate_recovered_success(engine, &request, &context, result).await?;
+            result.set_ocr_runtime_usage(ocr_runtime);
             context.report(ExecutionStage::Completed, Some(1), Some(1), Some("resumed"))?;
             return Ok(result);
         }
@@ -572,12 +598,20 @@ pub(super) async fn convert(
         existing => existing,
     };
 
+    let ocr_runtime;
     let output = if let Some(store::LoadedCheckpoint {
-        payload: CheckpointPayload::Converted { document, assets, diagnostics },
+        payload:
+            CheckpointPayload::Converted {
+                document,
+                assets,
+                diagnostics,
+                ocr_runtime: recovered_ocr_runtime,
+            },
         metadata,
         memory,
     }) = existing
     {
+        ocr_runtime = recovered_ocr_runtime;
         if metadata.phase != TaskPhase::Converted {
             return Err(recovery_error("corrupt", "checkpoint payload does not match its phase"));
         }
@@ -605,69 +639,39 @@ pub(super) async fn convert(
         )?
     } else {
         context.report(ExecutionStage::Detecting, None, None, None::<String>)?;
-        let candidates = engine.detect_formats(source.input(), &request.hint, &context).await?;
-        super::unsupported::check(source.input(), &candidates)?;
-        context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
-        let mut attempts = Vec::new();
-        for candidate in &candidates {
-            for converter in &engine.converters {
-                if converter.supported_formats().contains(&candidate.format)
-                    && let ProbeOutcome::Match { confidence } =
-                        context.run(converter.probe(source.input(), candidate, &context)).await??
-                {
-                    attempts.push(Attempt {
-                        converter: Arc::clone(converter),
-                        candidate: candidate.clone(),
-                        explicit: candidate.explicit,
-                        confidence: candidate.confidence * normalize_confidence(confidence),
-                        priority: converter.priority(),
-                    });
-                }
-            }
-        }
-        attempts.sort_by(|left, right| {
-            right
-                .explicit
-                .cmp(&left.explicit)
-                .then_with(|| right.confidence.total_cmp(&left.confidence))
-                .then_with(|| right.priority.cmp(&left.priority))
-                .then_with(|| left.converter.id().cmp(right.converter.id()))
-        });
-        let attempt = attempts.into_iter().next().ok_or_else(|| ConversionError::NoConverter {
-            format: candidates
-                .iter()
-                .map(|value| value.format.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
-        })?;
-        context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
-        let output = invoke_converter_preflighted(
-            attempt.converter.as_ref(),
+        let candidates = crate::source_recovery::detect_for_conversion(
+            &engine.format_detectors,
             source.input(),
-            &attempt.candidate,
+            &request.hint,
             &request.options,
-            &engine.services,
-            &context,
-            |output| {
-                validate_asset_inventory(&output.document, &output.assets, &request)?;
-                validate_diagnostics(&output.diagnostics)
-            },
-        )
-        .await?;
-        let output = invoke_enrichers(
-            &engine.enrichers,
-            output,
-            attempt.converter.id(),
-            attempt.candidate.format,
-            &request.options,
-            &engine.services,
             &context,
         )
         .await?;
+        context.report(ExecutionStage::Probing, Some(0), None, None::<String>)?;
+        let attempt = crate::preparation::select_converter(
+            &engine.converters,
+            source.input(),
+            &candidates,
+            &request.options,
+            &context,
+            &[],
+        )
+        .await?;
+        context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
+        let output = engine
+            .convert_and_enrich(
+                &attempt,
+                source.input(),
+                &request.options,
+                &context,
+                into_markdown_core::StreamConsumerKind::Collecting,
+            )
+            .await?;
         let output = discard_omitted_assets(output, &request, &context)?;
         let output = crate::result_policy::attach_evidence(output, &context)?;
         validate_asset_inventory(&output.document, &output.assets, &request)?;
         validate_diagnostics(&output.diagnostics)?;
+        ocr_runtime = Some(context.ocr_runtime_usage());
         store.commit(
             token,
             &context,
@@ -678,6 +682,7 @@ pub(super) async fn convert(
                 document: &output.document,
                 assets: CheckpointAssetsRef(&output.assets),
                 diagnostics: &output.diagnostics,
+                ocr_runtime,
             },
         )?;
         store.remove_media(token)?;
@@ -719,11 +724,12 @@ pub(super) async fn convert(
                 .saturating_add(provenance_inventory_bytes(&provenance)?),
         ),
     )?;
-    let result = output.into_conversion_result(
+    let mut result = output.into_conversion_result(
         markdown,
         provenance,
         [Some(markdown_memory), Some(provenance_memory), Some(final_memory)],
     )?;
+    result.set_ocr_runtime_usage(ocr_runtime);
     result.content()?;
     store.commit(
         token,
@@ -736,6 +742,7 @@ pub(super) async fn convert(
             markdown: &result.markdown,
             assets: CheckpointAssetsRef(&result.assets),
             diagnostics: &result.diagnostics,
+            ocr_runtime,
             provenance: &result.provenance,
         },
     )?;
@@ -856,23 +863,8 @@ fn validate_asset_references(
     Ok(())
 }
 
-fn validate_diagnostics(diagnostics: &[Diagnostic]) -> Result<(), ConversionError> {
-    if diagnostics.len() > into_markdown_core::MAX_DTO_DIAGNOSTICS {
-        return Err(recovery_error("limit", "checkpoint contains too many diagnostics"));
-    }
-    for diagnostic in diagnostics {
-        if diagnostic.code.is_empty() || diagnostic.code.chars().any(char::is_control) {
-            return Err(recovery_error(
-                "corrupt",
-                "checkpoint diagnostic code must be non-empty and control-free",
-            ));
-        }
-        if let Some(locator) = &diagnostic.locator {
-            validate_locator(locator)?;
-        }
-    }
-    Ok(())
-}
+mod diagnostics;
+use diagnostics::validate_diagnostics;
 
 fn validate_locator(locator: &SourceLocator) -> Result<(), ConversionError> {
     if locator.byte_start.is_some() != locator.byte_end.is_some()
@@ -1469,9 +1461,10 @@ mod tests {
             _: &'a FormatCandidate,
             _: &'a ConversionOptions,
             _: &'a Services,
-            _: &'a ExecutionContext,
+            context: &'a ExecutionContext,
         ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
             self.conversions.fetch_add(1, Ordering::SeqCst);
+            context.record_ocr_images(3, 2, 1, 2);
             let output = ConverterOutput::new(
                 self.document.clone(),
                 self.assets.clone(),
@@ -1762,6 +1755,17 @@ mod tests {
             );
             let result = block_on(engine.convert_recoverable(request(), &store, &token)).unwrap();
             assert_result_matches_fixture(&result, &fixture);
+            let ocr = result.ocr_runtime_usage().expect("durable OCR observations");
+            assert_eq!(
+                (
+                    ocr.image_sources,
+                    ocr.images_attempted,
+                    ocr.images_completed,
+                    ocr.images_failed,
+                    ocr.images_skipped
+                ),
+                (6, 4, 3, 1, 2)
+            );
             assert_eq!(store.inspect(&token).unwrap().unwrap().phase, TaskPhase::Succeeded);
         }
         {
@@ -1774,6 +1778,17 @@ mod tests {
             );
             let result = block_on(engine.convert_recoverable(request(), &store, &token)).unwrap();
             assert_result_matches_fixture(&result, &fixture);
+            let ocr = result.ocr_runtime_usage().expect("durable OCR observations");
+            assert_eq!(
+                (
+                    ocr.image_sources,
+                    ocr.images_attempted,
+                    ocr.images_completed,
+                    ocr.images_failed,
+                    ocr.images_skipped
+                ),
+                (6, 4, 3, 1, 2)
+            );
         }
         assert_eq!(conversions.load(Ordering::SeqCst), 1);
         assert_eq!(renders.load(Ordering::SeqCst), 3);
@@ -1825,6 +1840,7 @@ mod tests {
                         document: &fixture.document,
                         assets: CheckpointAssetsRef(&fixture.assets),
                         diagnostics: &fixture.diagnostics,
+                        ocr_runtime: None,
                     },
                 )
                 .unwrap(),
@@ -1840,6 +1856,7 @@ mod tests {
                         markdown,
                         assets: CheckpointAssetsRef(&fixture.assets),
                         diagnostics: &fixture.diagnostics,
+                        ocr_runtime: None,
                         provenance,
                     },
                 )
@@ -2734,7 +2751,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_width_and_file_size_are_preflighted() {
+    fn checkpoint_payload_size_obeys_request_memory_and_header_integrity() {
         let directory = private_tempdir();
         let store = RecoveryStore::open(directory.path()).unwrap();
         let token = store.create_token().unwrap();
@@ -2755,14 +2772,22 @@ mod tests {
             TEST_OPTIONS_FINGERPRINT,
             &payload,
         );
+        let mut limits = ResourceLimits::default();
+        limits.max_memory_bytes = 1024 * 1024;
+        let constrained = ExecutionContext::new(ExecutionOptions::default(), limits);
+        assert!(matches!(
+            store.load::<Vec<u8>>(&token, &constrained),
+            Err(ConversionError::ResourceLimit { .. })
+        ));
         let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-        let error = store.load::<CheckpointPayloadWire>(&token, &context).unwrap_err();
-        assert!(error.to_string().contains("container is too wide"));
+        let loaded = store.load::<Vec<u8>>(&token, &context).unwrap().unwrap();
+        assert_eq!(loaded.payload.len(), 1_100_001);
+        drop(loaded);
 
         let oversized = store.test_path(&token, TaskPhase::Succeeded);
         File::create(oversized).unwrap().set_len(2 * 1024 * 1024 * 1024 + 1).unwrap();
         let error = store.inspect(&token).unwrap_err();
-        assert!(error.to_string().contains("2 GiB"));
+        assert!(error.to_string().contains("signature is invalid"));
     }
 
     #[test]

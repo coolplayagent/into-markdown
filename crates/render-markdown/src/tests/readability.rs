@@ -357,3 +357,24 @@ fn hidden_source_markers_keep_ir_memory_without_rendered_overhead() {
     );
     assert_eq!(context.reserved_memory_bytes(), 0);
 }
+
+#[test]
+fn retained_non_browser_images_have_visible_download_labels() {
+    let asset = Asset {
+        id: AssetId("drawing".into()),
+        filename: Some("drawing.svm".into()),
+        media_type: "application/x-openoffice-gdimetafile".into(),
+        bytes: vec![1, 2, 3],
+        external_uri: None,
+    };
+    for alt in [None, Some("".into()), Some("   ".into())] {
+        let doc = document(vec![node("picture", Block::Image { asset: asset.id.clone(), alt })]);
+        for mode in [AssetMode::Extract, AssetMode::Embed] {
+            let mut options = ConversionOptions::default();
+            options.output.asset_mode = mode;
+            let output = render(&doc, std::slice::from_ref(&asset), &options).unwrap();
+            assert!(output.starts_with("[Original image](<"));
+            assert!(!output.starts_with("!"));
+        }
+    }
+}

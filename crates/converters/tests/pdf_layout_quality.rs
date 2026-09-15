@@ -66,6 +66,14 @@ mod quality {
                 second.document.to_json().unwrap(),
                 "{id} must be deterministic"
             );
+            assert!(
+                matches!(
+                    first.document.blocks.first().map(|node| &node.block),
+                    Some(Block::Page { .. })
+                ),
+                "{id}: {:?}",
+                first.diagnostics
+            );
             validate_source_geometry(&first.document);
             let actual = semantic_sequence(&first.document);
             let expected = golden["expected_sequence"]

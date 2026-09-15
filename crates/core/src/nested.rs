@@ -15,6 +15,9 @@ pub struct NestedConversionRequest<'a> {
     pub hint: &'a FormatHint,
     /// The root conversion policy, including offline and resource limits.
     pub options: &'a ConversionOptions,
+    /// Enrich this complete member now. Containers which assemble chapter assets
+    /// and enrich the assembled document set this to false.
+    pub enrich_output: bool,
     /// Converter IDs which must not be selected for this dispatch.
     pub excluded_converter_ids: &'a [&'a str],
 }

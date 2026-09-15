@@ -21,7 +21,7 @@ pub(super) fn parse_content(
         return Err(malformed(Some("content.xml"), "unexpected content root"));
     }
     let version = root.attr(OFFICE_NS, "version").unwrap_or(&package.odf_version);
-    if !matches!(version, "1.0" | "1.1" | "1.2" | "1.3") {
+    if !matches!(version, "1.0" | "1.1" | "1.2" | "1.3" | "1.4") {
         return Err(malformed(Some("content.xml"), "unsupported ODF content version"));
     }
     state.document.metadata.properties.insert("odf.version".into(), version.into());

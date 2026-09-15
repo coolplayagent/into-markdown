@@ -443,7 +443,7 @@ struct RecognizerAuthority {
     normalization_scale: f64,
     normalization_mean: f64,
     normalization_standard_deviation: f64,
-    maximum_width: usize,
+    width_policy: String,
     quality_corpus: String,
     quality_groups: Vec<RecognizerQualityGroup>,
 }
@@ -3580,7 +3580,7 @@ fn recognizer_authority_is_exact(authority: &RecognizerAuthority) -> bool {
         && authority.normalization_scale.to_bits() == (1.0_f64 / 255.0).to_bits()
         && authority.normalization_mean.to_bits() == 0.5_f64.to_bits()
         && authority.normalization_standard_deviation.to_bits() == 0.5_f64.to_bits()
-        && authority.maximum_width == 3200
+        && authority.width_policy == "dynamic-source-aspect-ratio"
         && authority.quality_corpus == "fixtures/manifest.json#ocr_quality"
         && exact_groups
 }

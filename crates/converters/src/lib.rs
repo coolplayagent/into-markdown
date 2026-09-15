@@ -3819,6 +3819,26 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_ooxml_directory_has_typed_detection_error() {
+        let mut bytes = cfb_with_stream("EncryptedPackage");
+        bytes[1224..1228].copy_from_slice(&2_u32.to_le_bytes());
+        let name = "EncryptionInfo\0".encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
+        bytes[1280..1280 + name.len()].copy_from_slice(&name);
+        bytes[1344..1346].copy_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes[1346] = 2;
+        bytes[1348..1360].fill(0xff);
+        let input = resolved(bytes, "encrypted.xlsx");
+        assert!(matches!(
+            block_on(ContentFormatDetector.detect(
+                &input,
+                &FormatHint::default(),
+                &execution_context()
+            )),
+            Err(ConversionError::Encrypted)
+        ));
+    }
+
+    #[test]
     fn cfb_directory_chain_distinguishes_legacy_office() {
         let input = resolved(cfb_with_stream("PowerPoint Document"), "slides.doc");
         let candidates = block_on(ContentFormatDetector.detect(

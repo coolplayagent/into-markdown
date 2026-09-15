@@ -1,6 +1,6 @@
 //! Fixed upstream model and character-table authority.
 
-use super::{BLANK, CLASSES, MAX_WIDTH, MODEL_ID, SCALE, limit, ocr};
+use super::{BLANK, CLASSES, MODEL_ID, SCALE, limit, ocr};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -50,7 +50,7 @@ pub(crate) struct Authority {
     pub normalization_scale: f64,
     pub normalization_mean: f32,
     pub normalization_standard_deviation: f32,
-    pub maximum_width: usize,
+    pub width_policy: String,
     pub quality_corpus: String,
     pub quality_groups: Vec<QualityGroup>,
 }
@@ -117,7 +117,7 @@ pub(crate) fn authority() -> Result<Authority, ConversionError> {
         || (value.normalization_scale as f32).to_bits() != SCALE.to_bits()
         || value.normalization_mean.to_bits() != 0.5_f32.to_bits()
         || value.normalization_standard_deviation.to_bits() != 0.5_f32.to_bits()
-        || value.maximum_width != MAX_WIDTH
+        || value.width_policy != "dynamic-source-aspect-ratio"
         || value.quality_corpus != "fixtures/manifest.json#ocr_quality"
         || value.quality_groups
             != [

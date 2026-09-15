@@ -11,8 +11,8 @@ SPEC.loader.exec_module(smoke)
 
 
 class OcrSmokeTests(unittest.TestCase):
-    def test_signed_process_group_budget_matches_release_contract(self):
-        self.assertEqual(smoke.SIGNED_WORKER_BYTES, 2048 * 1024**2)
+    def test_explicit_request_budget_matches_smoke_contract(self):
+        self.assertEqual(smoke.MEMORY_BYTES, 2048 * 1024**2)
         self.assertEqual(smoke.MIN_EFFECTIVE_WORKER_BYTES, 1024 * 1024**2)
 
     def test_structured_ocr_survives_markdown_escaping_and_rejects_native_only_text(self):
@@ -21,7 +21,8 @@ class OcrSmokeTests(unittest.TestCase):
             "data": {"value": "Clear scans.", "provenance": {"kind": "localOcr"}}}]}}
         report = {"failed": 0, "resourceUsage": {"sharedLeaseBudgetBytes": smoke.MEMORY_BYTES,
             "sharedLeasePeakBytes": 1024, "ocr": {"recognizedChars": 12},
-            "ocrRuntime": {"requests": 1, "recognitionMemoryRefusals": 0,
+            "ocrRuntime": {"imageSources": 1, "imagesAttempted": 1, "imagesCompleted": 1,
+                "imagesWithText": 1, "imagesFailed": 0, "imagesSkipped": 0, "requests": 1, "recognitionMemoryRefusals": 0,
                 "workerBudgetMinBytes": effective_worker,
                 "workerBudgetMaxBytes": effective_worker}}}
         self.assertEqual(smoke.verify_result(document, report, "Clear scans.", ValueError),
@@ -30,10 +31,10 @@ class OcrSmokeTests(unittest.TestCase):
         native["document"]["blocks"][0]["data"]["provenance"]["kind"] = "nativeParser"
         with self.assertRaisesRegex(ValueError, "expected text"):
             smoke.verify_result(native, report, "Clear scans.", ValueError)
-        for field, value in (("requests", 0), ("recognitionMemoryRefusals", 1),
+        for field, value in (("imagesCompleted", 0), ("imagesSkipped", 1), ("imagesWithText", 0), ("requests", 0), ("recognitionMemoryRefusals", 1),
                              ("workerBudgetMinBytes", smoke.MIN_EFFECTIVE_WORKER_BYTES - 1),
                              ("workerBudgetMaxBytes", effective_worker + 1),
-                             ("workerBudgetMaxBytes", smoke.SIGNED_WORKER_BYTES + 1)):
+                             ("workerBudgetMaxBytes", smoke.MEMORY_BYTES + 1)):
             invalid = copy.deepcopy(report)
             invalid["resourceUsage"]["ocrRuntime"][field] = value
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, "evidence"):

@@ -364,6 +364,7 @@ pub(super) fn list_marker(value: &str) -> Option<(ListKind, u64, &str, &str)> {
             return number
                 .parse::<u64>()
                 .ok()
+                .filter(|start| *start > 0)
                 .map(|start| (ListKind::Ordered, start, &trimmed[..=digits], rest));
         }
     }
@@ -371,11 +372,12 @@ pub(super) fn list_marker(value: &str) -> Option<(ListKind, u64, &str, &str)> {
 }
 
 fn field_inlines(value: &str) -> Vec<Inline> {
+    // Word picture anchors refer to binary image data, emitted separately.
     let mut output = Vec::new();
     let mut rest = value;
     while let Some(begin) = rest.find('\u{13}') {
         if begin > 0 {
-            output.push(OutputBuilder::text(&rest[..begin]));
+            output.push(OutputBuilder::text(visible_field_text(&rest[..begin])));
         }
         let field = &rest[begin + '\u{13}'.len_utf8()..];
         let Some(separator) = field.find('\u{14}') else {
@@ -389,7 +391,7 @@ fn field_inlines(value: &str) -> Vec<Inline> {
             rest = "";
             break;
         };
-        let display = &result[..end];
+        let display = visible_field_text(&result[..end]);
         if let Some(target) = hyperlink_target(&field[..separator]) {
             output.push(Inline::Link {
                 target: target.to_owned(),
@@ -400,6 +402,7 @@ fn field_inlines(value: &str) -> Vec<Inline> {
         }
         rest = &result[end + '\u{15}'.len_utf8()..];
     }
+    let rest = visible_field_text(rest);
     if !rest.is_empty() {
         output.push(OutputBuilder::text(rest));
     }
@@ -480,6 +483,7 @@ fn visible_field_text(value: &str) -> String {
     let mut showing_result = true;
     for character in value.chars() {
         match character {
+            '\u{1}' => {}
             '\u{13}' => {
                 field_depth = field_depth.saturating_add(1);
                 showing_result = false;
@@ -508,7 +512,7 @@ fn emit_images(
     let mut cursor = 0usize;
     let mut count = 0usize;
     while cursor < data.len() {
-        let found = find_image(&data[cursor..])
+        let found = find_image(&data[cursor..], budget)?
             .map(|(start, end, media)| (cursor + start, cursor + end, media));
         let Some((start, end, media_type)) = found else { break };
         let bytes = data[start..end].to_vec();
@@ -530,19 +534,31 @@ fn emit_images(
     Ok(())
 }
 
-pub(super) fn find_image(bytes: &[u8]) -> Option<(usize, usize, &'static str)> {
-    let png = bytes.windows(8).position(|window| window == b"\x89PNG\r\n\x1a\n");
-    let jpeg = bytes.windows(2).position(|window| window == b"\xff\xd8");
-    match (png, jpeg) {
-        (Some(start), None | Some(_)) if jpeg.is_none_or(|other| start < other) => {
-            png_end(&bytes[start..]).map(|end| (start, start + end, "image/png"))
+pub(super) fn find_image(
+    bytes: &[u8],
+    budget: &LegacyBudget<'_>,
+) -> Result<Option<(usize, usize, &'static str)>, ConversionError> {
+    // Office picture streams also contain records and arbitrary metadata. A byte signature
+    // becomes a picture only after its complete envelope is identified. JPEG APP segments
+    // can themselves contain thumbnail EOI markers; the shared marker parser skips them.
+    for start in 0..bytes.len() {
+        if start % 4096 == 0 {
+            budget.checkpoint()?;
         }
-        (_, Some(start)) => bytes[start + 2..]
-            .windows(2)
-            .position(|window| window == b"\xff\xd9")
-            .map(|end| (start, start + 2 + end + 2, "image/jpeg")),
-        _ => None,
+        let candidate = &bytes[start..];
+        if candidate.starts_with(b"\x89PNG\r\n\x1a\n") {
+            if let Some(end) = png_end(candidate) {
+                return Ok(Some((start, start + end, "image/png")));
+            }
+        } else if candidate.starts_with(b"\xff\xd8") {
+            match budget.jpeg_end(candidate) {
+                Ok(end) => return Ok(Some((start, start + end, "image/jpeg"))),
+                Err(ConversionError::Malformed { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
     }
+    Ok(None)
 }
 
 fn png_end(bytes: &[u8]) -> Option<usize> {
@@ -601,6 +617,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn picture_anchors_preserve_text_fields_and_table_boundaries() {
+        assert_eq!(visible_field_text("before\u{1}\tcell\u{7}"), "before\tcell\u{7}");
+        assert!(field_inlines("\u{1}").is_empty());
+        assert_eq!(
+            field_inlines(
+                "before\u{1}\u{13} HYPERLINK \"https://example.test\" \u{14}shown\u{1}\u{15} after"
+            ),
+            vec![
+                OutputBuilder::text("before"),
+                Inline::Link {
+                    target: "https://example.test".into(),
+                    content: vec![OutputBuilder::text("shown")],
+                },
+                OutputBuilder::text(" after"),
+            ]
+        );
+    }
+
+    #[test]
     fn field_instructions_do_not_enter_output() {
         assert_eq!(
             visible_field_text("before \u{13} HYPERLINK x \u{14}shown\u{15} after"),
@@ -626,6 +661,27 @@ mod tests {
         assert!(matches!(list_marker("• item"), Some((ListKind::Bullet, 1, _, "item"))));
         assert!(matches!(list_marker("12) item"), Some((ListKind::Ordered, 12, _, "item"))));
         assert!(list_marker("12monkeys").is_none());
+        assert!(list_marker("0. zero-based source text").is_none());
+    }
+
+    #[test]
+    fn jpeg_metadata_thumbnail_does_not_truncate_the_main_picture() {
+        use into_markdown_core::{ConversionOptions, ExecutionContext, ExecutionOptions};
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&[200, 10, 20], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let mut wrapped = jpeg[..2].to_vec();
+        wrapped.extend_from_slice(&[0xff, 0xe1, 0, 6, 0xff, 0xd8, 0xff, 0xd9]);
+        wrapped.extend_from_slice(&jpeg[2..]);
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let budget = LegacyBudget::new(wrapped.len(), &options, &context).unwrap();
+        let mut stream = vec![0xff, 0xd8, 0, 0, 0xff, 0xd9];
+        stream.extend_from_slice(&wrapped);
+        let (start, end, media) = find_image(&stream, &budget).unwrap().unwrap();
+        assert_eq!((start, end, media), (6, stream.len(), "image/jpeg"));
+        budget.raster(&stream[start..end], media, "test").unwrap();
     }
 
     #[test]

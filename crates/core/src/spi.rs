@@ -118,6 +118,8 @@ pub struct ConversionResult {
     pub(crate) detected_format: Option<InputFormat>,
     /// Monotonic engine processing time, excluding downstream artifact sinks.
     pub(crate) processing_duration_ms: Option<f64>,
+    /// OCR observations captured by the engine, including recovered executions.
+    pub(crate) ocr_runtime_usage: Option<crate::OcrRuntimeUsageDto>,
     /// Live request-memory charges for retained IR and assets.
     pub(crate) memory_lease: OutputMemoryLease,
 }
@@ -331,6 +333,7 @@ impl ConversionResult {
             provenance,
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease,
         }
     }
@@ -362,6 +365,18 @@ impl ConversionResult {
             provenance,
             memory_lease,
         ))
+    }
+
+    /// OCR observations for this conversion; older checkpoints may have no observations.
+    #[must_use]
+    pub const fn ocr_runtime_usage(&self) -> Option<crate::OcrRuntimeUsageDto> {
+        self.ocr_runtime_usage
+    }
+
+    /// Attach engine-owned observations before crossing the result boundary.
+    #[doc(hidden)]
+    pub fn set_ocr_runtime_usage(&mut self, value: Option<crate::OcrRuntimeUsageDto>) {
+        self.ocr_runtime_usage = value;
     }
 
     /// Whether this result retains a live request-memory charge.
@@ -831,8 +846,7 @@ pub fn estimate_validation_working_set(
     assets: &[Asset],
     diagnostics: &[Diagnostic],
 ) -> Result<u64, ConversionError> {
-    const PATH_AND_TREE_NODE_HIGH_WATER: usize = 4_096;
-    const INLINE_HIGH_WATER: usize = 2_048;
+    const PATH_AND_TREE_NODE_HIGH_WATER: usize = 11 * size_of::<String>() + 256;
     const ASSET_DIAGNOSTIC_HIGH_WATER: usize = 4_096;
 
     fn add(total: &mut usize, bytes: usize) -> Result<(), ConversionError> {
@@ -840,25 +854,12 @@ pub fn estimate_validation_working_set(
         Ok(())
     }
 
-    fn strings_in_provenance(value: &Provenance) -> Result<usize, ConversionError> {
-        [
-            Some(&value.provider),
-            value.locator.sheet.as_ref(),
-            value.locator.font_name.as_ref(),
-            value.locator.part.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .try_fold(0_usize, |total, value| {
-            total.checked_add(value.len()).ok_or_else(memory_estimate_overflow)
-        })
-    }
-
     fn visit_inlines(
         values: &[crate::Inline],
         depth: usize,
         total: &mut usize,
         inline_count: &mut usize,
+        scratch: &mut usize,
     ) -> Result<(), ConversionError> {
         if depth > 2 {
             // Typed validation rejects a nested link before following its own
@@ -876,24 +877,14 @@ pub fn estimate_validation_working_set(
                     detail: format!("{} > {}", *inline_count, crate::MAX_DOCUMENT_INLINES),
                 });
             }
-            add(total, INLINE_HIGH_WATER)?;
             match value {
-                crate::Inline::SourceText { provenance, .. } => {
-                    add(total, strings_in_provenance(provenance)?)?;
+                crate::Inline::OcrText { evidence, .. } => {
+                    // Region index validation owns one set at a time.
+                    *scratch = (*scratch).max(evidence.regions.len().saturating_mul(128));
                 }
-                crate::Inline::OcrText { provenance, evidence, .. } => {
-                    add(total, strings_in_provenance(provenance)?)?;
-                    add(total, evidence.regions.len().saturating_mul(512))?;
-                    add(total, evidence.chain.len().saturating_mul(512))?;
-                    for step in &evidence.chain {
-                        add(total, step.provider.len())?;
-                        if let Some(model) = &step.model {
-                            add(total, model.len())?;
-                        }
-                    }
-                }
-                crate::Inline::Link { content, .. } => {
-                    visit_inlines(content, depth + 1, total, inline_count)?;
+                crate::Inline::Link { target, content } => {
+                    *scratch = (*scratch).max(target.len().saturating_mul(4));
+                    visit_inlines(content, depth + 1, total, inline_count, scratch)?;
                 }
                 crate::Inline::FootnoteReference(label) => {
                     // The validator clones this into its reference B-tree.
@@ -913,6 +904,7 @@ pub fn estimate_validation_working_set(
         maximum_table_width: &mut usize,
         node_count: &mut usize,
         inline_count: &mut usize,
+        scratch: &mut usize,
     ) -> Result<(), ConversionError> {
         if depth > crate::MAX_DOCUMENT_DEPTH {
             return Err(ConversionError::Internal {
@@ -922,6 +914,7 @@ pub fn estimate_validation_working_set(
                 ),
             });
         }
+        *scratch = (*scratch).max(depth.saturating_mul(depth).saturating_mul(64));
         for node in nodes {
             *node_count = node_count.saturating_add(1);
             if *node_count > crate::MAX_DOCUMENT_NODES {
@@ -932,10 +925,9 @@ pub fn estimate_validation_working_set(
             }
             add(total, PATH_AND_TREE_NODE_HIGH_WATER)?;
             add(total, node.id.0.len())?; // cloned into the node-ID B-tree
-            add(total, strings_in_provenance(&node.provenance)?)?;
             match &node.block {
                 crate::Block::Paragraph(values) | crate::Block::Heading { content: values, .. } => {
-                    visit_inlines(values, 1, total, inline_count)?;
+                    visit_inlines(values, 1, total, inline_count, scratch)?;
                 }
                 crate::Block::TimedSegment { tokens, content, .. } => {
                     *inline_count = inline_count.saturating_add(tokens.len());
@@ -945,14 +937,7 @@ pub fn estimate_validation_working_set(
                             detail: format!("{} > {}", *inline_count, crate::MAX_DOCUMENT_INLINES),
                         });
                     }
-                    for token in tokens {
-                        add(total, PATH_AND_TREE_NODE_HIGH_WATER)?;
-                        add(total, token.text.len())?;
-                        if let Some(speaker) = &token.speaker {
-                            add(total, speaker.len())?;
-                        }
-                    }
-                    visit_inlines(content, 1, total, inline_count)?;
+                    visit_inlines(content, 1, total, inline_count, scratch)?;
                 }
                 crate::Block::List { items, .. } => {
                     for item in items {
@@ -964,6 +949,7 @@ pub fn estimate_validation_working_set(
                             maximum_table_width,
                             node_count,
                             inline_count,
+                            scratch,
                         )?;
                     }
                 }
@@ -987,6 +973,7 @@ pub fn estimate_validation_working_set(
                                 maximum_table_width,
                                 node_count,
                                 inline_count,
+                                scratch,
                             )?;
                         }
                     }
@@ -1001,6 +988,7 @@ pub fn estimate_validation_working_set(
                         maximum_table_width,
                         node_count,
                         inline_count,
+                        scratch,
                     )?;
                 }
                 crate::Block::Page { blocks, .. }
@@ -1013,6 +1001,7 @@ pub fn estimate_validation_working_set(
                         maximum_table_width,
                         node_count,
                         inline_count,
+                        scratch,
                     )?;
                 }
                 _ => {}
@@ -1022,6 +1011,7 @@ pub fn estimate_validation_working_set(
     }
 
     let mut bytes = 4_096_usize;
+    let mut scratch = 0_usize;
     let mut maximum_table_width = 0_usize;
     let (mut node_count, mut inline_count) = (0_usize, 0_usize);
     visit_nodes(
@@ -1031,6 +1021,7 @@ pub fn estimate_validation_working_set(
         &mut maximum_table_width,
         &mut node_count,
         &mut inline_count,
+        &mut scratch,
     )?;
     add(
         &mut bytes,
@@ -1067,6 +1058,9 @@ pub fn estimate_validation_working_set(
             }
         }
     }
+    // Recursive path strings and URI/OCR checks are released as each item finishes.
+    // Keep their peak separate from the ID/reference trees that survive the walk.
+    add(&mut bytes, scratch)?;
     u64::try_from(bytes).map_err(|_| memory_estimate_overflow())
 }
 
@@ -2467,6 +2461,33 @@ mod tests {
         }
         let many = estimate_retained_output(&document, &Vec::new(), &Vec::new()).unwrap();
         assert!(many > one);
+    }
+
+    #[test]
+    fn sequential_glyph_validation_uses_peak_scratch() {
+        let provenance = Provenance {
+            kind: crate::ProvenanceKind::NativeParser,
+            provider: "test.pdf".into(),
+            locator: crate::SourceLocator::default(),
+            confidence: None,
+        };
+        let glyph = crate::Inline::SourceText {
+            value: "x".into(),
+            marks: Vec::new(),
+            provenance: Box::new(provenance.clone()),
+        };
+        let mut document = Document {
+            blocks: vec![BlockNode {
+                id: crate::NodeId("body".into()),
+                block: crate::Block::Paragraph(vec![glyph.clone()]),
+                provenance,
+            }],
+            ..Document::default()
+        };
+        let single = estimate_validation_working_set(&document, &[], &[]).unwrap();
+        document.blocks[0].block = crate::Block::Paragraph(vec![glyph; 100_000]);
+        assert_eq!(estimate_validation_working_set(&document, &[], &[]).unwrap(), single);
+        document.validate().unwrap();
     }
 
     #[test]

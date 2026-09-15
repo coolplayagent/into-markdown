@@ -76,20 +76,21 @@ fn typed_report_matches_existing_bytes_for_optional_fields_and_outcomes() {
 }
 
 #[test]
-fn typed_report_streams_past_input_value_limit_without_weakening_decoder() {
+fn large_typed_report_roundtrips_and_honors_explicit_input_value_limit() {
     let mut item = item();
     item.diagnostics = vec![item.diagnostics[0].clone(); 56_000];
     let report = BatchReportDto::try_new(vec![item]).unwrap();
     let mut bytes = Vec::new();
     report.write_json(DtoJsonStyle::Compact, &mut bytes).unwrap();
     let json = String::from_utf8(bytes).unwrap();
-    let error = BatchReportDto::from_json(&json).unwrap_err();
+    assert_eq!(BatchReportDto::from_json(&json).unwrap(), report);
+    let limits = DtoLimits { max_values: 2_000_000, ..DtoLimits::default() };
+    let error = BatchReportDto::from_json_with_limits(&json, &limits).unwrap_err();
     assert_eq!(error.code, DtoErrorCode::ResourceLimit);
     assert!(error.detail.contains("dtoValues"));
     let decoded: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(decoded["items"][0]["diagnostics"].as_array().unwrap().len(), 56_000);
     assert_eq!(decoded["items"][0]["processingDurationMs"], 8.25);
-    assert_eq!(DtoLimits::default().max_values, 2_000_000);
 }
 
 #[test]

@@ -30,6 +30,7 @@ struct Layout {
     archive_offset: usize,
     entries: usize,
     name_bytes: u64,
+    retain_encrypted: bool,
 }
 
 #[derive(Clone)]
@@ -39,6 +40,7 @@ struct Record<'a> {
     kind: EntryKind,
     mode: Option<u32>,
     method: u16,
+    encrypted: bool,
     compressed: u64,
     expanded: u64,
     local_start: usize,
@@ -51,8 +53,10 @@ pub(super) fn preflight(
     bytes: &[u8],
     depth: u16,
     budget: &mut ArchiveBudget<'_>,
+    retain_encrypted: bool,
 ) -> Result<RawInventory, ConversionError> {
     let mut layout = locate(bytes)?;
+    layout.retain_encrypted = retain_encrypted;
     budget.enter_archive(depth, layout.entries)?;
     scan_records(bytes, &mut layout, budget)?;
     let plan = allocation_plan(layout)?;
@@ -118,6 +122,7 @@ fn parse_eocd(bytes: &[u8], eocd: usize) -> Result<Layout, ConversionError> {
         archive_offset,
         entries: usize::from(total_entries),
         name_bytes: 0,
+        retain_encrypted: false,
     })
 }
 
@@ -133,7 +138,9 @@ fn scan_records(
     for index in 0..layout.entries {
         budget.context().checkpoint()?;
         let (record, next) = record_at(bytes, *layout, cursor, budget.zip_charset())?;
-        budget.validate_member(&record.name, record.compressed, record.expanded)?;
+        if !record.encrypted {
+            budget.validate_member(&record.name, record.compressed, record.expanded)?;
+        }
         names = names
             .checked_add(u64::try_from(record.raw_name.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| memory_limit("ZIP name inventory overflowed"))?;
@@ -177,6 +184,7 @@ fn collect_records(
             compressed_size: record.compressed,
             expanded_size: record.expanded,
             deflated: record.method == 8,
+            encrypted: record.encrypted,
             physical_start: record.local_start,
             central_extra_len: record.central_extra_len,
             local_extra_len: record.local_extra_len,
@@ -209,7 +217,12 @@ fn record_at<'a>(
     }
     let flags = le16(header, 8)?;
     let method = le16(header, 10)?;
-    validate_flags(flags, method)?;
+    let encrypted = flags & 0x2041 != 0;
+    if encrypted && layout.retain_encrypted {
+        validate_flags(flags & !0x2041, if method == 99 { 8 } else { method })?;
+    } else {
+        validate_flags(flags, method)?;
+    }
     let crc = le32(header, 16)?;
     let compressed32 = le32(header, 20)?;
     let expanded32 = le32(header, 24)?;
@@ -233,7 +246,7 @@ fn record_at<'a>(
     }
     let raw_name = slice(bytes, name_start, name_len, "central name")?;
     let extra = slice(bytes, extra_start, extra_len, "central extra field")?;
-    validate_extra(extra)?;
+    validate_extra(extra, encrypted && layout.retain_encrypted)?;
     let name = decode_name(raw_name, flags, extra, explicit_charset)?;
     let compressed = u64::from(compressed32);
     let expanded = u64::from(expanded32);
@@ -266,6 +279,7 @@ fn record_at<'a>(
             kind,
             mode,
             method,
+            encrypted,
             compressed,
             expanded,
             local_start,
@@ -378,7 +392,10 @@ fn validate_local(
     if local_name != central_name {
         return Err(malformed("local and central names disagree"));
     }
-    validate_extra(slice(bytes, extra_start, extra_len, "local extra field")?)?;
+    validate_extra(
+        slice(bytes, extra_start, extra_len, "local extra field")?,
+        flags & 0x2041 != 0,
+    )?;
     let descriptor = flags & 0x0008 != 0;
     let local_values = (le32(local, 14)?, le32(local, 18)?, le32(local, 22)?);
     if descriptor {
@@ -436,7 +453,7 @@ fn validate_flags(flags: u16, method: u16) -> Result<(), ConversionError> {
     Ok(())
 }
 
-fn validate_extra(extra: &[u8]) -> Result<(), ConversionError> {
+fn validate_extra(extra: &[u8], retain_encrypted: bool) -> Result<(), ConversionError> {
     let mut cursor = 0;
     while cursor < extra.len() {
         let header = slice(extra, cursor, 4, "extra-field header")?;
@@ -452,7 +469,7 @@ fn validate_extra(extra: &[u8]) -> Result<(), ConversionError> {
         if id == 0x0001 {
             return Err(malformed("ZIP64 extra fields are not accepted"));
         }
-        if id == 0x9901 {
+        if id == 0x9901 && !retain_encrypted {
             return Err(ConversionError::Encrypted);
         }
     }

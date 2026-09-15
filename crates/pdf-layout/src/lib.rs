@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod baseline;
 mod budget;
 mod collect;
 mod dedup;
@@ -239,4 +240,17 @@ fn limit(name: &'static str, detail: impl Into<String>) -> ConversionError {
 
 fn malformed(detail: impl Into<String>) -> ConversionError {
     ConversionError::Malformed { part: Some("pdf-layout".into()), detail: detail.into() }
+}
+
+/// Annotate repeated page-edge matter after independently reconstructed pages.
+///
+/// # Errors
+/// Returns cancellation, deadline, or bounded annotation resource failures.
+pub fn annotate_running_matter(
+    document: &mut Document,
+    config: &LayoutConfig,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let mut budget = LayoutBudget::preflight(document, &[], config, context)?;
+    running_matter::annotate(&mut document.blocks, &mut budget)
 }

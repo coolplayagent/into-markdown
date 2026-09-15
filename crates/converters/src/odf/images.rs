@@ -43,18 +43,11 @@ pub(super) fn image_block(
         .get(&path)
         .ok_or_else(|| malformed(Some(&path), "image is not declared in manifest"))?;
     if super::image_validation::unsupported_media(&manifest.media_type) {
-        super::recovery::require_best_effort(options, &path, "unsupported image media")?;
-        state.warning("odf.imageOmitted", format!("Unsupported {} image omitted: {path}; placeholder retained, original bytes not exported", manifest.media_type), image_locator.clone());
-        state.add_inlines(1)?;
-        return Ok(Some(state.node(
-            Block::Paragraph(vec![into_markdown_core::Inline::Text {
-                value: format!("[Image omitted: {path} ({})]", manifest.media_type),
-                marks: vec![],
-            }]),
-            image_locator,
-        )?));
+        super::recovery::require_best_effort(options, &path, "original image attachment")?;
+        state.warning("odf.imageOriginal", format!("Image retained in its original {} format: {path}; raster recognition is unavailable", manifest.media_type), image_locator.clone());
+    } else {
+        image_profile(&path, &manifest.media_type)?;
     }
-    image_profile(&path, &manifest.media_type)?;
     let bytes =
         package.parts.get(&path).ok_or_else(|| malformed(Some(&path), "image part is missing"))?;
     context.checkpoint()?;
@@ -80,7 +73,12 @@ pub(super) fn image_block(
                 .file_name()
                 .and_then(|value| value.to_str())
                 .map(str::to_owned),
-            media_type: manifest.media_type.clone(),
+            media_type: manifest
+                .media_type
+                .split(';')
+                .next()
+                .unwrap_or(&manifest.media_type)
+                .to_owned(),
             bytes: bytes.clone(),
             external_uri: None,
         });

@@ -80,3 +80,19 @@ fn closed_xml_profile_rejects_empty_active_nodes_attributes_and_wrong_hierarchy(
         Err(ConversionError::Malformed { .. })
     ));
 }
+
+#[test]
+fn odf_14_and_producer_theme_preserve_document_text() {
+    let content = format!(
+        "<office:document-content {NS} office:version='1.4'><office:body><office:text><text:p>Theme document body</text:p></office:text></office:body></office:document-content>"
+    );
+    let styles = format!(
+        "<office:document-styles {NS} office:version='1.4' xmlns:loext='urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0'><office:styles><loext:theme loext:name='Office'><loext:theme-colors><loext:color loext:name='accent1' loext:color='#123456'/></loext:theme-colors></loext:theme></office:styles></office:document-styles>"
+    );
+    let bytes =
+        package(InputFormat::Odt, &content, &[("styles.xml", "text/xml", styles.as_bytes())]);
+    let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
+    assert_eq!(output.document.metadata.properties["odf.version"], "1.4");
+    let text = serde_json::to_string(&output.document).unwrap();
+    assert!(text.contains("Theme document body"));
+}

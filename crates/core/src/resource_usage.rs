@@ -18,8 +18,21 @@ pub struct MemoryBudgetSnapshotDto {
 }
 
 /// Bounded aggregate of isolated OCR request attempts, including setup failures.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OcrRuntimeUsageDto {
+    /// Image assets considered within each OCR transaction, deduplicated by asset identity.
+    pub image_sources: u64,
+    /// Source images submitted to recognition, including identities sharing cached bytes.
+    pub images_attempted: u64,
+    /// Source images whose recognizer returned a valid result, including empty results.
+    pub images_completed: u64,
+    /// Completed source images with accepted recognizer text before container merging.
+    pub images_with_text: u64,
+    /// Source images whose recognition attempt failed.
+    pub images_failed: u64,
+    /// Source images excluded or left unattempted, including preflight refusal.
+    pub images_skipped: u64,
     /// Calls assigned a worker allowance and submitted to the process adapter.
     pub requests: u64,
     /// Controlled worker-private recognition memory refusals.

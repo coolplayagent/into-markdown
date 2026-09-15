@@ -124,8 +124,7 @@ userinfo、query 与 fragment；Provider 只显示环境变量名和存在状态
 ## 控制台与静态资产
 
 `/workbench`（以及 `/`）提供多文件拖放、文件与目录选择、批量选项、队列进度、取消、
-失败重试和产物下载；`/status` 显示本地 API 状态，其他页面显示 404。每批最多 100 个文件、
-总计 1 GiB，单文件上限由批次 Engine 选项控制且不得超过 512 MiB。刷新后通过
+失败重试和产物下载；`/status` 显示本地 API 状态，其他页面显示 404。单文件上限由用户显式设置或共享 Engine 默认策略控制。刷新后通过
 `/admin/capabilities`、`/admin/formats`、`/admin/providers`、`/admin/plugins`、
 `/admin/configuration` 与 `/admin/doctor` 覆盖本地管理能力。`GET /api/tasks` 恢复最近 100 个 durable 任务；原文件不写入浏览器存储，因此刷新后的失败
 重试要求重新选择。客户端路由 fallback 仅处理带 `Accept: text/html` 的 GET/HEAD，并明确
@@ -179,7 +178,11 @@ Engine `CancellationToken`。
 让 Web 和 CLI 共享 DTO 与服务端校验。联网、私网和 AI/provider 能力必须在本次上传的
 `authorization` 中分别确认；授权位在建任务前消费且不写入 durable request。网络默认关闭，
 host allowlist、输入/内存/临时空间、页数与资源上限都在上传前 fail closed。未携带 Header
-时使用安全默认配置，以兼容已有本地 API 客户端。
+时使用共享默认配置，以兼容已有本地 API 客户端。
+
+前端明确提交 `error_policy: "best-effort"` 与 `ocr.policy: "auto"`。高级设置中的输入、内存、临时空间与页数限制留空时省略对应字段；服务端按 CLI 共用策略补齐，自动内存预算来自运行转换服务的机器。清空已修改的设置恢复省略语义。
+
+Web 与 CLI 共用逐页转换和 OCR 流程。降级结果显示“转换完成，部分内容已降级”，在结果预览附近列出原因与页码，以及 OCR 图片总数、尝试、完成、失败和跳过数量。统计随转换与成功检查点持久化，恢复任务继续使用原次观察值；旧检查点缺少统计时保持缺失。
 
 ## 预览、资源与下载
 

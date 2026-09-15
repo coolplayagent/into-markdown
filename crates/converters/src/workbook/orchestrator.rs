@@ -2,12 +2,10 @@ use crate::workbook::calamine_adapter::convert_xlsb;
 use crate::workbook::error::limit;
 use crate::workbook::model::WorkbookKind;
 use crate::workbook::preflight::preflight_package;
-use crate::workbook::resource_profile::xlsx_auto_profile;
 use crate::workbook::xlsx::adapter::convert_xlsx;
 use into_markdown_core::{
-    Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput, ExecutionContext,
-    SourceContentEvidence, document_is_empty, estimate_retained_output,
-    estimate_validation_working_set,
+    ConversionError, ConversionOptions, ConverterOutput, ExecutionContext, SourceContentEvidence,
+    document_is_empty,
 };
 
 pub(super) fn convert_workbook(
@@ -28,10 +26,7 @@ pub(super) fn convert_workbook(
     context.checkpoint()?;
 
     let mut output = match preflight.kind {
-        WorkbookKind::Xml => {
-            let profiled_options = xlsx_auto_profile(options, available);
-            convert_xlsx(bytes, &preflight, &profiled_options, context)?
-        }
+        WorkbookKind::Xml => convert_xlsx(bytes, &preflight, options, context)?,
         WorkbookKind::Binary => convert_xlsb(
             bytes,
             &preflight.sheet_parts,
@@ -98,52 +93,6 @@ pub(super) fn convert_workbook(
     {
         output = output.with_source_content_evidence(SourceContentEvidence::Empty);
     }
-    output.document.validate().map_err(|error| ConversionError::Internal {
-        detail: format!("workbook converter produced invalid IR: {error}"),
-    })?;
-    let retained = estimate_retained_output(&output.document, &output.assets, &output.diagnostics)?;
-    let validation =
-        estimate_validation_working_set(&output.document, &output.assets, &output.diagnostics)?;
-    let engine_owned_peak = retained
-        .checked_add(validation)
-        .and_then(|value| value.checked_add(workbook_provenance_plan(&output.document.blocks)))
-        .ok_or_else(|| limit("max_memory_bytes", "engine workbook validation peak overflow"))?;
-    if engine_owned_peak > preflight.memory_peak {
-        return Err(limit(
-            "max_memory_bytes",
-            format!(
-                "engine workbook validation requires {engine_owned_peak} > {}",
-                preflight.memory_peak
-            ),
-        ));
-    }
+    // The engine validates and accounts the retained IR after parser workspace is released.
     Ok(output)
-}
-
-fn workbook_provenance_plan(nodes: &[BlockNode]) -> u64 {
-    fn walk(nodes: &[BlockNode], total: &mut u64) {
-        for node in nodes {
-            *total = total.saturating_add(1_024);
-            match &node.block {
-                Block::List { items, .. } => {
-                    for item in items {
-                        walk(&item.blocks, total);
-                    }
-                }
-                Block::Table { rows, .. } => {
-                    for cell in rows.iter().flat_map(|row| &row.cells) {
-                        walk(&cell.blocks, total);
-                    }
-                }
-                Block::Footnote { blocks, .. }
-                | Block::Page { blocks, .. }
-                | Block::Slide { blocks, .. }
-                | Block::Sheet { blocks, .. } => walk(blocks, total),
-                _ => {}
-            }
-        }
-    }
-    let mut total = 4_096;
-    walk(nodes, &mut total);
-    total
 }

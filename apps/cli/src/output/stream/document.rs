@@ -84,13 +84,7 @@ impl StructuredSpool {
             .ir
             .as_mut()
             .ok_or_else(|| CliError::internal("document IR representation is absent"))?;
-        let lease = self
-            .ir_chunk_lease
-            .as_mut()
-            .ok_or_else(|| CliError::internal("document IR chunk lease is absent"))?;
-        let mut writer =
-            ChunkRecordingWriter { destination, chunks: &mut self.ir_write_chunks, lease };
-        writer.write_all(bytes).map_err(CliError::from)
+        destination.write_all(bytes).map_err(CliError::from)
     }
 
     fn write_ir_value<T: Serialize + ?Sized>(
@@ -102,12 +96,9 @@ impl StructuredSpool {
             .ir
             .as_mut()
             .ok_or_else(|| CliError::internal("document IR representation is absent"))?;
-        let lease = self
-            .ir_chunk_lease
-            .as_mut()
-            .ok_or_else(|| CliError::internal("document IR chunk lease is absent"))?;
-        let writer = ChunkRecordingWriter { destination, chunks: &mut self.ir_write_chunks, lease };
-        serde_json::to_writer_pretty(IndentingWriter::new(writer, indent), value)
-            .map_err(|error| map_json_error(&error, "serialize document IR event"))
+        let mut writer = super::super::json::ChunkWriter::new(destination)?;
+        serde_json::to_writer_pretty(IndentingWriter::new(&mut writer, indent), value)
+            .map_err(|error| map_json_error(&error, "serialize document IR event"))?;
+        writer.finish().map_err(CliError::from)
     }
 }

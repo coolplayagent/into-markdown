@@ -20,7 +20,7 @@ pub(super) fn parse_manifest(
         ));
     }
     let version = root.attr(MANIFEST_NS, "version").unwrap_or("1.2");
-    if !matches!(version, "1.2" | "1.3") {
+    if !matches!(version, "1.0" | "1.1" | "1.2" | "1.3" | "1.4") {
         return Err(malformed(Some("META-INF/manifest.xml"), "unsupported ODF manifest version"));
     }
     if root.attrs.iter().any(|attr| attr.name.ns != MANIFEST_NS || attr.name.local != "version") {

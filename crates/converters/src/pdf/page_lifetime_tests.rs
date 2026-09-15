@@ -363,7 +363,10 @@ fn prepared_page_failure_and_cancellation_do_not_publish_partial_output() {
             ..Default::default()
         });
         let engine = engine(pages.clone(), Arc::new(Recognizer::default()));
-        let request = request(3);
+        let mut request = request(3);
+        if !cancel {
+            request.options.error_policy = into_markdown_core::ErrorPolicy::Strict;
+        }
         let context = ExecutionContext::new(
             ExecutionOptions { cancellation: token, ..ExecutionOptions::default() },
             request.options.limits.clone(),
@@ -387,6 +390,31 @@ fn prepared_page_failure_and_cancellation_do_not_publish_partial_output() {
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_eq!(context.reserved_temporary_bytes(), 0);
     }
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn failed_page_ocr_recovers_and_processes_the_following_page() {
+    let pages = Arc::new(ObservedPages { stop_at: Some(2), ..Default::default() });
+    let engine = engine(pages.clone(), Arc::new(Recognizer::default()));
+    let mut request = request(3);
+    request.options.output.asset_mode = into_markdown_core::AssetMode::Extract;
+    let context =
+        ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
+    let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
+    assert_eq!(result.document.blocks.len(), 3);
+    assert_eq!(pages.entries.lock().unwrap().len(), 3);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "pdf.recovery.pageImage"
+                && d.locator.as_ref().unwrap().page == Some(2))
+    );
+    assert!(result.assets.iter().any(|a| a.media_type == "image/png"));
+    assert!(result.markdown.contains("recognized body"));
+    drop(result);
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 #[test]
@@ -438,6 +466,7 @@ fn permanent_assets_keep_originals_without_charging_ocr_page_renders() {
         let mut limited = request(3);
         limited.options.output.asset_mode = mode;
         limited.options.limits.max_total_asset_bytes = 100;
+        limited.options.error_policy = into_markdown_core::ErrorPolicy::Strict;
         let context =
             ExecutionContext::new(ExecutionOptions::default(), limited.options.limits.clone());
         assert!(matches!(

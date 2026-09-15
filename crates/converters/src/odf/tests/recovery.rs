@@ -5,7 +5,7 @@ use into_markdown_core::{
 };
 use into_markdown_render_markdown::render;
 
-fn convert_policy(
+pub(super) fn convert_policy(
     bytes: &[u8],
     format: InputFormat,
     policy: ErrorPolicy,
@@ -61,7 +61,7 @@ fn optional_scripts_and_revision_history_do_not_replace_static_body() {
 }
 
 #[test]
-fn forms_animation_and_svg_keep_static_slide_with_auditable_omissions() {
+fn forms_animation_and_svg_keep_static_slide_and_original_image() {
     let content = format!(
         "<office:document-content {NS} xmlns:form='urn:oasis:names:tc:opendocument:xmlns:form:1.0' xmlns:anim='urn:oasis:names:tc:opendocument:xmlns:animation:1.0'><office:body><office:presentation><draw:page><office:forms><form:form form:name='search'/></office:forms><draw:frame><draw:text-box><text:p>Static slide</text:p></draw:text-box></draw:frame><draw:frame><draw:image xlink:href='Pictures/vector.svg'/></draw:frame><anim:par><anim:seq/></anim:par></draw:page></office:presentation></office:body></office:document-content>"
     );
@@ -75,9 +75,10 @@ fn forms_animation_and_svg_keep_static_slide_with_auditable_omissions() {
     )
     .unwrap();
     let md = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-    assert!(md.contains("Static slide") && md.contains("Image omitted:"));
-    assert!(output.assets.is_empty());
-    for code in ["odf.formsOmitted", "odf.animationOmitted", "odf.imageOmitted"] {
+    assert!(md.contains("Static slide") && md.contains(".svg"));
+    assert_eq!(output.assets.len(), 1);
+    assert_eq!(output.assets[0].bytes, b"<svg/>");
+    for code in ["odf.formsOmitted", "odf.animationOmitted", "odf.imageOriginal"] {
         assert!(output.diagnostics.iter().any(|d| d.code == code));
     }
     assert!(
@@ -334,7 +335,7 @@ fn cached_index_fields_and_image_bullets_retain_body_under_best_effort() {
 #[test]
 fn vector_paths_keep_text_and_whitespace_separated_transforms_are_parsed() {
     let content = format!(
-        "<office:document-content {NS}><office:body><office:presentation><draw:page><draw:path svg:x='1cm' svg:y='2cm' svg:width='3cm' svg:height='4cm' svg:d='M0 0' svg:viewBox='0 0 10 10' draw:transform='rotate (0) translate (1cm 2cm)'><text:p>Path caption</text:p></draw:path></draw:page></office:presentation></office:body></office:document-content>"
+        "<office:document-content {NS}><office:body><office:presentation><draw:page><draw:path svg:x='1cm' svg:y='2cm' svg:width='3cm' svg:height='4cm' svg:d='M0 0' svg:viewBox='0 0 10 10' draw:transform='skewX (0) skewY (0) rotate (0) translate (1cm 2cm)'><text:p>Path caption</text:p></draw:path></draw:page></office:presentation></office:body></office:document-content>"
     );
     let bytes = package(InputFormat::Odp, &content, &[]);
     let output = convert_policy(

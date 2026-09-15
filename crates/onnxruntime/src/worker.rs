@@ -68,10 +68,10 @@ impl WorkerClient {
     ) -> Result<(Self, ModelMetadata), ConversionError> {
         context.checkpoint()?;
         let mut limits = worker_limits(library, model, contract)?;
-        // The enclosing provider owns the aggregate quota. Each model worker also
-        // remains bounded by the request and its fixed model envelope.
-        limits.physical_memory =
-            limits.physical_memory.min(context.resource_limits().max_memory_bytes);
+        // Model workers share the enclosing provider's aggregate request quota.
+        // Dynamic tensor shapes use this quota and actual allocation accounting.
+        limits.physical_memory = context.resource_limits().max_memory_bytes;
+        limits.address_space = limits.address_space.max(limits.physical_memory);
         let working_directory = worker_working_directory(authenticated_snapshot)
             .map_err(|()| ort_error("workerLaunch"))?;
         let mut process = spawn_worker(

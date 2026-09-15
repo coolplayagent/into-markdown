@@ -13,15 +13,23 @@ pub(crate) fn suppress_overlapping_ocr_atoms(
 ) -> Result<Vec<Atom>, ConversionError> {
     let mut kept = Vec::<AtomCandidate>::new();
     kept.try_reserve_exact(atoms.len()).map_err(|_| memory("layout atom dedup output"))?;
+    let mut ocr_candidates = Vec::<usize>::new();
+    ocr_candidates
+        .try_reserve_exact(atoms.iter().filter(|a| a.source_kind == SourceKind::Ocr).count())
+        .map_err(|_| memory("layout OCR candidate index"))?;
     for atom in atoms {
         budget.checkpoint_item()?;
-        let normalized = canonical(lines::inline_text(&atom.inline), budget)?;
+        let normalized = if atom.source_kind == SourceKind::Ocr {
+            canonical(lines::inline_text(&atom.inline), budget)?
+        } else {
+            String::new()
+        };
         let mut duplicate = false;
         if atom.source_kind == SourceKind::Ocr && !normalized.is_empty() {
-            for existing in kept.iter().rev() {
+            for &index in ocr_candidates.iter().rev() {
                 budget.compare()?;
-                if existing.atom.source_kind != SourceKind::Ocr
-                    || existing.atom.orientation != atom.orientation
+                let existing = &kept[index];
+                if existing.atom.orientation != atom.orientation
                     || overlap_ratio(existing.atom.bounds, atom.bounds) < 0.55
                 {
                     continue;
@@ -33,6 +41,9 @@ pub(crate) fn suppress_overlapping_ocr_atoms(
             }
         }
         if !duplicate {
+            if atom.source_kind == SourceKind::Ocr {
+                ocr_candidates.push(kept.len());
+            }
             kept.push(AtomCandidate { atom, normalized });
         }
     }

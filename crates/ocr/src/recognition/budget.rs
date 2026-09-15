@@ -1,24 +1,15 @@
 //! Recognition configuration and request-allocation accounting.
 
-use super::{
-    MAX_CROP_PIXELS, MAX_DECODED_BYTES, MAX_OUTPUT_TIMESTEPS, MAX_REGIONS, MAX_TENSOR_ELEMENTS,
-    RecognitionConfig, limit, ocr,
-};
+use super::{RecognitionConfig, limit, ocr};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, Tensor};
 
 pub(super) fn validate_config(config: &RecognitionConfig) -> Result<(), ConversionError> {
     if config.max_regions == 0
-        || config.max_regions > MAX_REGIONS
         || config.max_batch_size == 0
-        || config.max_batch_size > 8
         || config.max_crop_pixels == 0
-        || config.max_crop_pixels > MAX_CROP_PIXELS
         || config.max_tensor_elements == 0
-        || config.max_tensor_elements > MAX_TENSOR_ELEMENTS
         || config.max_output_timesteps == 0
-        || config.max_output_timesteps > MAX_OUTPUT_TIMESTEPS
         || config.max_decoded_bytes == 0
-        || config.max_decoded_bytes > MAX_DECODED_BYTES
     {
         return Err(ocr("invalidRecognitionConfig"));
     }

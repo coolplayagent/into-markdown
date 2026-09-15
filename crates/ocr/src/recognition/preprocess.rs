@@ -2,7 +2,7 @@
 
 use super::budget::to_u64;
 use super::pixels::{cubic_bgr, perspective_source};
-use super::{BASE_WIDTH, HEIGHT, MAX_WIDTH, RecognitionConfig, SCALE, limit, ocr};
+use super::{BASE_WIDTH, HEIGHT, RecognitionConfig, SCALE, limit, ocr};
 use crate::{CropDescriptor, PixelView};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, Tensor};
 
@@ -68,7 +68,7 @@ pub(super) fn validated_crop(
     }
     let rotate = height as f64 / width as f64 >= 1.5;
     let ratio = if rotate { height as f64 / width as f64 } else { width as f64 / height as f64 };
-    if !ratio.is_finite() || ratio * HEIGHT as f64 > MAX_WIDTH as f64 {
+    if !ratio.is_finite() || ratio * HEIGHT as f64 >= usize::MAX as f64 {
         return Err(limit("recognitionWidth"));
     }
     Ok(CropPlan { polygon: crop.polygon, width, height, rotate, ratio })
@@ -91,9 +91,6 @@ pub(super) fn prepare_batch(
         .max()
         .unwrap_or(BASE_WIDTH)
         .max(BASE_WIDTH);
-    if width > MAX_WIDTH {
-        return Err(limit("recognitionWidth"));
-    }
     let elements = batch
         .len()
         .checked_mul(3)

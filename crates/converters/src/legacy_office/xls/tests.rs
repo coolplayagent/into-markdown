@@ -616,7 +616,7 @@ fn xls_content_cell_order_display_values_and_merges_are_stable() {
 }
 
 #[test]
-fn tall_xls_pages_before_the_document_node_limit_without_loss() {
+fn tall_xls_preserves_structured_rows_without_a_document_node_ceiling() {
     const ROWS: u16 = 60_000;
     let mut bytes = raw_biff4_with_label(b"anchor");
     let dimensions =
@@ -639,33 +639,12 @@ fn tall_xls_pages_before_the_document_node_limit_without_loss() {
     let Block::Sheet { blocks, .. } = &output.document.blocks[0].block else {
         panic!("fixture did not emit a worksheet")
     };
-    let mut next_row = 0_u32;
-    for (page_index, block) in blocks.iter().enumerate() {
-        let Block::Code { language, text } = &block.block else {
-            panic!("large fixture did not use bounded page blocks")
-        };
-        assert_eq!(language.as_deref(), Some("tsv"));
-        assert_eq!(block.id.0, format!("workbook-page-0-{page_index}"));
-        assert_eq!(block.provenance.locator.sheet.as_deref(), Some("Sheet 1"));
-        let rows = u32::try_from(text.lines().count()).unwrap();
-        assert!((1..=2_048).contains(&rows));
-        assert!(text.lines().all(|row| !row.contains('\t')));
-        next_row += rows;
-    }
-    assert_eq!(next_row, u32::from(ROWS));
-    assert_eq!(blocks.len(), usize::from(ROWS).div_ceil(2_048));
-    let Block::Code { text, .. } = &blocks[0].block else { unreachable!() };
-    assert_eq!(text.lines().next(), Some("anchor"));
-    let Block::Code { text, .. } = &blocks.last().unwrap().block else { unreachable!() };
-    assert_eq!(text.lines().last(), Some("tail"));
-    assert_eq!(
-        output.document.metadata.properties.get("spreadsheet.sheet.0.bounds").map(String::as_str),
-        Some("A1:A60000")
-    );
-    assert_eq!(
-        output.diagnostics.iter().filter(|item| item.code == "spreadsheet.largeTablePaged").count(),
-        1
-    );
+    let Block::Table { rows, .. } = &blocks[0].block else { panic!("structured table expected") };
+    assert_eq!(rows.len(), usize::from(ROWS));
+    assert_eq!(cell_text(&rows[0].cells[0]), "anchor");
+    assert_eq!(cell_text(&rows.last().unwrap().cells[0]), "tail");
+    assert!(rows[1..rows.len() - 1].iter().all(|row| cell_text(&row.cells[0]).is_empty()));
+    output.document.validate().unwrap();
 }
 
 #[test]

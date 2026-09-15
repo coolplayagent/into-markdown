@@ -158,7 +158,7 @@ fn convert_odf(
             .transpose()?;
         let mut state = ParseState::default();
         if package.noncanonical_mimetype {
-            state.warning("odf.noncanonicalMimetype", "Noncanonical mimetype order/compression/descriptor accepted after complete ZIP integrity and exact media-type validation", part_locator("mimetype"));
+            state.warning("odf.noncanonicalMimetype", "Noncanonical mimetype order/compression/descriptor/metadata accepted after complete ZIP integrity and exact media-type validation", part_locator("mimetype"));
         }
         for part in &package.missing_optional_parts {
             state.warning(

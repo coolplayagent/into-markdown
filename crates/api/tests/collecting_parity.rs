@@ -480,12 +480,14 @@ fn explicit_drawio_invalid_structures_fail_clearly() {
         // Content detection can route a PDF signature to PDFium regardless of
         // this suffix. Exercise Draw.io validation through its explicit format.
         request.hint.format = Some(InputFormat::Drawio);
+        request.options.error_policy = ErrorPolicy::Strict;
         let error = block_on(default_engine().unwrap().convert(request)).unwrap_err();
         assert!(matches!(error, ConversionError::Malformed { .. }), "{error}");
     }
     let mut request =
         ConversionRequest::new(InputRef::bytes(b"<ordinary/>".as_slice(), Some("input.xml")));
     request.hint.format = Some(InputFormat::Drawio);
+    request.options.error_policy = ErrorPolicy::Strict;
     assert!(matches!(
         block_on(default_engine().unwrap().convert(request)),
         Err(ConversionError::Malformed { .. })
@@ -498,4 +500,40 @@ fn drawio_content_with_other_extension_reports_conflict() {
     let result = public(Arc::from(source.as_slice()), "diagram.html");
     assert_eq!(result.detected_format(), Some(InputFormat::Drawio));
     assert!(result.diagnostics.iter().any(|d| d.code == "drawio.extensionMismatch"));
+}
+
+#[test]
+fn mixed_encrypted_zip_delivers_plaintext_and_one_original_archive() {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, body) in [("readable.txt", "Readable archive content"), ("secret.txt", "secret")] {
+        writer
+            .start_file(
+                name,
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(body.as_bytes()).unwrap();
+    }
+    let mut bytes = writer.finish().unwrap().into_inner();
+    let central =
+        bytes.windows(4).enumerate().filter(|(_, b)| *b == b"PK\x01\x02").nth(1).unwrap().0;
+    let local = u32::from_le_bytes(bytes[central + 42..central + 46].try_into().unwrap()) as usize;
+    bytes[central + 8..central + 10].copy_from_slice(&1_u16.to_le_bytes());
+    bytes[local + 6..local + 8].copy_from_slice(&1_u16.to_le_bytes());
+    let result = public(Arc::from(bytes.clone()), "mixed.zip");
+    assert!(result.markdown.contains("Readable archive content"));
+    assert_eq!(result.assets.iter().filter(|asset| asset.bytes == bytes).count(), 1);
+    assert!(result.diagnostics.iter().any(|d| d.code == "zip.entry.encryptedRetained"
+        && d.locator.as_ref().and_then(|l| l.part.as_deref()) == Some("secret.txt")));
+    assert_eq!(conversion_outcome(&result.diagnostics), ConversionOutcome::Degraded);
+    let mut request = ConversionRequest::new(InputRef::Bytes {
+        data: Arc::from(bytes),
+        name: Some("mixed.zip".into()),
+    });
+    request.options.error_policy = ErrorPolicy::Strict;
+    assert_eq!(
+        block_on(default_engine().unwrap().convert(request)).unwrap_err().code(),
+        ErrorCode::Encrypted
+    );
 }

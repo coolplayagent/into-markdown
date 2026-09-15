@@ -112,6 +112,7 @@ impl StructuredSpool {
         let mut archive = zip::ZipWriter::new(destination);
         let files = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
+            .large_file(true)
             .unix_permissions(0o644);
         let directory = SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Stored)
@@ -123,7 +124,9 @@ impl StructuredSpool {
         archive
             .start_file("document.ir.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        replay_spool_chunks(&self.context, ir, &self.ir_write_chunks, &mut archive)?;
+        let mut buffered = super::super::json::ChunkWriter::new(&mut archive)?;
+        copy_spool(&self.context, ir, &mut buffered)?;
+        buffered.finish()?;
         archive
             .start_file("document.md", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
@@ -131,9 +134,8 @@ impl StructuredSpool {
         archive
             .start_file("manifest.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        serde_json::to_writer_pretty(&mut archive, &manifest)
+        super::super::serialization::write_json_buffered(&manifest, &mut archive)
             .map_err(|error| map_json_error(&error, "serialize bundle manifest"))?;
-        archive.write_all(b"\n")?;
         archive
             .start_file("provenance.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;

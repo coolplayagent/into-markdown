@@ -42,7 +42,7 @@ fn xml_base_dot_segments_and_unicode_ncnames_resolve_portably() {
 
     let missing = package.replace("href=\"text/two.xhtml\"", "href=\"text/missing.xhtml\"");
     assert_eq!(
-        convert(epub3_book(missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        convert_strict(epub3_book(missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
         ErrorCode::Malformed
     );
 }
@@ -102,7 +102,7 @@ fn chapter_recovery_is_scoped_after_epub_security_validation() {
             ("OPS/images/cover.png", PNG),
             ("OPS/styles/book.css", b"body{}"),
         ]);
-        assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
     }
 
     for hidden_after_syntax in [
@@ -123,7 +123,7 @@ fn chapter_recovery_is_scoped_after_epub_security_validation() {
             ("OPS/images/cover.png", PNG),
             ("OPS/styles/book.css", b"body{}"),
         ]);
-        assert_eq!(convert(bytes.clone()).unwrap_err().code(), ErrorCode::Malformed);
+        assert_eq!(convert_strict(bytes.clone()).unwrap_err().code(), ErrorCode::Malformed);
         assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
     }
 }
@@ -211,7 +211,7 @@ fn navigation_targets_follow_fallback_or_become_label_only_when_omitted() {
     let mut links = Vec::new();
     let mut footnotes = Vec::new();
     collect_links(&result.document.blocks, &mut links, &mut footnotes);
-    assert_eq!(links.iter().filter(|target| *target == "OPS/text/one.xhtml#one").count(), 2);
+    assert_eq!(links.iter().filter(|target| *target == "#epub-spine-000001-heading").count(), 2);
     assert!(!links.iter().any(|target| target.contains("dummy.svg")));
 
     let no_fallback_package =
@@ -288,7 +288,7 @@ fn duplicate_spine_and_all_empty_or_unreadable_chapters_fail_closed() {
         .unwrap()
         .replace("<itemref idref=\"two\"/>", "<itemref idref=\"one\"/><itemref idref=\"two\"/>");
     assert_eq!(
-        convert(epub3_book(duplicate.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        convert_strict(epub3_book(duplicate.as_bytes(), Some(nav3()))).unwrap_err().code(),
         ErrorCode::Malformed
     );
 
@@ -303,7 +303,7 @@ fn duplicate_spine_and_all_empty_or_unreadable_chapters_fail_closed() {
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn xml_characters_and_xhtml_document_boundaries_are_strict() {
     for invalid in ["&#0;", "&#1;", "&#xB;", "&#xD800;", "&#xFFFE;"] {
         let value = package.replace("Original EPUB Three", &format!("Bad{invalid}Title"));
         assert_eq!(
-            convert(epub3_book(value.as_bytes(), Some(nav3()))).unwrap_err().code(),
+            convert_strict(epub3_book(value.as_bytes(), Some(nav3()))).unwrap_err().code(),
             ErrorCode::Malformed,
             "accepted {invalid}"
         );
@@ -364,7 +364,7 @@ fn internal_reference_tokens_cannot_be_forged_by_external_links() {
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -385,7 +385,7 @@ fn percent_encoded_unicode_fragments_match_normalized_anchor_identity() {
     let mut links = Vec::new();
     let mut footnotes = Vec::new();
     super::epub_tests::collect_links(&result.document.blocks, &mut links, &mut footnotes);
-    assert_eq!(links.iter().filter(|target| *target == "OPS/text/two.xhtml#café").count(), 2);
+    assert_eq!(links.iter().filter(|target| *target == "#epub-spine-000002-heading").count(), 3);
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn retained_rasters_require_complete_payloads_and_bounded_pixels() {
         ("OPS/images/cover.png", truncated),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
 
     let mut oversized = PNG.to_vec();
     oversized[16..20].copy_from_slice(&100_000_u32.to_be_bytes());
@@ -462,7 +462,7 @@ fn epub3_toc_requires_direct_children_and_one_label_per_item() {
         br#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="text/one.xhtml"><span futurehref="https://example.invalid/future">bad</span></a></li></ol></nav></body></html>"#.as_slice(),
     ] {
         assert_eq!(
-            convert(epub3_book(epub3_package(), Some(invalid))).unwrap_err().code(),
+            convert_strict(epub3_book(epub3_package(), Some(invalid))).unwrap_err().code(),
             ErrorCode::Malformed
         );
     }
@@ -485,7 +485,7 @@ fn every_epub_xml_document_enforces_prolog_and_character_rules() {
             ("OPS/images/cover.png", PNG),
             ("OPS/styles/book.css", b"body{}"),
         ]);
-        assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
     }
 }
 
@@ -551,5 +551,5 @@ fn unicode_archive_names_preserve_epub_spine_navigation_and_assets() {
     assert_eq!(result.assets[0].filename.as_deref(), Some("封面（彩色）.png"));
     let mut links = Vec::new();
     collect_links(&result.document.blocks, &mut links, &mut Vec::new());
-    assert!(links.iter().any(|target| target == "OPS/text/cafe\u{301}.xhtml#target"));
+    assert!(links.iter().any(|target| target == "#epub-spine-000002-heading"));
 }

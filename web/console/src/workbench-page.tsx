@@ -3,7 +3,7 @@ import {
   CheckCircle2, CircleAlert, FolderOpen, LoaderCircle, Plus, Sparkles, Square, UploadCloud, X,
 } from "lucide-react";
 import type { ApiClient, CapabilityAdmin, ComponentStatus, TaskRecord, WorkbenchOptions } from "./api";
-import { ApiError, defaultWorkbenchOptions } from "./api";
+import { ApiError, defaultWorkbenchOptions, validResourceLimits } from "./api";
 import { CapabilityStrip, OptionPanel } from "./conversion-controls";
 import { useI18n } from "./i18n";
 import { ResultDialog } from "./result-page";
@@ -15,8 +15,6 @@ import {
   executionStageLabel, iconForFormat,
 } from "./task-ui";
 
-const MAX_BATCH_FILES = 100;
-const MAX_BATCH_BYTES = 1024 * 1024 * 1024;
 
 interface BatchEntry {
   key: string;
@@ -133,11 +131,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     // Core authenticates the format after upload, including renamed documents.
     const unique = incoming.filter((file) => { const key = entryKey(file); if (seen.has(key)) return false; seen.add(key); return true; });
     const combined = [...base, ...unique.map((file) => ({ key: entryKey(file), file }))];
-    const total = combined.reduce((sum, entry) => sum + entry.file.size, 0);
     setMessageScope("source");
-    if (combined.length > MAX_BATCH_FILES) setMessage(t("tooManyFiles"));
-    else if (combined.some((entry) => entry.file.size > options.maxInputMiB * 1024 * 1024)) setMessage(t("fileTooLarge"));
-    else if (total > MAX_BATCH_BYTES) setMessage(t("batchTooLarge"));
+    if (combined.some((entry) => options.maxInputMiB != null && entry.file.size > options.maxInputMiB * 1024 * 1024)) setMessage(t("fileTooLarge"));
     else {
       if (batchFinished) { setBatchId(null); navigatedBatch.current = null; }
       setEntries(combined);
@@ -228,7 +223,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
         <CapabilityStrip ocr={ocrStatus} capability={ocrCapability} />
         <OptionPanel value={options} onChange={setOptions} disabled={uploading || entries.some((entry) => Boolean(entry.task))} />
         {remoteOcrSelected && options.ocrPolicy !== "off" && <label className="check grant remote-conversion-grant"><input type="checkbox" checked={options.networkMode === "unrestricted" && options.authorizeProvider} onChange={(event) => { const allowed = event.target.checked; setOptions((current) => ({ ...current, networkMode: allowed ? "unrestricted" : "restricted", authorizeProvider: allowed })); setMessage(""); }} /><span><strong>{t("authorizeRemoteConversion")}</strong><small>{t("authorizationNote")}</small></span></label>}
-        <button className="convert-button" type="button" disabled={entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
+        <button className="convert-button" type="button" disabled={!validResourceLimits(options) || entries.length === 0 || uploading || entries.some((entry) => Boolean(entry.task))} onClick={() => void submit()}>{uploading ? <LoaderCircle className="spin" size={19} aria-hidden="true" /> : <Sparkles size={19} aria-hidden="true" />}{uploading ? t("uploading") : `${t("convert")}${entries.length ? ` (${entries.length})` : ""}`}</button>
         <div className={`message-bar ${messageScope === "controls" && message ? "visible" : ""}`} role="status" aria-live="polite">{messageScope === "controls" && message && <><CircleAlert size={17} aria-hidden="true" />{message}</>}</div>
       </div>
     </div><HistoryPanel tasks={recentHistory} fallbackName={t("restoredTask")} onOpen={selectTask} onCleanup={() => void cleanup()} feedback={historyFeedback} /></div>

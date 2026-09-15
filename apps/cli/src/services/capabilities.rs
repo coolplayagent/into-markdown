@@ -14,7 +14,7 @@ pub(crate) struct InvocationCapabilities {
 }
 
 impl InvocationCapabilities {
-    pub(crate) fn for_format(format: Option<InputFormat>, options: &ConversionOptions) -> Self {
+    pub(crate) fn for_format(format: Option<InputFormat>, _options: &ConversionOptions) -> Self {
         use InputFormat::*;
         // Archives can invoke any installed member converter recursively.
         if matches!(format, None | Some(Zip)) {
@@ -43,13 +43,7 @@ impl InvocationCapabilities {
             )
         );
         let media = matches!(format, Some(Audio | Video | YouTube));
-        let ocr_policy = effective_ocr_policy(options);
-        Self {
-            ocr: visual && !(ocr_policy == OcrPolicy::Auto && legacy_office),
-            transcription: media,
-            diarization: media,
-            legacy_office,
-        }
+        Self { ocr: visual, transcription: media, diarization: media, legacy_office }
     }
 }
 
@@ -128,7 +122,7 @@ mod tests {
         let audio = InvocationCapabilities::for_format(Some(InputFormat::Audio), &options);
         assert!(audio.transcription && audio.diarization && !audio.ocr);
         let office = InvocationCapabilities::for_format(Some(InputFormat::Ppt), &options);
-        assert!(office.legacy_office && !office.ocr);
+        assert!(office.legacy_office && office.ocr);
         let zip = InvocationCapabilities::for_format(Some(InputFormat::Zip), &options);
         assert!(zip.ocr && zip.transcription && zip.diarization && zip.legacy_office);
     }

@@ -185,6 +185,7 @@ fn convert_delimited(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
+    let delivery_budget = context.available_memory_bytes();
     let size = u64::try_from(input.bytes.len()).map_err(|_| ConversionError::ResourceLimit {
         limit: "max_input_bytes",
         detail: "delimited input size cannot be represented as u64".into(),
@@ -207,8 +208,74 @@ fn convert_delimited(
     let (mapping, memory) = decoded.mapping_and_memory();
     enforce_shape(&mut records, options, mapping, &mut diagnostics, memory)?;
     let header = has_header(&records, options.delimited_text.header, &mut decoded.memory)?;
-    reserve_table_ir(&records, &mut decoded.memory)?;
+    if let Err(error) = reserve_table_ir(&records, &mut decoded.memory) {
+        if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+            && matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+        {
+            let row_count = records.len();
+            drop(records);
+            return recover_source_text(decoded, diagnostics, format, row_count, size, &error);
+        }
+        return Err(error);
+    }
+    let row_count = records.len();
     let document = build_table(records, header, &decoded, format, context)?;
+    let retained =
+        into_markdown_core::estimate_retained_output(&document, &Vec::new(), &diagnostics)?;
+    let validation =
+        into_markdown_core::estimate_validation_working_set(&document, &[], &diagnostics)?;
+    let required = retained.saturating_add(validation);
+    if required > delivery_budget
+        && options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+    {
+        drop(document);
+        let error = ConversionError::ResourceLimit {
+            limit: "max_memory_bytes",
+            detail: format!("table delivery requires {required} > {delivery_budget}"),
+        };
+        return recover_source_text(decoded, diagnostics, format, row_count, size, &error);
+    }
+    Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
+}
+
+fn recover_source_text(
+    mut decoded: text::DecodedText,
+    mut diagnostics: Vec<Diagnostic>,
+    format: InputFormat,
+    rows: usize,
+    source_bytes: u64,
+    error: &ConversionError,
+) -> Result<ConverterOutput, ConversionError> {
+    decoded.memory.charge(8192)?;
+    let reason = format!(
+        "Table layout could not fit the memory budget; all {rows} rows are retained as {} source text.",
+        format.as_str().to_ascii_uppercase()
+    );
+    diagnostics.push(Diagnostic {
+        code: "delimited.layout.sourceText".into(),
+        severity: DiagnosticSeverity::Warning,
+        message: format!("{reason} {error}"),
+        locator: Some(locator(0, source_bytes as usize, None, Some(format))),
+    });
+    let provenance = provenance(0, source_bytes as usize, None, Some(format));
+    let document = Document {
+        blocks: vec![
+            BlockNode {
+                id: NodeId("delimited-recovery-reason".into()),
+                provenance: provenance.clone(),
+                block: Block::Paragraph(vec![Inline::Text { value: reason, marks: Vec::new() }]),
+            },
+            BlockNode {
+                id: NodeId("delimited-source-text".into()),
+                provenance,
+                block: Block::Code {
+                    language: Some(format.as_str().into()),
+                    text: std::mem::take(&mut decoded.text),
+                },
+            },
+        ],
+        ..Document::default()
+    };
     Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
 }
 
@@ -634,6 +701,40 @@ mod tests {
     fn convert(bytes: &[u8], format: InputFormat, options: &ConversionOptions) -> ConverterOutput {
         let input = ResolvedInput { bytes: Arc::from(bytes), metadata: SourceMetadata::default() };
         convert_delimited(&input, format, options, &context()).unwrap()
+    }
+
+    #[test]
+    fn table_memory_recovery_preserves_every_source_row_and_strict_limits() {
+        let source = "alpha,beta,gamma\n".repeat(500);
+        let input = ResolvedInput {
+            bytes: Arc::from(source.as_bytes()),
+            metadata: SourceMetadata::default(),
+        };
+        let mut options = ConversionOptions::default();
+        options.limits.max_memory_bytes = 1024 * 1024;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let output = convert_delimited(&input, InputFormat::Csv, &options, &context).unwrap();
+        assert!(output.diagnostics.iter().any(|d| d.code == "delimited.layout.sourceText"));
+        assert!(
+            output
+                .document
+                .blocks
+                .iter()
+                .any(|node| matches!(&node.block, Block::Code { text, .. } if text == &source))
+        );
+        output.document.validate().unwrap();
+        let Block::Paragraph(reason) = &output.document.blocks[0].block else { panic!() };
+        assert!(matches!(&reason[0], Inline::Text { value, .. } if !value.contains("exceeds")));
+        assert!(output.diagnostics.iter().any(|d| d.message.contains("max_memory_bytes")));
+        options.error_policy = into_markdown_core::ErrorPolicy::Strict;
+        let error = convert_delimited(&input, InputFormat::Csv, &options, &context).unwrap_err();
+        assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+        options.error_policy = into_markdown_core::ErrorPolicy::BestEffort;
+        options.limits.max_table_rows = 1;
+        assert!(matches!(
+            convert_delimited(&input, InputFormat::Csv, &options, &context),
+            Err(ConversionError::ResourceLimit { limit: "max_table_rows", .. })
+        ));
     }
 
     #[test]

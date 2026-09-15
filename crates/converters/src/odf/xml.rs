@@ -1,6 +1,6 @@
 use crate::odf::model::{
-    CONFIG_NS, DC_NS, DRAW_NS, FO_NS, MANIFEST_NS, MAX_XML_EVENTS, META_NS, NUMBER_NS, OFFICE_NS,
-    PRESENTATION_NS, STYLE_NS, SVG_NS, TABLE_NS, TEXT_NS, XLINK_NS, XML_NS, limit, malformed,
+    CONFIG_NS, DC_NS, DRAW_NS, FO_NS, MANIFEST_NS, META_NS, NUMBER_NS, OFFICE_NS, PRESENTATION_NS,
+    STYLE_NS, SVG_NS, TABLE_NS, TEXT_NS, XLINK_NS, XML_NS, limit, malformed,
 };
 use into_markdown_core::{ConversionError, ConversionOptions, ExecutionContext};
 use quick_xml::events::{BytesStart, Event};
@@ -123,9 +123,6 @@ pub(super) fn parse_xml(
         events = events
             .checked_add(1)
             .ok_or_else(|| limit("xml_events", "ODF XML event count overflow"))?;
-        if events > MAX_XML_EVENTS {
-            return Err(limit("xml_events", format!("{part} exceeds {MAX_XML_EVENTS} events")));
-        }
         if events.is_multiple_of(1024) {
             context.checkpoint()?;
         }

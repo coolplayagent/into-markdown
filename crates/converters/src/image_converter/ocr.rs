@@ -16,12 +16,33 @@ use geometry::{polygon_bounds, validate_region_bounds, validate_region_shape};
 
 #[derive(Debug)]
 pub(crate) struct OcrContribution {
+    pub(crate) recognition_completed: bool,
     pub(crate) nodes: Vec<BlockNode>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(super) accepted_text: bool,
     pub(crate) memory: Option<ResourceReservation>,
     pub(crate) recognized_regions: u64,
     pub(crate) recognized_chars: u64,
+}
+
+impl OcrContribution {
+    fn completed(
+        document: Document,
+        diagnostics: Vec<Diagnostic>,
+        memory: ResourceReservation,
+        recognized_regions: u64,
+        recognized_chars: u64,
+    ) -> Self {
+        Self {
+            recognition_completed: true,
+            accepted_text: !document.blocks.is_empty(),
+            nodes: document.blocks,
+            diagnostics,
+            memory: Some(memory),
+            recognized_regions,
+            recognized_chars,
+        }
+    }
 }
 
 pub(super) async fn recognize(
@@ -33,7 +54,19 @@ pub(super) async fn recognize(
     services: &Services,
     context: &ExecutionContext,
 ) -> Result<OcrContribution, ConversionError> {
-    recognize_inner(image, page, width, height, None, options, services, context).await
+    let result =
+        recognize_inner(image, page, width, height, None, options, services, context).await;
+    if crate::embedded_visual_ocr::effective_ocr_policy(options) == OcrPolicy::Off {
+        context.record_ocr_images(0, 0, 0, 1);
+    } else {
+        match &result {
+            Ok(value) if value.recognition_completed => {
+                context.record_ocr_images(1, u64::from(!value.nodes.is_empty()), 0, 0);
+            }
+            _ => context.record_ocr_images(0, 0, 1, 0),
+        }
+    }
+    result
 }
 
 #[allow(clippy::too_many_arguments)] // Source identity is intentionally explicit at this boundary.
@@ -120,14 +153,13 @@ async fn recognize_inner(
             if retained < reservation_bytes {
                 memory.shrink(reservation_bytes - retained)?;
             }
-            return Ok(OcrContribution {
-                accepted_text: !document.blocks.is_empty(),
-                nodes: document.blocks,
+            return Ok(OcrContribution::completed(
+                document,
                 diagnostics,
-                memory: Some(memory),
+                memory,
                 recognized_regions,
                 recognized_chars,
-            });
+            ));
         }
         OcrRecognition::Unbound(_) => {
             return unavailable(
@@ -194,14 +226,13 @@ async fn recognize_inner(
     if retained < reservation_bytes {
         memory.shrink(reservation_bytes - retained)?;
     }
-    Ok(OcrContribution {
-        accepted_text: !document.blocks.is_empty(),
-        nodes: document.blocks,
+    Ok(OcrContribution::completed(
+        document,
         diagnostics,
-        memory: Some(memory),
+        memory,
         recognized_regions,
         recognized_chars,
-    })
+    ))
 }
 
 fn materialize_remote_unbound(
@@ -539,6 +570,7 @@ fn unavailable(
 
 fn degraded(page: u32, message: String) -> OcrContribution {
     OcrContribution {
+        recognition_completed: false,
         nodes: vec![],
         accepted_text: false,
         diagnostics: vec![Diagnostic {
@@ -572,6 +604,7 @@ fn map_unavailable(provider: &str, error: ConversionError) -> ConversionError {
 
 fn empty() -> OcrContribution {
     OcrContribution {
+        recognition_completed: false,
         nodes: vec![],
         diagnostics: vec![],
         accepted_text: false,

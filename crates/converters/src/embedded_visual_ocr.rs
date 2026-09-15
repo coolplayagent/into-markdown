@@ -16,6 +16,7 @@ use std::io::Cursor;
 
 mod candidate_index;
 mod geometry;
+mod image_usage;
 mod jpeg_input;
 mod memory_plan;
 mod node_budget;
@@ -697,12 +698,7 @@ fn for_each_visual_reference(
     Ok(())
 }
 
-#[derive(Clone, Default)]
-struct CachedContribution {
-    nodes: Vec<BlockNode>,
-    diagnostics: Vec<Diagnostic>,
-    telemetry: Option<(OcrInputIdentity, u64, u64)>,
-}
+use runtime::CachedContribution;
 
 struct NormalizedImage {
     bytes: Vec<u8>,
@@ -732,15 +728,8 @@ async fn enrich(
         return Ok(output);
     }
 
-    // Keep only stable indices here. Cloning `Asset` would duplicate every
-    // payload, including excluded and unreferenced assets outside the plan.
-    let mut assets = BTreeMap::new();
-    for (index, asset) in output.assets.iter().enumerate() {
-        if index % 256 == 0 {
-            context.checkpoint()?;
-        }
-        assets.insert(asset.id.clone(), index);
-    }
+    let assets = visual_refs::asset_indices(&output, context)?;
+    let mut image_usage = image_usage::ImageUsage::for_output(context, &output);
     let mut eligible_assets = BTreeSet::new();
     let mut classified_assets = BTreeSet::new();
     for reference in &references {
@@ -834,6 +823,7 @@ async fn enrich(
         let asset = &output.assets[candidate.asset_index];
         match runtime::recognize(asset, ordinal, options, services, context).await {
             Ok((contribution, memory)) => {
+                image_usage.result(grouping.groups[group_index].asset_copies, &contribution);
                 node_budget.admit(
                     &contribution.nodes,
                     grouping.groups[group_index].reference_copies,
@@ -843,6 +833,7 @@ async fn enrich(
                 cache[group_index] = Some(contribution);
             }
             Err(error) => {
+                image_usage.failed(grouping.groups[group_index].asset_copies);
                 let Some(code) = runtime::optional_failure_code(
                     &error,
                     options,
@@ -921,9 +912,7 @@ fn ocr_enabled(options: &ConversionOptions) -> bool {
 }
 
 fn embedded_visual_ocr_enabled(input_format: InputFormat, options: &ConversionOptions) -> bool {
-    ocr_enabled(options)
-        && !(effective_ocr_policy(options) == OcrPolicy::Auto
-            && matches!(input_format, InputFormat::Doc | InputFormat::Ppt | InputFormat::Xls))
+    ocr_enabled(options) && eligible_container(input_format)
 }
 
 pub(crate) fn effective_ocr_policy(options: &ConversionOptions) -> OcrPolicy {
@@ -968,7 +957,6 @@ fn eligible_container(format: InputFormat) -> bool {
             | InputFormat::Epub
             | InputFormat::Html
             | InputFormat::Ipynb
-            | InputFormat::Zip
             | InputFormat::OutlookMsg
     )
 }
@@ -1213,6 +1201,15 @@ fn rebuild_nodes(
             rebuilt.push(node);
         }
         if let Some(contribution) = contribution {
+            if input_format == InputFormat::Pdf
+                && source_provenance.provider == "builtin.pdf.recovery"
+                && !contribution.nodes.is_empty()
+            {
+                rebuilt.push(pdf_placement::recovery_text_label(
+                    fresh_ocr_node_id(&source_id, 0, occupied_ids, context)?,
+                    &source_provenance,
+                ));
+            }
             for (ocr_index, template) in contribution.nodes.into_iter().enumerate() {
                 if ocr_index % 256 == 0 {
                     context.checkpoint()?;
@@ -2109,7 +2106,7 @@ mod tests {
         let ocr = Arc::new(EntryGuardOcr {
             plans: AtomicUsize::new(0),
             calls: AtomicUsize::new(0),
-            regions: u32::try_from(into_markdown_core::MAX_DOCUMENT_NODES / 2).unwrap(),
+            regions: 50_000,
         });
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
@@ -2153,7 +2150,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_ocr_reference_copies_still_fail_before_publication_when_nodes_overflow() {
+    fn actual_ocr_reference_copies_preserve_large_native_documents() {
         let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
@@ -2165,23 +2162,20 @@ mod tests {
         };
         let Block::Image { asset, .. } = &mut blocks[1].block else { panic!("image expected") };
         *asset = AssetId("asset-a".into());
-        source.document.blocks.extend((0..into_markdown_core::MAX_DOCUMENT_NODES - 4).map(
-            |index| BlockNode {
-                id: NodeId(format!("native-{index}")),
-                block: Block::Paragraph(vec![into_markdown_core::Inline::Text {
-                    value: "native body".into(),
-                    marks: vec![],
-                }]),
-                provenance: provenance("word/document.xml"),
-            },
-        ));
-        assert_eq!(
-            count_document_nodes(&source.document.blocks, &context).unwrap(),
-            into_markdown_core::MAX_DOCUMENT_NODES - 1
-        );
-        let error =
-            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap_err();
-        assert!(matches!(error, ConversionError::ResourceLimit { limit: "documentNodes", .. }));
+        source.document.blocks.extend((0..100_000 - 4).map(|index| BlockNode {
+            id: NodeId(format!("native-{index}")),
+            block: Block::Paragraph(vec![into_markdown_core::Inline::Text {
+                value: "native body".into(),
+                marks: vec![],
+            }]),
+            provenance: provenance("word/document.xml"),
+        }));
+        assert_eq!(count_document_nodes(&source.document.blocks, &context).unwrap(), 100_000 - 1);
+        let result =
+            block_on(enrich(source, InputFormat::Docx, &options, &services, &context)).unwrap();
+        assert!(count_document_nodes(&result.document.blocks, &context).unwrap() > 100_000);
+        result.document.validate().unwrap();
+        drop(result);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
         assert_eq!(context.reserved_memory_bytes(), 0);
     }
@@ -2372,32 +2366,41 @@ mod tests {
     }
 
     #[test]
-    fn legacy_office_auto_does_not_plan_or_run_embedded_visual_ocr() {
+    fn legacy_office_auto_recognizes_extracted_images() {
         let ocr = source_bound_ocr(false);
         let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
         let mut options = ConversionOptions::default();
         options.ocr.policy = OcrPolicy::Auto;
-
         for format in [InputFormat::Doc, InputFormat::Ppt, InputFormat::Xls] {
             let before = output();
-            let expected_document = before.document.clone();
-            let expected_assets = before.assets.clone();
-            let expected_diagnostics = before.diagnostics.clone();
+            let original = before.document.clone();
             let context =
                 ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
-            assert_eq!(
+            assert!(matches!(
                 plan_enrichment(&before, format, &options, &services, &context).unwrap(),
-                EnrichmentPlan::Skip,
-                "{format:?}"
-            );
-            let after = block_on(enrich(before, format, &options, &services, &context))
-                .unwrap_or_else(|error| panic!("{format:?}: {error}"));
-            assert_eq!(after.document, expected_document, "{format:?}");
-            assert_eq!(after.assets, expected_assets, "{format:?}");
-            assert_eq!(after.diagnostics, expected_diagnostics, "{format:?}");
+                EnrichmentPlan::Reserve(_)
+            ));
+            let after = block_on(enrich(before, format, &options, &services, &context)).unwrap();
+            assert_ne!(after.document, original);
         }
+        assert_eq!(ocr.calls.load(Ordering::SeqCst), 3);
+    }
 
-        assert_eq!(ocr.plans.load(Ordering::SeqCst), 0);
+    #[test]
+    fn archive_merge_does_not_repeat_member_ocr() {
+        let ocr = source_bound_ocr(false);
+        let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+        let options = ConversionOptions::default();
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let before = output();
+        let original = before.document.clone();
+        assert_eq!(
+            plan_enrichment(&before, InputFormat::Zip, &options, &services, &context).unwrap(),
+            EnrichmentPlan::Skip
+        );
+        let after =
+            block_on(enrich(before, InputFormat::Zip, &options, &services, &context)).unwrap();
+        assert_eq!(after.document, original);
         assert_eq!(ocr.calls.load(Ordering::SeqCst), 0);
     }
 
@@ -2418,7 +2421,6 @@ mod tests {
             InputFormat::Epub,
             InputFormat::Html,
             InputFormat::Ipynb,
-            InputFormat::Zip,
             InputFormat::OutlookMsg,
         ];
         let ocr = source_bound_ocr(false);

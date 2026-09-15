@@ -71,7 +71,10 @@ impl OcrEngine for PageOcrCache {
         options: &ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<OcrOutputPlan, ConversionError> {
-        cache_plan(self.provider.planned_bound_output(request, options, context)?)
+        cache_plan(
+            self.provider.planned_bound_output(request, options, context)?,
+            context.available_memory_bytes(),
+        )
     }
 
     fn planned_normalized_png_output(
@@ -81,7 +84,10 @@ impl OcrEngine for PageOcrCache {
         options: &ConversionOptions,
         context: &ExecutionContext,
     ) -> Result<OcrOutputPlan, ConversionError> {
-        cache_plan(self.provider.planned_normalized_png_output(width, height, options, context)?)
+        cache_plan(
+            self.provider.planned_normalized_png_output(width, height, options, context)?,
+            context.available_memory_bytes(),
+        )
     }
 
     fn recognize_bound<'a>(
@@ -131,18 +137,31 @@ impl OcrEngine for PageOcrCache {
     }
 }
 
-fn cache_plan(plan: OcrOutputPlan) -> Result<OcrOutputPlan, ConversionError> {
+fn cache_plan(
+    plan: OcrOutputPlan,
+    available_memory: u64,
+) -> Result<OcrOutputPlan, ConversionError> {
     let working = plan
         .max_working_bytes()
         .checked_add(plan.max_retained_bytes())
         .and_then(|bytes| bytes.checked_add(entry_overhead()))
         .ok_or_else(|| cache_error("OCR contribution cache plan overflow"))?;
+    // Dynamic providers consume the request's remaining allowance. Cache and
+    // provider allocations share that allowance and retain their own leases.
     OcrOutputPlan::try_new_with_working(
         plan.max_retained_bytes(),
-        working,
+        working.min(available_memory.saturating_sub(plan.max_retained_bytes())),
         plan.max_regions(),
         plan.max_text_bytes(),
     )
+}
+
+#[test]
+fn dynamic_provider_and_cache_share_the_request_working_allowance() {
+    let plan = OcrOutputPlan::try_new_with_working(1024, 7168, 1, 16).unwrap();
+    let cached = cache_plan(plan, 8192).unwrap();
+    assert_eq!(cached.max_retained_bytes() + cached.max_working_bytes(), 8192);
+    assert_eq!(cached.max_regions(), 1);
 }
 
 fn entry_overhead() -> u64 {

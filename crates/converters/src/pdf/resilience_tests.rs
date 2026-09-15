@@ -128,6 +128,7 @@ fn native_issue334_mixed_links_have_local_diagnostics_in_all_ocr_modes() {
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
 fn native_issue334_page_total_and_ir_limits_remain_independent() {
     let mut options = ConversionOptions::default();
+    options.error_policy = ErrorPolicy::Strict;
     options.ocr.policy = OcrPolicy::Off;
     let bytes = long_pdf(3, 4);
     options.limits.max_pdf_page_objects = 3;
@@ -195,14 +196,29 @@ fn native_issue334_explicit_layout_budget_is_enforced() {
         ),
         &options,
     );
+    let output = result.unwrap();
     assert!(
-        matches!(
-            &result,
-            Err(ConversionError::ResourceLimit { limit: "pdfLayoutComparisons", .. })
-        ),
-        "actual output: {:?}",
-        result.as_ref().map(|o| &o.document)
+        output
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "pdf.recovery.nativeText"
+                && d.message.contains("pdfLayoutComparisons"))
     );
+    let markdown =
+        into_markdown_render_markdown::render(&output.document, &output.assets, &options).unwrap();
+    assert!(markdown.contains("First line") && markdown.contains("Second line"));
+    options.error_policy = ErrorPolicy::Strict;
+    assert!(matches!(
+        convert(
+            one_page_fixture(
+                b"BT /F1 8 Tf 10 160 Td (First line) Tj 0 -15 Td (Second line) Tj ET",
+                false
+            ),
+            &options
+        ),
+        Err(ConversionError::ResourceLimit { limit: "pdfLayoutComparisons", .. })
+    ));
+    options.error_policy = ErrorPolicy::BestEffort;
     options.limits.max_pdf_layout_comparisons = 12_000_000;
     assert!(
         convert(

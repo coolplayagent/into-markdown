@@ -228,6 +228,7 @@ pub(super) fn destination(name: &str, ignorable: bool) -> Option<Destination> {
         "field" => Destination::FieldContainer,
         "info" => Destination::InfoContainer,
         "shppict" => Destination::ShapePictureContainer,
+        "shp" => Destination::ShapeContainer,
         "colortbl" | "stylesheet" | "listtable" | "listoverridetable" | "generator" | "object"
         | "objdata" | "filetbl" | "datastore" | "themedata" | "colorschememapping" | "htmltag"
         | "xmlopen" | "xmlattrname" | "xmlattrvalue" | "xmlclose" | "nonshppict" | "header"
@@ -257,6 +258,13 @@ pub(super) fn child_destination(
         Destination::InfoContainer => Some(match name {
             "title" => Destination::MetaTitle,
             "author" => Destination::MetaAuthor,
+            _ => Destination::Skip,
+        }),
+        Destination::ShapeContainer => Some(match name {
+            "shpinst" | "sp" | "sv" => Destination::ShapeContainer,
+            "shptxt" => Destination::Body,
+            "pict" => Destination::Pict,
+            "shppict" => Destination::ShapePictureContainer,
             _ => Destination::Skip,
         }),
         Destination::ShapePictureContainer => Some(match name {

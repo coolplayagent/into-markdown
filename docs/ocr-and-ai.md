@@ -80,7 +80,7 @@ checkpoint。第三方单次调用不支持中途轮询，其输入与工作上�
 
 识别预处理复刻官方 `get_rotate_crop_image`：raw source 四点透视固定 OpenCV
 `INTER_CUBIC`/`BORDER_REPLICATE`，高宽比至少 1.5 时逆时针旋转；随后按 batch 最大宽高比
-确定 pad width（基础 320、硬上限 3200），以 `INTER_LINEAR` 缩放到高 48，按 BGR/NCHW
+确定动态 pad width（基础 320，按文字区域比例展开），以 `INTER_LINEAR` 缩放到高 48，按 BGR/NCHW
 和固定 f32 `1/255`、`(x-0.5)/0.5` 归一化。宽度稳定排序和动态 batch 执行后恢复 caller
 顺序。输出只能是唯一 `fetch_name_0` float32 `[N,T,6906]`；shape、finite、元素、内存、
 取消和 deadline 都在访问 tensor 前有界。CTC 对相同分数选择较小 class index，先折叠

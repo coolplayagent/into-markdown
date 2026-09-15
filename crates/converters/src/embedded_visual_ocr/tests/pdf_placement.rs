@@ -164,3 +164,26 @@ fn pdf_empty_ocr_contributions_keep_native_text_without_geometry_error() {
         assert!(!text(&result.document).contains("embedded words"));
     }
 }
+
+#[test]
+fn recovery_page_ocr_is_labeled_and_recognized_once() {
+    let mut source = output();
+    source.document.blocks[0].provenance.provider = "builtin.pdf.recovery".into();
+    let Block::Page { blocks, .. } = &mut source.document.blocks[0].block else { panic!("page") };
+    blocks.truncate(1);
+    blocks[0].provenance.provider = "builtin.pdf.recovery".into();
+    let ocr = source_bound_ocr(false);
+    let services = Services { ocr: Some(ocr.clone()), ..Services::default() };
+    let options = ConversionOptions::default();
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let result = block_on(enrich(source, InputFormat::Pdf, &options, &services, &context)).unwrap();
+    result.document.validate().unwrap();
+    let Block::Page { blocks, .. } = &result.document.blocks[0].block else { panic!("page") };
+    assert!(matches!(&blocks[0].block, Block::Image { .. }));
+    assert!(matches!(&blocks[1].block, Block::Heading { content, .. }
+    if content == &vec![Inline::Text {
+        value: "Page image text (including figure and table labels)".into(), marks: Vec::new()
+    }]));
+    assert_eq!(text(&result.document).matches("embedded words").count(), 1);
+    assert_eq!(ocr.calls.load(Ordering::SeqCst), 1);
+}

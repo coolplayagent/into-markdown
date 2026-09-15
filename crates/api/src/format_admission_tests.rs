@@ -38,6 +38,11 @@ fn explicit_format_and_registered_content_detectors_remain_authoritative() {
     assert_eq!(block_on(engine.convert(input)).unwrap().markdown, "source text\n");
     let mut input = request(b"{\"a\":", Some("source.js"));
     input.hint.format = Some(InputFormat::Json);
+    let recovered = block_on(engine.convert(input.clone())).unwrap();
+    assert_eq!(recovered.assets[0].media_type, "application/json");
+    assert_eq!(recovered.assets[0].bytes, b"{\"a\":");
+    assert_eq!(recovered.outcome(), crate::ConversionOutcome::Degraded);
+    input.options.error_policy = ErrorPolicy::Strict;
     assert_eq!(block_on(engine.convert(input)).unwrap_err().code(), ErrorCode::Malformed);
 
     struct CustomDetector;

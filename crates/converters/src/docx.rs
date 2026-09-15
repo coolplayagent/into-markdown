@@ -6,7 +6,7 @@ use into_markdown_core::{
     Converter, ConverterOutput, Diagnostic, DiagnosticSeverity, Document, ExecutionContext,
     FormatCandidate, Inline, InlineMark, InputFormat, ListItem, ListKind, MAX_DOCUMENT_INLINES,
     MAX_DOCUMENT_NODES, MAX_TABLE_COLUMNS, NodeId, ProbeOutcome, Provenance, ProvenanceKind,
-    ResolvedInput, Services, SourceContentEvidence, SourceLocator, TableAlignment, TableRow,
+    ResolvedInput, Services, SourceContentEvidence, SourceLocator, TableRow,
 };
 use quick_xml::events::{BytesCData, BytesRef, BytesStart, BytesText, Event};
 use quick_xml::name::ResolveResult;

@@ -69,6 +69,16 @@ impl<'bytes, 'request> SafeArchive<'bytes, 'request> {
     }
 
     pub(crate) fn read(&mut self, path: &str) -> Result<OwnedEntry, ConversionError> {
+        self.read_member(path, false)
+    }
+
+    /// Re-read a validated member for exact original-source delivery, charging
+    /// decompression and live storage to the same request budget.
+    pub(crate) fn read_for_recovery(&mut self, path: &str) -> Result<OwnedEntry, ConversionError> {
+        self.read_member(path, true)
+    }
+
+    fn read_member(&mut self, path: &str, recovery: bool) -> Result<OwnedEntry, ConversionError> {
         let index =
             self.entries.binary_search_by(|entry| entry.name.as_str().cmp(path)).map_err(|_| {
                 ConversionError::Malformed {
@@ -76,7 +86,7 @@ impl<'bytes, 'request> SafeArchive<'bytes, 'request> {
                     detail: format!("EPUB package part {path:?} is missing"),
                 }
             })?;
-        if self.entries[index].verified {
+        if self.entries[index].verified && !recovery {
             return Err(ConversionError::Internal {
                 detail: format!("validated archive member {path:?} was requested more than once"),
             });
@@ -161,6 +171,26 @@ mod tests {
         writer.write_all(b"x").unwrap();
         writer.add_directory("unused-dir/", options).unwrap();
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn recovery_reread_preserves_bytes_and_charges_explicit_decompression_limit() {
+        let payload = b"original chapter bytes";
+        let bytes = stored(&[("chapter.xhtml", payload)]);
+        let mut options = ConversionOptions::default();
+        options.limits.max_decompressed_bytes = (payload.len() * 2) as u64;
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        let mut archive = SafeArchive::open(&bytes, &options, &context).unwrap();
+        drop(archive.read("chapter.xhtml").unwrap());
+        let recovered = archive.read_for_recovery("chapter.xhtml").unwrap();
+        assert_eq!(recovered.bytes, payload);
+        drop(recovered);
+        assert!(matches!(
+            archive.read_for_recovery("chapter.xhtml"),
+            Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
+        ));
+        drop(archive);
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]

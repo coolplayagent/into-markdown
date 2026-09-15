@@ -61,7 +61,7 @@ Web 调用方可为任务创建本地 `RecoveryStore` 与随机 `RecoveryToken`�
 `completedStages`、payload 长度与摘要的不可变文件。固定 4 KiB 元数据尾块使
 `RecoveryStore::inspect` 只做常量大小读取和 seek，不读取、分配或反序列化 payload；
 完整恢复才按摘要认证 payload。阶段先写入同目录私有随机临时文件并 `fsync`，写入的
-每个实际字节同时计入请求 `max_temporary_bytes` 和 2 GiB 硬上限，再以 no-replace
+每个实际字节计入请求 `max_temporary_bytes`，再以 no-replace
 hard link 原子发布并同步目录。崩溃遗留的临时文件不会参与恢复，较新的损坏或未知版本
 阶段会 fail closed，而不是降级成旧阶段或成功。
 
@@ -80,12 +80,10 @@ metadata、格式提示或任一 `ConversionOptions` 变化都返回稳定 `reco
 并发 loser 读取并返回唯一持久 winner，不能返回自己的未提交 payload。`converted`
 恢复只重做渲染；`succeeded` 恢复重新校验 Document、诊断、完整资源清单、嵌套图片引用
 和 reading-order provenance，并使用当前 renderer 重放后逐字节比较 Markdown。
-checkpoint 加载在 typed serde 前执行文件大小、JSON depth、container width 和 value count
-预检；depth 上限从公共 `MAX_DOCUMENT_DEPTH` 推导，因此合法最深 IR 的 wire
+checkpoint 加载在 typed serde 前按文件大小预留内存，校验 JSON depth 并统计字符串和结构节点的内存开销；depth 上限从公共 `MAX_DOCUMENT_DEPTH` 推导，因此合法最深 IR 的 wire
 嵌套也可恢复。资源字节使用带声明解码长度的规范 padded base64 wire，解码前先
 校验 alphabet、padding、长度、单资源及总资源请求上限。原始文件、typed wire、base64
-字符串、资源向量与解码字节的共存峰值统一计入请求内存预算；文件另受 2 GiB
-硬上限。
+字符串、资源向量与解码字节的共存峰值统一计入请求内存预算。
 协议完全离线，不执行任何远程访问。
 
 ## IR 与溯源
@@ -264,7 +262,7 @@ terminal state 没有出边。任务列表按 `(updated_at_ms DESC, id DESC)` �
 SQLite 固定使用 `rusqlite 0.37.0` 的 `bundled`、`backup` 与 `limits` features，由
 `libsqlite3-sys 0.35.0` 编译 SQLite 3.50.2 amalgamation；不探测或回退到系统 SQLite。
 连接强制并回读验证 WAL、foreign keys、`synchronous=FULL`、`trusted_schema=OFF`、
-`secure_delete=ON`、`temp_store=MEMORY`、4 KiB page 和 256 MiB page ceiling，并设置 SQLite
+`secure_delete=ON`、`temp_store=MEMORY`、4 KiB page 和 SQLite 支持的页数上界，并设置 SQLite
 allocation limits。每个 `TaskStore` 是可移动但不共享的同步
 connection；async 服务必须通过 blocking executor 调用。
 

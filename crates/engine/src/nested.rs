@@ -1,7 +1,7 @@
 use into_markdown_core::{
     BoxFuture, ConversionError, Converter, ConverterOutput, DetectionAuthority, ExecutionContext,
     FormatCandidate, FormatDetector, InputFormat, NestedConversionRequest, NestedConversionService,
-    ProbeOutcome, Services,
+    Services,
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 pub(crate) struct NestedDispatcher {
     detectors: Vec<Arc<dyn FormatDetector>>,
     converters: Vec<Arc<dyn Converter>>,
+    enrichers: Vec<Arc<dyn into_markdown_core::OutputEnricher>>,
     base_services: Services,
     self_weak: Weak<Self>,
 }
@@ -17,12 +18,14 @@ impl NestedDispatcher {
     pub(crate) fn new(
         detectors: Vec<Arc<dyn FormatDetector>>,
         converters: Vec<Arc<dyn Converter>>,
+        enrichers: Vec<Arc<dyn into_markdown_core::OutputEnricher>>,
         mut base_services: Services,
     ) -> Arc<Self> {
         base_services.nested = None;
         Arc::new_cyclic(|self_weak| Self {
             detectors,
             converters,
+            enrichers,
             base_services,
             self_weak: self_weak.clone(),
         })
@@ -49,106 +52,97 @@ impl NestedConversionService for NestedDispatcher {
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
             context.checkpoint()?;
-            let candidates =
-                detect_formats(&self.detectors, request.input, request.hint, context).await?;
-            super::unsupported::check(request.input, &candidates)?;
-            let mut selected = None;
-            for candidate in &candidates {
-                for converter in &self.converters {
-                    if request.excluded_converter_ids.contains(&converter.id())
-                        || !converter.supported_formats().contains(&candidate.format)
-                    {
-                        continue;
-                    }
-                    match context.run(converter.probe(request.input, candidate, context)).await?? {
-                        ProbeOutcome::NotApplicable => {}
-                        ProbeOutcome::Match { confidence } => {
-                            let attempt = Attempt {
-                                converter: Arc::clone(converter),
-                                candidate,
-                                confidence: candidate.confidence * normalize_confidence(confidence),
-                            };
-                            if selected.as_ref().is_none_or(|current| attempt.precedes(current)) {
-                                selected = Some(attempt);
-                            }
-                        }
-                    }
-                }
-            }
-            let Some(attempt) = selected else {
-                return Err(ConversionError::NoConverter {
-                    format: candidates
-                        .iter()
-                        .map(|candidate| candidate.format.as_str())
-                        .collect::<Vec<_>>()
-                        .join(","),
-                });
-            };
-            let services = self.services()?;
-            let plan = attempt.converter.planned_output_bytes(
+            let candidates = crate::source_recovery::detect_for_conversion(
+                &self.detectors,
                 request.input,
-                attempt.candidate,
+                request.hint,
                 request.options,
                 context,
-            )?;
-            if plan > context.available_memory_bytes() {
-                return Err(ConversionError::ResourceLimit {
-                    limit: "max_memory_bytes",
-                    detail: format!(
-                        "nested converter {} planned {plan} bytes but only {} remain",
-                        attempt.converter.id(),
-                        context.available_memory_bytes()
-                    ),
-                });
-            }
-            // The containing converter already runs inside the engine's
-            // globally charged preflight credit. Reusing that exact context is
-            // required: minting a credit from a child credit is forbidden.
-            let output = context
-                .run(attempt.converter.convert(
+            )
+            .await?;
+            let attempt = crate::preparation::select_converter(
+                &self.converters,
+                request.input,
+                &candidates,
+                request.options,
+                context,
+                request.excluded_converter_ids,
+            )
+            .await?;
+            if let Some(error) = attempt.probe_error {
+                return crate::source_recovery::converter_failure(
                     request.input,
-                    attempt.candidate,
                     request.options,
-                    &services,
                     context,
-                ))
-                .await??;
-            let validation_bytes = into_markdown_core::estimate_validation_working_set(
-                &output.document,
-                &output.assets,
-                &output.diagnostics,
+                    error,
+                    attempt.candidate.format,
+                );
+            }
+            let services = self.services()?;
+            let converted = async {
+                let plan = attempt.converter.planned_output_bytes(
+                    request.input,
+                    &attempt.candidate,
+                    request.options,
+                    context,
+                )?;
+                if plan > context.available_memory_bytes() {
+                    return Err(ConversionError::ResourceLimit {
+                        limit: "max_memory_bytes",
+                        detail: format!(
+                            "nested converter {} planned {plan} bytes but only {} remain",
+                            attempt.converter.id(),
+                            context.available_memory_bytes()
+                        ),
+                    });
+                }
+                // The containing converter already runs inside the engine's
+                // globally charged preflight credit. Reusing that exact context is
+                // required: minting a credit from a child credit is forbidden.
+                context
+                    .run(attempt.converter.convert(
+                        request.input,
+                        &attempt.candidate,
+                        request.options,
+                        &services,
+                        context,
+                    ))
+                    .await?
+            }
+            .await;
+            let output = match converted {
+                Ok(output) => output,
+                Err(error) => crate::source_recovery::converter_failure(
+                    request.input,
+                    request.options,
+                    context,
+                    error,
+                    attempt.candidate.format,
+                )?,
+            };
+            let output = crate::source_recovery::retain_empty_source(
+                request.input,
+                request.options,
+                context,
+                output,
+                attempt.candidate.format,
             )?;
-            let validation_memory = context.reserve_memory(validation_bytes)?;
-            output.document.validate().map_err(|error| ConversionError::Internal {
-                detail: format!(
-                    "nested converter {} returned invalid document IR ({} at {}): {}",
-                    attempt.converter.id(),
-                    error.code.as_str(),
-                    error.path,
-                    error.detail
-                ),
-            })?;
-            drop(validation_memory);
-            output.account_retained(context)
+            validate_output(&output, attempt.converter.id(), context)?;
+            let output = output.account_retained(context)?;
+            if !request.enrich_output {
+                return Ok(output);
+            }
+            crate::nested_enrichment::enrich(
+                &self.enrichers,
+                output,
+                attempt.converter.id(),
+                attempt.candidate.format,
+                request.options,
+                &services,
+                context,
+            )
+            .await
         })
-    }
-}
-
-struct Attempt<'a> {
-    converter: Arc<dyn Converter>,
-    candidate: &'a FormatCandidate,
-    confidence: f32,
-}
-
-impl Attempt<'_> {
-    fn precedes(&self, other: &Self) -> bool {
-        self.candidate
-            .explicit
-            .cmp(&other.candidate.explicit)
-            .then_with(|| self.confidence.total_cmp(&other.confidence))
-            .then_with(|| self.converter.priority().cmp(&other.converter.priority()))
-            .then_with(|| other.converter.id().cmp(self.converter.id()))
-            .is_gt()
     }
 }
 
@@ -260,4 +254,28 @@ fn merge_candidate(best: &mut BTreeMap<InputFormat, FormatCandidate>, candidate:
             existing.diagnostics.push(diagnostic);
         }
     }
+}
+
+fn validate_output(
+    output: &ConverterOutput,
+    converter_id: &str,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    let validation_bytes = into_markdown_core::estimate_validation_working_set(
+        &output.document,
+        &output.assets,
+        &output.diagnostics,
+    )?;
+    let validation_memory = context.reserve_memory(validation_bytes)?;
+    output.document.validate().map_err(|error| ConversionError::Internal {
+        detail: format!(
+            "nested converter {} returned invalid document IR ({} at {}): {}",
+            converter_id,
+            error.code.as_str(),
+            error.path,
+            error.detail
+        ),
+    })?;
+    drop(validation_memory);
+    Ok(())
 }

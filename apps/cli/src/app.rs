@@ -6583,7 +6583,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let error = run(
-            vec![input.into_os_string()],
+            vec![input.into_os_string(), "--error-policy".into(), "strict".into()],
             RunContext {
                 user_data_anchor: Some(root.join(".test-user-data")),
                 stdout: &mut stdout,

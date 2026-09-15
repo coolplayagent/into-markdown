@@ -105,12 +105,11 @@ fn convert_native(
     if requested == InputFormat::Xls && xls::looks_like_raw_biff(bytes) {
         return xls::convert_raw(bytes, &mut budget, options, context);
     }
-    let compatibility =
-        if requested == InputFormat::Xls && options.error_policy == ErrorPolicy::BestEffort {
-            CompoundCompatibility::LegacyOfficeBestEffort
-        } else {
-            CompoundCompatibility::Strict
-        };
+    let compatibility = if options.error_policy == ErrorPolicy::BestEffort {
+        CompoundCompatibility::LegacyOfficeBestEffort
+    } else {
+        CompoundCompatibility::Strict
+    };
     let compound = CompoundFile::open_with_compatibility(bytes, &mut budget, compatibility)?;
     let compound_recoveries = compound.recoveries().collect::<Vec<_>>();
     let container_view_required = !compound_recoveries.is_empty();
@@ -437,7 +436,7 @@ mod native_tests {
         }));
         assert!(matches!(
             convert_with_options(&storage_metadata, InputFormat::Doc, &best_effort),
-            Err(ConversionError::Malformed { .. })
+            Err(ConversionError::Unsupported { .. })
         ));
         assert!(matches!(
             convert_with_options(&storage_metadata, InputFormat::Doc, &strict),
@@ -578,23 +577,26 @@ mod native_tests {
     }
 
     #[test]
-    fn doc_and_ppt_keep_strict_cfb_validation_in_best_effort() {
+    fn doc_and_ppt_recover_redundant_cfb_metadata_in_best_effort() {
         let best_effort = options(ErrorPolicy::BestEffort);
+        let strict = options(ErrorPolicy::Strict);
         for (fixture, format) in [(DOC, InputFormat::Doc), (PPT, InputFormat::Ppt)] {
             let mut storage_metadata = fixture.to_vec();
             let comp_obj = directory_entry(&storage_metadata, "\u{1}CompObj");
             storage_metadata[comp_obj + 66] = 1;
-            assert!(matches!(
-                convert_with_options(&storage_metadata, format, &best_effort),
-                Err(ConversionError::Malformed { .. })
-            ));
-
             let mut trailing_bytes = fixture.to_vec();
             trailing_bytes.extend_from_slice(&[0xaa, 0xbb, 0xcc]);
-            assert!(matches!(
-                convert_with_options(&trailing_bytes, format, &best_effort),
-                Err(ConversionError::Malformed { .. })
-            ));
+            for bytes in [storage_metadata, trailing_bytes] {
+                let recovered = convert_with_options(&bytes, format, &best_effort).unwrap();
+                let original = convert_with_options(fixture, format, &best_effort).unwrap();
+                assert_eq!(recovered.document, original.document);
+                assert_eq!(recovered.assets, original.assets);
+                assert!(recovered.diagnostics.len() > original.diagnostics.len());
+                assert!(matches!(
+                    convert_with_options(&bytes, format, &strict),
+                    Err(ConversionError::Malformed { .. })
+                ));
+            }
         }
     }
 

@@ -26,8 +26,8 @@ fn main() {
     embedded_runtime::register_pdfium_resolver();
     let arguments = std::env::args_os().skip(1).collect::<Vec<OsString>>();
     let stdin_is_terminal = std::io::stdin().is_terminal();
-    let mut stdout = std::io::stdout().lock();
-    let mut stderr = std::io::stderr().lock();
+    let mut stdout = std::io::stdout();
+    let mut stderr = std::io::stderr();
     let cwd = match std::env::current_dir() {
         Ok(path) => path,
         Err(error) => {

@@ -175,19 +175,19 @@
         },
         {
           "symbol": "impl WebTaskBackend::relabel_speakers",
-          "lines": 133
+          "lines": 128
         },
         {
           "symbol": "publish_result_named",
-          "lines": 166
+          "lines": 163
         },
         {
           "symbol": "run_job",
-          "lines": 205
+          "lines": 203
         },
         {
           "symbol": "run_job::<closure_expression>#2",
-          "lines": 133
+          "lines": 131
         }
       ],
       "allowances": [
@@ -416,7 +416,7 @@
       "functions": [
         {
           "symbol": "parse_word_part",
-          "lines": 652
+          "lines": 644
         }
       ],
       "allowances": [
@@ -460,11 +460,11 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1226,
+      "lines": 1225,
       "functions": [
         {
           "symbol": "enrich",
-          "lines": 196
+          "lines": 193
         },
         {
           "symbol": "plan_enrichment",
@@ -536,7 +536,7 @@
       "functions": [
         {
           "symbol": "assemble",
-          "lines": 174
+          "lines": 168
         }
       ],
       "allowances": [
@@ -619,7 +619,7 @@
     },
     {
       "path": "crates/converters/src/feed.rs",
-      "lines": 2776,
+      "lines": 2761,
       "functions": [
         {
           "symbol": "append_content",
@@ -679,7 +679,7 @@
     },
     {
       "path": "crates/converters/src/html.rs",
-      "lines": 3151,
+      "lines": 3124,
       "functions": [
         {
           "symbol": "impl Builder<'a,'budget>::build_data_image",
@@ -742,7 +742,7 @@
       "functions": [
         {
           "symbol": "validate",
-          "lines": 149
+          "lines": 148
         }
       ],
       "allowances": [
@@ -774,7 +774,7 @@
       "functions": [
         {
           "symbol": "recognize_inner",
-          "lines": 148
+          "lines": 146
         }
       ],
       "allowances": [
@@ -842,7 +842,7 @@
       "functions": [
         {
           "symbol": "impl Converter for MediaConverter::convert",
-          "lines": 156
+          "lines": 152
         }
       ],
       "allowances": [
@@ -869,7 +869,7 @@
       "functions": [
         {
           "symbol": "assemble",
-          "lines": 155
+          "lines": 153
         }
       ],
       "allowances": [
@@ -881,7 +881,7 @@
     },
     {
       "path": "crates/converters/src/notebook.rs",
-      "lines": 2053,
+      "lines": 2039,
       "functions": [
         {
           "symbol": "valid_jpeg",
@@ -939,7 +939,7 @@
         },
         {
           "symbol": "impl Package::open",
-          "lines": 229
+          "lines": 227
         }
       ],
       "allowances": [
@@ -1090,7 +1090,7 @@
       "functions": [
         {
           "symbol": "parse_xml",
-          "lines": 116
+          "lines": 113
         }
       ],
       "allowances": [
@@ -1122,7 +1122,7 @@
       "functions": [
         {
           "symbol": "impl PdfOutput::extract_page",
-          "lines": 268
+          "lines": 266
         }
       ],
       "allowances": [
@@ -1354,7 +1354,7 @@
       "functions": [
         {
           "symbol": "impl Parser<'_>::control_word",
-          "lines": 195
+          "lines": 191
         }
       ],
       "allowances": [
@@ -1402,7 +1402,7 @@
     },
     {
       "path": "crates/converters/src/text.rs",
-      "lines": 1632,
+      "lines": 1550,
       "functions": [
         {
           "symbol": "decode_legacy",
@@ -1583,23 +1583,12 @@
       ]
     },
     {
-      "path": "crates/converters/src/workbook/orchestrator.rs",
-      "lines": null,
-      "functions": [
-        {
-          "symbol": "convert_workbook",
-          "lines": 105
-        }
-      ],
-      "allowances": []
-    },
-    {
       "path": "crates/converters/src/workbook/preflight.rs",
       "lines": null,
       "functions": [
         {
           "symbol": "preflight_package",
-          "lines": 726
+          "lines": 723
         }
       ],
       "allowances": [
@@ -1689,7 +1678,7 @@
     },
     {
       "path": "crates/core/src/dto.rs",
-      "lines": 2260,
+      "lines": 2253,
       "functions": [
         {
           "symbol": "impl BundleManifestDto::validate",
@@ -1711,7 +1700,7 @@
     },
     {
       "path": "crates/core/src/ir.rs",
-      "lines": 1702,
+      "lines": 1664,
       "functions": [
         {
           "symbol": "preflight_document_value",
@@ -1720,10 +1709,6 @@
         {
           "symbol": "validate_block",
           "lines": 149
-        },
-        {
-          "symbol": "validate_locator",
-          "lines": 108
         }
       ],
       "allowances": [
@@ -1743,15 +1728,15 @@
     },
     {
       "path": "crates/core/src/spi.rs",
-      "lines": 1585,
+      "lines": 1572,
       "functions": [
         {
           "symbol": "estimate_validation_working_set",
-          "lines": 233
+          "lines": 210
         },
         {
           "symbol": "estimate_validation_working_set::visit_nodes",
-          "lines": 114
+          "lines": 112
         }
       ],
       "allowances": [
@@ -1775,7 +1760,7 @@
       "functions": [
         {
           "symbol": "convert",
-          "lines": 288
+          "lines": 277
         }
       ],
       "allowances": [
@@ -1787,7 +1772,7 @@
     },
     {
       "path": "crates/engine/src/recovery/store.rs",
-      "lines": 1384,
+      "lines": 1377,
       "functions": [],
       "allowances": [
         {
@@ -1951,7 +1936,7 @@
     },
     {
       "path": "crates/ocr/src/runtime.rs",
-      "lines": 1361,
+      "lines": 1292,
       "functions": [],
       "allowances": []
     },
@@ -2010,11 +1995,11 @@
     },
     {
       "path": "crates/pdfium/src/native.rs",
-      "lines": 1788,
+      "lines": 1779,
       "functions": [
         {
           "symbol": "impl Backend for Native::characters",
-          "lines": 123
+          "lines": 116
         },
         {
           "symbol": "validated_snapshot_with_hook",
@@ -2065,7 +2050,7 @@
     },
     {
       "path": "crates/process-plugin/src/lib.rs",
-      "lines": 1366,
+      "lines": 1363,
       "functions": [
         {
           "symbol": "copy_runtime_tree",
@@ -2130,7 +2115,7 @@
     },
     {
       "path": "crates/render-markdown/src/lib.rs",
-      "lines": 1745,
+      "lines": 1692,
       "functions": [
         {
           "symbol": "plan_assets",
@@ -2138,11 +2123,11 @@
         },
         {
           "symbol": "planned_render_peak",
-          "lines": 303
+          "lines": 174
         },
         {
           "symbol": "planned_render_peak::nodes",
-          "lines": 165
+          "lines": 126
         }
       ],
       "allowances": [
@@ -2162,13 +2147,8 @@
     },
     {
       "path": "crates/task-store/src/lib.rs",
-      "lines": 2311,
-      "functions": [
-        {
-          "symbol": "migrate",
-          "lines": 124
-        }
-      ],
+      "lines": 2310,
+      "functions": [],
       "allowances": [
         {
           "key": "item|migrate|too_many_lines",
@@ -2457,7 +2437,7 @@
       "functions": [
         {
           "symbol": "WorkbenchPage",
-          "lines": 188
+          "lines": 185
         }
       ],
       "allowances": []

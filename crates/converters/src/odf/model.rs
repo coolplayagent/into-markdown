@@ -22,7 +22,6 @@ pub(super) const FO_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-com
 pub(super) const CONFIG_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:config:1.0";
 pub(super) const NUMBER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:datastyle:1.0";
 pub(super) const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-pub(super) const MAX_XML_EVENTS: usize = 8_000_000;
 pub(super) const ZIP_STREAM_CHUNK: usize = 16 * 1024;
 pub(super) const PACKAGE_BASE_WORKING_BYTES: u64 = 1024 * 1024;
 pub(super) const IMAGE_DECODER_HEADER_BYTES: u64 = 262_144;

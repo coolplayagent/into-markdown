@@ -380,7 +380,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const chooseFile = async (next: File | undefined) => {
     if (!next) return;
     if (!supportsMeetingFile(next.name)) { setMessage(t("unsupportedRecording")); return; }
-    if (next.size > options.maxInputMiB * 1024 * 1024) { setMessage(t("fileTooLarge")); return; }
+    if (options.maxInputMiB != null && next.size > options.maxInputMiB * 1024 * 1024) { setMessage(t("fileTooLarge")); return; }
     if (fromDraft) {
       try { await clearRecordingDraft(); }
       catch { setMessage(t("recordingStorageUnavailable")); return; }

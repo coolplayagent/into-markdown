@@ -71,26 +71,26 @@ export type AssetMode = "extract" | "embed" | "omit";
 export type NetworkMode = "restricted" | "unrestricted";
 export interface WorkbenchOptions {
   format: InputFormat | null; ocrPolicy: OcrPolicy; ocrConfidence: number; aiMode: AiMode;
-  assetMode: AssetMode; includeProvenance: boolean; maxInputMiB: number; maxMemoryMiB: number;
-  maxTemporaryMiB: number; maxPages: number; networkMode: NetworkMode; authorizeProvider: boolean;
+  assetMode: AssetMode; includeProvenance: boolean; maxInputMiB: number | null; maxMemoryMiB: number | null;
+  maxTemporaryMiB: number | null; maxPages: number | null; networkMode: NetworkMode; authorizeProvider: boolean;
 }
 export const defaultWorkbenchOptions: WorkbenchOptions = {
   format: null, ocrPolicy: "auto", ocrConfidence: 0.7, aiMode: "off", assetMode: "extract",
-  includeProvenance: true, maxInputMiB: 512, maxMemoryMiB: 1024, maxTemporaryMiB: 256,
-  maxPages: 10_000, networkMode: "restricted", authorizeProvider: false,
+  includeProvenance: true, maxInputMiB: null, maxMemoryMiB: null, maxTemporaryMiB: null,
+  maxPages: null, networkMode: "restricted", authorizeProvider: false,
 };
 export interface MeetingOptions {
   diarize: boolean;
   expectedSpeakers: number | null;
   transcriptLanguage: "auto" | "zh-Hans" | "zh-Hant" | "en";
   authorizeProvider: boolean;
-  maxInputMiB: number;
-  maxMemoryMiB: number;
-  maxTemporaryMiB: number;
+  maxInputMiB: number | null;
+  maxMemoryMiB: number | null;
+  maxTemporaryMiB: number | null;
 }
 export const defaultMeetingOptions: MeetingOptions = {
-  diarize: true, expectedSpeakers: null, transcriptLanguage: "auto", authorizeProvider: false, maxInputMiB: 512,
-  maxMemoryMiB: 1536, maxTemporaryMiB: 4096,
+  diarize: true, expectedSpeakers: null, transcriptLanguage: "auto", authorizeProvider: false, maxInputMiB: null,
+  maxMemoryMiB: null, maxTemporaryMiB: null,
 };
 export function meetingOptionsForLocale(locale: string): MeetingOptions {
   return { ...defaultMeetingOptions, transcriptLanguage: locale.toLowerCase().startsWith("zh") ? "zh-Hans" : "auto" };
@@ -278,7 +278,7 @@ export function parseTask(value: unknown): TaskRecord {
     || !Number.isSafeInteger(value.artifactGeneration) || Number(value.artifactGeneration) < 0
     || Number(value.progressMillionths) < 0 || Number(value.progressMillionths) > 1_000_000
     || !Array.isArray(value.diagnostics) || value.diagnostics.length > 1024 || value.diagnostics.some((item) => !isObject(item) || typeof item.code !== "string" || item.code.length > 128)
-    || !Array.isArray(value.artifacts) || value.artifacts.length > 128 || value.artifacts.some((artifact) => !isArtifact(artifact))
+    || !Array.isArray(value.artifacts) || value.artifacts.some((artifact) => !isArtifact(artifact))
     || value.displayName !== undefined && value.displayName !== null
       && (typeof value.displayName !== "string" || value.displayName.length === 0 || value.displayName.length > 255 || /[\u0000-\u001f\u007f/\\]/.test(value.displayName))
     || value.format !== undefined && value.format !== null && !inputFormats.has(value.format as InputFormat)
@@ -311,7 +311,7 @@ function parseTaskEvent(value: unknown): TaskEvent {
         || value.execution.message.length > 256 || /[\u0000-\u001f\u007f]/.test(value.execution.message)))) throw new ApiError("invalidEvent");
   return value as unknown as TaskEvent;
 }
-async function readBoundedJson(response: Response, limit = MAX_RESPONSE_BYTES): Promise<unknown> {
+async function readBoundedJson(response: Response, limit = Number.MAX_SAFE_INTEGER): Promise<unknown> {
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) throw new ApiError("responseTooLarge");
   if (!response.body) throw new ApiError("invalidResponse");
@@ -333,24 +333,37 @@ function base64UrlUtf8(value: string): string {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 function base64UrlJson(value: unknown): string { return base64UrlUtf8(JSON.stringify(value)); }
-function mib(value: number): number { return Math.round(value * 1024 * 1024); }
+function resourceOverrides(options: Pick<MeetingOptions, "maxInputMiB" | "maxMemoryMiB" | "maxTemporaryMiB"> & { maxPages?: number | null }): { limits?: Record<string, number> } {
+  const limits: Record<string, number> = {};
+  for (const [key, value, scale] of [
+    ["max_input_bytes", options.maxInputMiB, 1024 * 1024],
+    ["max_memory_bytes", options.maxMemoryMiB, 1024 * 1024],
+    ["max_temporary_bytes", options.maxTemporaryMiB, 1024 * 1024],
+    ["max_pages", options.maxPages, 1],
+  ] as const) {
+    if (value != null) {
+      const converted = Math.round(value * scale);
+      if (!Number.isSafeInteger(converted) || converted <= 0) throw new ApiError("invalidLimits");
+      limits[key] = converted;
+    }
+  }
+  return Object.keys(limits).length ? { limits } : {};
+}
+export function validResourceLimits(options: MeetingOptions | WorkbenchOptions): boolean {
+  try { resourceOverrides(options); return true; } catch { return false; }
+}
 export function taskRequest(options: WorkbenchOptions, batchId?: string): unknown {
   const ai = options.aiMode;
   const unrestrictedNetwork = options.networkMode === "unrestricted";
   return { schemaVersion: 1, workflow: "conversion", format: options.format, ...(batchId ? { batchId } : {}), options: {
+    error_policy: "best-effort",
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
     ocr: { policy: options.ocrPolicy, minimum_confidence: options.ocrConfidence },
-    asr: { language: null, chinese_script: "preserve", max_threads: 4, max_duration_ms: null,
-      max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
+    asr: { language: null, chinese_script: "preserve" },
     diarization: { enabled: false, expected_speakers: null, max_speakers: 16 },
     ai: { vision_ocr: ai, image_description: ai, layout_repair: ai, table_repair: ai, formula_repair: ai, audio_transcription: "off", markdown_postprocess: ai },
     network: { enabled: unrestrictedNetwork, max_redirects: 3, deny_private_networks: !unrestrictedNetwork, allowed_hosts: [] },
-    limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
-      max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
-      max_pages: options.maxPages, max_pdf_page_objects: 100_000, max_pdf_total_objects: 10_000_000, max_pdf_layout_comparisons: 12_000_000, max_asset_bytes: 67108864, max_total_asset_bytes: 134217728,
-      max_memory_bytes: mib(options.maxMemoryMiB), max_temporary_bytes: mib(options.maxTemporaryMiB), max_table_rows: 100000,
-      max_table_columns: 16384, max_table_cells: 1000000, max_field_bytes: 16777216, max_feed_entries: 10000,
-      max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
+    ...resourceOverrides(options),
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: options.includeProvenance,
       asset_mode: options.assetMode, asset_uri_prefix: null },
   }, authorization: { network: unrestrictedNetwork, privateNetwork: unrestrictedNetwork, provider: options.authorizeProvider } };
@@ -365,21 +378,16 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
   const chineseScript = options.transcriptLanguage === "zh-Hans" ? "simplified"
     : options.transcriptLanguage === "zh-Hant" ? "traditional" : "preserve";
   return { schemaVersion: 1, workflow: "meetingTranscript", format: inferred, options: {
+    error_policy: "best-effort",
     text: { charset: null, decoding_mode: "strict" }, delimited_text: { header: "auto", ragged_rows: "strict" },
-    ocr: { policy: "off", minimum_confidence: 0.7 },
-    asr: { language, chinese_script: chineseScript, max_threads: 4, max_duration_ms: null,
-      max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024 },
+    ocr: { policy: "auto", minimum_confidence: 0.7 },
+    asr: { language, chinese_script: chineseScript },
     diarization: { enabled: options.diarize, expected_speakers: options.expectedSpeakers,
       max_speakers: 16 },
     ai: { vision_ocr: "off", image_description: "off", layout_repair: "off", table_repair: "off",
       formula_repair: "off", audio_transcription: "only", markdown_postprocess: "off" },
     network: { enabled: options.authorizeProvider, max_redirects: 3, deny_private_networks: !options.authorizeProvider, allowed_hosts: [] },
-    limits: { max_input_bytes: mib(options.maxInputMiB), max_decompressed_bytes: 1073741824, max_archive_entries: 100000,
-      max_archive_depth: 16, max_archive_entry_bytes: 268435456, max_archive_compression_ratio: 100, max_nesting_depth: 256,
-      max_pages: 10000, max_pdf_page_objects: 100_000, max_pdf_total_objects: 10_000_000, max_pdf_layout_comparisons: 12_000_000, max_asset_bytes: 67108864, max_total_asset_bytes: 134217728,
-      max_memory_bytes: mib(options.maxMemoryMiB), max_temporary_bytes: mib(options.maxTemporaryMiB), max_table_rows: 100000,
-      max_table_columns: 16384, max_table_cells: 1000000, max_field_bytes: 16777216, max_feed_entries: 10000,
-      max_feed_text_bytes: 67108864, max_feed_html_bytes: 67108864 },
+    ...resourceOverrides(options),
     output: { flavor: "gfm", asset_directory_suffix: "_assets", include_provenance: true,
       asset_mode: "extract", asset_uri_prefix: null },
   }, authorization: { network: options.authorizeProvider, privateNetwork: options.authorizeProvider, provider: options.authorizeProvider } };

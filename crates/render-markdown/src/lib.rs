@@ -8,6 +8,9 @@ mod fixed_alloc;
 mod inline;
 mod list;
 
+mod render_plan;
+use render_plan::{RenderPlan, plan_inlines};
+
 use inline::{protect_paragraph_indent, render_html_inlines, render_inlines};
 
 use base64::Engine as _;
@@ -530,15 +533,41 @@ where
         // `render_blocks` keeps its Vec<String> and join output alive while
         // two LF normalization results, two `<br>` replacement results, and
         // the optional span/header wrapper are successively constructed.
-        cell_block_joins = cell_block_joins
+        let temporary = body
             .checked_add(body)
-            .and_then(|value| value.checked_add(body))
             .and_then(|value| value.checked_add(flattened))
             .and_then(|value| value.checked_add(flattened))
             .and_then(|value| value.checked_add(wrapped))
             .ok_or_else(render_plan_overflow)?;
+        cell_block_joins = cell_block_joins.max(temporary);
     }
     Ok((cell_strings, cell_block_joins))
+}
+
+fn plan_table_contents(
+    rows: &[TableRow],
+    plan: &mut RenderPlan<'_>,
+    visit: fn(&[BlockNode], usize, &mut RenderPlan<'_>) -> Result<u64, ConversionError>,
+) -> Result<(u64, u64), ConversionError> {
+    let mut peak = 0;
+    let owners = table_cell_owner_bounds(rows, |blocks| {
+        // Each cell releases its text-normalization and block-join workspace
+        // before the next cell; the retained grid strings are counted separately.
+        let mut cell =
+            RenderPlan { bytes: 0, units: 0, visited: plan.visited, context: plan.context };
+        let body = visit(blocks, 1, &mut cell)?;
+        let headers = cell
+            .units
+            .checked_mul(
+                (16 * std::mem::size_of::<String>() + 12 * std::mem::size_of::<usize>()) as u64,
+            )
+            .ok_or_else(render_plan_overflow)?;
+        peak = peak.max(cell.bytes.checked_add(headers).ok_or_else(render_plan_overflow)?);
+        plan.visited = cell.visited;
+        Ok(body)
+    })?;
+    plan.add(peak)?;
+    Ok(owners)
 }
 
 fn table_plan_owners(
@@ -593,111 +622,10 @@ fn planned_render_peak(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<u64, ConversionError> {
-    struct Plan<'a> {
-        bytes: u64,
-        units: u64,
-        visited: usize,
-        context: &'a ExecutionContext,
-    }
-    impl Plan<'_> {
-        fn add(&mut self, bytes: u64) -> Result<(), ConversionError> {
-            self.bytes = self.bytes.checked_add(bytes).ok_or_else(render_plan_overflow)?;
-            Ok(())
-        }
-        fn unit(&mut self) -> Result<(), ConversionError> {
-            self.units = self.units.checked_add(1).ok_or_else(render_plan_overflow)?;
-            self.visited = self.visited.saturating_add(1);
-            if self.visited.is_multiple_of(1_024) {
-                self.context.checkpoint()?;
-            }
-            Ok(())
-        }
-        fn text(&mut self, value: &str, depth: usize) -> Result<u64, ConversionError> {
-            let source = u64::try_from(value.len()).map_err(|_| render_plan_overflow())?;
-            let newlines = u64::try_from(value.bytes().filter(|byte| *byte == b'\n').count())
-                .map_err(|_| render_plan_overflow())?;
-            // `normalize_lf` owns two successive replace results; `single_line`
-            // owns one more. `escape_text` expands each input byte by at most
-            // five bytes (`&amp;`) and marked text can wrap all six supported
-            // marks with at most 13 bytes each.
-            self.add(source)?;
-            self.add(source)?;
-            self.add(source)?;
-            // Adjacent marked runs own a joined buffer with geometric capacity.
-            self.add(source)?;
-            self.add(source)?;
-            let output = source
-                .checked_mul(5)
-                .and_then(|value| value.checked_add(6 * 13))
-                .ok_or_else(render_plan_overflow)?;
-            let mut rendered = output;
-            self.add(rendered)?;
-            // At each typed block ancestor the child string remains alive while
-            // indentation replacement, formatting, the Vec<String> slot, and
-            // the container join allocate their own result. This recurrence
-            // mirrors those four concrete owners instead of applying a global
-            // depth multiplier.
-            for _ in 0..depth {
-                self.add(rendered)?;
-                rendered = rendered
-                    .checked_add(newlines.checked_mul(4).ok_or_else(render_plan_overflow)?)
-                    .and_then(|value| value.checked_add(64))
-                    .ok_or_else(render_plan_overflow)?;
-                self.add(rendered)?;
-                self.add(rendered)?;
-                self.add(rendered)?;
-            }
-            Ok(output)
-        }
-    }
-
-    fn inlines(
-        values: &[Inline],
-        block_depth: usize,
-        link_depth: usize,
-        plan: &mut Plan<'_>,
-    ) -> Result<u64, ConversionError> {
-        if link_depth > 2 {
-            return Err(ConversionError::Internal {
-                detail: "renderer preflight rejected nested links".into(),
-            });
-        }
-        let mut output = 0_u64;
-        for value in values {
-            plan.unit()?;
-            let rendered = match value {
-                Inline::Text { value, .. }
-                | Inline::SourceText { value, .. }
-                | Inline::OcrText { value, .. }
-                | Inline::Code(value)
-                | Inline::Formula(value)
-                | Inline::FootnoteReference(value) => plan.text(value, block_depth)?,
-                Inline::Link { target, content } => {
-                    let target_output = plan.text(target, block_depth)?;
-                    inlines(content, block_depth, link_depth + 1, plan)?
-                        .checked_add(target_output.checked_mul(3).ok_or_else(render_plan_overflow)?)
-                        .and_then(|value| value.checked_add(6))
-                        .ok_or_else(render_plan_overflow)?
-                }
-                Inline::LineBreak => {
-                    plan.add(4)?;
-                    4
-                }
-                _ => {
-                    return Err(ConversionError::Internal {
-                        detail: "renderer preflight encountered an unsupported future inline"
-                            .into(),
-                    });
-                }
-            };
-            output = output.checked_add(rendered).ok_or_else(render_plan_overflow)?;
-        }
-        Ok(output)
-    }
     fn nodes(
         values: &[BlockNode],
         depth: usize,
-        plan: &mut Plan<'_>,
+        plan: &mut RenderPlan<'_>,
     ) -> Result<u64, ConversionError> {
         if depth > into_markdown_core::MAX_DOCUMENT_DEPTH {
             return Err(ConversionError::Internal {
@@ -709,9 +637,9 @@ fn planned_render_peak(
             plan.unit()?;
             let rendered = match &value.block {
                 Block::Paragraph(values) | Block::TimedSegment { content: values, .. } => {
-                    inlines(values, depth, 1, plan)?
+                    plan_inlines(values, depth, 1, plan)?
                 }
-                Block::Heading { content: values, .. } => inlines(values, depth, 1, plan)?
+                Block::Heading { content: values, .. } => plan_inlines(values, depth, 1, plan)?
                     .checked_add(16)
                     .ok_or_else(render_plan_overflow)?,
                 Block::List { items, .. } => {
@@ -731,14 +659,7 @@ fn planned_render_peak(
                 }
                 Block::Table { rows, .. } => {
                     let (width, first_has_header, _) = table_shape(rows)?;
-                    for row in rows {
-                        plan.unit()?;
-                        for _ in &row.cells {
-                            plan.unit()?;
-                        }
-                    }
-                    let (cell_strings, cell_block_joins) =
-                        table_cell_owner_bounds(rows, |blocks| nodes(blocks, depth + 1, plan))?;
+                    let (cell_strings, cell_block_joins) = plan_table_contents(rows, plan, nodes)?;
                     let owners = table_plan_owners(
                         rows,
                         width,
@@ -772,43 +693,8 @@ fn planned_render_peak(
                             plan.add(rendered)?;
                         }
                         rendered
-                    } else if language.as_deref() == Some("tsv") && longest_run(text, '`') <= 2 {
-                        let source =
-                            u64::try_from(text.len()).map_err(|_| render_plan_overflow())?;
-                        let newlines =
-                            u64::try_from(text.bytes().filter(|byte| *byte == b'\n').count())
-                                .map_err(|_| render_plan_overflow())?;
-                        // Paged workbook TSV escapes backticks, so the three-byte
-                        // fence is fixed. Account the two LF-normalization owners,
-                        // the fenced output, and each enclosing block join.
-                        plan.add(source)?;
-                        plan.add(source)?;
-                        let mut rendered =
-                            source.checked_add(16).ok_or_else(render_plan_overflow)?;
-                        plan.add(rendered)?;
-                        for _ in 0..depth {
-                            plan.add(rendered)?;
-                            rendered = rendered
-                                .checked_add(
-                                    newlines.checked_mul(4).ok_or_else(render_plan_overflow)?,
-                                )
-                                .and_then(|value| value.checked_add(64))
-                                .ok_or_else(render_plan_overflow)?;
-                            plan.add(rendered)?;
-                            plan.add(rendered)?;
-                            plan.add(rendered)?;
-                        }
-                        rendered
                     } else {
-                        let mut rendered = 16_u64;
-                        if let Some(language) = language {
-                            rendered = rendered
-                                .checked_add(plan.text(language, depth)?)
-                                .ok_or_else(render_plan_overflow)?;
-                        }
-                        rendered
-                            .checked_add(plan.text(text, depth)?)
-                            .ok_or_else(render_plan_overflow)?
+                        plan.fenced_text(text, language.as_deref(), depth)?
                     }
                 }
                 Block::Formula(value) => plan.text(value, depth)?,
@@ -824,7 +710,7 @@ fn planned_render_peak(
                             .checked_add(plan.text(alt, depth)?)
                             .ok_or_else(render_plan_overflow)?;
                     }
-                    rendered.checked_add(8).ok_or_else(render_plan_overflow)?
+                    rendered.checked_add(32).ok_or_else(render_plan_overflow)?
                 }
                 Block::Page { blocks, .. } => nodes(blocks, depth + 1, plan)?
                     .checked_add(64)
@@ -864,7 +750,7 @@ fn planned_render_peak(
     }
 
     context.checkpoint()?;
-    let mut plan = Plan { bytes: 0, units: 0, visited: 0, context };
+    let mut plan = RenderPlan { bytes: 0, units: 0, visited: 0, context };
     plan.add(into_markdown_core::estimate_validation_working_set(document, assets, &[])?)?;
     let _ = nodes(&document.blocks, 1, &mut plan)?;
     for asset in assets {
@@ -1019,11 +905,16 @@ impl RenderContext<'_> {
             Block::Paragraph(content) => {
                 render_inlines(content, inline_context).map(protect_paragraph_indent)
             }
-            Block::Heading { level, content } => Ok(format!(
-                "{} {}",
-                "#".repeat(usize::from(*level)),
-                render_inlines(content, inline_context)?
-            )),
+            Block::Heading { level, content } => {
+                let prefix = epub_heading_anchor(node)
+                    .map(|id| format!("<a id=\"{id}\"></a>\n\n"))
+                    .unwrap_or_default();
+                Ok(format!(
+                    "{prefix}{} {}",
+                    "#".repeat(usize::from(*level)),
+                    render_inlines(content, inline_context)?
+                ))
+            }
             Block::List { kind, start, items } => {
                 self.render_list(*kind, *start, items, inline_context)
             }
@@ -1045,7 +936,9 @@ impl RenderContext<'_> {
                     Ok(format!("[^{label}]: {}", indent_continuation(&body, 4)))
                 }
             }
-            Block::Image { asset, alt } => self.render_image(&asset.0, alt.as_deref()),
+            Block::Image { asset, alt } => {
+                self.render_image(&asset.0, alt.as_deref(), node.provenance.locator.page)
+            }
             Block::Page { number, blocks } => {
                 let body = self.render_blocks_in(blocks, inline_context)?;
                 let (anchor_prefix, heading) = page_render_identity(node);
@@ -1216,10 +1109,7 @@ impl RenderContext<'_> {
                         u64::try_from(rendered.capacity()).map_err(|_| render_plan_overflow())?,
                     )
                     .ok_or_else(render_plan_overflow)?;
-                actual.cell_block_joins = actual
-                    .cell_block_joins
-                    .checked_add(temporary)
-                    .ok_or_else(render_plan_overflow)?;
+                actual.cell_block_joins = actual.cell_block_joins.max(temporary);
                 output.push_str(&rendered);
                 output.push_str("</");
                 output.push_str(tag);
@@ -1320,10 +1210,7 @@ impl RenderContext<'_> {
                         u64::try_from(value.capacity()).map_err(|_| render_plan_overflow())?,
                     )
                     .ok_or_else(render_plan_overflow)?;
-                actual.cell_block_joins = actual
-                    .cell_block_joins
-                    .checked_add(temporary)
-                    .ok_or_else(render_plan_overflow)?;
+                actual.cell_block_joins = actual.cell_block_joins.max(temporary);
                 rendered[column] = value;
                 occupancy[column..end].fill(cell.row_span);
                 column = end;
@@ -1388,7 +1275,12 @@ impl RenderContext<'_> {
         Ok((exact, base_temporary.checked_add(wrapper_peak).ok_or_else(render_plan_overflow)?))
     }
 
-    fn render_image(&self, id: &str, alt: Option<&str>) -> Result<String, ConversionError> {
+    fn render_image(
+        &self,
+        id: &str,
+        alt: Option<&str>,
+        page: Option<u32>,
+    ) -> Result<String, ConversionError> {
         let alt = escape_image_alt(&single_line(alt.unwrap_or_default()));
         if self.options.output.asset_mode == AssetMode::Omit {
             return Ok(alt);
@@ -1426,8 +1318,24 @@ impl RenderContext<'_> {
                 validate_link_target(&target)?;
                 escape_destination(&target, InlineContext::Normal)
             };
-        Ok(format!("![{alt}](<{destination}>)"))
+        let prefix = if asset.media_type.starts_with("image/") { "!" } else { "" };
+        let alt = if prefix.is_empty() && alt.trim().is_empty() { "Original image" } else { &alt };
+        let fragment = if asset.media_type == "application/pdf" && !destination.contains('#') {
+            page.map(|page| format!("#page={page}")).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        Ok(format!("{prefix}[{alt}](<{destination}{fragment}>)"))
     }
+}
+
+fn epub_heading_anchor(node: &BlockNode) -> Option<&str> {
+    if node.provenance.provider != "builtin.converter.epub" {
+        return None;
+    }
+    let sequence = node.id.0.strip_prefix("epub-spine-")?.strip_suffix("-heading")?;
+    (!sequence.is_empty() && sequence.bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some(node.id.0.as_str())
 }
 
 fn page_render_identity(node: &BlockNode) -> (&'static str, &'static str) {
@@ -1700,10 +1608,40 @@ fn media_type_extension(media_type: &str) -> Option<String> {
         "image/svg+xml" => "svg",
         "image/avif" => "avif",
         "application/pdf" => "pdf",
+        "application/x-openoffice-gdimetafile" => "svm",
         "text/plain" => "txt",
         "text/csv" => "csv",
         "application/json" => "json",
         "application/zip" => "zip",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.ms-excel.sheet.binary.macroenabled.12" => "xlsb",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.oasis.opendocument.text" => "odt",
+        "application/vnd.oasis.opendocument.spreadsheet" => "ods",
+        "application/vnd.oasis.opendocument.presentation" => "odp",
+        "application/rtf" | "text/rtf" => "rtf",
+        "application/epub+zip" => "epub",
+        "text/markdown" => "md",
+        "text/html" => "html",
+        "text/tab-separated-values" => "tsv",
+        "application/xml" | "text/xml" => "xml",
+        "application/vnd.jgraph.mxfile" => "drawio",
+        "application/x-ipynb+json" => "ipynb",
+        "application/vnd.rar" => "rar",
+        "application/vnd.ms-outlook" => "msg",
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/flac" => "flac",
+        "audio/mpeg" => "mp3",
+        "audio/mp4" => "m4a",
+        "audio/ogg" => "ogg",
+        "video/mp4" => "mp4",
+        "video/quicktime" => "mov",
+        "video/x-matroska" => "mkv",
+        "video/webm" => "webm",
         _ => return None,
     };
     Some(extension.into())
@@ -1938,6 +1876,23 @@ mod tests {
 
     fn node(id: impl Into<String>, block: Block) -> BlockNode {
         BlockNode { id: NodeId(id.into()), block, provenance: provenance() }
+    }
+
+    #[test]
+    fn epub_chapter_links_have_explicit_stable_anchors() {
+        let mut chapter = node(
+            "epub-spine-000001-heading",
+            Block::Heading {
+                level: 1,
+                content: vec![Inline::Text { value: "Chapter".into(), marks: vec![] }],
+            },
+        );
+        chapter.provenance.provider = "builtin.converter.epub".into();
+        let document = Document { blocks: vec![chapter.clone()], ..Document::default() };
+        let markdown = render(&document, &[], &ConversionOptions::default()).unwrap();
+        assert!(markdown.contains("<a id=\"epub-spine-000001-heading\"></a>"));
+        chapter.id.0 = "epub-spine-\" onload=\"x-heading".into();
+        assert_eq!(epub_heading_anchor(&chapter), None);
     }
 
     #[test]
@@ -2386,6 +2341,37 @@ mod tests {
     }
 
     #[test]
+    fn original_attachments_keep_openable_content_addressed_filenames() {
+        for (mime, extension) in [
+            ("application/msword", "doc"),
+            ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
+            ("application/vnd.oasis.opendocument.spreadsheet", "ods"),
+            ("audio/flac", "flac"),
+            ("text/html", "html"),
+        ] {
+            let doc = document(vec![node(
+                "original",
+                Block::Image {
+                    asset: AssetId("source".into()),
+                    alt: Some("Original source".into()),
+                },
+            )]);
+            let asset = Asset {
+                id: AssetId("source".into()),
+                filename: Some("untrusted.png".into()),
+                media_type: mime.into(),
+                bytes: vec![1, 2, 3],
+                external_uri: None,
+            };
+            let plan = plan_assets(&doc, &[asset], &ConversionOptions::default()).unwrap();
+            assert_eq!(
+                plan.entries()[0].filename,
+                format!("asset-{}.{}", sha256_hex(&[1, 2, 3]), extension)
+            );
+        }
+    }
+
+    #[test]
     fn content_plan_rejects_conflicting_metadata_and_unsafe_prefixes() {
         let doc = document(vec![node("a", Block::Image { asset: AssetId("a".into()), alt: None })]);
         let asset = |id: &str, media_type: &str| Asset {
@@ -2726,6 +2712,73 @@ mod tests {
         block.provenance.locator.sheet = Some("Data".into());
         block.provenance.locator.cell = Some(CellRef { row: 4, column: 2 });
         assert_eq!(output(&document(vec![block])), "located\n");
+    }
+
+    #[test]
+    fn original_pdf_assets_render_as_downloadable_links() {
+        let doc = document(vec![node(
+            "original",
+            Block::Image {
+                asset: AssetId("original".into()),
+                alt: Some("Original PDF page 7".into()),
+            },
+        )]);
+        let assets = vec![Asset {
+            id: AssetId("original".into()),
+            filename: Some("original.pdf".into()),
+            media_type: "application/pdf".into(),
+            bytes: b"%PDF-source".to_vec(),
+            external_uri: None,
+        }];
+        let markdown = render(&doc, &assets, &ConversionOptions::default()).unwrap();
+        assert!(markdown.contains("[Original PDF page 7](<"));
+        assert!(!markdown.contains("!["));
+        assert!(markdown.contains(".pdf>"));
+    }
+
+    #[test]
+    fn source_code_fences_fit_actual_byte_budget_and_preserve_delimiters() {
+        let source = "field,&value,````\r\n".repeat(32_768);
+        let doc = document(vec![node(
+            "source",
+            Block::Code { language: Some("csv".into()), text: source.clone() },
+        )]);
+        let mut options = ConversionOptions::default();
+        options.limits.max_memory_bytes = source.len() as u64 * 12 + 65_536;
+        let context = ExecutionContext::new(Default::default(), options.limits.clone());
+        let plan = planned_render_peak(&doc, &[], &options, &context).unwrap();
+        let reservation = context.reserve_memory(plan).unwrap();
+        let markdown = render(&doc, &[], &options).unwrap();
+        assert!(markdown.starts_with("`````csv\n"));
+        assert!(markdown.contains(&source.replace("\r\n", "\n")));
+        assert!(markdown.ends_with("`````\n"));
+        drop(reservation);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
+
+    #[test]
+    fn contiguous_character_runs_share_render_admission_and_keep_mark_boundaries() {
+        let value = "A & readable sentence. ".repeat(4096);
+        let fragmented = document(vec![node(
+            "body",
+            Block::Paragraph(
+                value
+                    .chars()
+                    .map(|c| Inline::Text { value: c.to_string(), marks: vec![] })
+                    .collect(),
+            ),
+        )]);
+        let joined = document(vec![paragraph("body", &value)]);
+        let context = ExecutionContext::new(Default::default(), Default::default());
+        let options = ConversionOptions::default();
+        let fragmented_plan = planned_render_peak(&fragmented, &[], &options, &context).unwrap();
+        let joined_plan = planned_render_peak(&joined, &[], &options, &context).unwrap();
+        let validation = |doc: &Document| {
+            into_markdown_core::estimate_validation_working_set(doc, &[], &[]).unwrap()
+        };
+        assert_eq!(fragmented_plan - validation(&fragmented), joined_plan - validation(&joined));
+        assert_eq!(output(&fragmented), output(&joined));
+        assert!(fragmented_plan >= output(&fragmented).capacity() as u64);
     }
 
     #[test]

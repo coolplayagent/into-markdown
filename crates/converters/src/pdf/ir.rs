@@ -7,7 +7,12 @@ pub(super) fn text_block(
     page: u32,
     info: &PageInfo,
     characters: &[Character],
+    policy: into_markdown_core::ErrorPolicy,
 ) -> Result<BlockNode, ConversionError> {
+    super::recovery::check_native_mapping(
+        characters.iter().map(|character| character.value),
+        policy,
+    )?;
     let mut inlines = Vec::new();
     let inline_capacity = allocation_capacity_bound(characters.len())?;
     inlines
@@ -64,6 +69,23 @@ pub(super) fn provenance(
         locator.font_size = Some(character.font_size);
         locator.rotation_degrees =
             Some((character.angle_degrees + f32::from(info.rotation_degrees)).rem_euclid(360.0));
+        if let Some((x, y)) = character.origin {
+            let origin = normalize_rect(
+                into_markdown_pdfium::PdfRect { left: x, right: x, bottom: y, top: y },
+                info,
+            )?;
+            let rotation =
+                (character.angle_degrees + f32::from(info.rotation_degrees)).rem_euclid(360.0);
+            locator.text_baseline = Some(if (45.0..135.0).contains(&rotation) {
+                -origin.x
+            } else if (135.0..225.0).contains(&rotation) {
+                -origin.y
+            } else if (225.0..315.0).contains(&rotation) {
+                origin.x
+            } else {
+                origin.y
+            });
+        }
     }
     Ok(Provenance {
         kind: ProvenanceKind::NativeParser,

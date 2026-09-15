@@ -53,11 +53,9 @@ SPEECH_COMPONENTS = [
     "3dspeaker-eres2net-base-onnx-model",
 ]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
-# The provider coordinator and authenticated ONNX worker share this physical
-# process-group ceiling. Real scanned-page samples exceed the former 768 MiB
-# envelope during model startup even though steady-state recognition remains
-# bounded, so keep explicit headroom without removing the sandbox limit.
-OCR_PROCESS_GROUP_MEMORY_BYTES = 2048 * 1024 * 1024
+# Package metadata permits the exact JSON integer range. The host assigns each
+# OCR worker its actual allowance from the remaining request memory budget.
+OCR_PROCESS_GROUP_MEMORY_BYTES = (1 << 53) - 1
 GGML_CPU_VARIANTS = {
     "x86_64-pc-windows-msvc": (
         "ggml-cpu-x64.dll",

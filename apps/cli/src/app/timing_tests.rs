@@ -66,6 +66,8 @@ fn failures_remain_auditable_with_elapsed_time() {
     let report_path = root.join("failure-report.json");
     let arguments = vec![
         OsString::from("--no-config"),
+        OsString::from("--error-policy"),
+        OsString::from("strict"),
         invalid.into_os_string(),
         OsString::from("--output"),
         root.join("failure.md").into_os_string(),
@@ -112,6 +114,8 @@ fn malformed_without_report_renders_text_and_json_timings() {
     for json_log in [false, true] {
         let mut arguments = vec![
             OsString::from("--no-config"),
+            OsString::from("--error-policy"),
+            OsString::from("strict"),
             invalid.clone().into_os_string(),
             OsString::from("--output"),
             root.join(if json_log { "json.md" } else { "text.md" }).into_os_string(),

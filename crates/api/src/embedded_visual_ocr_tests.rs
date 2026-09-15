@@ -492,7 +492,12 @@ fn dynamically_created_epub_external_and_traversal_images_never_enter_embedded_o
         Some("traversal-image.epub"),
     ));
     request.options.ocr.policy = OcrPolicy::Always;
-    assert!(matches!(block_on(engine.convert(request)), Err(ConversionError::Malformed { .. })));
+    let source = epub_with_unsafe_image("../../../escape.png", Some("../../../escape.png"));
+    let output = block_on(engine.convert(request)).unwrap();
+    assert_eq!(output.outcome(), crate::ConversionOutcome::Degraded);
+    assert_eq!(output.assets.len(), 1);
+    assert_eq!(output.assets[0].bytes, source);
+    assert!(output.diagnostics.iter().any(|d| d.code == "conversion.recovery.originalFile"));
     assert_eq!(
         ocr.0.load(Ordering::SeqCst),
         0,
@@ -615,7 +620,10 @@ fn assert_dynamic_file_ocr_references(
     assert_eq!(
         result.markdown.matches("text from embedded picture").count(),
         references,
-        "{suffix}"
+        "{suffix}: {:?}; markdown={}; assets={:?}",
+        result.diagnostics,
+        result.markdown,
+        result.assets
     );
     if suffix == ".pptx" {
         assert!(result.markdown.contains("table cell"), "PPTX table content must survive");
@@ -636,6 +644,15 @@ fn assert_dynamic_file_ocr_references(
         );
     }
     assert_eq!(ocr.0.load(Ordering::SeqCst), recognized_assets, "{suffix}");
+    let usage = result.ocr_runtime_usage().unwrap();
+    assert_eq!(usage.image_sources, recognized_assets as u64, "{suffix}");
+    assert_eq!(usage.images_attempted, recognized_assets as u64, "{suffix}");
+    assert_eq!(usage.images_completed, recognized_assets as u64, "{suffix}");
+    assert_eq!(usage.images_skipped, 0, "{suffix}");
+    let off = baseline.ocr_runtime_usage().unwrap();
+    assert_eq!(off.image_sources, recognized_assets as u64, "{suffix}: off");
+    assert_eq!(off.images_attempted, 0, "{suffix}: off");
+    assert_eq!(off.images_skipped, recognized_assets as u64, "{suffix}: off");
     assert_eq!(
         result.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>(),
         baseline.assets.iter().map(|asset| (&asset.id, &asset.bytes)).collect::<Vec<_>>(),

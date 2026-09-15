@@ -4,13 +4,8 @@ use into_markdown_core::{
     ConversionError, ConversionOptions, ExecutionContext, ResourceReservation,
 };
 
-const MAX_XML_EVENTS: u64 = 1_000_000;
-const MAX_ATTRIBUTES_PER_ELEMENT: usize = 4096;
 const CHECKPOINT_INTERVAL: u64 = 1024;
 const NAVIGATION_URL_CHECKPOINT_BYTES: usize = 4 * 1024;
-const MAX_NAVIGATION_URL_VALUE_BYTES: usize = 64 * 1024;
-const MAX_NAVIGATION_URL_TOKEN_BYTES: usize = 8 * 1024;
-const MAX_NAVIGATION_URL_TOKENS: usize = 4096;
 
 #[cfg(test)]
 type NavigationUrlTestHook = Option<Box<dyn FnMut(usize)>>;
@@ -48,9 +43,6 @@ impl<'a> EpubBudget<'a> {
 
     pub(super) fn event(&mut self, depth: usize) -> Result<(), ConversionError> {
         self.events = self.events.checked_add(1).ok_or_else(|| limit("epub_xml_events"))?;
-        if self.events > MAX_XML_EVENTS {
-            return Err(limit("epub_xml_events"));
-        }
         if depth > self.max_depth {
             return Err(ConversionError::ResourceLimit {
                 limit: "max_nesting_depth",
@@ -59,18 +51,6 @@ impl<'a> EpubBudget<'a> {
         }
         if self.events.is_multiple_of(CHECKPOINT_INTERVAL) {
             self.context.checkpoint()?;
-        }
-        Ok(())
-    }
-
-    pub(super) fn attributes(count: usize) -> Result<(), ConversionError> {
-        if count > MAX_ATTRIBUTES_PER_ELEMENT {
-            return Err(ConversionError::ResourceLimit {
-                limit: "epub_xml_attributes",
-                detail: format!(
-                    "EPUB XML element has {count} attributes, maximum is {MAX_ATTRIBUTES_PER_ELEMENT}"
-                ),
-            });
         }
         Ok(())
     }
@@ -105,14 +85,6 @@ impl<'a> EpubBudget<'a> {
         bytes: usize,
     ) -> Result<ResourceReservation, ConversionError> {
         self.field("navigation URL attribute", bytes)?;
-        if bytes > MAX_NAVIGATION_URL_VALUE_BYTES {
-            return Err(ConversionError::ResourceLimit {
-                limit: "epub_navigation_url_bytes",
-                detail: format!(
-                    "EPUB navigation URL attribute has {bytes} bytes; maximum is {MAX_NAVIGATION_URL_VALUE_BYTES}"
-                ),
-            });
-        }
         self.consume_navigation_url_bytes(bytes)?;
         let scratch = bytes
             .checked_mul(2)
@@ -127,12 +99,11 @@ impl<'a> EpubBudget<'a> {
 
     /// Count a single URL, IRI, CURIE, or srcset/ping candidate request-wide.
     pub(super) fn navigation_url_token(&mut self, bytes: usize) -> Result<(), ConversionError> {
-        if bytes == 0 || bytes > MAX_NAVIGATION_URL_TOKEN_BYTES {
-            return Err(ConversionError::ResourceLimit {
-                limit: "epub_navigation_url_token_bytes",
-                detail: format!(
-                    "EPUB navigation URL token has {bytes} bytes; maximum is {MAX_NAVIGATION_URL_TOKEN_BYTES}"
-                ),
+        self.field("navigation URL token", bytes)?;
+        if bytes == 0 {
+            return Err(ConversionError::Malformed {
+                part: Some("epub/navigation".into()),
+                detail: "empty navigation URL token".into(),
             });
         }
         self.navigation_url_tokens =
@@ -142,15 +113,12 @@ impl<'a> EpubBudget<'a> {
                     detail: "EPUB navigation URL token count overflowed".into(),
                 }
             })?;
-        if self.navigation_url_tokens > MAX_NAVIGATION_URL_TOKENS
-            || self.navigation_url_tokens > self.max_items
-        {
+        if self.navigation_url_tokens > self.max_items {
             return Err(ConversionError::ResourceLimit {
                 limit: "epub_navigation_url_tokens",
                 detail: format!(
                     "EPUB navigation URL token count {} exceeds request limit {}",
-                    self.navigation_url_tokens,
-                    MAX_NAVIGATION_URL_TOKENS.min(self.max_items)
+                    self.navigation_url_tokens, self.max_items
                 ),
             });
         }
@@ -189,5 +157,24 @@ fn limit(limit_name: &'static str) -> ConversionError {
     ConversionError::ResourceLimit {
         limit: limit_name,
         detail: "EPUB XML event budget exceeded".into(),
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    use into_markdown_core::ExecutionOptions;
+
+    #[test]
+    fn long_books_pass_the_old_event_ceiling_and_still_cancel() {
+        let options = ConversionOptions::default();
+        let execution = ExecutionOptions::default();
+        let context = ExecutionContext::new(execution.clone(), options.limits.clone());
+        let mut budget = EpubBudget::new(&options, &context);
+        for _ in 0..1_001_472 {
+            budget.event(1).unwrap();
+        }
+        execution.cancellation.cancel();
+        assert!((0..1024).any(|_| budget.event(1).is_err()));
     }
 }

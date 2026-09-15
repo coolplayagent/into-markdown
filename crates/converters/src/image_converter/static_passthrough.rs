@@ -61,6 +61,7 @@ fn convert(
     document.validate().map_err(|error| ConversionError::Internal {
         detail: format!("image converter emitted invalid IR at {}: {}", error.path, error.detail),
     })?;
+    context.record_ocr_images(0, 0, 0, u64::from(summary.frames));
     ConverterOutput::new_with_memory_reservations(
         document,
         inventory.assets,

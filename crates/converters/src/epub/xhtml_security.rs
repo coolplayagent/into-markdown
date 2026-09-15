@@ -158,7 +158,6 @@ fn audit_start_tag<'a>(
     let (qname, empty, syntax_valid) = parse_start(content, &mut scratch.attributes);
     let scope_valid = complete && syntax_valid && xml::valid_qname(qname.as_bytes());
     budget.checkpoint()?;
-    EpubBudget::attributes(scratch.attributes.len())?;
     let binding_start = scratch.bindings.len();
     for attribute in &scratch.attributes {
         if attribute.name == "xmlns" {

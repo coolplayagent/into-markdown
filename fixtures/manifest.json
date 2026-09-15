@@ -4,7 +4,7 @@
     "path": "fixtures/generate.py",
     "version": "1.0.0",
     "source_revision": "repository-commit",
-    "sha256": "db485418292033aa2988db5f63a57b073afefa7e9c7bfb3beb920b86cef7bf48",
+    "sha256": "9c1af37cd58662e7fb146ea24291c50b5807a33fc375d65bb4ddeaa311e96218",
     "seed": 20260813,
     "python": "3.13.14",
     "pillow": "11.3.0",
@@ -542,7 +542,7 @@
       "expected": {
         "outcome": "success",
         "error_code": "",
-        "semantic_sha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6",
+        "semantic_sha256": "74e9ddc3560a6afe197e4700ac52005057b39554b9fbf4c7df2cf63b864602c7",
         "description": "EPUB 3 package with navigation and one XHTML spine item"
       }
     },

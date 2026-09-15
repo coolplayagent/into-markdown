@@ -91,34 +91,16 @@ pub(super) fn mimetype_header_for_policy(
     expected: &str,
     options: &into_markdown_core::ConversionOptions,
 ) -> Result<Option<LocalMimetypeHeader>, ConversionError> {
-    let result = validate_first_mimetype_local_header(bytes, expected);
-    if options.error_policy == into_markdown_core::ErrorPolicy::Strict || result.is_ok() {
+    let result = validate_first_mimetype_local_header(bytes, expected).and_then(|local| {
+        validate_raw_mimetype_central(bytes, &local)?;
+        Ok(local)
+    });
+    if options.error_policy == into_markdown_core::ErrorPolicy::Strict {
         return result.map(Some);
     }
-    // Only packing deviations are deferred. Complete raw ZIP local/central/descriptor
-    // binding and streamed payload CRC checks still run before the package is accepted.
-    if read_u32(bytes, 0) == Some(0x0403_4b50)
-        && (validated_local_zip_name(bytes, 0)? != "mimetype"
-            || read_u16(bytes, 8).is_some_and(|method| method != 0)
-            || read_u16(bytes, 6).is_some_and(|flags| flags & 8 != 0))
-    {
-        return Ok(None);
-    }
-    result.map(Some)
-}
-
-pub(super) fn validate_relaxed_mimetype_extras(
-    bytes: &[u8],
-    entry: &zip::read::ZipFile<'_>,
-) -> Result<(), ConversionError> {
-    let local = usize::try_from(entry.header_start())
-        .map_err(|_| malformed(Some("mimetype"), "local offset overflow"))?;
-    let central = usize::try_from(entry.central_header_start())
-        .map_err(|_| malformed(Some("mimetype"), "central offset overflow"))?;
-    if read_u16(bytes, local + 28) != Some(0) || read_u16(bytes, central + 30) != Some(0) {
-        return Err(malformed(Some("mimetype"), "mimetype extra fields are not supported"));
-    }
-    Ok(())
+    // General ZIP local/central/descriptor binding, extra-field validation and
+    // payload CRC checks run for every package, including noncanonical packing.
+    Ok(result.ok())
 }
 
 pub(super) fn validate_first_mimetype_local_header(

@@ -63,11 +63,13 @@ pub(super) fn assemble(
         }
     }
     validate_targets(&spine, navigation.as_ref(), &anchors, &chapter_paths, &footnote_labels)?;
+    let link_diagnostics = bind_chapter_links(&mut spine, navigation.as_mut(), &footnote_labels);
     let recovery_memory = spine.recovery_memory;
 
     let metadata = std::mem::take(&mut package.metadata);
     let mut output =
         ConverterOutput::new(Document { metadata, ..Document::default() }, Vec::new(), Vec::new());
+    output.diagnostics.extend(link_diagnostics);
     output.diagnostics.append(&mut package.diagnostics);
     output.diagnostics.append(&mut spine.diagnostics);
     if let Some(navigation) = navigation {
@@ -165,7 +167,10 @@ pub(super) fn assemble(
         }
         output.assets.append(&mut chapter.output.assets);
         for diagnostic in &mut chapter.output.diagnostics {
-            prefix_locator(diagnostic.locator.as_mut(), &chapter.path);
+            prefix_locator(
+                Some(diagnostic.locator.get_or_insert_with(SourceLocator::default)),
+                &chapter.path,
+            );
         }
         output.diagnostics.append(&mut chapter.output.diagnostics);
         if let Some(title) = chapter.output.document.metadata.title.take() {
@@ -177,7 +182,16 @@ pub(super) fn assemble(
         }
     }
     resources.finish(&mut output, context)?;
-    output.document.validate().map_err(|error| {
+    validate_assembled_document(&output.document)?;
+    let output = output.account_retained(context)?;
+    drop(recovery_memory);
+    Ok(output)
+}
+
+fn validate_assembled_document(
+    document: &into_markdown_core::Document,
+) -> Result<(), ConversionError> {
+    document.validate().map_err(|error| {
         if error.code == into_markdown_core::IrErrorCode::ResourceLimit {
             ConversionError::ResourceLimit {
                 limit: "document_structure",
@@ -188,10 +202,7 @@ pub(super) fn assemble(
                 detail: format!("assembled EPUB IR is invalid at {}: {}", error.path, error.detail),
             }
         }
-    })?;
-    let output = output.account_retained(context)?;
-    drop(recovery_memory);
-    Ok(output)
+    })
 }
 
 fn non_linear_spine_diagnostic(skipped: usize, package_path: &str) -> Diagnostic {
@@ -403,6 +414,52 @@ fn rewrite_inlines(
         }
     }
     Ok(())
+}
+
+fn bind_chapter_links(
+    spine: &mut SpineResult,
+    navigation: Option<&mut Navigation>,
+    footnotes: &BTreeMap<String, String>,
+) -> Vec<Diagnostic> {
+    let anchors = spine
+        .chapters
+        .iter()
+        .enumerate()
+        .map(|(index, chapter)| {
+            (chapter.path.clone(), format!("#epub-spine-{:06}-heading", index + 1))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut located_fragments = BTreeSet::new();
+    let mut bind = |target: &mut String| {
+        let (path, fragment) = target
+            .split_once('#')
+            .map_or((target.as_str(), None), |(path, fragment)| (path, Some(fragment)));
+        if let Some(anchor) = anchors.get(path) {
+            if fragment.is_some() {
+                located_fragments.insert(target.clone());
+            }
+            *target = anchor.clone();
+        }
+    };
+    if let Some(navigation) = navigation {
+        for entry in &mut navigation.entries {
+            if let Some(target) = &mut entry.target {
+                bind(target);
+            }
+        }
+    }
+    for chapter in &mut spine.chapters {
+        for target in chapter.references.values_mut() {
+            if !footnotes.contains_key(target) {
+                bind(target);
+            }
+        }
+    }
+    located_fragments.into_iter().map(|target| diagnostic(
+        "epub.link.chapterLocation", DiagnosticSeverity::Warning,
+        format!("Source fragment {target} is linked to its delivered chapter; precise fragment position is unavailable"),
+        Some(target.split('#').next().unwrap_or(&target)),
+    )).collect()
 }
 
 fn validate_targets(

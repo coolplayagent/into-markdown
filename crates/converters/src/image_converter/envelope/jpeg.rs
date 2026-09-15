@@ -7,9 +7,9 @@ pub(super) fn validate(
     limits: &ResourceLimits,
     context: &ExecutionContext,
 ) -> Result<Summary, ConversionError> {
-    if codestream_end(bytes, limits, context)? != bytes.len() {
-        return Err(malformed("JPEG EOI must follow a frame and end exactly at EOF"));
-    }
+    // Cameras can append metadata or a motion-photo payload after the primary image.
+    // Validate that image and retain the complete source in the delivered asset.
+    codestream_end(bytes, limits, context)?;
     Ok(Summary { frames: 1, animated: false })
 }
 
@@ -38,7 +38,7 @@ pub(crate) fn codestream_end(
         match marker {
             0xd9 => {
                 if !saw_frame {
-                    return Err(malformed("JPEG EOI must follow a frame and end exactly at EOF"));
+                    return Err(malformed("JPEG EOI must follow a frame"));
                 }
                 return Ok(cursor);
             }

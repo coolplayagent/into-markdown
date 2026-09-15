@@ -27,17 +27,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[cfg(any(unix, windows))]
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 #[cfg(any(unix, windows))]
 const DATABASE_FILE: &str = "tasks.sqlite3";
 #[cfg(any(unix, windows))]
-const MAX_DATABASE_BYTES: i64 = 256 * 1024 * 1024;
+const MAX_DATABASE_BYTES: i64 = 4_294_967_294 * PAGE_SIZE;
 #[cfg(any(unix, windows))]
 const PAGE_SIZE: i64 = 4096;
 const MAX_ROWS: u32 = 100;
 const MAX_DIAGNOSTICS: usize = 64;
-const MAX_ARTIFACTS: usize = 128;
-const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES: u64 = i64::MAX as u64;
 const MAX_JSON_BYTES: usize = 16 * 1024;
 #[cfg(any(unix, windows))]
 const MAX_JSON_BYTES_I32: i32 = 16 * 1024;
@@ -838,10 +837,8 @@ impl TaskStore {
     ) -> Result<TaskRecord, TaskStoreError> {
         let _operation = BusyOperation::enter(&self.busy)?;
         self.preflight()?;
-        if artifacts.is_empty() || artifacts.len() > MAX_ARTIFACTS {
-            return Err(TaskStoreError::Limit(
-                "replacement artifact count must be within 1 and 128".into(),
-            ));
+        if artifacts.is_empty() {
+            return Err(TaskStoreError::Limit("replacement artifacts must not be empty".into()));
         }
         if i64::try_from(expected_generation).is_err() {
             return Err(TaskStoreError::Limit("artifact generation exceeds SQLite range".into()));
@@ -853,7 +850,7 @@ impl TaskStore {
             })
         })?;
         if total > MAX_ARTIFACT_BYTES {
-            return Err(TaskStoreError::Limit("task artifact bytes exceed 2 GiB".into()));
+            return Err(TaskStoreError::Limit("artifact size exceeds storage range".into()));
         }
         let now = utc_now_ms()?;
         let started = Instant::now();
@@ -1001,17 +998,9 @@ impl TaskStore {
                 row.get(0)
             })
             .map_err(map_sqlite_generic)?;
-        let existing_artifacts: i64 = transaction
-            .query_row("SELECT count(*) FROM artifacts WHERE task_id=?1", [id.as_str()], |row| {
-                row.get(0)
-            })
-            .map_err(map_sqlite_generic)?;
         if usize::try_from(existing_diagnostics).unwrap_or(usize::MAX)
             + transition.diagnostics.len()
             > MAX_DIAGNOSTICS
-            || usize::try_from(existing_artifacts).unwrap_or(usize::MAX)
-                + transition.artifacts.len()
-                > MAX_ARTIFACTS
         {
             return Err(TaskStoreError::Limit("task child row count exceeded".into()));
         }
@@ -1538,7 +1527,7 @@ impl TaskStore {
     fn load_artifacts(&self, id: &TaskId) -> Result<Vec<ArtifactReference>, TaskStoreError> {
         let mut statement = self
             .connection
-            .prepare("SELECT storage_key, kind, byte_len, sha256, asset_id, filename, media_type FROM artifacts WHERE task_id=?1 ORDER BY storage_key LIMIT 129")
+            .prepare("SELECT storage_key, kind, byte_len, sha256, asset_id, filename, media_type FROM artifacts WHERE task_id=?1 ORDER BY storage_key")
             .map_err(|error| self.map_sqlite(error))?;
         let rows = statement
             .query_map([id.as_str()], |row| {
@@ -1555,7 +1544,7 @@ impl TaskStore {
             .map_err(|error| self.map_sqlite(error))?;
         let mut values = Vec::new();
         values
-            .try_reserve(MAX_ARTIFACTS.min(129))
+            .try_reserve(128)
             .map_err(|_| TaskStoreError::Limit("artifact allocation failed".into()))?;
         let mut total_bytes = 0_u64;
         for row in rows {
@@ -1580,12 +1569,9 @@ impl TaskStore {
                 .checked_add(artifact.byte_len)
                 .ok_or_else(|| TaskStoreError::Corrupt("artifact byte total overflowed".into()))?;
             if total_bytes > MAX_ARTIFACT_BYTES {
-                return Err(TaskStoreError::Corrupt("task artifact bytes exceed 2 GiB".into()));
+                return Err(TaskStoreError::Corrupt("artifact size exceeds storage range".into()));
             }
             values.push(artifact);
-        }
-        if values.len() > MAX_ARTIFACTS {
-            return Err(TaskStoreError::Corrupt("task contains too many artifacts".into()));
         }
         Ok(values)
     }
@@ -1720,7 +1706,7 @@ fn configure(connection: &Connection) -> Result<(), TaskStoreError> {
         .query_row("PRAGMA page_count", [], |row| row.get(0))
         .map_err(map_sqlite_generic)?;
     if page_count.saturating_mul(PAGE_SIZE) > MAX_DATABASE_BYTES {
-        return Err(TaskStoreError::Limit("database exceeds the 256 MiB limit".into()));
+        return Err(TaskStoreError::Limit("database exceeds SQLite page-count capacity".into()));
     }
     Ok(())
 }
@@ -1834,6 +1820,11 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
         }
         transaction.commit().map_err(map_sqlite_generic)?;
     }
+    migrate_recent_schema(connection)
+}
+
+#[cfg(any(unix, windows))]
+fn migrate_recent_schema(connection: &rusqlite::Connection) -> Result<(), TaskStoreError> {
     let current: i64 = connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(map_sqlite_generic)?;
@@ -1858,6 +1849,16 @@ fn migrate(connection: &Connection) -> Result<(), TaskStoreError> {
                 "ALTER TABLE tasks ADD COLUMN artifact_generation INTEGER NOT NULL DEFAULT 0 CHECK(artifact_generation>=0);\
                  PRAGMA user_version=5;",
             )
+            .map_err(map_sqlite_generic)?;
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    let current: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sqlite_generic)?;
+    if current == 5 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        transaction
+            .execute_batch("DROP TRIGGER IF EXISTS artifacts_limit; PRAGMA user_version=6;")
             .map_err(map_sqlite_generic)?;
         transaction.commit().map_err(map_sqlite_generic)?;
     }
@@ -2014,7 +2015,7 @@ fn validate_artifact_budget(
             .ok_or_else(|| TaskStoreError::Limit("artifact byte length total overflowed".into()))
     })?;
     if existing.checked_add(added).is_none_or(|total| total > MAX_ARTIFACT_BYTES) {
-        return Err(TaskStoreError::Limit("task artifact bytes exceed 2 GiB".into()));
+        return Err(TaskStoreError::Limit("artifact size exceeds storage range".into()));
     }
     Ok(())
 }
@@ -2023,8 +2024,7 @@ fn validate_transition(transition: &TaskTransition) -> Result<(), TaskStoreError
     if transition.progress_millionths > 1_000_000 {
         return Err(TaskStoreError::Limit("progress exceeds 1000000 millionths".into()));
     }
-    if transition.diagnostics.len() > MAX_DIAGNOSTICS || transition.artifacts.len() > MAX_ARTIFACTS
-    {
+    if transition.diagnostics.len() > MAX_DIAGNOSTICS {
         return Err(TaskStoreError::Limit("transition child row count exceeded".into()));
     }
     if transition.next == TaskStatus::Succeeded && transition.progress_millionths != 1_000_000 {

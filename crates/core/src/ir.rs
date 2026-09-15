@@ -3,15 +3,18 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use thiserror::Error;
 
+mod locator;
+pub use locator::SourceLocator;
+
 /// JSON schema version emitted and accepted by this library.
 pub const DOCUMENT_SCHEMA_VERSION: u32 = 1;
 
 /// Maximum nested block-node depth accepted by the default validator.
 pub const MAX_DOCUMENT_DEPTH: usize = 16;
-/// Maximum structural-node count accepted by the default validator.
-pub const MAX_DOCUMENT_NODES: usize = 100_000;
-/// Maximum inline-node count accepted by the default validator.
-pub const MAX_DOCUMENT_INLINES: usize = 1_000_000;
+/// Addressable structural-node count; execution budgets govern actual content size.
+pub const MAX_DOCUMENT_NODES: usize = isize::MAX as usize / std::mem::size_of::<BlockNode>();
+/// Addressable inline-node count; execution budgets govern actual content size.
+pub const MAX_DOCUMENT_INLINES: usize = isize::MAX as usize / std::mem::size_of::<Inline>();
 /// Maximum UTF-8 JSON input size accepted by the default decoder.
 pub const MAX_DOCUMENT_JSON_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum logical column count accepted for one table.
@@ -230,51 +233,6 @@ pub struct TimedToken {
     /// Confidence of the token-level anonymous speaker assignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker_confidence: Option<f32>,
-}
-
-/// Location of extracted content in the source.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceLocator {
-    /// Inclusive byte offset in the original encoded source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub byte_start: Option<u64>,
-    /// Exclusive byte offset in the original encoded source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub byte_end: Option<u64>,
-    /// One-based page number.
-    pub page: Option<u32>,
-    /// One-based slide number.
-    pub slide: Option<u32>,
-    /// Worksheet name.
-    pub sheet: Option<String>,
-    /// Spreadsheet cell.
-    pub cell: Option<CellRef>,
-    /// Bounding rectangle.
-    pub bounds: Option<Rect>,
-    /// Zero-based source character index, when this node represents one PDF
-    /// character or another independently addressable text unit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub character_index: Option<u32>,
-    /// Best-effort source font name. This is a clue, not a trusted identity.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_name: Option<String>,
-    /// Source font size in source coordinate units.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_size: Option<f32>,
-    /// Clockwise source rotation in degrees.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rotation_degrees: Option<f32>,
-    /// Page width in source coordinate units, when the locator addresses a page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub page_width: Option<f32>,
-    /// Page height in source coordinate units, when the locator addresses a page.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub page_height: Option<f32>,
-    /// Media time range.
-    pub time: Option<TimeRange>,
-    /// Safe container-relative part name, using `/` separators.
-    pub part: Option<String>,
 }
 
 /// How content entered the IR.
@@ -1374,20 +1332,7 @@ fn validate_locator(locator: &SourceLocator, path: &str) -> Result<(), IrError> 
             "bounds must be finite with non-negative dimensions",
         ));
     }
-    for (field, value) in [
-        ("fontSize", locator.font_size),
-        ("rotationDegrees", locator.rotation_degrees),
-        ("pageWidth", locator.page_width),
-        ("pageHeight", locator.page_height),
-    ] {
-        if value.is_some_and(|value| !value.is_finite()) {
-            return Err(IrError::new(
-                IrErrorCode::InvalidLocator,
-                format!("{path}.{field}"),
-                "source geometry must be finite",
-            ));
-        }
-    }
+    locator::validate_geometry(locator, path)?;
     if locator.font_size.is_some_and(|value| value < 0.0)
         || locator.page_width.is_some_and(|value| value <= 0.0)
         || locator.page_height.is_some_and(|value| value <= 0.0)

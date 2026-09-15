@@ -39,20 +39,14 @@ fn official_authority_and_character_table_are_exact() {
 }
 
 #[test]
-fn public_config_can_only_tighten_product_resource_bounds() {
+fn public_config_accepts_larger_explicit_budgets() {
     for config in [
-        RecognitionConfig { max_regions: MAX_REGIONS + 1, ..RecognitionConfig::default() },
-        RecognitionConfig { max_crop_pixels: MAX_CROP_PIXELS + 1, ..RecognitionConfig::default() },
+        RecognitionConfig { max_regions: 3000 + 1, ..RecognitionConfig::default() },
+        RecognitionConfig { max_crop_pixels: 32_000_000 + 1, ..RecognitionConfig::default() },
+        RecognitionConfig { max_tensor_elements: 32_000_000 + 1, ..RecognitionConfig::default() },
+        RecognitionConfig { max_output_timesteps: 1024 + 1, ..RecognitionConfig::default() },
         RecognitionConfig {
-            max_tensor_elements: MAX_TENSOR_ELEMENTS + 1,
-            ..RecognitionConfig::default()
-        },
-        RecognitionConfig {
-            max_output_timesteps: MAX_OUTPUT_TIMESTEPS + 1,
-            ..RecognitionConfig::default()
-        },
-        RecognitionConfig {
-            max_decoded_bytes: MAX_DECODED_BYTES + 1,
+            max_decoded_bytes: 16 * 1024 * 1024 + 1,
             ..RecognitionConfig::default()
         },
     ] {
@@ -63,7 +57,7 @@ fn public_config_can_only_tighten_product_resource_bounds() {
                 config,
                 &context(),
             )
-            .is_err()
+            .is_ok()
         );
     }
 }
@@ -101,6 +95,33 @@ fn ctc_collapses_before_blank_and_ties_choose_lowest_index() {
 }
 
 struct ShapeRuntime;
+
+#[test]
+fn long_text_crop_keeps_full_dynamic_width_and_explicit_tensor_budget() {
+    let bytes = vec![128; 1001 * 11 * 3];
+    let image = PixelView {
+        width: 1001,
+        height: 11,
+        row_stride: 3003,
+        format: PixelFormat::Bgr8,
+        orientation: crate::ImageOrientation::Normal,
+        bytes: &bytes,
+    };
+    let crop = CropDescriptor {
+        polygon: [(0.0, 0.0), (1000.0, 0.0), (1000.0, 10.0), (0.0, 10.0)],
+        width: 1000,
+        height: 10,
+    };
+    let config = RecognitionConfig::default();
+    let plan = super::preprocess::validated_crop(&crop, image, &config).unwrap();
+    let prepared = prepare_batch(image, &[(0, plan)], &config, &context()).unwrap();
+    assert_eq!(prepared.tensor.shape, [1, 3, 48, 4800]);
+    let capped = RecognitionConfig { max_tensor_elements: 3 * 48 * 3200, ..config };
+    assert!(matches!(
+        prepare_batch(image, &[(0, plan)], &capped, &context()),
+        Err(ConversionError::ResourceLimit { limit: "recognitionTensorElements", .. })
+    ));
+}
 
 impl TensorRuntime for ShapeRuntime {
     fn id(&self) -> &'static str {

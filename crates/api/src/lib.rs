@@ -673,7 +673,12 @@ mod tests {
                 Some("stale-dimension.xlsb"),
             ))))
             .unwrap();
-            let peak = broad.document.metadata.properties["spreadsheet.preflight.memoryPeak"]
+            let peak = broad
+                .document
+                .metadata
+                .properties
+                .get("spreadsheet.preflight.memoryPeak")
+                .unwrap_or_else(|| panic!("actual_cell={actual_cell}: {:?}", broad.diagnostics))
                 .parse::<u64>()
                 .unwrap();
             assert!(peak >= 32_000_000);

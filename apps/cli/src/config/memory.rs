@@ -4,13 +4,10 @@ use into_markdown::MemoryBudgetSnapshotDto;
 #[cfg(not(test))]
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
+#[cfg(test)]
 const GIB: u64 = 1024 * 1024 * 1024;
+#[cfg(test)]
 const MIB: u64 = 1024 * 1024;
-const MIN_ASSET_BYTES: u64 = 256 * MIB;
-const MAX_ASSET_BYTES: u64 = 2 * GIB;
-const MIN_TOTAL_ASSET_BYTES: u64 = GIB;
-const MAX_TOTAL_ASSET_BYTES: u64 = 4 * GIB;
-
 // CLI unit tests use a deterministic host, with pressure/missing-probe cases
 // injected through select(). Source-built and installed binaries probe the OS.
 #[cfg(test)]
@@ -31,27 +28,20 @@ pub(crate) fn probe() -> MemoryBudgetSnapshotDto {
 pub(crate) fn select(total: Option<u64>, available: Option<u64>) -> MemoryBudgetSnapshotDto {
     let total = total.filter(|value| *value > 0);
     let available = available.filter(|value| total.is_none_or(|total| *value <= total));
-    let reserve = total.map_or(GIB, |total| (total / 8).max(GIB));
-    let budget = match (total, available) {
-        (Some(total), Some(available)) => {
-            three_quarters(total).min(available.saturating_sub(reserve))
-        }
-        (Some(total), None) => (total / 4).min(2 * GIB),
-        (None, Some(available)) => (2 * GIB).min(available.saturating_sub(reserve)),
-        (None, None) => 2 * GIB,
-    };
+    // A momentary free-memory sample cannot describe reclaimable caches, swap,
+    // or the memory needed by the next file. Use machine capacity as the stable
+    // automatic ceiling; reservations still account actual concurrent work.
+    let budget = total
+        .or(available.filter(|value| *value > 0))
+        .unwrap_or_else(|| into_markdown::ResourceLimits::default().max_memory_bytes);
     MemoryBudgetSnapshotDto {
         total_bytes: total,
         available_bytes: available,
-        system_reserve_bytes: reserve,
+        system_reserve_bytes: 0,
         auto_budget_bytes: budget,
         effective_budget_bytes: budget,
         automatic: true,
     }
-}
-
-fn three_quarters(value: u64) -> u64 {
-    (value / 4) * 3 + (value % 4) * 3 / 4
 }
 
 pub(crate) fn apply_override(
@@ -73,7 +63,7 @@ pub(crate) fn apply_overrides(
     loaded: &mut super::LoadedConfig,
 ) {
     apply_override(arguments.max_memory_size, loaded);
-    apply_adaptive_asset_defaults(
+    apply_asset_defaults(
         loaded.effective.conversion.limits.max_asset_bytes.is_some()
             || arguments.max_asset_size.is_some(),
         loaded.effective.conversion.limits.max_total_asset_bytes.is_some()
@@ -82,52 +72,27 @@ pub(crate) fn apply_overrides(
     );
 }
 
-pub(crate) fn local_resource_adaptation(
-    arguments: &crate::args::ConversionArgs,
-    loaded: &super::LoadedConfig,
-) -> into_markdown::AdaptiveResourceLimits {
-    let mut implicit = Vec::with_capacity(2);
-    if loaded.effective.conversion.limits.max_asset_bytes.is_none()
-        && arguments.max_asset_size.is_none()
-    {
-        implicit.push("max_asset_bytes");
-    }
-    if loaded.effective.conversion.limits.max_total_asset_bytes.is_none()
-        && arguments.max_total_asset_size.is_none()
-    {
-        implicit.push("max_total_asset_bytes");
-    }
-    let mut ceilings = loaded.options.limits.clone();
-    ceilings.max_asset_bytes = ceilings.max_memory_bytes;
-    ceilings.max_total_asset_bytes = ceilings.max_memory_bytes;
-    into_markdown::AdaptiveResourceLimits::local(implicit, ceilings)
-}
-
 pub(crate) fn local_execution_options(
     arguments: &crate::args::ConversionArgs,
     loaded: &super::LoadedConfig,
 ) -> into_markdown::ExecutionOptions {
     into_markdown::ExecutionOptions {
         timeout: arguments.timeout_ms.or(loaded.timeout_ms).map(std::time::Duration::from_millis),
-        resource_adaptation: local_resource_adaptation(arguments, loaded),
         ..into_markdown::ExecutionOptions::default()
     }
 }
 
-pub(crate) fn apply_adaptive_asset_defaults(
+pub(crate) fn apply_asset_defaults(
     max_asset_explicit: bool,
     max_total_asset_explicit: bool,
     options: &mut into_markdown::ConversionOptions,
 ) {
     let budget = options.limits.max_memory_bytes;
     if !max_total_asset_explicit {
-        options.limits.max_total_asset_bytes =
-            (budget / 2).clamp(MIN_TOTAL_ASSET_BYTES, MAX_TOTAL_ASSET_BYTES);
+        options.limits.max_total_asset_bytes = budget;
     }
     if !max_asset_explicit {
-        options.limits.max_asset_bytes = (budget / 4)
-            .clamp(MIN_ASSET_BYTES, MAX_ASSET_BYTES)
-            .min(options.limits.max_total_asset_bytes);
+        options.limits.max_asset_bytes = budget.min(options.limits.max_total_asset_bytes);
     }
 }
 
@@ -156,7 +121,7 @@ pub(super) fn apply_config(
     };
     snapshot.effective_budget_bytes = options.limits.max_memory_bytes;
     snapshot.automatic = !matches!(value, Some(super::MemoryLimitConfig::Bytes(_)));
-    apply_adaptive_asset_defaults(
+    apply_asset_defaults(
         limits.max_asset_bytes.is_some(),
         limits.max_total_asset_bytes.is_some(),
         options,
@@ -188,28 +153,28 @@ mod tests {
         assert_eq!(loaded.options.limits.max_memory_bytes, 3 * GIB);
         apply_override(Some(MemorySizeArg::Bytes(16 * GIB)), &mut loaded);
         assert_eq!(loaded.options.limits.max_memory_bytes, 16 * GIB);
-        apply_adaptive_asset_defaults(false, false, &mut loaded.options);
-        assert_eq!(loaded.options.limits.max_asset_bytes, 2 * GIB);
-        assert_eq!(loaded.options.limits.max_total_asset_bytes, 4 * GIB);
+        apply_asset_defaults(false, false, &mut loaded.options);
+        assert_eq!(loaded.options.limits.max_asset_bytes, 16 * GIB);
+        assert_eq!(loaded.options.limits.max_total_asset_bytes, 16 * GIB);
         assert!(!loaded.memory_snapshot.automatic);
         apply_override(Some(MemorySizeArg::Auto), &mut loaded);
-        apply_adaptive_asset_defaults(false, false, &mut loaded.options);
+        apply_asset_defaults(false, false, &mut loaded.options);
         assert_eq!(loaded.memory_snapshot, snapshot);
-        assert_eq!(loaded.options.limits.max_memory_bytes, 10 * GIB);
-        assert_eq!(loaded.options.limits.max_asset_bytes, 2 * GIB);
-        assert_eq!(loaded.options.limits.max_total_asset_bytes, 4 * GIB);
+        assert_eq!(loaded.options.limits.max_memory_bytes, 16 * GIB);
+        assert_eq!(loaded.options.limits.max_asset_bytes, 16 * GIB);
+        assert_eq!(loaded.options.limits.max_total_asset_bytes, 16 * GIB);
     }
 
     #[test]
-    fn machine_capacity_and_pressure_select_deterministic_budgets() {
+    fn transient_memory_pressure_does_not_reject_conversion() {
         for (total, available, expected) in [
-            (4, 3, 2),
-            (16, 12, 10),
-            (64, 56, 48),
-            (128, 100, 84),
-            (16, 3, 1),
-            (16, 2, 0),
-            (16, 0, 0),
+            (4, 3, 4),
+            (16, 12, 16),
+            (64, 56, 64),
+            (128, 100, 128),
+            (16, 3, 16),
+            (16, 2, 16),
+            (16, 0, 16),
         ] {
             assert_eq!(
                 select(Some(total * GIB), Some(available * GIB)).auto_budget_bytes,
@@ -221,26 +186,25 @@ mod tests {
     #[test]
     fn missing_or_inconsistent_probes_use_known_capacity_conservatively() {
         assert_eq!(select(None, None).auto_budget_bytes, 2 * GIB);
-        assert_eq!(select(Some(2 * GIB), None).auto_budget_bytes, GIB / 2);
-        assert_eq!(select(Some(64 * GIB), None).auto_budget_bytes, 2 * GIB);
-        assert_eq!(select(None, Some(GIB / 2)).auto_budget_bytes, 0);
+        assert_eq!(select(Some(2 * GIB), None).auto_budget_bytes, 2 * GIB);
+        assert_eq!(select(Some(64 * GIB), None).auto_budget_bytes, 64 * GIB);
+        assert_eq!(select(None, Some(GIB / 2)).auto_budget_bytes, GIB / 2);
         let invalid = select(Some(4 * GIB), Some(8 * GIB));
         assert_eq!(invalid.available_bytes, None);
-        assert_eq!(invalid.auto_budget_bytes, GIB);
-        assert_eq!(
-            select(Some(u64::MAX), Some(u64::MAX)).auto_budget_bytes,
-            three_quarters(u64::MAX)
-        );
+        assert_eq!(invalid.auto_budget_bytes, 4 * GIB);
+        assert_eq!(select(Some(u64::MAX), Some(u64::MAX)).auto_budget_bytes, u64::MAX);
     }
 
     #[test]
     fn local_asset_defaults_follow_the_effective_memory_budget() {
-        for (memory, expected_asset, expected_total) in
-            [(2 * GIB, 512 * MIB, GIB), (10 * GIB, 2 * GIB, 4 * GIB), (64 * GIB, 2 * GIB, 4 * GIB)]
-        {
+        for (memory, expected_asset, expected_total) in [
+            (2 * GIB, 2 * GIB, 2 * GIB),
+            (10 * GIB, 10 * GIB, 10 * GIB),
+            (64 * GIB, 64 * GIB, 64 * GIB),
+        ] {
             let mut options = into_markdown::ConversionOptions::default();
             options.limits.max_memory_bytes = memory;
-            apply_adaptive_asset_defaults(false, false, &mut options);
+            apply_asset_defaults(false, false, &mut options);
             assert_eq!(options.limits.max_asset_bytes, expected_asset);
             assert_eq!(options.limits.max_total_asset_bytes, expected_total);
         }
@@ -252,19 +216,19 @@ mod tests {
         options.limits.max_memory_bytes = 16 * GIB;
         options.limits.max_asset_bytes = 96 * MIB;
         options.limits.max_total_asset_bytes = 768 * MIB;
-        apply_adaptive_asset_defaults(true, false, &mut options);
+        apply_asset_defaults(true, false, &mut options);
         assert_eq!(options.limits.max_asset_bytes, 96 * MIB);
-        assert_eq!(options.limits.max_total_asset_bytes, 4 * GIB);
+        assert_eq!(options.limits.max_total_asset_bytes, 16 * GIB);
 
         options.limits.max_asset_bytes = 96 * MIB;
         options.limits.max_total_asset_bytes = 768 * MIB;
-        apply_adaptive_asset_defaults(false, true, &mut options);
+        apply_asset_defaults(false, true, &mut options);
         assert_eq!(options.limits.max_asset_bytes, 768 * MIB);
         assert_eq!(options.limits.max_total_asset_bytes, 768 * MIB);
 
         options.limits.max_asset_bytes = 96 * MIB;
         options.limits.max_total_asset_bytes = 768 * MIB;
-        apply_adaptive_asset_defaults(true, true, &mut options);
+        apply_asset_defaults(true, true, &mut options);
         assert_eq!(options.limits.max_asset_bytes, 96 * MIB);
         assert_eq!(options.limits.max_total_asset_bytes, 768 * MIB);
     }

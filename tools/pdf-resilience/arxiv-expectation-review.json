@@ -1,0 +1,207 @@
+{
+  "previousExpectationSha256": "5217be5ff37333436e57c6f157086f6b4bfcca32ad9b52bc1fc84007c020aa14",
+  "scope": "Source expectation corrections; candidate visual approval remains pending",
+  "corrections": [
+    {
+      "id": "2404.11584",
+      "page": 13,
+      "oldFragment": "[33] Shunyu Yao et al.Tree of Thoughts: Deliberate",
+      "sourceSha256": "00c56fab3b763c0d8a0b4a1bfe122cd012ddd10369c389b34afe5604f5332f3c",
+      "sourcePageImageSha256": "b003b0b3e41ab57523df0fcb2a19738f67a78450358d9c0727dbec07aa4af2e1",
+      "replacementFragments": [
+        "[33] Shunyu Yao et al. Tree of Thoughts: Deliberate"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2311.12351",
+      "page": 20,
+      "oldFragment": "to any pair of (q𝑖, k𝑗 ) as long as |𝑖 − 𝑗 | ≥ 𝑤 ,",
+      "sourceSha256": "e6e4b7caab516c8da8c7325fe653d4ed942e9dfe4541df881b6827dcb3ea9f7f",
+      "sourcePageImageSha256": "5eb4410584bbac0dd9bf5f1a13efa77827b723a63994b3510912d4461b201fb2",
+      "replacementFragments": [],
+      "reason": "Source equation visually compared: retain qi, kj, subtraction, absolute-value bars, greater-or-equal relation and w; allow italic Unicode glyphs and source line wrapping.",
+      "replacementPattern": "to any pair of \\(q[𝑖i]\\s*,\\s*k[𝑗j]\\s*\\)\\s+as long as \\|[𝑖i]\\s*−\\s*[𝑗j]\\s*\\|\\s*≥\\s*[𝑤w]\\s*,"
+    },
+    {
+      "id": "2402.19473",
+      "page": 11,
+      "oldFragment": "Input Code RepresentationSimilar Code",
+      "sourceSha256": "8c545fc3b42109582528c790404818157c3f0dc1b09c1132be2fc1b585a48711",
+      "sourcePageImageSha256": "e03567fd54ede64b6fc8882563089d916eebdb7e6bdeb19579dc73243f45a7b8",
+      "replacementFragments": [
+        "Input Code Representation",
+        "Similar Code Representation"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2404.14294",
+      "page": 36,
+      "oldFragment": "O. Saarikivi et al. , “Textbooks are all you need,”",
+      "sourceSha256": "4a9d2c4bd26ca9e08cc32490a21fbfebf7bdefef07ada8a627bb4708449e7fa6",
+      "sourcePageImageSha256": "aa7b659c974fd381100eb1bda190d3d56e210b98b8b8bf577ff09d97636f0a79",
+      "replacementFragments": [
+        "O. Saarikivi et al., “Textbooks are all you need,”"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2609.01679",
+      "page": 76,
+      "oldFragment": "for ehr representation learning.arXiv preprint",
+      "sourceSha256": "c42686b3923eac101ee2c6e155d960f78d6895cacb9c12b5c621e4eb419cbc24",
+      "sourcePageImageSha256": "afa6ffd4af2b9a9b16a4dbae7ab7e0f70d7816f0ea6010c54078d5da1bc7cd5d",
+      "replacementFragments": [
+        "for ehr representation learning. arXiv preprint"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2608.29077",
+      "page": 1,
+      "oldFragment": "/* Stegotext */ The Prime Minister declared today a",
+      "sourceSha256": "ed54dad5f8bcc1851e3a881f5eaa144d2fd26860b79f1922be63ca41a61073a2",
+      "sourcePageImageSha256": "c78fc11f1976b037f1dad8319c730dfce82dc439bad18e6233b98a4202d0d552",
+      "replacementFragments": [
+        "/* Stegotext */",
+        "The Prime Minister declared",
+        "today a fresh package of"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2608.29077",
+      "page": 36,
+      "oldFragment": "2025 Yan and Murawaki (2025) ✓ ✗ ✗ ✓ ✓2025 Bai et al.",
+      "sourceSha256": "ed54dad5f8bcc1851e3a881f5eaa144d2fd26860b79f1922be63ca41a61073a2",
+      "sourcePageImageSha256": "cb0c58e2cc94883768396cf806e9ff452f6205e8c8669634ff490f6afc40b36b",
+      "replacementFragments": [
+        "2025 Yan and Murawaki (2025) ✓ ✗ ✗ ✓ ✓",
+        "2025 Bai et al. (2025b) ✓ ✗ ✗ ✓ ✓"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2412.19437",
+      "page": 28,
+      "oldFragment": "1 2 3 4 5 6 7 8 9 10 1112 13 14 15 16 17 18 19 20 21",
+      "sourceSha256": "812a3fd645c80725354de9d831a6785503007a60681461407f64e97305fa9330",
+      "sourcePageImageSha256": "90fb8be709a11f6f752704a5ac8ada7bdf8a36a81bf794a17a3c752fa4843d49",
+      "replacementFragments": [
+        "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2307.09288",
+      "page": 39,
+      "oldFragment": "Mitchell,andMattGardner.",
+      "sourceSha256": "1df284ce95f783002074bfe8f21d47c646b396ceb1736ea3ec0ea212fc070d91",
+      "sourcePageImageSha256": "e5bac7709b6d287e15715bac5858d3ad7c75314b83e6a8dc1f2d28eea2c38175",
+      "replacementFragments": [
+        "Mitchell, and Matt Gardner."
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2302.13971",
+      "page": 27,
+      "oldFragment": "the terminal output, and nothing else. The ﬁrst",
+      "sourceSha256": "2e663675ae36ad12adb2f5a05281bac2747ecf8d23d92bedd9f937a89fee7136",
+      "sourcePageImageSha256": "e60b075f5fe1fda022ef963999079d9fb86bbed1b9f0c4cfcd35c47898a1a0b7",
+      "replacementFragments": [
+        "the terminal output, and nothing else. The first"
+      ],
+      "reason": "Source page visually compared: preserve real word boundaries and separate figure labels or table rows; typographic ligatures use their readable letters."
+    },
+    {
+      "id": "2309.16609",
+      "page": 59,
+      "oldFragment": "figure. CODE LL AMA, however, attempts to draw the",
+      "replacementFragments": [
+        "figure. CODE LLAMA, however, attempts to draw the"
+      ],
+      "sourceSha256": "5d4a9c3f6da9e9fa18a444bc3a663271dcf5ada36cc4c5dfe607a041619be798",
+      "sourcePageImageSha256": "7541029345b04a49ee49b8ad26f089a96909059af647249dc44bfa2d285fb1d2",
+      "reason": "Small-cap font renders the model name as CODE LLAMA; the extracted extra internal space splits a word.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    },
+    {
+      "id": "2306.11644",
+      "page": 1,
+      "oldFragment": "now referred to asscaling laws [KMH+20]. The",
+      "replacementFragments": [
+        "now referred to as scaling laws [KMH+20]. The"
+      ],
+      "sourceSha256": "f2d7bc256626c20439601bccd12adbb4b4457763bc75ccda4509f00b4809cd89",
+      "sourcePageImageSha256": "2efd6ff0369ee21ce5f6b1a19d509acee108b9d847eff6a640e728025b8a6059",
+      "reason": "Source visibly separates as and the italic scaling laws phrase.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    },
+    {
+      "id": "2408.00118",
+      "page": 11,
+      "oldFragment": "Table 19| Offensive cyber-security evaluations on",
+      "replacementFragments": [
+        "Table 19 | Offensive cyber-security evaluations on"
+      ],
+      "sourceSha256": "e81333353e58a01cbca0b6d5aec28caa5a7c6d26b52d227844bcce1bd87dc557",
+      "sourcePageImageSha256": "c05eec5928e10201db3ec6092dd83451967b84d3c88bb7e240e7d90c746fbd64",
+      "reason": "Caption separator has visible spacing on both sides.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    },
+    {
+      "id": "2204.02311",
+      "page": 87,
+      "oldFragment": "WikiLingua (tr→ en) 41 .54 44 .78 45.38 45.38 49 .27",
+      "replacementFragments": [
+        "WikiLingua (tr → en) 41.54 44.78 45.38 45.38 49.27 53.01 54.44"
+      ],
+      "sourceSha256": "1e88f1f3027cd1abecb1713c1c08a89137c7730582549ec7ca78ca329f3f975d",
+      "sourcePageImageSha256": "e5ff0f00c1ee011a06b3eb1e76fc492b6675174951320a0ef825b3a73f8cf08b",
+      "reason": "Visually checked all seven values in the same Turkish-English table row; decimal digits have no internal spaces.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    },
+    {
+      "id": "2205.01068",
+      "page": 1,
+      "oldFragment": "Xi Victoria Lin, Todor Mihaylov, Myle Ott††, Sam",
+      "replacementFragments": [
+        "Xi Victoria Lin, Todor Mihaylov, Myle Ott†",
+        "Sam Shleifer†"
+      ],
+      "sourceSha256": "dc88168a2514e4c66a5a791cab6dfacae9bbd566a3d86a119add151f31484d87",
+      "sourcePageImageSha256": "ae2ebe7a691c6608527a2d49c6525d0f5496dae8b4b4d9478315921eb48436cd",
+      "reason": "Author line visibly contains one dagger per author; source extraction duplicated a dagger. Separate author fragments allow superscript line wrapping.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    },
+    {
+      "id": "2309.10305",
+      "page": 28,
+      "oldFragment": "the afternoon，we are going to the zoo 。We are going to",
+      "replacementFragments": [
+        "the afternoon，we are going to the zoo。We are going to"
+      ],
+      "sourceSha256": "a472efa33bb8a1451f4d694d075c61a0c5c8cab2b5a1be678d5669a688c71a8e",
+      "sourcePageImageSha256": "fa4dc1281ea57fc34c0714270847c350b39415b17d859247d4b6c1a98dfda312",
+      "reason": "Source paragraph has Chinese punctuation; remove extraction spacing before the full stop while retaining all words and punctuation.",
+      "previousExpectationSha256": "7b0b5da32ad4f799b10025474d3b199dd9dc4cf8a06d6dcc1c27eb61b31936c1"
+    }
+  ],
+  "whitespaceCorrections": [
+    {
+      "id": "2308.11432",
+      "reason": "Allow a line break between training and agents while retaining both complete words."
+    },
+    {
+      "id": "2312.00785",
+      "reason": "Allow source superscript author numbers to place commas on the next line."
+    },
+    {
+      "id": "2406.08434",
+      "reason": "Allow the affiliation number and complete institute name on separate lines."
+    }
+  ],
+  "currentExpectationSha256": "08526e5dc7a4f330bbead67769f2d0fcf59a7a14c02aa1062b3e134a63d912f8"
+}

@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createApiClient, ApiError, defaultMeetingOptions, defaultWorkbenchOptions, meetingTaskRequest,
-  meetingOptionsForLocale, parseTask,
+  meetingOptionsForLocale, parseTask, taskRequest,
 } from "../src/api";
 import type { ApiClient, MeetingOptions, TaskRecord, WorkbenchOptions } from "../src/api";
 import { App } from "../src/app";
@@ -13,7 +13,8 @@ import { requestMicrophone, requestSystemAudio } from "../src/meeting-page";
 import { JsonTree, SafeMarkdownPreview } from "../src/preview";
 import { ErrorBoundary } from "../src/error-boundary";
 import { takeSession } from "../src/session";
-import { archiveMembers } from "../src/archive-diagnostics";
+import { I18nProvider } from "../src/i18n";
+import { archiveMembers, conversionObservations, ArchiveDiagnostics } from "../src/archive-diagnostics";
 import { supportsFileName, taskFailureLabel, taskFailureCode } from "../src/task-ui";
 import { parseOcrOmissions } from "../src/ocr-omissions";
 import styles from "../src/styles.css";
@@ -295,6 +296,9 @@ test("meeting request binds language hints to deterministic Chinese script outpu
   assert.equal(traditional.options.asr.language, "zh");
   assert.equal(traditional.options.asr.chinese_script, "traditional");
   const automatic = meetingTaskRequest(file, defaultMeetingOptions) as any;
+  assert.equal(automatic.options.error_policy, "best-effort");
+  assert.equal(automatic.options.ocr.policy, "auto");
+  assert.equal(automatic.options.limits, undefined);
   assert.equal(automatic.options.asr.language, null);
   assert.equal(automatic.options.asr.chinese_script, "preserve");
   const remote = meetingTaskRequest(file, { ...defaultMeetingOptions, authorizeProvider: true }) as any;
@@ -375,10 +379,10 @@ test("workbench API sends shared conversion options and resumes SSE from Last-Ev
   assert.equal(request.batchId, batchId);
   assert.equal(request.format, "pdf");
   assert.equal(request.options.ocr.policy, "always");
-  assert.equal(request.options.limits.max_memory_bytes, 1024 * 1024 * 1024);
+  assert.equal(request.options.limits, undefined);
+  assert.equal(request.options.error_policy, "best-effort");
   assert.deepEqual(request.options.asr, {
-    language: null, chinese_script: "preserve", max_threads: 4,
-    max_duration_ms: null, max_segments: 100_000, max_native_memory_bytes: 900 * 1024 * 1024,
+    language: null, chinese_script: "preserve",
   });
   assert.equal(request.options.ai.audio_transcription, "off");
   assert.deepEqual(request.options.network, { enabled: true, max_redirects: 3, deny_private_networks: false, allowed_hosts: [] });
@@ -823,7 +827,11 @@ test("local workbench keeps implementation limits and network policy out of the 
   await waitForText(window, "Conversion settings");
   assert.ok(!window.document.body.textContent.includes("Open advanced settings"));
   assert.ok(!window.document.body.textContent.includes("Input file limit"));
-  assert.ok(!window.document.body.textContent.includes("Memory limit"));
+  const advanced = window.document.querySelector(".control-card details");
+  assert.ok(advanced);
+  assert.equal(advanced.hasAttribute("open"), false);
+  assert.ok(advanced.textContent.includes("Memory limit"));
+  assert.ok(Array.from(advanced.querySelectorAll("input")).every((input) => input.value === ""));
   assert.ok(!window.document.body.textContent.includes("Allowed hosts"));
   assert.ok(!window.document.body.textContent.includes("Allow network access"));
 });
@@ -1195,4 +1203,58 @@ test("structured OCR failure and omission locations are bounded and preserved", 
   ]);
   assert.throws(() => parseOcrOmissions('{"diagnostics":[{"code":"ocr.optionalRecognitionMemorySkipped"}]}'));
   assert.throws(() => parseOcrOmissions('{"diagnostics":[{"code":"ocr.optionalRecognitionResourceSkipped"}]}'));
+});
+
+
+test("conversion defaults omit resource overrides and preserve explicit edits", () => {
+  const defaults = taskRequest(defaultWorkbenchOptions) as any;
+  assert.equal(defaults.options.error_policy, "best-effort");
+  assert.equal(defaults.options.ocr.policy, "auto");
+  assert.equal(defaults.options.limits, undefined);
+  const edited = taskRequest({ ...defaultWorkbenchOptions, maxPages: 23000, maxMemoryMiB: 9000 }) as any;
+  assert.deepEqual(edited.options.limits, { max_memory_bytes: 9000 * 1024 * 1024, max_pages: 23000 });
+  assert.equal((taskRequest({ ...defaultWorkbenchOptions, maxPages: null }) as any).options.limits, undefined);
+  assert.throws(() => taskRequest({ ...defaultWorkbenchOptions, maxMemoryMiB: 0 }), ApiError);
+});
+
+test("conversion observations retain degradation reasons and real OCR counts", () => {
+  const observation = conversionObservations(JSON.stringify({ outcome: "degraded", diagnostics: [{ severity: "warning", message: "Page image retained", locator: { page: 3 } }], ocrRuntime: { imageSources: 40, imagesAttempted: 39, imagesCompleted: 38, imagesFailed: 1, imagesSkipped: 1 } }));
+  assert.equal(observation.outcome, "degraded");
+  assert.deepEqual(observation.reasons, ["[3] Page image retained"]);
+  assert.equal(observation.ocr?.imagesSkipped, 1);
+  assert.equal(conversionObservations('{"diagnostics":[]}').ocr, undefined);
+});
+
+
+test("degraded result displays nearby OCR counts even when the diagnostic preview is truncated", async () => {
+  const window = installWindow(["zh-CN"]);
+  const completed = task("succeeded");
+  const text = JSON.stringify({ outcome: "degraded", diagnostics: [{ severity: "warning", message: "保留页面图像", locator: { page: 3 } }], ocrRuntime: { imageSources: 40, imagesAttempted: 39, imagesCompleted: 38, imagesFailed: 1, imagesSkipped: 1 } });
+  completed.artifacts.push({ storageKey: "b".repeat(32), kind: "diagnostics", byteLen: text.length, sha256: "c".repeat(64) });
+  let downloads = 0;
+  const api: ApiClient = { ...availableApi,
+    async preview() { return { text: text.slice(0, 20), truncated: true, contentType: "application/json" }; },
+    async download() { downloads++; return { blob: new Blob([text]), filename: "diagnostics.json" }; },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!);
+  root.render(createElement(I18nProvider, null, createElement(ArchiveDiagnostics, { api, task: completed })));
+  await waitForText(window, "转换完成，部分内容已降级");
+  assert.ok(window.document.body.textContent.includes("[3] 保留页面图像"));
+  assert.ok(window.document.body.textContent.includes("图片总数 40；尝试 39，完成 38，失败 1，跳过 1"));
+  assert.equal(downloads, 1);
+});
+
+
+test("large converted task inventories remain readable through the real API client", async () => {
+  const completed = task("succeeded");
+  completed.artifacts = Array.from({ length: 8000 }, (_, index) => ({
+    storageKey: index.toString(16).padStart(32, "0"), kind: "asset" as const,
+    byteLen: 100, sha256: "c".repeat(64),
+  }));
+  const wire = JSON.stringify(completed);
+  assert.ok(wire.length > 1024 * 1024);
+  const api = createApiClient(token, async () => new Response(wire, {
+    headers: { "content-type": "application/json", "content-length": String(wire.length) },
+  }));
+  assert.equal((await api.getTask(completed.id)).artifacts.length, 8000);
 });

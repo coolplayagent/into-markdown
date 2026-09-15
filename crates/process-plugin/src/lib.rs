@@ -38,7 +38,6 @@ const HASH_BUFFER_BYTES: u64 = 64 * 1024;
 const ABSOLUTE_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const ABSOLUTE_RUNTIME_ENTRIES: usize = 25_000;
-const ABSOLUTE_ADDRESS_SPACE_BYTES: u64 = 4 * 1024 * 1024 * 1024 * 1024;
 
 /// Immutable authority for one installed executable.
 #[derive(Debug, Clone)]
@@ -1103,9 +1102,7 @@ fn validate_policy(policy: &RuntimePolicy) -> Result<(), PluginError> {
         || policy.max_output_bytes == 0
         || policy.max_output_bytes > u64::from(policy.max_frame_bytes)
         || policy.max_memory_bytes < 32 * 1024 * 1024
-        || policy.max_address_space_bytes.is_some_and(|bytes| {
-            bytes < policy.max_memory_bytes || bytes > ABSOLUTE_ADDRESS_SPACE_BYTES
-        })
+        || policy.max_address_space_bytes.is_some_and(|bytes| bytes < policy.max_memory_bytes)
         || policy.max_file_bytes == 0
         || !(16..=4096).contains(&policy.max_open_files)
         || policy.handshake_timeout.is_zero()
@@ -1661,8 +1658,8 @@ mod tests {
         validate_policy(&policy).unwrap();
         policy.max_address_space_bytes = Some(physical - 1);
         assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
-        policy.max_address_space_bytes = Some(ABSOLUTE_ADDRESS_SPACE_BYTES + 1);
-        assert_eq!(validate_policy(&policy).unwrap_err().code, PluginErrorCode::Authority);
+        policy.max_address_space_bytes = Some(8 * 1024 * 1024 * 1024 * 1024);
+        validate_policy(&policy).unwrap();
     }
 
     #[cfg(unix)]

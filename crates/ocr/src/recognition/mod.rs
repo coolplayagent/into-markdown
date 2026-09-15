@@ -27,15 +27,9 @@ const PROVIDER: &str = "builtin.ocr.ppocrv6-recognizer";
 const MODEL_ID: &str = "pp-ocrv6-tiny-recognizer-onnx";
 const HEIGHT: usize = 48;
 const BASE_WIDTH: usize = 320;
-const MAX_WIDTH: usize = 3200;
 const CLASSES: usize = 6906;
 const BLANK: usize = 0;
 const SCALE: f32 = 1.0 / 255.0;
-const MAX_REGIONS: usize = 3000;
-const MAX_CROP_PIXELS: usize = 32_000_000;
-const MAX_TENSOR_ELEMENTS: usize = 32_000_000;
-const MAX_OUTPUT_TIMESTEPS: usize = 1024;
-const MAX_DECODED_BYTES: usize = 16 * 1024 * 1024;
 
 /// Recognition resource and batching bounds.
 #[derive(Debug, Clone)]
@@ -51,12 +45,12 @@ pub struct RecognitionConfig {
 impl Default for RecognitionConfig {
     fn default() -> Self {
         Self {
-            max_regions: MAX_REGIONS,
+            max_regions: usize::MAX,
             max_batch_size: 8,
-            max_crop_pixels: MAX_CROP_PIXELS,
-            max_tensor_elements: MAX_TENSOR_ELEMENTS,
-            max_output_timesteps: MAX_OUTPUT_TIMESTEPS,
-            max_decoded_bytes: MAX_DECODED_BYTES,
+            max_crop_pixels: usize::MAX,
+            max_tensor_elements: usize::MAX,
+            max_output_timesteps: usize::MAX,
+            max_decoded_bytes: usize::MAX,
         }
     }
 }

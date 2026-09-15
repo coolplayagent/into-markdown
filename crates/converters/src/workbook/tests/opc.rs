@@ -41,10 +41,11 @@ fn parser_driving_declarations_are_bounded_before_calamine() {
     );
     let styles = r#"<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cellXfs count="1000001"/></styleSheet>"#;
     let oversized_styles = rewrite_package(&base, &[("xl/styles.xml", styles.to_owned())], &[]);
-    assert!(matches!(
-        convert(&oversized_styles, &ConversionOptions::default()),
-        Err(ConversionError::ResourceLimit { limit: "max_table_cells", .. })
-    ));
+    let output = convert(&oversized_styles, &ConversionOptions::default()).unwrap();
+    assert!(output.diagnostics.iter().any(|d| d.code == "spreadsheet.extension.omitted"));
+    let mut strict = ConversionOptions::default();
+    strict.error_policy = ErrorPolicy::Strict;
+    assert!(matches!(convert(&oversized_styles, &strict), Err(ConversionError::Malformed { .. })));
 
     let content_types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"#;
     let workbook_rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#;

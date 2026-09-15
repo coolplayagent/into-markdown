@@ -62,6 +62,7 @@ impl ChapterDispatch<'_> {
                     input: &input,
                     hint: &hint,
                     options: self.options,
+                    enrich_output: false,
                     excluded_converter_ids: EXCLUDED,
                 },
                 self.context,
@@ -384,7 +385,7 @@ pub(super) async fn convert(
         )?;
         drop(entry);
         if let Some(chapter) = dispatch.convert(item, prepared, &mut recovery).await? {
-            chapters.push(chapter);
+            super::original_attachment::append(&mut chapters, chapter, archive, context)?;
         }
     }
     finish(
