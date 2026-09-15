@@ -460,7 +460,7 @@
     },
     {
       "path": "crates/converters/src/embedded_visual_ocr.rs",
-      "lines": 1225,
+      "lines": 1226,
       "functions": [
         {
           "symbol": "enrich",
@@ -1122,7 +1122,7 @@
       "functions": [
         {
           "symbol": "impl PdfOutput::extract_page",
-          "lines": 266
+          "lines": 267
         }
       ],
       "allowances": [

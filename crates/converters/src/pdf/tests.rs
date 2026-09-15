@@ -843,7 +843,9 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                     into_markdown_core::ExecutionOptions::default(),
                     into_markdown_core::ResourceLimits::default(),
                 );
-                let output = convert_pdf(&path, &input, &ConversionOptions::default(), &context)
+                let mut native_options = ConversionOptions::default();
+                native_options.ocr.policy = OcrPolicy::Off;
+                let output = convert_pdf(&path, &input, &native_options, &context)
                     .expect("both serialized conversions succeed");
                 assert_eq!(output.document.blocks.len(), 4);
                 assert!(!output.assets.is_empty());
@@ -892,12 +894,18 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                 else {
                     panic!("page")
                 };
-                let Block::Paragraph(first_inlines) = &first_blocks[0].block else {
-                    panic!("text")
-                };
-                let Inline::SourceText { provenance, .. } = &first_inlines[0] else {
-                    panic!("character")
-                };
+                let provenance = first_blocks
+                    .iter()
+                    .find_map(|node| {
+                        let Block::Paragraph(inlines) = &node.block else { return None };
+                        inlines.iter().find_map(|inline| match inline {
+                            Inline::SourceText { value, provenance, .. } if value == "R" => {
+                                Some(provenance)
+                            }
+                            _ => None,
+                        })
+                    })
+                    .expect("native source character after any preceding link annotation");
                 let first_character_bounds = provenance.locator.bounds.unwrap();
                 let raw_character = PdfRect {
                     left: first_character_bounds.x,

@@ -382,29 +382,15 @@ impl PdfOutput {
                 provenance: rendered_provenance,
             });
         }
-        if render_requested && needs_page_frame {
-            retain_output_bytes(context, &mut retained_memory, diagnostic_overhead()?)?;
-            diagnostics.push(Diagnostic {
-                code: "pdf.pageOcrPlacement".into(),
-                severity: DiagnosticSeverity::Info,
-                message: "Image placement uses displayed-page OCR to preserve clipping and page coordinates".into(),
-                locator: Some(page_locator(page_number, &info)),
-            });
-        }
-        if scanned {
-            retain_output_bytes(context, &mut retained_memory, diagnostic_overhead()?)?;
-            diagnostics
-                .try_reserve(1)
-                .map_err(|_| resource("max_memory_bytes", "diagnostic allocation failed"))?;
-            diagnostics.push(Diagnostic {
-                code: "pdf.scannedPage".into(),
-                severity: DiagnosticSeverity::Info,
-                message: format!(
-                    "page {page_number} has fewer than {MIN_NATIVE_TEXT_CHARS} printable native characters and image coverage of at least 50%"
-                ),
-                locator: Some(page_locator(page_number, &info)),
-            });
-        }
+        record_page_ocr_decisions(
+            render_requested && needs_page_frame,
+            scanned,
+            page_number,
+            &info,
+            &mut diagnostics,
+            &mut retained_memory,
+            context,
+        )?;
         counts.nodes = checked_count(
             counts.nodes,
             1,
@@ -519,4 +505,41 @@ mod object_budget_tests {
             Err(ConversionError::ResourceLimit { limit: "documentNodes", .. })
         ));
     }
+}
+
+fn record_page_ocr_decisions(
+    needs_page_frame: bool,
+    scanned: bool,
+    page_number: u32,
+    info: &super::PageInfo,
+    diagnostics: &mut Vec<Diagnostic>,
+    retained_memory: &mut Vec<ResourceReservation>,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    if needs_page_frame {
+        retain_output_bytes(context, retained_memory, diagnostic_overhead()?)?;
+        diagnostics.push(Diagnostic {
+            code: "pdf.pageOcrPlacement".into(),
+            severity: DiagnosticSeverity::Info,
+            message:
+                "Image placement uses displayed-page OCR to preserve clipping and page coordinates"
+                    .into(),
+            locator: Some(page_locator(page_number, info)),
+        });
+    }
+    if scanned {
+        retain_output_bytes(context, retained_memory, diagnostic_overhead()?)?;
+        diagnostics
+            .try_reserve(1)
+            .map_err(|_| resource("max_memory_bytes", "diagnostic allocation failed"))?;
+        diagnostics.push(Diagnostic {
+            code: "pdf.scannedPage".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "page {page_number} has fewer than {MIN_NATIVE_TEXT_CHARS} printable native characters and image coverage of at least 50%"
+            ),
+            locator: Some(page_locator(page_number, info)),
+        });
+    }
+    Ok(())
 }

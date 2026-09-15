@@ -403,7 +403,11 @@ fn failed_page_ocr_recovers_and_processes_the_following_page() {
         ExecutionContext::new(ExecutionOptions::default(), request.options.limits.clone());
     let result = block_on(engine.convert_with_context(request, context.clone())).unwrap();
     assert_eq!(result.document.blocks.len(), 3);
-    assert_eq!(pages.entries.lock().unwrap().len(), 3);
+    assert_eq!(
+        pages.entries.lock().unwrap().iter().map(|entry| entry.0).collect::<Vec<_>>(),
+        vec![1, 2, 2, 3],
+        "one recovery-image OCR attempt precedes the following page"
+    );
     assert!(
         result
             .diagnostics
