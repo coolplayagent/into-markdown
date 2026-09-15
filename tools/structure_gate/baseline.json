@@ -1995,7 +1995,7 @@
     },
     {
       "path": "crates/pdfium/src/native.rs",
-      "lines": 1779,
+      "lines": 1725,
       "functions": [
         {
           "symbol": "impl Backend for Native::characters",

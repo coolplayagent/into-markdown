@@ -16,6 +16,7 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod images;
 mod links;
 mod runtime_path;
 mod text;
@@ -167,7 +168,9 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDFBitmap_GetHeight",
     "FPDFBitmap_GetStride",
     "FPDFBitmap_GetWidth",
-    "FPDFImageObj_GetBitmap",
+    "FPDFImageObj_GetRenderedBitmap",
+    "FPDFPageObj_GetMatrix",
+    "FPDFPageObj_SetMatrix",
     "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",
@@ -426,7 +429,9 @@ fn last_error_code(value: c_ulong) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-type GetBitmap = unsafe extern "C" fn(Handle) -> Handle;
+type GetRenderedBitmap = unsafe extern "C" fn(Handle, Handle, Handle) -> Handle;
+type GetObjectMatrix = unsafe extern "C" fn(Handle, *mut text::Matrix) -> c_int;
+type SetObjectMatrix = unsafe extern "C" fn(Handle, *const text::Matrix) -> c_int;
 type GetImagePixelSize = unsafe extern "C" fn(Handle, *mut c_uint, *mut c_uint) -> c_int;
 type GetBitmapInt = unsafe extern "C" fn(Handle) -> c_int;
 type GetBitmapBuffer = unsafe extern "C" fn(Handle) -> *mut c_void;
@@ -531,7 +536,9 @@ pub(crate) struct Native {
     destroy_bitmap: Close,
     render_page: Render,
     last_error: LastError,
-    image_bitmap: GetBitmap,
+    image_bitmap: GetRenderedBitmap,
+    object_matrix: GetObjectMatrix,
+    set_object_matrix: SetObjectMatrix,
     image_pixel_size: GetImagePixelSize,
     bitmap_width: GetBitmapInt,
     bitmap_height: GetBitmapInt,
@@ -624,7 +631,9 @@ impl Native {
             destroy_bitmap: symbol!("FPDFBitmap_Destroy", Close),
             render_page: symbol!("FPDF_RenderPageBitmap", Render),
             last_error: symbol!("FPDF_GetLastError", LastError),
-            image_bitmap: symbol!("FPDFImageObj_GetBitmap", GetBitmap),
+            image_bitmap: symbol!("FPDFImageObj_GetRenderedBitmap", GetRenderedBitmap),
+            object_matrix: symbol!("FPDFPageObj_GetMatrix", GetObjectMatrix),
+            set_object_matrix: symbol!("FPDFPageObj_SetMatrix", SetObjectMatrix),
             image_pixel_size: symbol!("FPDFImageObj_GetImagePixelSize", GetImagePixelSize),
             bitmap_width: symbol!("FPDFBitmap_GetWidth", GetBitmapInt),
             bitmap_height: symbol!("FPDFBitmap_GetHeight", GetBitmapInt),
@@ -1307,79 +1316,14 @@ impl Backend for Native {
     }
     fn image_bitmap(
         &self,
+        document: usize,
+        page: usize,
         image: usize,
         limits: Limits,
         planned_bytes: u64,
     ) -> Result<ImageBitmap, Error> {
-        let bitmap = unsafe { (self.image_bitmap)(image as Handle) };
-        if bitmap.is_null() {
-            return Err(self.error("image_bitmap"));
-        }
-        let bitmap = BitmapGuard { raw: bitmap, destroy: self.destroy_bitmap };
-        let width = nonnegative("image_bitmap_width", unsafe { (self.bitmap_width)(bitmap.raw) })?;
-        let height =
-            nonnegative("image_bitmap_height", unsafe { (self.bitmap_height)(bitmap.raw) })?;
-        let stride =
-            nonnegative("image_bitmap_stride", unsafe { (self.bitmap_stride)(bitmap.raw) })?;
-        for dimension in [width, height] {
-            if dimension > limits.max_render_dimension {
-                return Err(Error::ResourceLimit {
-                    limit: "max_render_dimension",
-                    actual: u64::from(dimension),
-                    maximum: u64::from(limits.max_render_dimension),
-                });
-            }
-        }
-        let pixels = u64::from(width)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| invalid("image_bitmap", "pixel count overflow"))?;
-        if pixels > limits.max_render_pixels {
-            return Err(Error::ResourceLimit {
-                limit: "max_render_pixels",
-                actual: pixels,
-                maximum: limits.max_render_pixels,
-            });
-        }
-        let (format, bytes_per_pixel) = match unsafe { (self.bitmap_format)(bitmap.raw) } {
-            1 => (PixelFormat::Gray, 1_u32),
-            2 => (PixelFormat::Bgr, 3),
-            3 => (PixelFormat::Bgrx, 4),
-            4 => (PixelFormat::Bgra, 4),
-            value => return Err(invalid("image_bitmap_format", &format!("unknown {value}"))),
-        };
-        let minimum_stride = width
-            .checked_mul(bytes_per_pixel)
-            .ok_or_else(|| invalid("image_bitmap", "minimum stride overflow"))?;
-        if stride < minimum_stride {
-            return Err(invalid("image_bitmap", "native stride is shorter than one row"));
-        }
-        let size = u64::from(stride)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| invalid("image_bitmap", "buffer size overflow"))?;
-        if size > limits.max_bitmap_bytes {
-            return Err(Error::ResourceLimit {
-                limit: "max_bitmap_bytes",
-                actual: size,
-                maximum: limits.max_bitmap_bytes,
-            });
-        }
-        let output_bound = planned_bytes / 2;
-        if size > output_bound {
-            return Err(invalid("image_bitmap", "decoded size exceeded preflight plan"));
-        }
-        let capacity = usize::try_from(size)
-            .map_err(|_| invalid("image_bitmap", "buffer does not fit usize"))?;
-        let source = unsafe { (self.bitmap_buffer)(bitmap.raw) }.cast::<u8>();
-        if source.is_null() && capacity != 0 {
-            return Err(self.error("image_bitmap_buffer"));
-        }
-        let mut bytes = zeroed_boxed_bytes(capacity, "image_bitmap")?;
-        if capacity != 0 {
-            // SAFETY: PDFium reports `stride * height` bytes owned by `bitmap`; the bitmap remains
-            // alive through this copy, and all arithmetic/allocation was checked above.
-            bytes.copy_from_slice(unsafe { std::slice::from_raw_parts(source, capacity) });
-        }
-        Ok(ImageBitmap { width, height, stride, format, bytes: bytes.into_vec() })
+        let bitmap = self.render_image_bitmap(document, page, image)?;
+        self.copy_image_bitmap(bitmap, limits, planned_bytes)
     }
     fn image_bitmap_allocation_bytes(&self, image: usize, limits: Limits) -> Result<u64, Error> {
         let (mut width, mut height) = (0_u32, 0_u32);
@@ -1416,7 +1360,8 @@ impl Backend for Native {
                 maximum: limits.max_bitmap_bytes,
             });
         }
-        bytes.checked_mul(2).ok_or_else(|| invalid("image_plan", "bitmap peak overflow"))
+        // Account for source pixels, mask, rendered bitmap and the owned output copy.
+        bytes.checked_mul(4).ok_or_else(|| invalid("image_plan", "bitmap peak overflow"))
     }
 }
 

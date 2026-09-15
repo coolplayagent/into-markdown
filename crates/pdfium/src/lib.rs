@@ -1,6 +1,8 @@
 //! Fail-closed `PDFium` boundary.
 #![allow(missing_docs)]
 #![allow(clippy::missing_errors_doc)]
+#[cfg(test)]
+mod image_tests;
 mod native;
 
 use std::ffi::{CStr, CString};
@@ -172,6 +174,8 @@ trait Backend: Send + Sync {
     fn render(&self, page: usize, width: u32, height: u32) -> Result<Vec<u8>, Error>;
     fn image_bitmap(
         &self,
+        document: usize,
+        page: usize,
         image: usize,
         limits: Limits,
         planned_bytes: u64,
@@ -724,6 +728,8 @@ impl PlannedBitmap<'_, '_> {
     pub fn materialize(self) -> Result<ImageBitmap, Error> {
         let _guard = self.image.page.document.runtime.0.lock()?;
         let bitmap = self.image.page.document.runtime.0.backend.image_bitmap(
+            self.image.page.document.raw,
+            self.image.page.raw,
             self.image.raw,
             self.image.page.document.runtime.0.limits,
             self.allocation_bytes,
@@ -1237,6 +1243,8 @@ mod tests {
         fn image_bitmap(
             &self,
             _: usize,
+            _: usize,
+            _: usize,
             _: Limits,
             planned_bytes: u64,
         ) -> Result<ImageBitmap, Error> {
@@ -1677,7 +1685,7 @@ mod tests {
         assemble_pdf(&objects)
     }
 
-    fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+    pub(crate) fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
         let mut pdf = b"%PDF-1.4\n%\x80\x80\x80\x80\n".to_vec();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {
@@ -1703,7 +1711,7 @@ mod tests {
         pdf
     }
 
-    fn stream_object(dictionary: &str, bytes: &[u8]) -> Vec<u8> {
+    pub(crate) fn stream_object(dictionary: &str, bytes: &[u8]) -> Vec<u8> {
         let mut object =
             format!("<< {dictionary} /Length {} >>\nstream\n", bytes.len()).into_bytes();
         object.extend_from_slice(bytes);

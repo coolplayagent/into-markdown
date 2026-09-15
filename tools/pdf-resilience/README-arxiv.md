@@ -89,3 +89,5 @@ Unreadable encrypted sources retain their real CLI status. `classify_inputs.py` 
 将分阶段运行关联到原始清单。每条记录携带实际可执行文件哈希及原始报告哈希，多个可执行文件参与时组合报告的顶层可执行文件哈希为空，同一可执行文件的分组运行保留共享哈希；所有原报告继续保留。部分基线必须提供原始清单，只有每篇、每种模式均有结果时组合报告才完整。专项复测产生的新失败会保留为失败。
 
 邮件的 CID 图片在正文引用或附件展示两条路径都纳入 OCR。全透明图像通过独立像素检查归入无可见文字项，原始 OCR 失败计数仍保留；整页已执行 OCR 的 PDF 原始图像不重复识别。不同口径分别报告。
+
+`masked_pdf_corpus.py --output <directory>` builds a PDF-specific OCR contract from the frozen English image golden (Pillow is required locally). The sentence lives in a soft mask over black pixels, alongside a native text paragraph. Run its `manifest.json` in auto/off modes and validate `expectations.json` with the shared quality gate. This checks both visible image composition and image OCR on a page with native text. The native PDFium regression also checks partial alpha, original pixel dimensions, repeated extraction and unchanged page rendering. PDF image extraction uses `FPDFImageObj_GetRenderedBitmap` at source resolution and restores the object matrix while holding the runtime gate.

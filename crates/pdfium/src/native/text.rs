@@ -11,6 +11,13 @@ pub(super) struct Matrix {
     f: f32,
 }
 
+impl Matrix {
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn image_pixels(width: u32, height: u32) -> Self {
+        Self { a: width as f32, d: height as f32, ..Self::default() }
+    }
+}
+
 impl Native {
     pub(super) fn character_font_size(&self, text: usize, index: c_int) -> Result<f64, Error> {
         let nominal = unsafe { (self.text_font_size)(text as Handle, index) };

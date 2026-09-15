@@ -526,7 +526,7 @@ fn append_download_integrity(
     }
 }
 
-pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 52] = [
+pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 54] = [
     "FPDF_InitLibraryWithConfig",
     "FPDF_DestroyLibrary",
     "FPDF_LoadMemDocument64",
@@ -575,7 +575,9 @@ pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 52] = [
     "FPDFBitmap_GetHeight",
     "FPDFBitmap_GetStride",
     "FPDFBitmap_GetWidth",
-    "FPDFImageObj_GetBitmap",
+    "FPDFImageObj_GetRenderedBitmap",
+    "FPDFPageObj_GetMatrix",
+    "FPDFPageObj_SetMatrix",
     "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",

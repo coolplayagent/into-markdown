@@ -22,7 +22,7 @@
     "FPDFLink_GetURL", "FPDFLink_CountRects", "FPDFLink_GetRect", "FPDFLink_CloseWebLinks",
     "FPDFBitmap_CreateEx", "FPDFBitmap_Destroy", "FPDFBitmap_GetBuffer",
     "FPDFBitmap_GetFormat", "FPDFBitmap_GetHeight", "FPDFBitmap_GetStride",
-    "FPDFBitmap_GetWidth", "FPDFImageObj_GetBitmap", "FPDFImageObj_GetImagePixelSize",
+    "FPDFBitmap_GetWidth", "FPDFImageObj_GetRenderedBitmap", "FPDFPageObj_GetMatrix", "FPDFPageObj_SetMatrix", "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError"
   ],
