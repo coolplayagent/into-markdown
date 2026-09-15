@@ -3059,7 +3059,7 @@ fn publish_result_named(
             &shared.publication_failure,
         )?;
         let manifest = bounded_json(
-            &ArtifactManifest { schema_version: 1, entries: &entries },
+            &ArtifactManifest::new(result, &entries),
             isize::MAX as usize,
             "artifact manifest",
         )?;
@@ -3224,37 +3224,9 @@ fn document_speaker_ids(document: &into_markdown::Document) -> Vec<String> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OwnedManifest {
     schema_version: u32,
+    #[serde(default)]
+    bundle_unavailable: bool,
     entries: Vec<ArtifactReference>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArtifactManifest<'a> {
-    schema_version: u32,
-    entries: &'a [ArtifactReference],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DiagnosticsArtifact<'a> {
-    schema_version: u32,
-    diagnostics: &'a [into_markdown::Diagnostic],
-    outcome: &'a str,
-    ocr_runtime: Option<into_markdown::OcrRuntimeUsageDto>,
-}
-
-impl<'a> DiagnosticsArtifact<'a> {
-    fn from_result(result: &'a into_markdown::ConversionResult) -> Self {
-        Self {
-            schema_version: 1,
-            diagnostics: &result.diagnostics,
-            outcome: match result.outcome() {
-                into_markdown::ConversionOutcome::Complete => "complete",
-                into_markdown::ConversionOutcome::Degraded => "degraded",
-            },
-            ocr_runtime: result.ocr_runtime_usage(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -3269,7 +3241,7 @@ struct OwnedDiagnosticsArtifact {
 }
 
 mod diagnostics;
-use diagnostics::restored_result;
+use diagnostics::{ArtifactManifest, DiagnosticsArtifact, restored_result};
 
 fn load_diagnostics_artifact(
     backend: &WebTaskBackend,
@@ -3473,7 +3445,9 @@ fn validate_manifest_metadata(manifest: &OwnedManifest) -> Result<(), WebTaskErr
         ArtifactKind::Diagnostics,
         ArtifactKind::Bundle,
     ] {
-        if manifest.entries.iter().filter(|entry| entry.kind == required).count() != 1 {
+        let expected =
+            usize::from(required != ArtifactKind::Bundle || !manifest.bundle_unavailable);
+        if manifest.entries.iter().filter(|entry| entry.kind == required).count() != expected {
             return Err(WebTaskError::Unsafe(
                 "artifact manifest has an invalid required set".into(),
             ));
@@ -3638,6 +3612,9 @@ fn add_bundle_artifact(
     publication_failure: &AtomicUsize,
 ) -> Result<(), WebTaskError> {
     cancelled(cancellation)?;
+    if diagnostics::bundle_unavailable(result) {
+        return Ok(());
+    }
     entries
         .try_reserve(1)
         .map_err(|_| WebTaskError::Limit("artifact index allocation failed".into()))?;

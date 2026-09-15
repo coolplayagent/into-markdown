@@ -4,28 +4,27 @@
 
 Into Markdown is a local-first, offline-by-default document-to-Markdown product. It combines a
 Rust conversion core, the `into-md` CLI, a local Web workbench, stable JSON and Bundle contracts,
-and two self-contained optional capability plugins. Every result passes through the
+built-in OCR, and a self-contained optional speech plugin. Every result passes through the
 provenance-aware Document IR and the single deterministic GFM renderer.
 
 ## Product composition
 
 - Core: CLI, Web workbench, Document IR, detection and conversion, PDFium, secure output
   transactions, plugin and provider administration, and installed-package acceptance tools.
-- OCR plugin `official.ocr.ppocrv6`: PP-OCRv6, ONNX Runtime, worker, models, and character table.
+- Built-in OCR: PP-OCRv6, ONNX Runtime, worker, models, and character table ship with Core.
 - Speech plugin `official.media.whisper`: FFmpeg, Whisper, VAD, diarization models, and runtimes.
 - Agent Skill `into-markdown`: portable instructions for compatible agents, released as a
   standalone ZIP and embedded byte-for-byte in every Core package.
 
-Models and runtimes for OCR and speech are installed, verified, and updated with their complete
-capability plugins. Ordinary conversion reuses installed plugins; explicit `setup` operations
-install capabilities.
+OCR is verified and updated with Core. Speech models and runtimes are installed as a complete
+plugin through explicit `setup media`; ordinary conversion reuses installed plugins.
 
 ## Supported surface
 
 The current format catalog includes PDF, DOCX, PPTX, XLSX, ODT/ODS/ODP, RTF, EPUB,
 text, Markdown, HTML, CSV/TSV, JSON, XML, RSS/Atom feeds, Jupyter notebooks, images, ZIP, Outlook
-MSG, audio, and video. Core natively handles Office 97–2003 DOC/PPT/XLS; OCR, transcription, and
-diarization use their corresponding capability plugins.
+MSG, audio, and video. Core handles Office 97–2003 DOC/PPT/XLS and OCR; transcription and
+diarization use the speech plugin.
 
 Release targets are macOS ARM64, Linux x86_64, Linux ARM64, and Windows x86_64. macOS x86_64 is
 unsupported. See the [installation and deployment guide](docs/user-guide.en.md) for signature
@@ -66,13 +65,12 @@ See the [CLI](docs/cli.md), [executable command and format examples](docs/cli-ex
 ```sh
 into-md capabilities list --json
 into-md capabilities show ocr --json
-into-md setup ocr
 into-md setup media
 into-md doctor --json
 into-md ui
 ```
 
-Each `setup` command explicitly installs and verifies a complete official capability plugin.
+`setup media` explicitly installs and verifies the speech plugin; Core includes OCR.
 `into-md ui` listens only on `127.0.0.1` and provides batch conversion,
 progress and cancellation, task history, artifact preview/download, and format, capability,
 provider, plugin, configuration, and diagnostic administration. CLI and Web paths share the same
@@ -84,7 +82,7 @@ See [capability plugins](docs/capability-plugins.md),
 ## Agent Skill
 
 Users install the Agent Skill by extracting `into-markdown-skill.zip` into an agent's discovery
-directory or by copying or linking `share/into-markdown/skills/into-markdown/` from any Core.
+directory.
 Codex can invoke `$into-markdown` explicitly or select it for matching conversion requests.
 
 See the [Agent Skill release and installation guide](docs/agent-skill.md).

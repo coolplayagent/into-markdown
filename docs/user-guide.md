@@ -2,72 +2,42 @@
 
 [English](user-guide.en.md) · [CLI 示例](cli-examples.md)
 
-正式发布由一个平台 Core、两个自包含能力插件和 Agent Skill 组成。每个 Core/插件同时发布
-SHA-256、SPDX、来源与第三方声明 sidecar；每个目标的 `*-signing-policy.json` 明确说明是否具有
-外部发布者签名。只组合相同版本和目标平台的构件。当前默认发布模式是 `unsigned`：可以安装，
-但操作系统不能验证发布者身份。两个 `.imp` 始终保留内部 Ed25519 清单签名和 SHA-256 固定。
+正式发布提供四个平台的 Core ZIP、对应的可选语音插件、Agent Skill 和审计 ZIP。Core 已包含 OCR 模型与运行时。选择相同版本、相同目标平台的构件；发布说明中的 `UNSIGNED` 表示没有操作系统发布者签名，语音 `.imp` 仍使用内部 Ed25519 清单签名。
 
-| 能力 | 构件 |
+| 平台 | Core |
 | --- | --- |
-| 普通文档、Office 97–2003、PDF、Web 工作台 | 对应平台 Core |
-| OCR | `official.ocr.ppocrv6-<target>.imp` |
-| 转写与说话人分离 | `official.media.whisper-<target>.imp` |
-| Agent 指令 | `into-markdown-skill.zip` |
+| macOS Apple Silicon | `into-md-macos-arm64.zip` |
+| Linux x86_64 | `into-md-linux-x86_64.zip` |
+| Linux ARM64 | `into-md-linux-arm64.zip` |
+| Windows x86_64 | `into-md-windows-x86_64.zip` |
 
-Core 原生解析 Office 97–2003 的 `.doc/.ppt/.xls` 文件。
+普通文档、Office 97–2003、PDF、OCR 和 Web 工作台均由 Core 提供。语音转写与说话人分离使用 `official.media.whisper-<target>.imp`；Agent 指令使用 `into-markdown-skill.zip`。macOS x86_64 不在支持范围内。
 
 ## 安装 Core
 
-macOS ARM64 先校验摘要，再根据 signing policy 挂载 DMG 并运行根目录安装器：
+从 [正式发布页面](https://github.com/coolplayagent/into-markdown/releases) 下载对应 ZIP，核对发布资产的 SHA-256。审计 ZIP 包含发布文件清单、来源、许可证与构建证据；Core 内同时保留许可证材料。
+
+macOS 示例：
 
 ```sh
-shasum -a 256 -c into-md-macos-arm64-core.dmg.sha256
-# unsigned 发布在摘要匹配后可移除下载隔离；signed 发布改用 spctl 验证
-xattr -d com.apple.quarantine into-md-macos-arm64-core.dmg 2>/dev/null || true
-hdiutil attach into-md-macos-arm64-core.dmg
-# 使用 hdiutil 输出的实际卷路径
-cd "/Volumes/into-markdown"
-./bin/archive-check .
-./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
+shasum -a 256 into-md-macos-arm64.zip
+unzip into-md-macos-arm64.zip -d into-md-core
+./into-md-core/into-md version --json
 ```
 
-unsigned DMG 使用 ad-hoc Mach-O 签名保证 Apple silicon 可执行性，但没有 Developer ID 或 Apple
-公证；也可以保留 quarantine，并在“系统设置 → 隐私与安全”中选择“仍要打开”。只有 policy 为
-`signed` 时才应执行 `spctl --assess --type open --verbose=2` 并要求通过。不支持 macOS x86_64。
+Linux 选择与 `uname -m` 对应的 ZIP，使用 `sha256sum` 校验，解压后运行 `./into-md-core/into-md`。可将解压目录加入 PATH，后续使用 `into-md` 调用。
 
-Linux 选择与 `uname -m` 匹配的 x86_64 或 ARM64 归档：
-
-```sh
-sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-mkdir into-md-core
-tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
-cd into-md-core
-./bin/archive-check .
-./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
-```
-
-ARM64 使用 `into-md-linux-arm64-core.tar.gz`。只有 signing policy 为 `signed` 时才会发布 `.asc`，
-此时额外运行 `gpg --verify`；unsigned 模式以 GitHub Release 旁的 SHA-256 sidecar 为安装前校验
-权威。安装器不修改 shell profile。
-
-Windows x86_64 在 PowerShell 先校验 ZIP 摘要；unsigned ZIP 只有在摘要匹配后才解除下载标记：
+Windows PowerShell 示例：
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash
-Unblock-File .\into-md-windows-x86_64-core.zip
-Expand-Archive .\into-md-windows-x86_64-core.zip .\into-md-core
-& .\into-md-core\bin\archive-check.exe .\into-md-core
-powershell -NoProfile -ExecutionPolicy Bypass -File .\into-md-core\Install.ps1
+(Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64.zip).Hash
+Expand-Archive .\into-md-windows-x86_64.zip .\into-md-core
+& .\into-md-core\into-md.exe version --json
 ```
 
-摘要必须匹配发布 sidecar。unsigned 发布会显示 `Unknown publisher` 或 SmartScreen 提示，这是预期
-行为；不要在摘要不匹配时绕过提示。只有 signing policy 为 `signed` 时才运行
-`Get-AuthenticodeSignature` 并要求 `Status` 为 `Valid`。
+Windows 保持解压目录完整，包含 PDFium 等随包文件。unsigned 产物可能触发系统信任提示；先核对下载来源与摘要，再按系统提示允许运行。macOS unsigned 产物具有执行所需的 ad-hoc 签名，没有 Developer ID 公证。
 
-Linux 和 Windows 重复运行同一安装命令会验证并修复相同版本，而不是返回冲突。升级保留旧的
-不可变版本，只有新归档完整校验后才切换。Windows PATH 中的 `into-md.exe` 是稳定 launcher，
-因此不要把 `versions/<摘要>/bin` 手工加入 PATH，也不要修改同目录的 `into-md.prefix`。
-文件占用导致升级或卸载失败时先结束提示中对应的本地任务并重试；失败不会删除原安装。
+升级时解压到新目录，结束旧版本转换任务后切换命令路径。转换配置和已安装语音插件保存在用户数据目录中；保留旧目录可供回退。
 
 ## 验证与能力安装
 
@@ -76,36 +46,16 @@ into-md version --json
 into-md formats --json
 into-md capabilities list --json
 into-md doctor --json
-into-md setup ocr
 into-md setup media
 ```
 
-`setup` 是联网安装完整能力插件的显式命令，包内包含对应模型与运行时。转换和状态查询使用
-当前已安装的能力状态。
+OCR 随 Core 提供，默认 `best-effort` 与 `auto`。`setup media` 是显式联网安装语音插件的操作；普通转换使用已安装能力。
 
-## 完整离线部署
+## 离线部署
 
-在联网机器验证 Core、两个 `.imp` 和 sidecar，通过受控介质传入隔离环境。安装 Core 后使用其
-固定的官方发布者身份：
+在联网机器下载并校验 Core ZIP；需要语音时同时下载相同版本、目标平台的 `.imp`，再复制到离线机器。解压 Core 即可进行文档转换与 OCR。
 
-```sh
-installed="$HOME/.local/share/into-markdown/current"
-catalog="$installed/share/into-markdown/plugins/official-publisher.json"
-signer_id=$(jq -r .signingKeyId "$catalog")
-signer_sha=$(jq -r .signingKeySha256 "$catalog")
-target=x86_64-unknown-linux-gnu # 改为当前平台 target
-for package in official.ocr.ppocrv6 official.media.whisper; do
-  file="/media/release/$package-$target.imp"
-  sha=$(sha256sum "$file" | awk '{print $1}')
-  into-md plugins install "$file" --sha256 "$sha" \
-    --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global
-  into-md plugins verify "$package" --scope global
-done
-into-md capabilities list --json
-```
-
-macOS 用 `shasum -a 256`；Windows 用 `Get-FileHash` 和同一 catalog 字段。离线安装不增加
-`--allow-network`。
+运行 `into-md ui`，在工作台插件管理中导入本地语音 `.imp`。官方包的摘要和发布者身份由 Core 内置目录核对；安装后通过 `into-md capabilities list --json` 检查。CLI 离线导入的发布者指纹参数见[插件管理](plugin-management.md)。
 
 ## 转换与网络
 
@@ -137,12 +87,4 @@ into-md meeting.webm --ai audio-transcription=only --diarize \
 普通诊断不能定位损坏时才运行 `doctor --deep`。公开 issue 不粘贴 API Key、带 query 的 URL、
 私有路径或敏感内容。
 
-```sh
-./uninstall "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
-```
-
-```powershell
-& .\into-md-core\Uninstall.ps1
-```
-
-卸载器负责产品树和命令 shim；用户自行复制的 Agent Skill 或建立的链接由用户单独管理。
+卸载便携 Core 时删除自己解压的安装目录，并移除自己添加的 PATH 项。用户配置、已安装插件、转换结果和单独复制的 Agent Skill 按需分别保留或删除。

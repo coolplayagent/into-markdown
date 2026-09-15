@@ -2,75 +2,42 @@
 
 [中文](user-guide.md) · [CLI examples](cli-examples.en.md)
 
-A release contains one platform Core, two self-contained capability plugins, and the Agent Skill.
-Every Core/plugin has SHA-256, SPDX, source, and notice sidecars. Each target's
-`*-signing-policy.json` states whether an external publisher signature is present. The default release
-mode is `unsigned`: it is installable, but the operating system cannot verify the publisher identity.
-Both `.imp` files always retain internal Ed25519 manifest signatures and pinned SHA-256 values.
+A release provides Core ZIPs for four platforms, matching optional speech plugins, an Agent Skill, and an audit ZIP. Core includes the OCR models and runtime. Use artifacts from the same version and target platform. `UNSIGNED` means operating-system publisher signatures are absent; speech `.imp` packages retain internal Ed25519 manifest signatures.
 
-| Capability | Artifact |
+| Platform | Core |
 | --- | --- |
-| Ordinary documents, Office 97–2003, PDF, and Web workbench | Platform Core |
-| OCR | `official.ocr.ppocrv6-<target>.imp` |
-| Transcription and diarization | `official.media.whisper-<target>.imp` |
-| Agent instructions | `into-markdown-skill.zip` |
+| macOS Apple Silicon | `into-md-macos-arm64.zip` |
+| Linux x86_64 | `into-md-linux-x86_64.zip` |
+| Linux ARM64 | `into-md-linux-arm64.zip` |
+| Windows x86_64 | `into-md-windows-x86_64.zip` |
 
-Core natively parses Office 97–2003 `.doc/.ppt/.xls` files.
+Core handles documents, Office 97–2003, PDF, OCR, and the Web workbench. Transcription and diarization use `official.media.whisper-<target>.imp`; Agent instructions use `into-markdown-skill.zip`. macOS x86_64 is unsupported.
 
 ## Install Core
 
-On macOS ARM64, verify the digest, then mount the DMG according to its signing policy:
+Download the matching ZIP from the [release page](https://github.com/coolplayagent/into-markdown/releases) and verify its SHA-256 against the release asset. The audit ZIP contains the release inventory, sources, licenses, and build evidence. Core also includes license materials.
+
+macOS example:
 
 ```sh
-shasum -a 256 -c into-md-macos-arm64-core.dmg.sha256
-# For unsigned releases only, remove quarantine after the digest matches.
-xattr -d com.apple.quarantine into-md-macos-arm64-core.dmg 2>/dev/null || true
-hdiutil attach into-md-macos-arm64-core.dmg
-cd "/Volumes/into-markdown" # use the actual path printed by hdiutil
-./bin/archive-check .
-./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
+shasum -a 256 into-md-macos-arm64.zip
+unzip into-md-macos-arm64.zip -d into-md-core
+./into-md-core/into-md version --json
 ```
 
-Unsigned DMGs use ad-hoc Mach-O signatures for Apple silicon execution, but have no Developer ID or
-Apple notarization. Alternatively, keep quarantine and choose Open Anyway in Privacy & Security.
-Only a `signed` policy should pass `spctl --assess --type open --verbose=2`. macOS x86_64 is unsupported.
+On Linux, select the ZIP matching `uname -m`, verify it with `sha256sum`, extract it, and run `./into-md-core/into-md`. Add the extracted directory to PATH to invoke `into-md` directly.
 
-On Linux, select the x86_64 or ARM64 archive matching `uname -m`:
-
-```sh
-sha256sum -c into-md-linux-x86_64-core.tar.gz.sha256
-mkdir into-md-core
-tar -xzf into-md-linux-x86_64-core.tar.gz -C into-md-core
-cd into-md-core
-./bin/archive-check .
-./install "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
-```
-
-Use `into-md-linux-arm64-core.tar.gz` on ARM64. A `.asc` is present only for a `signed` policy; verify
-it with GPG in that mode. For unsigned releases, the SHA-256 sidecar adjacent to the GitHub Release
-asset is the pre-install authority. The installer never edits shell profiles.
-
-On Windows x86_64, verify the ZIP digest first. For an unsigned ZIP, remove its download mark only
-after that digest matches:
+Windows PowerShell example:
 
 ```powershell
-(Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64-core.zip).Hash
-Unblock-File .\into-md-windows-x86_64-core.zip
-Expand-Archive .\into-md-windows-x86_64-core.zip .\into-md-core
-& .\into-md-core\bin\archive-check.exe .\into-md-core
-powershell -NoProfile -ExecutionPolicy Bypass -File .\into-md-core\Install.ps1
+(Get-FileHash -Algorithm SHA256 .\into-md-windows-x86_64.zip).Hash
+Expand-Archive .\into-md-windows-x86_64.zip .\into-md-core
+& .\into-md-core\into-md.exe version --json
 ```
 
-The digest must match the release sidecar. Unknown publisher and SmartScreen warnings are expected
-for unsigned releases; never bypass them if the digest differs. Only a `signed` policy should be
-checked with `Get-AuthenticodeSignature`, whose `Status` must then be `Valid`.
+Keep the Windows directory intact, including its bundled PDFium files. Unsigned artifacts may trigger operating-system trust prompts; verify the source and digest before allowing execution. Unsigned macOS artifacts have ad-hoc signatures needed for execution, without Developer ID notarization.
 
-Repeating the same Linux or Windows install verifies and repairs that version instead of returning
-a conflict. An upgrade keeps the immutable old version and switches authority only after the new
-archive passes every check. On Windows, the `into-md.exe` on PATH is a stable launcher: do not add a
-`versions/<digest>/bin` directory to PATH or edit the adjacent `into-md.prefix`. If an in-use file
-blocks upgrade or removal, stop the identified local task and retry; the failed operation preserves
-the prior installation.
+For upgrades, extract to a new directory and finish old conversion processes before switching the command path. Configuration and installed speech plugins remain in the user data directory. Keep the previous directory if rollback is needed.
 
 ## Verify and install capabilities
 
@@ -79,36 +46,16 @@ into-md version --json
 into-md formats --json
 into-md capabilities list --json
 into-md doctor --json
-into-md setup ocr
 into-md setup media
 ```
 
-`setup` is the explicit networked command for installing a complete capability plugin, including
-its models and runtime. Conversion and status commands use the currently installed capability state.
+Core includes OCR and defaults to `best-effort` with `auto` OCR. `setup media` explicitly downloads and installs the speech plugin. Ordinary conversion uses installed capabilities.
 
-## Complete offline deployment
+## Offline deployment
 
-Verify Core, both `.imp` files, and sidecars on a connected machine, then transfer them through
-controlled media. Install Core and use its pinned official publisher identity:
+Download and verify Core on a connected machine. If speech is needed, also obtain the `.imp` matching the version and target platform, then transfer both to the offline machine. Extracting Core makes document conversion and OCR available.
 
-```sh
-installed="$HOME/.local/share/into-markdown/current"
-catalog="$installed/share/into-markdown/plugins/official-publisher.json"
-signer_id=$(jq -r .signingKeyId "$catalog")
-signer_sha=$(jq -r .signingKeySha256 "$catalog")
-target=x86_64-unknown-linux-gnu # replace with the current platform target
-for package in official.ocr.ppocrv6 official.media.whisper; do
-  file="/media/release/$package-$target.imp"
-  sha=$(sha256sum "$file" | awk '{print $1}')
-  into-md plugins install "$file" --sha256 "$sha" \
-    --signing-key-id "$signer_id" --signing-key-sha256 "$signer_sha" --scope global
-  into-md plugins verify "$package" --scope global
-done
-into-md capabilities list --json
-```
-
-Use `shasum -a 256` on macOS and `Get-FileHash` plus the same catalog fields on Windows. Do not add
-`--allow-network` during offline installation.
+Run `into-md ui` and import the local speech `.imp` through plugin management. Core's embedded catalog checks official package digests and publisher identity. Verify installation with `into-md capabilities list --json`. See [plugin management](plugin-management.md) for CLI offline import and publisher fingerprint arguments.
 
 ## Conversion and networking
 
@@ -140,13 +87,4 @@ Preserve the exit status and stable `--log-format json` event, then run `into-md
 Use `doctor --deep` only when ordinary diagnostics cannot locate damage. Do not expose API keys,
 query-bearing URLs, private paths, or sensitive content in public issues.
 
-```sh
-./uninstall "$HOME/.local/share/into-markdown" "$HOME/.local/bin"
-```
-
-```powershell
-& .\into-md-core\Uninstall.ps1
-```
-
-The uninstaller manages the product tree and command shim. Users separately manage any copied or
-linked Agent Skill directory.
+To uninstall portable Core, remove the directory you extracted and any PATH entry you added. Keep or remove user configuration, installed plugins, conversion outputs, and separately copied Agent Skills as needed.
