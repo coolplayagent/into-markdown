@@ -22,6 +22,7 @@ if str(PORTABLE_RELEASE_DIR) not in sys.path:
     sys.path.insert(0, str(PORTABLE_RELEASE_DIR))
 from drawio_smoke import drawio_cases
 from ocr_smoke import ocr_case
+from pdf_runtime_smoke import runtime_failure_case
 
 
 CORE_ARCHIVES = {
@@ -258,33 +259,20 @@ def run_case(
     )
 
 
-def run_failure_case(
-    name: str,
-    binary: pathlib.Path,
-    arguments: list[str],
-    cwd: pathlib.Path,
-    environment: dict[str, str],
-) -> dict:
-    result = subprocess.run(
-        [str(binary), *arguments, "--log-format", "json"],
-        cwd=cwd,
-        env=environment,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=20,
-        check=False,
+
+def run_failure_case(*arguments):
+    return runtime_failure_case(*arguments, run_case, AcceptanceError)
+
+
+def common_runtime_case(binary, work, environment, target):
+    unavailable = dict(environment)
+    library_name = pathlib.PurePosixPath(PDFIUM_MANIFEST["targets"][target]["library"]).name
+    unavailable["PDFIUM_LIBRARY"] = str(work / "missing-runtime" / library_name)
+    return run_failure_case(
+        "missing-runtime-all-platforms", binary,
+        [str(PDF_FIXTURE), "-o", str(work / "missing-runtime-strict.md"), "--no-config", "--ocr", "off"],
+        work, unavailable,
     )
-    try:
-        event = json.loads(result.stderr)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise AcceptanceError(f"{name} did not emit a JSON error") from error
-    if result.returncode != 9 or event.get("code") != "componentUnavailable":
-        raise AcceptanceError(
-            f"{name} did not fail closed as componentUnavailable: "
-            f"exit={result.returncode}, event={event}"
-        )
-    return {"name": name, "exitCode": result.returncode, "code": event["code"]}
 
 
 def assert_runtime_absent(
@@ -610,7 +598,7 @@ def run_e2e(
             "plainTextOutputSha256": sha256_file(result),
             "pdfiumRuntime": pdfium_runtime,
             "realOcr": ocr_case(binary, environment, AcceptanceError),
-            "negativeCases": negative_cases,
+            "negativeCases": [*negative_cases, common_runtime_case(binary, work, environment, target)],
             "runtimeCacheCreated": False,
             "networkRequired": False,
             "conclusion": "pass",

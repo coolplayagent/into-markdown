@@ -106,6 +106,45 @@ class NativeAcceptanceTests(unittest.TestCase):
                         "failed": 0, "resourceUsage": {"ocrRuntime": {**runtime, field: 1}},
                     })
 
+    def test_runtime_recovery_and_strict_error_share_report_contract(self) -> None:
+        import subprocess
+        import pdf_runtime_smoke
+
+        with tempfile.TemporaryDirectory() as name:
+            work = pathlib.Path(name)
+            source = work / "source.pdf"
+            source.write_bytes(b"original pdf bytes")
+            output = work / "strict.md"
+
+            def recover(_name, _binary, args, _cwd, _env):
+                recovered = pathlib.Path(args[args.index("-o") + 1])
+                assets = recovered.with_name(recovered.stem + "_assets")
+                assets.mkdir(exist_ok=True)
+                (assets / "original.pdf").write_bytes(source.read_bytes())
+                recovered.write_text("[original](original.pdf)", encoding="utf-8")
+                pathlib.Path(args[args.index("--report") + 1]).write_text(json.dumps({
+                    "failed": 0, "items": [{"outcome": "degraded", "diagnostics": [
+                        {"code": "pdf.recovery.originalPdf"}]}],
+                }), encoding="utf-8")
+                return {"exitCode": 0}, b""
+
+            def strict(args, **_kwargs):
+                self.assertEqual(args[args.index("--error-policy") + 1], "strict")
+                pathlib.Path(args[args.index("--report") + 1]).write_text(json.dumps({
+                    "succeeded": 0, "failed": 1,
+                    "items": [{"errorCode": "componentUnavailable"}],
+                }), encoding="utf-8")
+                return subprocess.CompletedProcess(args, 10, b"", b'{"code":"componentUnavailable"}\n{"code":"partialFailure"}\n')
+
+            with mock.patch.object(pdf_runtime_smoke.subprocess, "run", side_effect=strict):
+                result = acceptance.runtime_failure_case(
+                    "unavailable", work / "into-md", [str(source), "-o", str(output)],
+                    work, {}, recover, acceptance.AcceptanceError,
+                )
+            self.assertEqual(result["exitCode"], 10)
+            self.assertEqual(result["recovery"]["exitCode"], 0)
+            self.assertFalse(output.exists())
+
     def test_audit_accepts_exact_linux_core(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
