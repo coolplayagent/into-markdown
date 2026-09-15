@@ -9,6 +9,7 @@ import pathlib
 import platform
 import re
 import subprocess
+import struct
 import time
 import zlib
 
@@ -178,7 +179,12 @@ def main():
         ]))
         record, text = run_case(exe, root, env, "wide-image", [wide_image])
         assert record["pages"] == 1 and "Wide image retained body" in text
-        assert list((root / "wide-image_assets").glob("*.bmp")), "small wide image lost to a dimension cap"
+        images = list((root / "wide-image_assets").glob("*.png"))
+        assert any(
+            data[:8] == b"\x89PNG\r\n\x1a\n"
+            and struct.unpack(">II", data[16:24]) == (20_000, 1)
+            for image in images for data in [image.read_bytes()] if len(data) >= 24
+        ), "small wide image lost its original dimensions"
         report["cases"].append(record)
         damaged = root / "damaged.pdf"
         damaged.write_bytes(b"%PDF-1.4\nreadable original with damaged catalog")

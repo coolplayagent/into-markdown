@@ -87,6 +87,25 @@ class NativeAcceptanceTests(unittest.TestCase):
             archive.writestr(info, manifest)
         return path
 
+    def test_default_ppt_accepts_completed_ocr_without_text(self) -> None:
+        with tempfile.TemporaryDirectory() as name:
+            output = pathlib.Path(name) / "normal.md"
+            output.write_text("slide body", encoding="utf-8")
+            runtime = dict(imageSources=1, imagesAttempted=1, imagesCompleted=1,
+                           imagesWithText=0, imagesFailed=0, imagesSkipped=0, requests=1)
+            report = {"failed": 0, "resourceUsage": {"ocrRuntime": runtime}}
+            self.assertEqual(acceptance.verify_legacy_result("ppt", output, report), runtime)
+            for field in ("imagesAttempted", "imagesCompleted", "requests"):
+                with self.subTest(field=field), self.assertRaises(acceptance.AcceptanceError):
+                    acceptance.verify_legacy_result("ppt", output, {
+                        "failed": 0, "resourceUsage": {"ocrRuntime": {**runtime, field: 0}},
+                    })
+            for field in ("imagesFailed", "imagesSkipped"):
+                with self.subTest(field=field), self.assertRaises(acceptance.AcceptanceError):
+                    acceptance.verify_legacy_result("ppt", output, {
+                        "failed": 0, "resourceUsage": {"ocrRuntime": {**runtime, field: 1}},
+                    })
+
     def test_audit_accepts_exact_linux_core(self) -> None:
         with tempfile.TemporaryDirectory() as name:
             root = pathlib.Path(name)
