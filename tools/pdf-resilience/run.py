@@ -9,6 +9,7 @@ import pathlib
 import platform
 import re
 import subprocess
+import struct
 import time
 import zlib
 
@@ -106,6 +107,15 @@ def public_cases(exe, root, env, report):
     report["cases"].append(record)
 
 
+
+def png_dimensions(path: pathlib.Path) -> tuple[int, int] | None:
+    with path.open("rb") as source:
+        header = source.read(24)
+    if len(header) == 24 and header[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", header[16:24])
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--into-md", type=pathlib.Path, required=True)
@@ -178,7 +188,7 @@ def main():
         ]))
         record, text = run_case(exe, root, env, "wide-image", [wide_image])
         assert record["pages"] == 1 and "Wide image retained body" in text
-        assert list((root / "wide-image_assets").glob("*.bmp")), "small wide image lost to a dimension cap"
+        assert any(png_dimensions(image) == (20_000, 1) for image in (root / "wide-image_assets").glob("*.png")), "small wide image lost its original dimensions"
         report["cases"].append(record)
         damaged = root / "damaged.pdf"
         damaged.write_bytes(b"%PDF-1.4\nreadable original with damaged catalog")

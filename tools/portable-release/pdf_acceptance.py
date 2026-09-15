@@ -25,5 +25,10 @@ def run(contents: dict[str, bytes], member: str) -> dict:
         for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "TMP", "TEMP", "TMPDIR"):
             environment[key] = str(isolated)
         command = [sys.executable, str(pathlib.Path(__file__).resolve().parents[1] / "pdf-resilience/run.py"), "--into-md", str(binary), "--work-root", str(root / "results")]
-        subprocess.run(command, env=environment, check=True, timeout=180, capture_output=True)
+        try:
+            subprocess.run(command, env=environment, check=True, timeout=180, capture_output=True)
+        except subprocess.CalledProcessError as error:
+            sys.stderr.write(error.stdout.decode("utf-8", errors="replace"))
+            sys.stderr.write(error.stderr.decode("utf-8", errors="replace"))
+            raise
         return json.loads((root / "results/report.json").read_text(encoding="utf-8"))

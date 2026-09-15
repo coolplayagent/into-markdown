@@ -303,6 +303,61 @@ def assert_runtime_absent(
         raise AcceptanceError(f"{detail} materialized native runtime")
 
 
+def verify_legacy_result(extension: str, output: pathlib.Path, report: dict) -> dict:
+    if not output.is_file() or not output.read_bytes() or report.get("failed") != 0:
+        raise AcceptanceError(f"legacy Office {extension.upper()} output is missing or failed")
+    runtime = report.get("resourceUsage", {}).get("ocrRuntime", {})
+    if runtime.get("imagesFailed", 0):
+        raise AcceptanceError(f"legacy Office {extension.upper()} OCR failed")
+    # The fixed PPT contains one image. Default auto OCR must process it even
+    # when recognition returns no text for its decorative pixels.
+    if extension == "ppt" and any(
+        runtime.get(key) != expected
+        for key, expected in {
+            "imageSources": 1, "imagesAttempted": 1, "imagesCompleted": 1,
+            "imagesSkipped": 0, "requests": 1,
+        }.items()
+    ):
+        raise AcceptanceError("default legacy Office PPT image OCR was not completed")
+    return runtime
+
+
+def legacy_office_cases(binary: pathlib.Path, environment: dict[str, str]) -> list[dict]:
+    # Default document OCR owns separate state from the lazy-load and PDFium
+    # path checks, just as the standalone image OCR acceptance does.
+    with tempfile.TemporaryDirectory(prefix="into-md-legacy-office-") as name:
+        work = pathlib.Path(name).resolve()
+        env = dict(environment)
+        for variable, folder in {
+            "HOME": "home", "USERPROFILE": "home", "APPDATA": "data",
+            "LOCALAPPDATA": "cache", "XDG_CACHE_HOME": "cache",
+            "XDG_DATA_HOME": "data", "XDG_CONFIG_HOME": "config",
+            "TMP": "tmp", "TEMP": "tmp", "TMPDIR": "tmp",
+        }.items():
+            path = work / folder
+            path.mkdir(mode=0o700, exist_ok=True)
+            env[variable] = str(path)
+        cases = []
+        for extension in ("doc", "ppt", "xls"):
+            fixture = LEGACY_OFFICE_FIXTURES / f"normal.{extension}"
+            if not fixture.is_file():
+                raise AcceptanceError(f"legacy Office fixture is unavailable: {fixture.name}")
+            output = work / f"normal-{extension}.md"
+            report_path = work / f"normal-{extension}.json"
+            case, _ = run_case(
+                f"legacy-office-{extension}", binary,
+                [str(fixture), "-o", str(output), "--report", str(report_path),
+                 "--conflict", "error", "--no-config", "--progress", "never"],
+                work, env,
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            case["ocrRuntime"] = verify_legacy_result(extension, output, report)
+            case["outputSha256"] = sha256_file(output)
+            case["reportSha256"] = sha256_file(report_path)
+            cases.append(case)
+        return cases
+
+
 def run_e2e(
     target: str,
     contents: dict[str, bytes],
@@ -371,38 +426,6 @@ def run_e2e(
         ):
             raise AcceptanceError("plain-text conversion output is missing or invalid")
         assert_runtime_absent(cache, home, temporary, "help, version, or plain text conversion")
-        for extension in ("doc", "ppt", "xls"):
-            fixture = LEGACY_OFFICE_FIXTURES / f"normal.{extension}"
-            if not fixture.is_file():
-                raise AcceptanceError(f"legacy Office fixture is unavailable: {fixture.name}")
-            legacy_result = work / f"normal-{extension}.md"
-            legacy_case, _ = run_case(
-                f"legacy-office-{extension}",
-                binary,
-                [
-                    str(fixture),
-                    "-o",
-                    str(legacy_result),
-                    "--conflict",
-                    "error",
-                    "--no-config",
-                    "--progress",
-                    "never",
-                ],
-                work,
-                environment,
-            )
-            cases.append(legacy_case)
-            if not legacy_result.is_file() or not legacy_result.read_bytes():
-                raise AcceptanceError(
-                    f"legacy Office {extension.upper()} output is missing or empty"
-                )
-            assert_runtime_absent(
-                cache,
-                home,
-                temporary,
-                f"default legacy Office {extension.upper()} conversion",
-            )
         negative_cases = []
         pdfium_runtime = None
         if target == "x86_64-pc-windows-msvc":
@@ -577,6 +600,7 @@ def run_e2e(
                 "bytes": authority["library_size"],
                 "materialization": "canonical-var-fallback",
             }
+        cases.extend(legacy_office_cases(binary, environment))
         return {
             "schemaVersion": 1,
             "target": target,
