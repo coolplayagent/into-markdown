@@ -8,7 +8,7 @@ use super::{
     MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE, NodeId, OcrPolicy, PageCoverage, Path, Pdfium,
     Rect, ResourceReservation, account_asset, allocation_capacity_bound, asset_record_overhead,
     character_working_set_bytes, checked_count, content_asset_id, diagnostic_overhead,
-    displayed_dimensions, image_bitmap_to_bmp, image_pixels_required, map_pdfium_error,
+    displayed_dimensions, image_bitmap_to_png, image_pixels_required, map_pdfium_error,
     materialize_after_reserve, normalize_rect, output_block_overhead, page_locator, provenance,
     render_dimensions, rendered_bitmap_to_bmp, request_path_scan, resource,
     retain_existing_reservation, retain_output_bytes, text_block,
@@ -272,7 +272,7 @@ impl PdfOutput {
                     materialize_after_reserve(context, bitmap_plan_bytes, || {
                         bitmap_plan.materialize().map_err(map_pdfium_error)
                     })?;
-                let (encoded, encoded_memory) = image_bitmap_to_bmp(&bitmap, options, context)?;
+                let (encoded, encoded_memory) = image_bitmap_to_png(&bitmap, options, context)?;
                 drop(bitmap);
                 drop(bitmap_memory);
                 account_asset(&encoded, &mut counts.asset_bytes, options)?;
@@ -289,8 +289,8 @@ impl PdfOutput {
                     })?;
                     assets.push(Asset {
                         id: AssetId(id.clone()),
-                        filename: Some(format!("{id}.bmp")),
-                        media_type: "image/bmp".into(),
+                        filename: Some(format!("{id}.png")),
+                        media_type: "image/png".into(),
                         bytes: encoded,
                         external_uri: None,
                     });

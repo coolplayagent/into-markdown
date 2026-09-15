@@ -17,7 +17,9 @@ pub(crate) mod working_visual;
 #[cfg(test)]
 mod tests;
 
-use assets::{account_asset, content_asset_id, image_bitmap_to_bmp, rendered_bitmap_to_bmp};
+#[cfg(test)]
+use assets::image_bitmap_to_bmp;
+use assets::{account_asset, content_asset_id, image_bitmap_to_png, rendered_bitmap_to_bmp};
 use budget::{
     asset_record_overhead, diagnostic_overhead, materialize_after_reserve, output_block_overhead,
     retain_existing_reservation, retain_output_bytes,

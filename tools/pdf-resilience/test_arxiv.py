@@ -506,6 +506,12 @@ class OcrProcessingQualityTests(unittest.TestCase):
         self.assertIn('OCR processing completion below threshold', result['cases'][0]['errors'])
         self.assertTrue(completion.audit(self.sample(100, 95))['processingQualityPassed'])
 
+    def test_resource_skips_cannot_inflate_completion_rate(self):
+        report = self.sample(3, 3, 97)
+        report['cases'][0]['items'] = [dict(diagnostics=[dict(
+            code='embeddedVisualOcr.optionalRecognitionMemorySkipped')])]
+        self.assertFalse(completion.audit(report)['processingQualityPassed'])
+
     def test_blank_exclusion_requires_matching_source_and_asset(self):
         proof = dict(records=[dict(id='scan', sourceSha256='source', sha256='transparent', alphaExtrema=[0,0])])
         report = self.sample(8, 7)

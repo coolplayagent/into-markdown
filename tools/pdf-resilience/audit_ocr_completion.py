@@ -41,6 +41,14 @@ def audit(report, proof=None, minimum=0.95):
             rate = completed / attempted if attempted else None
             if rate is not None and rate < minimum:
                 errors.append('OCR processing completion below threshold')
+            resource_skip = any(
+                d.get('code') in ('embeddedVisualOcr.optionalRecognitionMemorySkipped',
+                                  'resource.max_memory.unitOmitted')
+                for item in case.get('items', []) for d in item.get('diagnostics', []))
+            if resource_skip and usage['imagesSkipped']:
+                admitted_rate = completed / (attempted + usage['imagesSkipped'])
+                if admitted_rate < minimum:
+                    errors.append('resource-skipped images reduce OCR coverage below threshold')
             recovery_pages = {(d.get('locator') or {}).get('page')
                               for item in case.get('items', []) for d in item.get('diagnostics', [])
                               if d.get('code') == 'pdf.recovery.pageImage'}
