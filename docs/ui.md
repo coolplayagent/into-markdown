@@ -186,7 +186,7 @@ Web 与 CLI 共用逐页转换和 OCR 流程。降级结果显示“转换完成
 
 ## 预览、资源与下载
 
-成功任务公开 Markdown、Document IR、诊断、bundle 和已提取资源的 opaque artifact 引用。
+成功任务公开 Markdown、Document IR、诊断和已提取资源的 opaque artifact 引用，本地资产完整时同时提供 bundle。源图片只有远程 URL 时保留原链接，并记录 `webBundleExternalAssets` 降级原因及便携包不可用状态。
 工作台的 Markdown 预览不使用 `innerHTML`，也不生成链接、图片、iframe、object 或 embed；
 标题、列表、代码块和普通文本只由 React text node 呈现。因此原始 HTML、`javascript:`、
 `file:`、data URI 和远程图片语法都只能显示为不可执行文本，默认不会读取本地或外部资源。
@@ -214,9 +214,7 @@ RFC 7233 `bytes` 区间（显式 `206`、`Content-Range`、`Accept-Ranges`）；
 terminal 状态的持久化时间从最旧的、未固定任务开始删除，直到年龄和容量条件同时满足；恰好
 30 天或总量恰好超过容量边界的任务参与清理，恰好等于容量时不清理。单个未固定任务即可因
 超额被删除；固定项不计为候选，即使因此仍高于目标容量也不会删除；pending/running/converted
-任务永不参与。10 GiB retained-history 目标不超过 14,352 MiB data ceiling；另有四笔单任务
-1,028 MiB 保守 reservation 与 4 MiB SQLite headroom，使并发转换不会突破 14,356 MiB managed
-ceiling。
+任务永不参与。历史保留目标用于清理已完成任务；进行中的转换使用与 CLI 共用的资源策略。存储计数遵循 SQLite 有符号整数表示范围，按实际写入量登记并预留任务元数据，磁盘写入错误保留真实失败状态。
 
 删除先验证 checkpoint 和 capability-bound 任务树，再把目录以 `taskId.recoveryToken` 原子移动到
 私有 `trash`，事务删除 SQLite 主记录及子记录，最后清除 checkpoint 和隔离目录。SQLite commit
