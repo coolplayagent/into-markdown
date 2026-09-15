@@ -402,6 +402,28 @@ class QualityGateTests(unittest.TestCase):
 
 
 class ReplayReconciliationTests(unittest.TestCase):
+    def test_nested_replays_keep_each_case_identity_and_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            base = dict(complete=True, binarySha256='old', manifestSha256='manifest',
+                        cases=[dict(id=i, ocr='auto', sourceSha256=i, passed=True) for i in ['a', 'b']])
+            replay = {**base, 'binarySha256': 'new', 'cases': [{**base['cases'][0], 'passed': False}]}
+            a, b, combined = root/'base.json', root/'replay.json', root/'combined.json'
+            a.write_text(json.dumps(base)); b.write_text(json.dumps(replay))
+            combined.write_text(json.dumps(reconciliation.reconcile(a, [b])))
+            result = reconciliation.reconcile(combined, [b])
+            self.assertIsNone(result['binarySha256'])
+            self.assertEqual(result['failed'], 1)
+            self.assertEqual({c['id']: c['binarySha256'] for c in result['cases']}, {'a': 'new', 'b': 'old'})
+            self.assertEqual(result['constituentRuns'][0]['reportSha256'], quality.digest(combined))
+            self.assertEqual(len(result['constituentRuns'][0]['constituentRuns']), 2)
+            malformed = json.loads(combined.read_text())
+            del malformed['cases'][0]['binarySha256']
+            combined.write_text(json.dumps(malformed))
+            with self.assertRaises(ValueError): reconciliation.reconcile(combined, [b])
+            b.write_text(json.dumps({**replay, 'cases': [{**replay['cases'][0], 'binarySha256': 'other'}]}))
+            with self.assertRaises(ValueError): reconciliation.reconcile(a, [b])
+
     def test_replays_keep_executable_identity_and_cannot_hide_a_new_regression(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

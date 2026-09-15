@@ -6,11 +6,25 @@ import pathlib
 from quality_gate import digest
 
 
+def executable_identities(report):
+    shared = report.get('binarySha256')
+    if not shared and not report.get('constituentRuns'):
+        raise ValueError('all runs must identify their executables')
+    identities = {shared} if shared else set()
+    for case in report['cases']:
+        identity = case.get('binarySha256') or shared
+        if not identity or (shared and identity != shared):
+            raise ValueError('case executable identity is missing or inconsistent')
+        identities.add(identity)
+    if not identities:
+        raise ValueError('run has no executable identity')
+    return identities
+
+
 def reconcile(base_path, replay_paths, manifest_path=None):
     paths = [base_path, *replay_paths]
     reports = [json.loads(p.read_text()) for p in paths]
-    if not all(r.get('binarySha256') for r in reports):
-        raise ValueError('all runs must identify their executables')
+    executables = set().union(*(executable_identities(r) for r in reports))
     if manifest_path is None and not all(r.get('complete') for r in reports[1:]):
         raise ValueError('partial replays require the complete frozen source manifest')
     if not reports[0].get('complete') and manifest_path is None:
@@ -33,6 +47,7 @@ def reconcile(base_path, replay_paths, manifest_path=None):
         seen = set()
         for case in report['cases']:
             key = (case['id'], case['ocr'])
+            executable = case.get('binarySha256') or report['binarySha256']
             if key in seen or inventory.get(key) != case['sourceSha256']:
                 raise ValueError('duplicate, unknown, or changed replay source')
             seen.add(key)
@@ -40,15 +55,15 @@ def reconcile(base_path, replay_paths, manifest_path=None):
                 replacements.append(dict(id=key[0], ocr=key[1],
                     previousPassed=cases[key]['passed'], replayPassed=case['passed'],
                     previousBinarySha256=cases[key]['binarySha256'],
-                    replayBinarySha256=report['binarySha256']))
-            cases[key] = {**case, 'binarySha256': report['binarySha256'],
+                    replayBinarySha256=executable))
+            cases[key] = {**case, 'binarySha256': executable,
                           'evidenceReportSha256': digest(path), 'evidenceRunIndex': index}
-    executables = {r['binarySha256'] for r in reports}
     result = {**reports[0], 'binarySha256': next(iter(executables)) if len(executables) == 1 else None,
               'evidenceKind': 'hash-bound corpus runs and targeted replays',
               'complete': len(cases) == len(inventory),
               'missingCases': [list(k) for k in inventory if k not in cases],
               'constituentRuns': [dict(reportSha256=digest(p), binarySha256=r['binarySha256'],
+                   binarySha256s=sorted(executable_identities(r)), constituentRuns=r.get('constituentRuns', []),
                    manifestSha256=r['manifestSha256'], complete=r.get('complete', False), cases=len(r['cases']),
                    modes=r.get('modes'), watchdogSeconds=r.get('watchdogSeconds'),
                    configurationSha256=[c['sha256'] for c in r.get('configurations', [])])
