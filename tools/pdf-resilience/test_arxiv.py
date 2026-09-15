@@ -217,6 +217,9 @@ with patch.dict(sys.modules, {'quality_gate': quality}):
     compact_spec = importlib.util.spec_from_file_location('compact_report', pathlib.Path(__file__).with_name('compact_report.py'))
     compaction = importlib.util.module_from_spec(compact_spec)
     compact_spec.loader.exec_module(compaction)
+    completion_spec = importlib.util.spec_from_file_location('audit_ocr_completion', pathlib.Path(__file__).with_name('audit_ocr_completion.py'))
+    completion = importlib.util.module_from_spec(completion_spec)
+    completion_spec.loader.exec_module(completion)
 
 
 
@@ -488,6 +491,36 @@ class CompactOcrModeTests(unittest.TestCase):
             result = compaction.compact(path)
             self.assertEqual(result['ocrTotalsByMode']['auto'], auto)
             self.assertEqual(result['ocrTotalsByMode']['off'], off)
+
+
+class OcrProcessingQualityTests(unittest.TestCase):
+    def sample(self, attempted, completed, skipped=0):
+        return dict(complete=True, cases=[dict(id='scan', ocr='auto', sourceSha256='source', passed=True,
+            resourceUsage=dict(ocrRuntime=dict(imageSources=attempted+skipped, imagesAttempted=attempted,
+                imagesCompleted=completed, imagesWithText=0, imagesFailed=attempted-completed,
+                imagesSkipped=skipped)), assets=[dict(sha256='transparent')])])
+
+    def test_successful_delivery_cannot_hide_document_ocr_failure_rate(self):
+        result = completion.audit(self.sample(643, 583))
+        self.assertFalse(result['processingQualityPassed'])
+        self.assertIn('OCR processing completion below threshold', result['cases'][0]['errors'])
+        self.assertTrue(completion.audit(self.sample(100, 95))['processingQualityPassed'])
+
+    def test_blank_exclusion_requires_matching_source_and_asset(self):
+        proof = dict(records=[dict(id='scan', sourceSha256='source', sha256='transparent', alphaExtrema=[0,0])])
+        report = self.sample(8, 7)
+        report['cases'][0]['items'] = [dict(diagnostics=[dict(code='embeddedVisualOcr.unsupportedVisual', message='fully transparent embedded raster')])]
+        self.assertTrue(completion.audit(report, proof)['processingQualityPassed'])
+        proof['records'][0]['sourceSha256'] = 'changed'
+        self.assertFalse(completion.audit(report, proof)['processingQualityPassed'])
+
+    def test_recovery_images_must_reach_ocr_and_empty_text_is_separate(self):
+        report = self.sample(1, 1, 2)
+        report['cases'][0]['items'] = [dict(diagnostics=[dict(code='pdf.recovery.pageImage', locator=dict(page=p)) for p in [1,2]])]
+        self.assertFalse(completion.audit(report)['processingQualityPassed'])
+        result = completion.audit(self.sample(1, 1))
+        self.assertTrue(result['processingQualityPassed'])
+        self.assertEqual(result['cases'][0]['ocr']['imagesWithText'], 0)
 
 
 if __name__ == "__main__":
