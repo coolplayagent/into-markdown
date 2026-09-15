@@ -59,11 +59,62 @@ def reconcile(base_path, replay_paths, manifest_path=None):
     return result
 
 
+def combine_partitions(paths, manifest_path):
+    """Combine disjoint runs, retaining each partition's original authority."""
+    reports = [json.loads(path.read_text()) for path in paths]
+    if not reports or not reports[0].get('binarySha256') or not reports[0].get('modes'):
+        raise ValueError('partitions require executable and mode identities')
+    reference = reports[0]
+    for report in reports:
+        for key in ('binarySha256', 'modes', 'watchdogSeconds', 'configurations'):
+            if report.get(key) != reference.get(key):
+                raise ValueError(f'partition execution options differ: {key}')
+    manifest = json.loads(manifest_path.read_text())
+    inventory = {(paper['id'], mode): paper for paper in manifest['papers']
+                 for mode in reference['modes']}
+    if len(inventory) != len(manifest['papers']) * len(reference['modes']):
+        raise ValueError('duplicate source or mode in partition inventory')
+    cases, runs = {}, []
+    for index, (path, report) in enumerate(zip(paths, reports)):
+        authority = digest(path)
+        for case in report['cases']:
+            key = (case['id'], case['ocr'])
+            expected = inventory.get(key)
+            if key in cases or expected is None or expected['sha256'] != case['sourceSha256']:
+                raise ValueError('duplicate, unknown, or changed partition source')
+            if 'pages' in expected and case.get('expectedPages') != expected['pages']:
+                raise ValueError('partition page count differs from source inventory')
+            cases[key] = {**case, 'binarySha256': report['binarySha256'],
+                          'evidenceReportSha256': authority, 'evidenceRunIndex': index}
+        runs.append(dict(reportSha256=authority, binarySha256=report['binarySha256'],
+                         manifestSha256=report['manifestSha256'], complete=report.get('complete', False),
+                         cases=len(report['cases']), modes=report['modes'],
+                         watchdogSeconds=report.get('watchdogSeconds'),
+                         configurationSha256=[c['sha256'] for c in report.get('configurations', [])]))
+    missing = [list(key) for key in inventory if key not in cases]
+    return {**reference, 'manifestSha256': digest(manifest_path),
+            'evidenceKind': 'disjoint partitions of the frozen source inventory',
+            'complete': not missing and all(r.get('complete', False) for r in reports),
+            'missingCases': missing, 'cases': list(cases.values()), 'constituentRuns': runs,
+            'passed': sum(c['passed'] for c in cases.values()),
+            'failed': sum(not c['passed'] for c in cases.values())}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--base', type=pathlib.Path, required=True)
-    parser.add_argument('--replay', type=pathlib.Path, action='append', required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--base', type=pathlib.Path)
+    source.add_argument('--partition', type=pathlib.Path, action='append')
+    parser.add_argument('--replay', type=pathlib.Path, action='append')
     parser.add_argument('--manifest', type=pathlib.Path)
     parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args()
-    args.output.write_text(json.dumps(reconcile(args.base, args.replay, args.manifest), indent=2)+'\n')
+    if args.partition:
+        if args.manifest is None or args.replay:
+            parser.error('partitions require --manifest and use no --replay')
+        result = combine_partitions(args.partition, args.manifest)
+    else:
+        if not args.replay:
+            parser.error('--base requires --replay')
+        result = reconcile(args.base, args.replay, args.manifest)
+    args.output.write_text(json.dumps(result, indent=2)+'\n')

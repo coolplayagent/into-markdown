@@ -475,6 +475,31 @@ class ReplayReconciliationTests(unittest.TestCase):
             self.assertTrue(result['complete'])
 
 
+    def test_disjoint_partitions_verify_complete_inventory_and_execution_options(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest = root/'manifest.json'
+            manifest.write_text(json.dumps({'papers': [dict(id=i, sha256=i, pages=1) for i in ['a', 'b']]}))
+            options = dict(complete=True, binarySha256='same', modes=['auto'], watchdogSeconds=60, configurations=[])
+            left = {**options, 'manifestSha256': 'partition-a', 'cases': [dict(id='a', ocr='auto', sourceSha256='a', expectedPages=1, passed=True)]}
+            right = {**options, 'manifestSha256': 'partition-b', 'cases': [dict(id='b', ocr='auto', sourceSha256='b', expectedPages=1, passed=False)]}
+            a, b = root/'a.json', root/'b.json'
+            a.write_text(json.dumps(left)); b.write_text(json.dumps(right))
+            result = reconciliation.combine_partitions([a, b], manifest)
+            self.assertTrue(result['complete'])
+            self.assertEqual(result['manifestSha256'], quality.digest(manifest))
+            self.assertEqual((result['passed'], result['failed']), (1, 1))
+            self.assertEqual(result['cases'][1]['evidenceRunIndex'], 1)
+            b.write_text(json.dumps({**right, 'cases': []}))
+            self.assertEqual(reconciliation.combine_partitions([a, b], manifest)['missingCases'], [['b', 'auto']])
+            for key, value in [('binarySha256', 'other'), ('watchdogSeconds', 61), ('modes', ['off'])]:
+                b.write_text(json.dumps({**right, key: value}))
+                with self.assertRaises(ValueError): reconciliation.combine_partitions([a, b], manifest)
+            for replacement in [left['cases'][0], {**right['cases'][0], 'sourceSha256': 'changed'}, {**right['cases'][0], 'expectedPages': 2}]:
+                b.write_text(json.dumps({**right, 'cases': [replacement]}))
+                with self.assertRaises(ValueError): reconciliation.combine_partitions([a, b], manifest)
+
+
 class CompactOcrModeTests(unittest.TestCase):
     def test_explicit_off_skips_are_separate_from_default_ocr(self):
         with tempfile.TemporaryDirectory() as directory:
