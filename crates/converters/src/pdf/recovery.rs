@@ -815,6 +815,8 @@ fn render_recovery_page(
         return Err(resource("max_asset_bytes", "PDF recovery PNG"));
     }
     drop(bitmap);
+    // Retain compressed bytes; release the encoder workspace before the next page.
+    encoded.shrink_to_fit();
     let retained = encoded.capacity() as u64 + 4096;
     reservation.shrink(bytes.saturating_mul(4).saturating_add(65536).saturating_sub(retained))?;
     let id = content_asset_id("pdf-recovery-page", &encoded)?;
@@ -887,6 +889,40 @@ mod tests {
         assert_eq!(image.get_pixel(100, 500).0, [255, 0, 0, 255]);
         assert_eq!(image.get_pixel(400, 500).0, [0, 0, 255, 255]);
         assert_eq!(image.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+    fn compressed_recovery_pages_share_a_small_retained_budget() {
+        let runtime = Pdfium::load_pinned(
+            Path::new(&std::env::var_os("PDFIUM_LIBRARY").unwrap()),
+            Limits::default(),
+        )
+        .unwrap();
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 8 * 1024 * 1024, ..ResourceLimits::default() },
+        );
+        let input = ResolvedInput {
+            bytes: Arc::from(
+                include_bytes!("../../tests/fixtures/pdf/composite-colors.pdf").as_slice(),
+            ),
+            metadata: SourceMetadata::default(),
+        };
+        let pdf = open_document(&runtime, &input, &context).unwrap();
+        let page = pdf.page(0).unwrap();
+        let mut retained = Vec::new();
+        for _ in 0..32 {
+            retained.push(
+                render_recovery_page(&page, &ConversionOptions::default(), &context).unwrap(),
+            );
+        }
+        assert!(context.reserved_memory_bytes() < 1024 * 1024);
+        assert!(retained.windows(2).all(|pair| pair[0].0.bytes == pair[1].0.bytes));
+        drop(retained);
+        drop(page);
+        drop(pdf);
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]

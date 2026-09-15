@@ -440,6 +440,25 @@ class ReplayReconciliationTests(unittest.TestCase):
             self.assertFalse(reconciliation.reconcile(a, [b], manifest)['complete'])
 
 
+    def test_partial_replays_keep_missing_inputs_and_failures_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            manifest = root/'manifest.json'
+            manifest.write_text(json.dumps({'papers': [dict(id=i, sha256=i) for i in ['a', 'b', 'c']]}))
+            base = dict(complete=False, binarySha256='old', manifestSha256=quality.digest(manifest), modes=['auto'],
+                        cases=[dict(id='a', ocr='auto', sourceSha256='a', passed=True)])
+            replay = {**base, 'binarySha256':'new', 'cases':[dict(id='b', ocr='auto', sourceSha256='b', passed=False)]}
+            a, b = root/'base.json', root/'partial.json'
+            a.write_text(json.dumps(base)); b.write_text(json.dumps(replay))
+            result = reconciliation.reconcile(a, [b], manifest)
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['missingCases'], [['c', 'auto']])
+            self.assertEqual(result['failed'], 1)
+            self.assertFalse(result['constituentRuns'][1]['complete'])
+            replay['cases'].append(dict(id='c', ocr='auto', sourceSha256='c', passed=True))
+            b.write_text(json.dumps(replay))
+            self.assertTrue(reconciliation.reconcile(a, [b], manifest)['complete'])
+
     def test_same_executable_shards_retain_the_shared_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

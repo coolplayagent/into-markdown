@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reconcile complete corpus runs with explicit, hash-bound targeted replays."""
+"""Reconcile hash-bound runs against their full frozen source inventory."""
 import argparse
 import json
 import pathlib
@@ -9,8 +9,10 @@ from quality_gate import digest
 def reconcile(base_path, replay_paths, manifest_path=None):
     paths = [base_path, *replay_paths]
     reports = [json.loads(p.read_text()) for p in paths]
-    if not all(r.get('binarySha256') for r in reports) or not all(r.get('complete') for r in reports[1:]):
-        raise ValueError('targeted replays must be complete and identify their executables')
+    if not all(r.get('binarySha256') for r in reports):
+        raise ValueError('all runs must identify their executables')
+    if manifest_path is None and not all(r.get('complete') for r in reports[1:]):
+        raise ValueError('partial replays require the complete frozen source manifest')
     if not reports[0].get('complete') and manifest_path is None:
         raise ValueError('a partial base requires the complete frozen source manifest')
     inventory = {}
