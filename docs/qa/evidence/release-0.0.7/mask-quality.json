@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "qualityPassed": true,
+  "failures": [],
+  "expectationSha256": "4b975d2b2d34087670f8d3b758dfa659e59dd737a52f92601d7982839a38e40b",
+  "reportSha256": "df16e21abe753d518c639f1a285c323722d1078d67e428e6aca8d0586ef565cf",
+  "reviewSha256": "4958950e9cd5a9259e38f17e42e70c3d52fa315f21c16a23277b943c5ac4c9fb",
+  "binarySha256": "c947f6e128140a17a0089c7eb5cc222f969339427d2bedd5d33fa26f61c7bb88",
+  "reviewPolicy": "source-content",
+  "allRecoveryPagesRequired": false
+}

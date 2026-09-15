@@ -1,0 +1,19 @@
+{
+  "reason": "User reduced the current-candidate retest to approximately 50 conversions; completed pairs are retained, remaining executions cancelled by request.",
+  "originalManifest": "tools/pdf-resilience/arxiv-manifest.json",
+  "reports": [
+    {"path":"target/arxiv-100/arxiv-v53-0/report.json","completedCases":18,"failed":0},
+    {"path":"target/arxiv-100/arxiv-v53-1/report.json","completedCases":16,"failed":0},
+    {"path":"target/arxiv-100/arxiv-v53-2/report.json","completedCases":18,"failed":0}
+  ],
+  "originalManifestSha256": "e2c8791d2e2bab548a1775fe50d18aa7aeb6cad0206b7da483c63ead13019907",
+  "retestManifestSha256": "e31062ac9bdfd2908d25697713d590f039759a013f20483ab97b8cca86416ce3",
+  "papers": 26,
+  "conversions": 52,
+  "sourcePages": 2195,
+  "partitionEvidence": [
+    {"originalReport":"target/arxiv-100/arxiv-v53-0/report.json","originalReportSha256":"4849409d294ec9d01da6dfb4df474a2a86fecd88577ee6651abb1dd71b875659","completedSubsetReportSha256":"51f77fb1a44ca6946107c2df8d3d1300d47ac27e91355827e93570c7207d8eae","completedSubsetManifestSha256":"d7854c72ab542b5dcb419b3c7c86cca26603aad94fdf7a011acfc0ec0964a53e"},
+    {"originalReport":"target/arxiv-100/arxiv-v53-1/report.json","originalReportSha256":"d866bd8748e8721d1bd36d8915ea21585c4ff1af0c005886c08756a4fdb44025","completedSubsetReportSha256":"a9166b68e965752baff90daf7c12304f9e91ee22385883d63f16ef5d2bd21431","completedSubsetManifestSha256":"48c2c1dd6e921233bd947db9f86fed39887f41dc4242404f1bc57d0d2b34d4ad"},
+    {"originalReport":"target/arxiv-100/arxiv-v53-2/report.json","originalReportSha256":"651d23eeaaa3cbd1686ce3c196f77526b5d6e32a66abe2fa553bb2fbc3c508e8","completedSubsetReportSha256":"e4287903aca9a388d20aa784f90e47e0c54bd924b9feaaec7cbf13a63827a1f5","completedSubsetManifestSha256":"00b0a864643b7c86b36322509083f73bd0b2002892c716c6b2a4abd1868610b3"}
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "sourceSha256": "0b0605e151a065c9196f7c9afd952d65dc6bee4199e6220c65e0fae8855da4b5",
+  "records": [
+    {"memberSha256":"8035bc3f748d8b97b8a9978bd812197bf40cf2b294a7e9b30e39d7167ddc720e","independentExtractor":"pdftotext 26.05.0","sourceWordCount":163,"nativeFallbackWordCount":163,"missingSourceWordCounts":{},"allSourceWordsPreserved":true}
+  ]
+}

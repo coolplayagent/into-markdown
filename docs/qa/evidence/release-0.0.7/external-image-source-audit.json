@@ -1,0 +1,25 @@
+{
+  "id": "msg-c61c13bedbd442b2",
+  "sourceSha256": "1c62deaa6d13dbc521668a7c6c12a689c2fba3d8be290b194e76933938106a26",
+  "method": "Independent olefile inspection of MSG storages and HTML streams; no remote fetch.",
+  "attachmentStorageCount": 0,
+  "htmlStreamCount": 2,
+  "remoteUrlReferences": 32,
+  "conclusion": "The source contains external image references without locally attached image bytes.",
+  "remoteImageReferences": 13,
+  "uniqueRemoteImageReferences": 12,
+  "remoteImageUrlSha256": [
+    "02724937d6da8974c4e6b6c867fbc4d5ba861e5ca93196e10972e5eeafe57eb0",
+    "04277fc46e2b1bba4b5f11f9d9e3df30f05616e149e90a20dbbeb7a36f2fc512",
+    "603f27b1a38324504e65f7395e76d4bad30c328a245f57d68a8e9be4b8009698",
+    "7179caa3989d62269ed9b8cbf6968657573952b53a7fa1d72e65256131403417",
+    "80e70f09d6301844013d9294678622f287f233bfd767cf2bf487c430fc36f644",
+    "8e8f0e47517f27079846f6db304416c64fdcf1717a801003c9acb05fa97194b2",
+    "8f359e605f60bdeffed81d794dd75a226220ead4b207b9296acbd79e043a7aec",
+    "9ba87af2321674578ff88afaa86d27dec7e073e518267844ca8ca9de799e66ac",
+    "b0482b21304a344102efdd01ab35bfbda532dcb16930e98068db6dc98fe33942",
+    "c7406fd9cd732f7ae385df2c3669f9fef4954232a551ab2c01003880b2d03767",
+    "dc999ef4b331abf17407ed5b70b309e720a84ffedd2aeeb5075c1d13d8a771c2",
+    "eec580b0ed2cf4e759329c5f72fbc15b8ea1e2c9efb4d033283e4fd5ed4f4cb5"
+  ]
+}

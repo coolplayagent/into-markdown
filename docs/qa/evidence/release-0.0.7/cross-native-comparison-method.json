@@ -1,0 +1,10 @@
+{
+  "purpose": "Supplementary native-content comparison; formal candidate delivery runs use defaults.",
+  "memoryBudgetBytes": 4294967296,
+  "modes": [
+    "off"
+  ],
+  "baseline": "official 0.0.6",
+  "candidate": "v46 0.0.7",
+  "reason": "Under concurrent load, default 0.0.6 refused 197 inputs before parsing because available memory was below its 2 GiB reserve. That diagnostic run is preserved. The supplementary content comparison applies the same explicit 4 GiB budget to both binaries; it does not measure default delivery success."
+}

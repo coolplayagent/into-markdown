@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {"id":"epub-8a275fd1e858a9a8","sameSourceWordSequence":true,"wordCount":164074,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-8a52629d5367c6d1","sameSourceWordSequence":true,"wordCount":22569,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-15217e4a6b838642","sameSourceWordSequence":true,"wordCount":6413,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-6b79f2d23b804172","sameSourceWordSequence":true,"wordCount":27769,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-614e33087b3f7cb9","sameSourceWordSequence":true,"wordCount":27484,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-1381ffdb6b07ac19","sameSourceWordSequence":true,"wordCount":139265,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-2f39814cbc740d02","sameSourceWordSequence":true,"wordCount":220530,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-9b2bfa1357b7c24c","sameSourceWordSequence":true,"wordCount":50220,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-815eda08ac677be3","sameSourceWordSequence":true,"wordCount":80845,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."},
+    {"id":"epub-4c2dadd1a2135fdb","sameSourceWordSequence":true,"wordCount":128801,"removedLines":"Only whole generated omission notes, recovery notices and original-source download labels; source prose remains intact."}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "complete": false,
+  "scope": "OCR processing and recovery-page coverage; recognized text requires the independent text-bearing-image benchmark.",
+  "requiredCompletionRate": 0.95,
+  "processingQualityPassed": false,
+  "conversionFailuresWithoutOcr": [],
+  "cases": [
+    {"id":"pdf-3ef3b998b7ad2335","sourceSha256":"07ff23e18f431ec812a6c954ce57c3ec1e92dbc2ea01e16f228eb22ba97de370","ocr":{"imageSources":1146,"imagesAttempted":92,"imagesCompleted":92,"imagesWithText":71,"imagesFailed":0,"imagesSkipped":1054,"requests":92,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":10873161018,"workerBudgetMaxBytes":16883531847},"excludedTransparentFailures":0,"completionRate":1.0,"errors":["unprocessed images reduce OCR coverage below threshold"]}
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "fc7b2981f6fe4215a5f34108886236e445eae58ca47a16c9c2b8f792f0ebe51a",
+  "manifestSha256": "041f9628a0cf39238d516e2e3d1259492b4e1034939f0aaa088e7c91f2b61a38",
+  "binarySha256": "9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9",
+  "modes": [
+    "auto",
+    "off"
+  ],
+  "complete": true,
+  "constituentRuns": [],
+  "replacements": [],
+  "passed": 4,
+  "failed": 0,
+  "seconds": 26.69,
+  "ocrTotals": {"imageSources":14,"imagesAttempted":7,"imagesCompleted":7,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":7},
+  "ocrTotalsByMode": {"auto":{"imageSources":7,"imagesAttempted":7,"imagesCompleted":7,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":0},"off":{"imageSources":7,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":7}},
+  "ocrUnaccountedCases": [],
+  "cases": [
+    {"id":"soft-mask-text","ocr":"auto","sourceSha256":"63d3bece1e35e42a6cc67987370f8f2e9e719ba60ab56578b4f0bbb56e4b5f06","binarySha256":"9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9","passed":true,"exitCode":0,"seconds":4.773,"peakRssBytes":107741184,"markdownSha256":"93d39a40a6fb6a3d4008de914536294ffccd4523b4732977cdc572cc2fdc6866","assetBundleSha256":"54eef89d7cb90cc5e29f6c64ac076c63606a28e720ec83ff61e683f30f7c545f","outcomes":{"complete":1},"errorCodes":{},"diagnosticCounts":{},"expectedPages":1,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":1,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":1,"imagesAttempted":1,"imagesCompleted":1,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":0,"requests":1,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":17026519652,"workerBudgetMaxBytes":17026519652},"effectiveBudgetBytes":17179869184},
+    {"id":"soft-mask-text","ocr":"off","sourceSha256":"63d3bece1e35e42a6cc67987370f8f2e9e719ba60ab56578b4f0bbb56e4b5f06","binarySha256":"9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9","passed":true,"exitCode":0,"seconds":0.661,"peakRssBytes":32210944,"markdownSha256":"93d39a40a6fb6a3d4008de914536294ffccd4523b4732977cdc572cc2fdc6866","assetBundleSha256":"54eef89d7cb90cc5e29f6c64ac076c63606a28e720ec83ff61e683f30f7c545f","outcomes":{"complete":1},"errorCodes":{},"diagnosticCounts":{},"expectedPages":1,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":1,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":1,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":1,"requests":0,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":0,"workerBudgetMaxBytes":0},"effectiveBudgetBytes":17179869184},
+    {"id":"masked-dictionary-pages","ocr":"auto","sourceSha256":"d260ed13460252133cfef26fa9ba25ea54f006403a539e2dfd032b9a1e06b13a","binarySha256":"9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9","passed":true,"exitCode":0,"seconds":18.879,"peakRssBytes":320946176,"markdownSha256":"8d69a3cf5425cfaa8c3587267d4194b96612717986b2f031f186e1ee1bd2bcf0","assetBundleSha256":"2a01c980be6a734b5f86b36a7ce5241ac6b5c8758bd08b29e108e73230d9dd14","outcomes":{"degraded":1},"errorCodes":{},"diagnosticCounts":{"ocr.lowConfidence":2},"expectedPages":3,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":6,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":6,"imagesAttempted":6,"imagesCompleted":6,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":0,"requests":6,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":16988542848,"workerBudgetMaxBytes":17013841140},"effectiveBudgetBytes":17179869184},
+    {"id":"masked-dictionary-pages","ocr":"off","sourceSha256":"d260ed13460252133cfef26fa9ba25ea54f006403a539e2dfd032b9a1e06b13a","binarySha256":"9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9","passed":true,"exitCode":0,"seconds":2.377,"peakRssBytes":143671296,"markdownSha256":"8d69a3cf5425cfaa8c3587267d4194b96612717986b2f031f186e1ee1bd2bcf0","assetBundleSha256":"2a01c980be6a734b5f86b36a7ce5241ac6b5c8758bd08b29e108e73230d9dd14","outcomes":{"complete":1},"errorCodes":{},"diagnosticCounts":{},"expectedPages":3,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":6,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":6,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":6,"requests":0,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":0,"workerBudgetMaxBytes":0},"effectiveBudgetBytes":17179869184}
+  ]
+}
