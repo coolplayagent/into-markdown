@@ -24,6 +24,7 @@ pub(super) struct EntryMeta {
     pub(super) compressed_size: u64,
     pub(super) expanded_size: u64,
     pub(super) deflated: bool,
+    pub(super) encrypted: bool,
     pub(super) physical_start: usize,
     pub(super) central_extra_len: usize,
     pub(super) local_extra_len: usize,
@@ -53,8 +54,23 @@ impl<'a> Archive<'a> {
         depth: u16,
         budget: &mut ArchiveBudget<'_>,
     ) -> Result<Self, ConversionError> {
+        Self::open_recovering(bytes, depth, budget, false)
+    }
+
+    pub(super) fn open_recovering(
+        bytes: &'a [u8],
+        depth: u16,
+        budget: &mut ArchiveBudget<'_>,
+        retain_encrypted: bool,
+    ) -> Result<Self, ConversionError> {
         budget.context().checkpoint()?;
-        let RawInventory { entries, memory } = super::raw_central::preflight(bytes, depth, budget)?;
+        let RawInventory { entries, memory } =
+            super::raw_central::preflight(bytes, depth, budget, retain_encrypted)?;
+        if entries.iter().any(|entry| entry.encrypted)
+            && !entries.iter().any(|entry| entry.kind == EntryKind::File && !entry.encrypted)
+        {
+            return Err(ConversionError::Encrypted);
+        }
         #[cfg(test)]
         CONSTRUCTOR_CALLS.with(|calls| calls.set(calls.get() + 1));
         let inner = zip::ZipArchive::new(Cursor::new(bytes))
@@ -78,6 +94,9 @@ impl<'a> Archive<'a> {
         meta: &EntryMeta,
         budget: &mut ArchiveBudget<'_>,
     ) -> Result<EntryData, ConversionError> {
+        if meta.encrypted {
+            return Err(ConversionError::Encrypted);
+        }
         budget.validate_member(&meta.name, meta.compressed_size, meta.expanded_size)?;
         budget.charge_expanded(&meta.name, meta.expanded_size)?;
         let mut memory = budget.context().reserve_memory(meta.expanded_size)?;

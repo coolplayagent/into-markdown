@@ -34,9 +34,8 @@ pub(crate) fn encode_result_into<W: Write + Seek>(
                 .document
                 .validate()
                 .map_err(|error| CliError::internal(format!("validate document IR: {error}")))?;
-            serde_json::to_writer_pretty(&mut destination, &result.document)
+            write_json_buffered(&result.document, &mut destination)
                 .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
-            destination.write_all(b"\n")?;
         }
         EmitKind::ResultJson => {
             ResultDto::write_json_from_result(result, DtoJsonStyle::Pretty, &mut destination)
@@ -46,4 +45,15 @@ pub(crate) fn encode_result_into<W: Write + Seek>(
         EmitKind::Bundle => bundle::write_bundle(result, destination)?,
     }
     Ok(())
+}
+
+/// Batch JSON fragments before passing them to filesystem or compression writers.
+pub(crate) fn write_json_buffered<T: serde::Serialize + ?Sized>(
+    value: &T,
+    destination: impl Write,
+) -> Result<(), serde_json::Error> {
+    let mut writer = super::json::ChunkWriter::new(destination).map_err(serde_json::Error::io)?;
+    serde_json::to_writer_pretty(&mut writer, value)?;
+    writer.write_all(b"\n").map_err(serde_json::Error::io)?;
+    writer.finish().map_err(serde_json::Error::io)
 }

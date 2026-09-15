@@ -77,6 +77,7 @@ pub(crate) fn write_bundle<W: Write + Seek>(
     let mut archive = zip::ZipWriter::new(destination);
     let file_options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true)
         .unix_permissions(0o644);
     let directory_options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored)
@@ -94,9 +95,8 @@ pub(crate) fn write_bundle<W: Write + Seek>(
     archive
         .start_file("document.ir.json", file_options)
         .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-    serde_json::to_writer_pretty(&mut archive, &result.document)
+    super::serialization::write_json_buffered(&result.document, &mut archive)
         .map_err(|error| CliError::internal(format!("serialize document IR: {error}")))?;
-    archive.write_all(b"\n")?;
     archive
         .start_file("document.md", file_options)
         .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
@@ -104,9 +104,8 @@ pub(crate) fn write_bundle<W: Write + Seek>(
     archive
         .start_file("manifest.json", file_options)
         .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;
-    serde_json::to_writer_pretty(&mut archive, &manifest)
+    super::serialization::write_json_buffered(&manifest, &mut archive)
         .map_err(|error| CliError::internal(format!("serialize bundle manifest: {error}")))?;
-    archive.write_all(b"\n")?;
     archive
         .start_file("provenance.json", file_options)
         .map_err(|error| CliError::internal(format!("create bundle entry: {error}")))?;

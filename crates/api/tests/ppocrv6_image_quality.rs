@@ -158,6 +158,11 @@ mod quality {
             let expected = canonical(golden["ground_truth_nfc"].as_str().unwrap());
             let actual = canonical(&actual);
             let edits = edit_distance(&expected, &actual);
+            eprintln!(
+                "{id}: edits={edits}; expected={}; actual={}",
+                expected.iter().collect::<String>(),
+                actual.iter().collect::<String>()
+            );
             let total = totals.entry(golden["group"].as_str().unwrap().into()).or_default();
             total.0 += edits;
             total.1 += expected.len();

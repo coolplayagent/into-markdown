@@ -9,6 +9,7 @@ mod geometry;
 mod ir;
 mod links;
 mod pages;
+pub(crate) mod recovery;
 mod runtime;
 mod stream;
 pub(crate) mod working_visual;
@@ -16,7 +17,9 @@ pub(crate) mod working_visual;
 #[cfg(test)]
 mod tests;
 
-use assets::{account_asset, content_asset_id, image_bitmap_to_bmp, rendered_bitmap_to_bmp};
+#[cfg(test)]
+use assets::image_bitmap_to_bmp;
+use assets::{account_asset, content_asset_id, image_bitmap_to_png, rendered_bitmap_to_bmp};
 use budget::{
     asset_record_overhead, diagnostic_overhead, materialize_after_reserve, output_block_overhead,
     retain_existing_reservation, retain_output_bytes,
@@ -58,7 +61,6 @@ const PROVIDER_ID: &str = "builtin.converter.pdfium";
 const FORMATS: &[InputFormat] = &[InputFormat::Pdf];
 const MIN_NATIVE_TEXT_CHARS: usize = 8;
 const MIN_SCAN_IMAGE_COVERAGE: f64 = 0.50;
-const MAX_RENDER_DIMENSION: u32 = 16_384;
 const MAX_PAGE_RENDER_DIMENSION: u32 = 4096;
 type PdfiumRuntimeResolver = fn() -> Result<PathBuf, ConversionError>;
 static PDFIUM_RUNTIME_RESOLVER: OnceLock<PdfiumRuntimeResolver> = OnceLock::new();
@@ -338,7 +340,12 @@ impl Converter for PdfConverter {
         context: &'a ExecutionContext,
     ) -> BoxFuture<'a, Result<ConverterOutput, ConversionError>> {
         Box::pin(async move {
-            let path = self.runtime_path()?;
+            let path = match self.runtime_path() {
+                Ok(path) => path,
+                Err(error) => {
+                    return recovery::unavailable_runtime(input, options, context, &error);
+                }
+            };
             let _permit = runtime::acquire_pdf_conversion(context).await?;
             convert_pdf_admitted(&path, input, options, context)
         })
@@ -364,17 +371,55 @@ fn convert_pdf_admitted(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
-    let runtime = pages::load_runtime(runtime_path, options)?;
-    let pdf = open_document(&runtime, input, context)?;
+    let original = recovery::Original::prepare(input, context)?;
+    let runtime = match pages::load_runtime(runtime_path, options) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let output = original.page(None, 0, "runtime", &error, options, context)?;
+            return original.attach(output, context);
+        }
+    };
+    let pdf = match open_document(&runtime, input, context) {
+        Ok(pdf) => pdf,
+        Err(error) => {
+            let output = original.page(None, 0, "document", &error, options, context)?;
+            return original.attach(output, context);
+        }
+    };
     let observed_pages = pdf.page_count();
     let selected_pages = observed_pages.min(options.limits.max_pages);
-    let mut output = pages::PdfOutput::new(selected_pages, context)?;
-    output.record_page_truncation(observed_pages, selected_pages)?;
-    let mut counts = pages::Counts::default();
-    for page_index in 0..selected_pages {
-        output = output.extract_page(&pdf, page_index, options, context, &mut counts, false)?;
+    let mut output = ConverterOutput::default();
+    if observed_pages > selected_pages {
+        output.diagnostics.push(page_truncation_diagnostic(observed_pages, selected_pages));
     }
-    output.finish(options, context)
+    let mut counts = pages::Counts::default();
+    let mut published = HashSet::new();
+    for page_index in 0..selected_pages {
+        output = original.prepare_delivery(output, options, &mut published, context)?;
+        let result = pages::PdfOutput::new(1, context)
+            .and_then(|page| {
+                page.extract_page(&pdf, page_index, options, context, &mut counts, false)
+            })
+            .and_then(|page| page.finish(options, context));
+        let page = match result {
+            Ok(page) => page,
+            Err(error) => {
+                original.page(Some(&pdf), page_index, "extraction", &error, options, context)?
+            }
+        };
+        stream::append_page(
+            &mut output,
+            page,
+            options.output.asset_mode,
+            false,
+            &mut published,
+            context,
+        )?;
+        counts.asset_ids.clear();
+    }
+    output = original.prepare_delivery(output, options, &mut published, context)?;
+    let output = crate::pdf_ocr::finish_pdf_pages(output, options, context)?;
+    original.attach(output, context)
 }
 
 fn page_truncation_diagnostic(observed: u32, selected: u32) -> Diagnostic {
@@ -396,5 +441,9 @@ fn open_document<'a>(
 ) -> Result<into_markdown_pdfium::Document<'a>, ConversionError> {
     let plan = runtime.plan_open(input.bytes.clone(), None).map_err(map_pdfium_error)?;
     let _memory = context.reserve_memory(plan.allocation_bytes())?;
-    plan.materialize().map_err(map_pdfium_error)
+    let pdf = plan.materialize().map_err(map_pdfium_error)?;
+    if pdf.page_count() == 0 {
+        return Err(malformed("document", "PDF contains no pages"));
+    }
+    Ok(pdf)
 }

@@ -3,8 +3,7 @@
 use super::budget::{limit, locator, malformed, parameter_i32, parameter_u16, reserve_vec};
 use super::destinations::{child_destination, is_known_non_destination_control};
 use super::parser::{
-    CellMerge, Destination, FontCharset, MAX_CONTROL_WORD_LEN, MAX_CONTROLS, MAX_NUMERIC_DIGITS,
-    MAX_RTF_FONTS, Parser,
+    CellMerge, Destination, FontCharset, MAX_CONTROL_WORD_LEN, MAX_NUMERIC_DIGITS, Parser,
 };
 use super::text::encoding_for_codepage;
 use into_markdown_core::{ConversionError, DiagnosticSeverity, Inline};
@@ -130,9 +129,6 @@ impl Parser<'_> {
                 "fcharset" => {
                     let charset = parameter_u16(parameter, "font charset")?;
                     if let Some(font) = self.font_table_font {
-                        if self.font_charsets.len() >= MAX_RTF_FONTS {
-                            return Err(limit("rtf_font_count", format!(">= {MAX_RTF_FONTS}")));
-                        }
                         let order = u32::try_from(self.font_charsets.len()).map_err(|_| {
                             limit("rtf_font_count", "font definition order overflow")
                         })?;
@@ -150,6 +146,7 @@ impl Parser<'_> {
                 | Destination::FieldContainer
                 | Destination::InfoContainer
                 | Destination::ShapePictureContainer
+                | Destination::ShapeContainer
         ) {
             return Ok(());
         }
@@ -173,9 +170,7 @@ impl Parser<'_> {
             }
             "u" => {
                 let value = parameter.ok_or_else(|| malformed("u requires a parameter"))?;
-                let signed = i16::try_from(value)
-                    .map_err(|_| limit("rtf_unicode_value", "u must be a signed 16-bit value"))?;
-                let unit = u16::from_ne_bytes(signed.to_ne_bytes());
+                let unit = unicode_unit(value, self.options.error_policy)?;
                 self.emit_unicode(unit, start, end)?;
                 self.state_mut().fallback_remaining = self.state().unicode_skip;
             }
@@ -221,7 +216,7 @@ impl Parser<'_> {
                 state.subscript = false;
             }
             "pard" => {
-                if self.table.active {
+                if self.table.active && !self.table.row_open {
                     self.finish_table(end)?;
                 }
                 self.pending_list_marker = None;
@@ -320,15 +315,22 @@ impl Parser<'_> {
             .control_count
             .checked_add(1)
             .ok_or_else(|| limit("rtf_control_count", "control count overflow"))?;
-        if self.control_count > MAX_CONTROLS {
-            return Err(limit(
-                "rtf_control_count",
-                format!("{} > {MAX_CONTROLS}", self.control_count),
-            ));
-        }
         if self.control_count.is_multiple_of(1024) {
             self.context.checkpoint()?;
         }
         Ok(())
+    }
+}
+
+fn unicode_unit(
+    value: i64,
+    policy: into_markdown_core::ErrorPolicy,
+) -> Result<u16, ConversionError> {
+    match i16::try_from(value) {
+        Ok(signed) => Ok(u16::from_ne_bytes(signed.to_ne_bytes())),
+        Err(_) if policy == into_markdown_core::ErrorPolicy::BestEffort => {
+            u16::try_from(value).map_err(|_| malformed("u is outside the UTF-16 code-unit range"))
+        }
+        Err(_) => Err(malformed("u must be a signed 16-bit value")),
     }
 }

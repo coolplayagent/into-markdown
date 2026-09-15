@@ -112,9 +112,7 @@ pub(super) fn assemble(
                 Block::Paragraph(text(&attachment.filename)),
                 &attachment.source,
             ));
-            if let Some(asset) = attachment.asset.as_ref().filter(|asset| {
-                attachment.content_id.is_none() && asset.media_type.starts_with("image/")
-            }) {
+            if let Some(asset) = visible_attachment_image(&attachment) {
                 blocks.push(node(
                     prefix,
                     &mut next_id,
@@ -391,4 +389,11 @@ mod tests {
         assert_eq!(format_filetime(116_444_736_000_000_000), "1970-01-01T00:00:00Z");
         assert_eq!(format_filetime(116_444_736_001_234_567), "1970-01-01T00:00:00.1234567Z");
     }
+}
+
+fn visible_attachment_image(attachment: &AttachmentOutput) -> Option<&Asset> {
+    attachment.asset.as_ref().filter(|asset| {
+        (attachment.content_id.is_none() || attachment.safe_image)
+            && asset.media_type.starts_with("image/")
+    })
 }

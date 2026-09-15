@@ -72,14 +72,14 @@ pub(super) fn parse_all<'a>(
                     .transpose()?
                     .unwrap_or_else(|| infer_media_type(&filename).into());
                 let digest = format!("{:x}", Sha256::digest(bytes));
-                let asset = Asset {
+                let mut asset = Asset {
                     id: AssetId(format!("msg-attachment-{}-{}", ordinal + 1, &digest[..16])),
                     filename: Some(filename.clone()),
                     media_type,
                     bytes: bytes.to_vec(),
                     external_uri: None,
                 };
-                let safe_image = content_id.is_some() && audit_cid_image(&asset, budget)?;
+                let safe_image = audit_attachment_image(&mut asset, budget)?;
                 output.push(ParsedAttachment {
                     asset: Some(asset),
                     nested: None,
@@ -127,20 +127,25 @@ pub(super) fn parse_all<'a>(
     Ok(output)
 }
 
-fn audit_cid_image(asset: &Asset, budget: &MsgBudget<'_>) -> Result<bool, ConversionError> {
-    if !matches!(asset.media_type.as_str(), "image/png" | "image/jpeg") {
+fn audit_attachment_image(
+    asset: &mut Asset,
+    budget: &MsgBudget<'_>,
+) -> Result<bool, ConversionError> {
+    use crate::image_converter::{envelope, format};
+    let Some(format) = format::detect(&asset.bytes, budget.context())? else {
         return Ok(false);
+    };
+    // Attachment labels are producer metadata; the encoded bytes identify the codec.
+    if asset.media_type != format.media_type() {
+        asset.media_type = format.media_type().into();
+        if let Some(filename) = &mut asset.filename {
+            let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
+            *filename = format!("{stem}.{}", format.extension());
+        }
     }
-    let mut memory = budget.context().reserve_memory(0)?;
-    match crate::rtf::audit_embedded_raster(
-        &asset.bytes,
-        &asset.media_type,
-        budget.options(),
-        budget.context(),
-        &mut memory,
-    ) {
-        Ok(()) => Ok(true),
-        Err(ConversionError::Malformed { .. }) => Ok(false),
+    match envelope::validate(format, &asset.bytes, &budget.options().limits, budget.context()) {
+        Ok(_) => Ok(true),
+        Err(ConversionError::Malformed { .. } | ConversionError::Unsupported { .. }) => Ok(false),
         Err(error) => Err(error),
     }
 }

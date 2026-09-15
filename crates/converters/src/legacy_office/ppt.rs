@@ -464,7 +464,7 @@ fn emit_pictures(
 ) -> Result<(), ConversionError> {
     let mut cursor = 0usize;
     let mut count = 0usize;
-    while let Some((start, end, media_type)) = find_image(&pictures[cursor..]) {
+    while let Some((start, end, media_type)) = find_image(&pictures[cursor..], budget)? {
         let start = cursor + start;
         let end = cursor + end;
         budget.raster(&pictures[start..end], media_type, "Pictures/image")?;

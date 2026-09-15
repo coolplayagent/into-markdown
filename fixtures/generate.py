@@ -376,7 +376,7 @@ def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
     minifat: list[int] = []
     for entry in directory:
         data = entry["data"]
-        if data is None or not data:
+        if data is None or not data or len(data) >= 4096:
             continue
         entry["start"] = len(minifat)
         count = (len(data) + 63) // 64
@@ -390,7 +390,21 @@ def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
     root_sectors = (len(mini_data) + 511) // 512
     minifat_start = directory_sectors
     root_start = minifat_start + minifat_sectors
-    fat_sector = root_start + root_sectors
+    regular_start = root_start + root_sectors
+    regular_data = bytearray()
+    regular_chains = []
+    for entry in directory:
+        data = entry["data"]
+        if data is not None and len(data) >= 4096:
+            start = regular_start + len(regular_data) // 512
+            count = (len(data) + 511) // 512
+            entry["start"] = start
+            regular_chains.append((start, count))
+            regular_data.extend(data)
+            regular_data.extend(b"\0" * (-len(regular_data) % 512))
+    fat_sector = regular_start + len(regular_data) // 512
+    if fat_sector >= 128:
+        raise ValueError("fixture CFB requires more than one FAT sector")
     directory[0]["start"] = root_start if root_sectors else CFB_END
 
     directory_bytes = bytearray()
@@ -417,6 +431,8 @@ def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
     chain(0, directory_sectors)
     chain(minifat_start, minifat_sectors)
     chain(root_start, root_sectors)
+    for start, count in regular_chains:
+        chain(start, count)
     fat_entries[fat_sector] = CFB_FAT
     header = bytearray(512)
     header[:8] = bytes.fromhex("d0cf11e0a1b11ae1")
@@ -430,7 +446,7 @@ def cfb(entries: list[tuple[tuple[str, ...], bytes | None]]) -> bytes:
     for offset in range(80, 512, 4):
         struct.pack_into("<I", header, offset, CFB_FREE)
     fat_bytes = b"".join(struct.pack("<I", value) for value in fat_entries)
-    return bytes(header + directory_bytes + minifat_bytes + mini_data + fat_bytes)
+    return bytes(header + directory_bytes + minifat_bytes + mini_data + regular_data + fat_bytes)
 
 
 def lzfu_uncompressed(raw: bytes) -> bytes:
@@ -1515,7 +1531,7 @@ def build(root: Path, font_path: Path) -> None:
         b'<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Corpus chapter</title></head>'
         b'<body><main><h1 id="corpus">Corpus chapter</h1><p>Alpha EPUB text.</p></main></body></html>'
     )
-    add("epub-normal", "epub", "normal", "small/epub/normal.epub", epub_normal, "application/epub+zip", expected("success", "EPUB 3 package with navigation and one XHTML spine item", "# Contents\n\n1. [Corpus chapter](<EPUB/chapter.xhtml#corpus>)\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n"))
+    add("epub-normal", "epub", "normal", "small/epub/normal.epub", epub_normal, "application/epub+zip", expected("success", "EPUB 3 package with navigation and one XHTML spine item", "# Contents\n\n1. [Corpus chapter](<#epub-spine-000001-heading>)\n\n<a id=\"epub-spine-000001-heading\"></a>\n\n# Corpus chapter\n\n# Corpus chapter\n\nAlpha EPUB text\\.\n"))
 
     fixtures.extend(workbook_fixtures(root))
     fixtures.extend(presentation_fixtures(root))

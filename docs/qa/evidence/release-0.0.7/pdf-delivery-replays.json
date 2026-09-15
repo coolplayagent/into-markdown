@@ -1,0 +1,9 @@
+{
+  "complete": true,
+  "replays": 2,
+  "reports": [
+    "target/real-world-007/pdf-watchdog-v53/pdf-fc5ab66c3aab76d4/result/report.json",
+    "target/real-world-007/pdf-watchdog-v53/pdf-8d931779ff38af88/result/report.json"
+  ],
+  "reason": "External test-runner watchdog replays retain default conversion options and preserve the original timed-out run."
+}

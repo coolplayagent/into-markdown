@@ -338,6 +338,17 @@ fn repeated_boundaries(
     if first.segments.len() != next.segments.len() {
         return Ok(false);
     }
+    // Justified prose fills the same broad column boundaries on successive
+    // rows. Require a compact cell as independent evidence; broad cells can
+    // still form a table when explicit cell paths corroborate their grid.
+    if ![first, next].iter().any(|row| {
+        let broadest = row.segments.iter().map(|s| s.right - s.x).fold(0.0, f32::max);
+        row.segments.iter().any(|segment| {
+            segment.right - segment.x <= (row.line.bounds.height.max(1.0) * 8.0).max(broadest * 0.5)
+        })
+    }) {
+        return Ok(false);
+    }
     let tolerance = first.line.bounds.height.max(next.line.bounds.height).max(1.0) * 0.08;
     for (expected, actual) in first.segments.iter().zip(&next.segments) {
         budget.compare()?;
@@ -371,7 +382,8 @@ fn path_grid_covers(
     let mut matches = Vec::new();
     matches.try_reserve_exact(cell_count).map_err(|_| memory("layout path grid matches"))?;
     let mut used = Vec::new();
-    used.try_reserve_exact(cell_count).map_err(|_| memory("layout path grid indexes"))?;
+    used.try_reserve_exact(path_bounds.len()).map_err(|_| memory("layout path grid indexes"))?;
+    used.resize(path_bounds.len(), false);
     for row in rows {
         for segment in &row.segments {
             budget.checkpoint_item()?;
@@ -381,15 +393,7 @@ fn path_grid_covers(
                 if !rect_contains_cell(bounds, row, *segment) {
                     continue;
                 }
-                let mut already_used = false;
-                for used_index in &used {
-                    budget.compare()?;
-                    if *used_index == index {
-                        already_used = true;
-                        break;
-                    }
-                }
-                if already_used {
+                if used[index] {
                     continue;
                 }
                 if best.is_none_or(|(_, current)| rect_precedes(bounds, current)) {
@@ -397,7 +401,7 @@ fn path_grid_covers(
                 }
             }
             let Some((index, bounds)) = best else { return Ok(false) };
-            used.push(index);
+            used[index] = true;
             matches.push(bounds);
         }
     }

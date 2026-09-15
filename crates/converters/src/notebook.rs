@@ -1,5 +1,8 @@
 //! Strict, offline nbformat 4 conversion into the common document IR.
 
+mod fields;
+use fields::{required_object, required_string, required_u64};
+
 use crate::markdown;
 use base64::Engine as _;
 use image::{
@@ -614,10 +617,17 @@ impl<'a> NotebookBuilder<'a> {
             "stream" => {
                 let name = required_string(output, "name", &part)?;
                 if !matches!(name, "stdout" | "stderr") {
-                    return Err(malformed(
-                        format!("{part}.name"),
-                        "stream name must be stdout or stderr",
-                    ));
+                    if self.options.error_policy == into_markdown_core::ErrorPolicy::Strict {
+                        return Err(malformed(
+                            format!("{part}.name"),
+                            "stream name must be stdout or stderr",
+                        ));
+                    }
+                    self.warning(
+                        "notebook.stream.retained",
+                        "nonstandard stream name retained with its recorded text",
+                        &part,
+                    )?;
                 }
                 let text = source_text(
                     output.get("text"),
@@ -1191,39 +1201,6 @@ fn exact_inline_destination_span(
     )
 }
 
-fn required_object<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-    part: &str,
-) -> Result<&'a Map<String, Value>, ConversionError> {
-    object
-        .get(key)
-        .and_then(Value::as_object)
-        .ok_or_else(|| malformed(part, format!("{key} must be an object")))
-}
-
-fn required_string<'a>(
-    object: &'a Map<String, Value>,
-    key: &str,
-    part: &str,
-) -> Result<&'a str, ConversionError> {
-    object
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| malformed(part, format!("{key} must be a string")))
-}
-
-fn required_u64(
-    object: &Map<String, Value>,
-    key: &str,
-    part: &str,
-) -> Result<u64, ConversionError> {
-    object
-        .get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| malformed(part, format!("{key} must be a non-negative integer")))
-}
-
 fn source_text(
     value: Option<&Value>,
     part: &str,
@@ -1297,6 +1274,15 @@ fn decode_image(
         })?
     } else {
         &encoded
+    };
+    // Notebook MIME bundles commonly wrap base64 at line boundaries. Whitespace is
+    // transport formatting; the decoded image still receives full codec validation.
+    let normalized;
+    let payload = if payload.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        normalized = payload.chars().filter(|ch| !ch.is_ascii_whitespace()).collect::<String>();
+        normalized.as_str()
+    } else {
+        payload
     };
     let estimate =
         payload.len().checked_mul(3).and_then(|v| v.checked_div(4)).ok_or_else(|| {
@@ -2203,6 +2189,23 @@ mod tests {
     }
 
     #[test]
+    fn recorded_stdin_output_is_preserved_in_best_effort() {
+        let source = br#"{"nbformat":4,"nbformat_minor":4,"metadata":{},"cells":[{"cell_type":"code","source":"input()","execution_count":1,"metadata":{},"outputs":[{"name":"stdin","output_type":"stream","text":"recorded input"}]}]}"#;
+        let mut options = ConversionOptions::default();
+        let output = convert_notebook(&input(source), &options, &context(&options)).unwrap();
+        let rendered =
+            into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+                .unwrap();
+        assert!(rendered.contains("recorded input"));
+        assert!(output.diagnostics.iter().any(|d| d.code == "notebook.stream.retained"));
+        options.error_policy = into_markdown_core::ErrorPolicy::Strict;
+        assert_eq!(
+            convert_notebook(&input(source), &options, &context(&options)).unwrap_err().code(),
+            ErrorCode::Malformed
+        );
+    }
+
+    #[test]
     fn duplicate_keys_and_forged_images_fail_closed() {
         let options = ConversionOptions::default();
         let duplicate =
@@ -2437,7 +2440,7 @@ mod tests {
     }
 
     #[test]
-    fn cumulative_nested_ir_is_rejected_before_merge() {
+    fn cumulative_nested_ir_preserves_all_cells_above_the_old_node_ceiling() {
         let source = "x\n\n".repeat(200);
         let cells = (0..501)
             .map(|index| {
@@ -2451,10 +2454,38 @@ mod tests {
         }))
         .unwrap();
         let options = ConversionOptions::default();
-        assert_eq!(
-            convert_notebook(&input(&bytes), &options, &context(&options)).unwrap_err().code(),
-            ErrorCode::ResourceLimit
-        );
+        let result = convert_notebook(&input(&bytes), &options, &context(&options)).unwrap();
+        assert!(result.document.blocks.len() >= 100_200);
+        result.document.validate().unwrap();
+    }
+
+    #[test]
+    fn wrapped_notebook_base64_preserves_image_bytes() {
+        let encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let wrapped = encoded
+            .as_bytes()
+            .chunks(20)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        let options = ConversionOptions::default();
+        let original = decode_image(
+            &serde_json::json!(encoded),
+            "image/png",
+            &options,
+            &context(&options),
+            "test",
+        )
+        .unwrap();
+        let actual = decode_image(
+            &serde_json::json!(wrapped),
+            "image/png",
+            &options,
+            &context(&options),
+            "test",
+        )
+        .unwrap();
+        assert_eq!(actual, original);
     }
 
     #[test]

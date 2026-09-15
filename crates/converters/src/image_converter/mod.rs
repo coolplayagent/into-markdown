@@ -365,6 +365,7 @@ fn recover_image_ocr(
         }
     })?;
     Ok(ocr::OcrContribution {
+        recognition_completed: false,
         nodes: vec![],
         diagnostics: vec![
             Diagnostic {

@@ -25,9 +25,6 @@ const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 const CONTENT_NS: &str = "http://purl.org/rss/1.0/modules/content/";
 const DC_NS: &str = "http://purl.org/dc/elements/1.1/";
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-const MAX_FEED_EVENTS: usize = 1_000_000;
-const MAX_FEED_DIAGNOSTICS: usize = 100_000;
-const MAX_FEED_ATTRIBUTES_PER_ELEMENT: usize = 4096;
 const FEED_DETECTION_EVENT_LIMIT: usize = 4096;
 const FEED_DETECTION_BYTE_LIMIT: usize = 1024 * 1024;
 
@@ -309,7 +306,7 @@ impl FeedBudget {
         Ok(Self {
             aggregate: super::html::FeedHtmlBudget::new(
                 options.limits.max_feed_text_bytes,
-                MAX_FEED_DIAGNOSTICS,
+                usize::MAX,
                 options.limits.max_memory_bytes,
                 context,
             )?,
@@ -326,12 +323,6 @@ impl FeedBudget {
             .events
             .checked_add(1)
             .ok_or_else(|| limit("feed_events", "feed event count overflowed"))?;
-        if self.events > MAX_FEED_EVENTS {
-            return Err(limit(
-                "feed_events",
-                &format!("feed exceeds {MAX_FEED_EVENTS} XML events"),
-            ));
-        }
         Ok(())
     }
 
@@ -995,12 +986,6 @@ fn attributes_inner(
 ) -> Result<FeedAttributes, ConversionError> {
     let mut output = FeedAttributes::default();
     for (attribute_index, attribute) in element.attributes().enumerate() {
-        if output.0.len() >= MAX_FEED_ATTRIBUTES_PER_ELEMENT {
-            return Err(limit(
-                "feed_attributes",
-                &format!("feed element exceeds {MAX_FEED_ATTRIBUTES_PER_ELEMENT} attributes"),
-            ));
-        }
         if output.0.len().is_multiple_of(128) {
             context.checkpoint()?;
         }
@@ -3027,6 +3012,16 @@ mod tests {
     }
 
     #[test]
+    fn xml_work_continues_beyond_million_events_under_request_budget() {
+        let options = ConversionOptions::default();
+        let context = context();
+        let mut budget = FeedBudget::new(&options, &context).unwrap();
+        budget.events = 1_000_000;
+        budget.event().unwrap();
+        assert_eq!(budget.events, 1_000_001);
+    }
+
+    #[test]
     fn allocation_container_audit_stays_fail_closed() {
         let source = include_str!("feed.rs");
         let production = source.split_once("#[cfg(test)]\nmod tests").unwrap().0;
@@ -3304,7 +3299,7 @@ mod tests {
             let options = ConversionOptions::default();
             let mut budget = super::super::html::FeedHtmlBudget::new(
                 options.limits.max_feed_text_bytes,
-                MAX_FEED_DIAGNOSTICS,
+                usize::MAX,
                 options.limits.max_memory_bytes,
                 &context,
             )
@@ -3396,7 +3391,7 @@ mod tests {
         let options = ConversionOptions::default();
         let mut measured = super::super::html::FeedHtmlBudget::new(
             options.limits.max_feed_text_bytes,
-            MAX_FEED_DIAGNOSTICS,
+            usize::MAX,
             options.limits.max_memory_bytes,
             &context,
         )
@@ -3418,7 +3413,7 @@ mod tests {
             .unwrap();
         let mut replay = super::super::html::FeedHtmlBudget::new(
             options.limits.max_feed_text_bytes,
-            MAX_FEED_DIAGNOSTICS,
+            usize::MAX,
             options.limits.max_memory_bytes,
             &context,
         )

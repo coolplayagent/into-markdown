@@ -89,7 +89,11 @@ impl AiProvider for OpenAiImageDescriptionProvider {
             .map_err(|_| memory("image size is unrepresentable"))?
             .checked_mul(5)
             .and_then(|value| value.checked_add(FIXED_WORKING_BYTES))
-            .and_then(|value| value.checked_add(options.limits.max_field_bytes))
+            .and_then(|value| {
+                value.checked_add(
+                    options.limits.max_field_bytes.min(crate::openai::MAX_RESPONSE_BYTES as u64),
+                )
+            })
             .ok_or_else(|| memory("image-description plan overflow"))?;
         if encoded_peak > options.limits.max_memory_bytes
             || encoded_peak > context.available_memory_bytes()

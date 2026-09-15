@@ -249,3 +249,35 @@ fn normalize_ragged_table(
     }
     Ok(())
 }
+
+// Keep the delivered IR shallow while preserving every cell's content in source order.
+// The streaming XML parser can process much deeper source structures.
+fn append_table(
+    rows: Vec<TableRow>,
+    flattened_nested_content: bool,
+    tables: &mut [TableBuild],
+    part: &str,
+    state: &mut ParseState,
+) -> Result<(), ConversionError> {
+    if tables.len() >= into_markdown_core::MAX_DOCUMENT_DEPTH / 2
+        || (flattened_nested_content && !tables.is_empty())
+    {
+        let parent = tables.last_mut().expect("deep table has a parent");
+        parent.flattened_nested_content = true;
+        for row in rows {
+            for cell in row.cells {
+                parent.cell_blocks.extend(cell.blocks);
+            }
+        }
+        state.warning("word.tableDepthFlattened",
+            "Deeply nested table cells are retained in source order with simplified structure.", part);
+        return Ok(());
+    }
+    let node = state.node(Block::Table { rows, alignments: Vec::new() }, part)?;
+    if let Some(parent) = tables.last_mut() {
+        parent.cell_blocks.push(node);
+    } else {
+        state.document.blocks.push(node);
+    }
+    Ok(())
+}

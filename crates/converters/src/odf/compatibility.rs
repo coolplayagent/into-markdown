@@ -1,5 +1,5 @@
 //! Inert producer metadata encountered in real ODF packages. Semantic content still goes
-//! through the regular ODF parsers; this is not a fallback for unknown body elements.
+//! through the regular ODF parsers.
 use super::model::{
     DRAW_NS, FO_NS, META_NS, NUMBER_NS, OFFICE_NS, PRESENTATION_NS, STYLE_NS, SVG_NS, TABLE_NS,
     TEXT_NS,
@@ -21,6 +21,8 @@ pub(super) fn producer_namespace(ns: &str) -> bool {
 pub(super) fn producer_attribute(node: &XmlNode, attr: &Attr) -> bool {
     let local = attr.name.local.as_str();
     match attr.name.ns.as_str() {
+        TEXT_NS if node.is(DRAW_NS, "frame") => local == "anchor-page-number",
+        TABLE_NS if node.is(TABLE_NS, "table-row") => local == "visibility",
         FO_NS if node.is(DRAW_NS, "text-box") => matches!(local, "min-height" | "min-width"),
         GRDDL_NS => {
             local == "transformation"
@@ -55,6 +57,12 @@ pub(super) fn producer_attribute(node: &XmlNode, attr: &Attr) -> bool {
 // ignores their layout while consuming text/list styles separately. All descendants are
 // still checked for active content, namespaces and XML/resource limits.
 pub(super) fn layout_definition(node: &XmlNode, parent: &XmlNode) -> bool {
+    if node.is(CALCEXT_NS, "conditional-formats") && parent.is(TABLE_NS, "table") {
+        return true;
+    }
+    if node.is(LOEXT_NS, "theme") && parent.is(OFFICE_NS, "styles") {
+        return true;
+    }
     ((parent.is(OFFICE_NS, "document-styles") || parent.is(OFFICE_NS, "master-styles"))
         && node.is(DRAW_NS, "layer-set"))
         || (parent.is(OFFICE_NS, "font-face-decls") && node.is(STYLE_NS, "font-face"))
@@ -112,7 +120,10 @@ pub(super) fn layout_definition(node: &XmlNode, parent: &XmlNode) -> bool {
             ))
         || (parent.is(OFFICE_NS, "spreadsheet")
             && node.name.ns == TABLE_NS
-            && matches!(node.name.local.as_str(), "calculation-settings" | "named-expressions"))
+            && matches!(
+                node.name.local.as_str(),
+                "calculation-settings" | "named-expressions" | "database-ranges"
+            ))
         || (node.is(STYLE_NS, "map") && parent.is(STYLE_NS, "style"))
         || (parent.name.ns == DRAW_NS
             && node.name.ns == DRAW_NS
@@ -130,34 +141,18 @@ pub(super) fn layout_definition(node: &XmlNode, parent: &XmlNode) -> bool {
 pub(super) fn layout_metadata_element(node: &XmlNode) -> bool {
     let local = node.name.local.as_str();
     match node.name.ns.as_str() {
-        STYLE_NS => matches!(
+        CALCEXT_NS => matches!(
             local,
-            "background-image"
-                | "columns"
-                | "default-page-layout"
-                | "drawing-page-properties"
-                | "footer"
-                | "footer-first"
-                | "footer-left"
-                | "footer-style"
-                | "footnote-sep"
-                | "handout-master"
-                | "header"
-                | "header-first"
-                | "header-left"
-                | "header-style"
-                | "header-footer-properties"
-                | "list-level-label-alignment"
-                | "list-level-properties"
-                | "map"
-                | "presentation-page-layout"
-                | "region-left"
-                | "region-right"
-                | "ruby-properties"
-                | "section-properties"
-                | "tab-stop"
-                | "tab-stops"
+            "conditional-formats"
+                | "conditional-format"
+                | "condition"
+                | "color-scale"
+                | "color-scale-entry"
+                | "data-bar"
+                | "formatting-entry"
+                | "icon-set"
         ),
+        STYLE_NS => style_layout_metadata(local),
         DRAW_NS => matches!(
             local,
             "fill-image"
@@ -201,6 +196,14 @@ pub(super) fn layout_metadata_element(node: &XmlNode) -> bool {
                 | "null-date"
                 | "named-expressions"
                 | "named-range"
+                | "database-ranges"
+                | "database-range"
+                | "filter"
+                | "filter-condition"
+                | "filter-and"
+                | "filter-or"
+                | "sort"
+                | "sort-by"
         ),
         PRESENTATION_NS => matches!(
             local,
@@ -212,15 +215,59 @@ pub(super) fn layout_metadata_element(node: &XmlNode) -> bool {
                 | "placeholder"
                 | "settings"
         ),
-        LOEXT_NS => matches!(local, "graphic-properties" | "fill-character" | "text"),
+        LOEXT_NS => matches!(
+            local,
+            "graphic-properties"
+                | "fill-character"
+                | "text"
+                | "theme"
+                | "theme-colors"
+                | "color"
+                | "gradient-stop"
+        ),
+        SVG_NS => matches!(local, "font-face-src" | "font-face-uri" | "font-face-format"),
         META_NS => local == "template",
         _ => false,
     }
 }
 
+fn style_layout_metadata(local: &str) -> bool {
+    matches!(
+        local,
+        "background-image"
+            | "columns"
+            | "default-page-layout"
+            | "drawing-page-properties"
+            | "footer"
+            | "footer-first"
+            | "footer-left"
+            | "footer-style"
+            | "footnote-sep"
+            | "handout-master"
+            | "header"
+            | "header-first"
+            | "header-left"
+            | "header-style"
+            | "header-footer-properties"
+            | "list-level-label-alignment"
+            | "list-level-properties"
+            | "map"
+            | "presentation-page-layout"
+            | "region-left"
+            | "region-right"
+            | "ruby-properties"
+            | "section-properties"
+            | "tab-stop"
+            | "tab-stops"
+    )
+}
+
 pub(super) fn standard_attribute(node: &XmlNode, attr: &Attr) -> bool {
     let local = attr.name.local.as_str();
     match attr.name.ns.as_str() {
+        TABLE_NS if node.name.ns == DRAW_NS => {
+            matches!(local, "end-cell-address" | "end-x" | "end-y" | "table-background")
+        }
         STYLE_NS if node.is(DRAW_NS, "frame") => matches!(local, "rel-width" | "rel-height"),
         OFFICE_NS if node.is(DRAW_NS, "a") || node.is(TEXT_NS, "a") => local == "name",
         super::model::XML_NS if node.name.ns == DRAW_NS => local == "id",

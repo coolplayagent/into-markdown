@@ -40,9 +40,9 @@ OCR_COMPONENTS = ["onnxruntime-cpu", "ppocrv6-tiny-detector-onnx-model", "ppocrv
 CORE_COMPONENTS = ["pdfium"]
 SPEECH_COMPONENTS = ["ffmpeg", "onnxruntime-cpu", "whisper-small", "silero-vad-half-onnx-model", "3dspeaker-eres2net-base-onnx-model"]
 SPEECH_TRANSCRIPTION_MEMORY_BYTES = 1536 * 1024 * 1024
-# Keep the coordinator plus authenticated ONNX worker inside a finite sandbox
-# while allowing the measured startup footprint of ordinary scanned pages.
-OCR_PROCESS_GROUP_MEMORY_BYTES = 2048 * 1024 * 1024
+# Package metadata permits the exact JSON integer range. The host assigns each
+# OCR worker its actual allowance from the remaining request memory budget.
+OCR_PROCESS_GROUP_MEMORY_BYTES = (1 << 53) - 1
 FIXTURES = [
     "drawio/normal.drawio", "drawio/compressed.drawio",
     "docx/normal.docx", "docx/corrupt.docx", "epub/normal.epub", "msg/normal.msg",

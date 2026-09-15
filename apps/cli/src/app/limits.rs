@@ -64,6 +64,8 @@ mod tests {
                 assert!(Cli::try_parse_from(["into-md", flag, invalid]).is_err());
             }
         }
-        assert!(Cli::try_parse_from(["into-md", "--max-pdf-page-objects", "10000001"]).is_err());
+        assert!(Cli::try_parse_from(["into-md", "--max-pdf-page-objects", "10000001"]).is_ok());
+        assert!(Cli::try_parse_from(["into-md", "--max-pdf-page-objects", "2147483647"]).is_ok());
+        assert!(Cli::try_parse_from(["into-md", "--max-pdf-page-objects", "2147483648"]).is_err());
     }
 }

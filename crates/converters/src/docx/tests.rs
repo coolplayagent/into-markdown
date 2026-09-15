@@ -823,6 +823,9 @@ mod tests {
             }
             other => panic!("expected corrupt JPEG codestream rejection, got {other:?}"),
         }
+        let mut image_limits = strict_options();
+        image_limits.limits.max_decompressed_bytes = 1024 * 1024 * 1024;
+        let image_context = ExecutionContext::new(ExecutionOptions::default(), image_limits.limits.clone());
         assert!(matches!(
             convert_docx(
                 &image_package(
@@ -830,8 +833,8 @@ mod tests {
                     "image/png",
                     &resource_bounded_header,
                 ),
-                &strict_options(),
-                &context(),
+                &image_limits,
+                &image_context,
             ),
             Err(ConversionError::ResourceLimit { limit: "max_decompressed_bytes", .. })
         ));
@@ -1067,6 +1070,34 @@ mod tests {
                 other => panic!("expected stable table diagnostic, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn deeply_nested_tables_preserve_text_with_shallow_delivered_structure() {
+        let mut document = format!(r#"<w:document xmlns:w="{WORD}"><w:body>"#);
+        for _ in 0..300 { document.push_str("<w:tbl><w:tr><w:tc>"); }
+        let body = "Deep readable body ".repeat(12_000);
+        document.push_str(&format!("<w:p><w:r><w:t>{body}</w:t></w:r></w:p>"));
+        for _ in 0..300 { document.push_str("</w:tc></w:tr></w:tbl>"); }
+        document.push_str("</w:body></w:document>");
+        let bytes = base(document.as_bytes(), &[]);
+        let output = convert_docx(&bytes, &ConversionOptions::default(), &context()).unwrap();
+        output.document.validate().unwrap();
+        assert!(output.diagnostics.iter().any(|d| d.code == "word.tableDepthFlattened"));
+        let rendered = format!("{:?}", output.document);
+        assert_eq!(rendered.matches("Deep readable body").count(), 12_000);
+        assert_eq!(rendered.matches("Table {").count(), 1);
+        use into_markdown_core::MarkdownRenderer as _;
+        let planned = into_markdown_render_markdown::GfmRenderer.planned_markdown_bytes(
+            &output.document, &output.assets, &ConversionOptions::default(), &context()).unwrap();
+        assert!(planned < 32 * 1024 * 1024, "deep source text must not multiply the rendering budget: {planned}");
+        assert_eq!(render(&output.document, &output.assets, &ConversionOptions::default()).unwrap().matches("Deep readable body").count(), 12_000);
+        let mut options = ConversionOptions::default();
+        options.limits.max_nesting_depth = 256;
+        assert!(matches!(convert_docx(&bytes, &options, &context()),
+            Err(ConversionError::ResourceLimit { limit: "max_nesting_depth", .. })));
+        assert!(matches!(convert_docx(&bytes, &strict_options(), &context()),
+            Err(ConversionError::Malformed { .. })));
     }
 
     #[test]

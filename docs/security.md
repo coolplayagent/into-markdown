@@ -22,8 +22,8 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - `ResourceLimits` 限制输入大小、解压后字节数、归档条目数、嵌套深度、页数和
   保留资源数，并限制实现显式计费的内存与请求临时文件字节数。所有累加使用 checked
   arithmetic，临时文件由执行上下文负责 RAII 清理。
-- 本地调用方只能为未显式设置的资产软额度授予一次精确提升权限；提升不能改变请求开始时的
-  `max_memory_bytes`，也不能提高解压、嵌套、归档完整性、模型结构或 Web profile 上限。
+- API 调用方可显式为未固定的资产软额度授予一次精确提升权限；提升不能改变请求开始时的
+  `max_memory_bytes`，也不能提高解压、嵌套、归档完整性或模型结构约束。
   显式额度始终不可突破。
 - raster 图片与 OCR 源图不依赖固定宽高或固定像素阈值。非零尺寸经 checked pixel/stride/
   decoded/working-set 规划后，由解压、内存、输入和资产预算约束；第三方 decoder 接收已认证
@@ -90,7 +90,7 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   控件，也不调用网络。`script`、`style`、`template`、`noscript`、隐藏/inert/aria-hidden 内容
   在语义遍历边界整体丢弃；SVG/MathML 内部链接和图片不能穿透为资源。`base` 只解析引用，
   不代表网络授权；外部图片仅作为 canonical HTTP(S) audit Asset，bytes 为空且不会自动 fetch。
-  HTML 输入、tree event、DOM node、nesting、IR inline/node、table 与自有逻辑内存分别受硬限制
+  HTML 输入、DOM node、nesting、IR inline/node、table 与自有逻辑内存分别受预算限制；tree event 持续检查取消和超时
   并定期 checkpoint。parser logical work 是协作式预算，不声称覆盖 html5ever 内部 allocator、
   metadata 或进程 RSS。预算错误后 TreeSink 进入 poisoned 状态，后续回调保持 O(1)、不分配且
   不改变树，最初的 limit/cancel/deadline 错误保持权威。
@@ -99,7 +99,7 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   canonical HTTP(S) hyperlink 数据变换，绝不授权网络。PNG/JPEG pict 在保留前受尺寸、
   单项/总资源、完整像素解码和请求内存预算约束；EMF/WMF 不解析。group、control、数字、
   Unicode fallback、decoded text、IR/table/asset/diagnostic 与 heap capacity 均有 checked
-  hard limit，并在长扫描循环 checkpoint。font table 最多接受 4096 项，使用分配前计费并按
+  预算与整数边界，并在长扫描循环 checkpoint。font table 使用分配前计费并按
   实际 capacity 补差的 `Vec`；destination 结束后原地排序/去重，正文只做 binary search。
   容器内 RTF helper 不接受 `Services`，不能重建 context 或重置 limit，返回值继续持有同一
   request memory lease。
@@ -148,7 +148,7 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   含 NUL 时不会调用 native loader。runtime snapshot 的固定、已审计制品加载内存属于进程级
   loader 生命周期，不混入请求 credit；
   句柄受 Rust 父子生命周期约束且 native 调用串行化。转换循环在页、图片与编码行执行取消/
-  deadline checkpoint，图片和页面 render 同时受 PDFium 上限、`ExecutionContext` memory、
+  deadline checkpoint，图片和页面 render 使用请求的 `ExecutionContext` memory、
   单 asset 与总 asset 上限控制。转换器把 IR/asset 的 live memory lease 随 `ConverterOutput`
   转交 Engine，并继续随 `ConversionResult` 保持到调用方释放。Engine 在 converter/renderer 调用前
   取得经过同一 context 认证的 preflight reservation，并按完整 retained IR、asset、diagnostic、
@@ -191,8 +191,8 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   保证并发调用只有一个 winner，其他调用返回该持久结果。未知 schema、截断 JSON、阶段
   与 payload 不一致、伪造成功历史均返回稳定 `recovery` 错误。阶段通过同目录私有临时
   文件、文件 `fsync` 和 no-replace hard link 发布；临时残留永远不代表成功，写入同时
-  受请求 temporary budget 与 2 GiB 上限约束。固定 4 KiB 状态尾块允许 payload-free
-  inspect；完整读取在 typed serde 前做 size/depth/width/value 预检并预留原始、字符串和
+  受请求 temporary budget 约束。固定 4 KiB 状态尾块允许 payload-free
+  inspect；完整读取在 typed serde 前校验 depth，并按实际大小预留原始、字符串和
   结构内存。资源字节使用声明解码长度的规范 padded base64，在分配前验证编码、
   单资源与总资源上限，typed wire/base64/解码字节的共存峰值也受同一内存预算。
   恢复 succeeded 还会重验资源 ID/MIME/外部 URI、嵌套引用、diagnostics、
@@ -204,7 +204,8 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   NaN/Infinity 和 `[0,1]` 外概率稳定拒绝。概率验证、bitmap 构造、score 扫描、长预处理
   与候选循环执行协作式 checkpoint。独立图像转换器对 PNG chunk/CRC、JPEG marker/entropy、
   WebP RIFF/frame、BMP file/DIB/pixel range、TIFF/BigTIFF IFD/strip/tile range 做完整 envelope
-  审计，所有长扫描每 4 KiB checkpoint 后才进入固定 Rust decoder；ICC/profile、Exif/XMP
+  审计；TIFF 通过偏移定位目录与像素，保留未使用字节，检查实际数据区间的越界和重叠。
+  所有长扫描每 4 KiB checkpoint 后才进入固定 Rust decoder；ICC/profile、Exif/XMP
   自由文本和 active payload 均不执行，仅提取受界数字方向与 DPI。调用 `imageproc`/`clipper2-rust`
   前按 model pixels 和最大几何结构保留请求逻辑内存，并把 tensor reservation 保持到
   runtime 与后处理结束；这只表示请求 heap capacity 的保守逻辑计费，不是 allocator
@@ -259,8 +260,8 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
 - OCR 识别只消费检测器给出的 raw-source `CropDescriptor`，不会再次应用 EXIF orientation。
   四点轴、面积、单 crop pixels 和宽高比先校验；官方 cubic/replicate 透视中间图、resize
   tensor、排序槽位、runtime 输出和 CTC String/Vec 均在分配前以 checked arithmetic 预留。
-  batch width 上限 3200，输出只接受 finite float32 `[N,T,6906]`，class/timestep/decoded bytes
-  具有独立硬上限。所有长循环、batch 和 runtime 前后执行 cancellation/deadline checkpoint；
+  batch width 按原始文字区域比例动态展开，输出只接受 finite float32 `[N,T,6906]`。
+  识别配置中的显式数量限制和统一请求内存预算约束分配，避免固定宽度导致整页 OCR 失败。所有长循环、batch 和 runtime 前后执行 cancellation/deadline checkpoint；
   任一失败不写缓存、不返回部分识别结果。
 - PDFium 链接规划为 `best-effort` 预留最坏情况下的诊断容量。物化 URI 含内部 NUL 或无效
   编码时省略整条链接并输出就近 `pdf.linkOmitted`；`strict` 返回类型化链接错误。URI 长度
@@ -311,14 +312,13 @@ unavailable。平台 address-space ceiling 与模型 session/run、`max_session_
 macOS ARM64 的 1 TiB ceiling 用于容纳 dyld/shared-cache/allocator 的稀疏虚拟地址预留，
 不表示 RSS 或物理可用内存；约 8 TiB Expand fixture 验证攻击输出明显高于该硬边界。
 `ExecutionContext` 在克隆输入前预留输入值/shape 副本、输入槽位与 ORT backing，在执行前
-按输出 contract 的最大 shape 预留 native 输出、返回值/shape 副本，并全程持有 run scratch
+对有限输出 contract 按最大 shape 预留 native 输出与返回值副本；符号动态输出使用当前请求剩余预算，返回后按实际 shape 验证输入、输出和复制工作集。两条路径全程持有 run scratch
 预算；contract metadata 的名称、shape 和结构容量计入 session 上界。输入/输出各最多 64
 个，名称最多 256 UTF-8 字节，rank 最多 16；所有元素数和字节数用 checked arithmetic。
 worker 直接经 `ort-sys` C API 先把 IO count 读入标量，名称读入固定 257-byte allocator，
 rank/dim 读入 `[i64; 16]`，检查后才分配 metadata。ORT 返回后同样先把输出 rank/dim 读入
 固定栈，在任何 `GetTensorMutableData`、Rust slice/`Vec` 或值复制前验证 Exact/Dynamic
-上界、元素数和字节数；越界时直接释放 native tensor。无最大值的动态维度不是合法
-contract。IPC 具有固定 header、version、单调 request id、消息数/载荷/模型/tensor 上限；
+上界、元素数和字节数；越界时直接释放 native tensor。符号动态维度的实际分配受请求预算与 worker 物理内存预算约束。IPC 具有固定 header、version、单调 request id、消息数/载荷/模型/tensor 上限；
 stderr 最多保留 64 KiB。创建前后、等待 single-flight、IPC 等待和推理前后均检查取消和
 deadline；失败会 kill 并 wait/reap worker，不留下孤儿进程。GraphProto IO 在 prost decode
 前经字段数、长度、count、rank 和递归深度有界的 wire preflight，并与 authority/native
@@ -407,7 +407,7 @@ identity 复核及 fd-relative rename。父目录、目标、临时文件或符�
 
 浏览器文件名仅是最多 255 bytes 的 display metadata；分隔符、控制字符、`.` 和 `..` 均
 拒绝，永不解释为自由路径或 URL。请求 body 逐 chunk 消费，每次实际写入前检查单文件
-512 MiB 与 managed root 14,356 MiB ceiling；断连会 drop guard 并清理未绑定任务的 incoming
+共享 `max_input_bytes` 与 managed root 存储额度；断连会 drop guard 并清理未绑定任务的 incoming
 capability。数据库不保存输入正文或 Provider secret。
 
 durable 状态机是 `pending -> running -> converted -> succeeded`。RecoveryStore 的
@@ -425,41 +425,25 @@ unlink 临时名称，只从 retained 匿名只读 fd 流式响应；原 publish
 记录重解释为 Web publication。schema v1/v2 中缺少 AssetId/filename/media-type 的 legacy asset
 会无损迁移并保留 `None`；v4 另记录首次进入 terminal 状态的时间，固定操作不会重置保留年龄；
 新写入必须带完整 canonical metadata。Web 后端另在成功、重启、
-查询与下载边界要求恰好一份 Markdown/Document IR/diagnostics/bundle、最多 124 assets、唯一
-storage key/AssetId；通用 TaskStore 累计最多 2 GiB，Web profile publication 累计最多
-512 MiB，且 manifest 与 TaskStore 逐字段相同。损坏的非成功
+查询与下载边界要求恰好一份 Markdown/Document IR/diagnostics/bundle、完整 assets 清单、唯一
+storage key/AssetId；字节计数采用可表示的 SQLite 有符号整数，manifest 与 TaskStore 逐字段相同。损坏的非成功
 published set 只在 descriptor-bound 验证所有成员为私有普通单链接文件后 quarantine 删除，任务
 稳定为 failed；持久化本身不可用时停止 dequeue，worker 不 panic，也不伪造成功。
 
 队列以接收/恢复顺序 FIFO dequeue，最多四 worker 并行；每项有独立 cancellation token、
-30 分钟 deadline 和 Engine ResourceLimits。单项 error/panic 隔离为 failed。最后一个 backend
+Engine ResourceLimits；转换超时遵循与 CLI 相同的默认策略。单项 error/panic 隔离为 failed。最后一个 backend
 handle drop 会取消在途任务、唤醒并 join 全部 worker。启动前只清理 canonical incoming/stage
 残留；遇到额外成员、symlink、special file 或外部 hardlink 会拒绝而非递归删除。
 
-Web profile 把 request memory 与 temporary 上限约束为 256 MiB、总 assets 为 128 MiB；每个
-执行任务在首次 TaskStore 状态 mutation 前保守预留 1 GiB payload 加 4 MiB metadata headroom：
-两个可同时存在的 checkpoint 各由 256 MiB temporary ceiling 约束，Web publication 另限
-512 MiB，TaskStore/WAL/manifest bookkeeping 另留 4 MiB。lease 覆盖转换、RecoveryStore
-提交、stage、rename 与最终 TaskStore transition；每个 lease 释放时，即使仍有其他任务在途，
-也在 quota mutex 内重新 descriptor-bound 测量 managed tree；若并发 publication 使全树测量
-暂时不可用，则把该 lease 的完整计划计入 `used`。这样未计入
-`used` 的在途写始终由 `reserved` 覆盖，持续满载 worker 也不能复用已落盘 reservation，
-全局 ceiling 精确由 10 GiB retained history、四笔各 1,028 MiB 的 worker reservation 和
-4 MiB SQLite headroom 组成；同时四个任务可取得完整保守运行资源。quota wait 使用有界 timed wait，
-计入 30 分钟总 deadline，并在 cancel/owner shutdown 时唤醒；真实清理会通知等待者，清理失败
-不虚减 quota。
+Web 与 CLI 共用 Core 转换资源策略；省略的限制保持共用默认值，自动内存预算由运行服务的机器计算。
+前端明确提交 best-effort 与 OCR auto，高级设置只提交用户修改的限制。转换恢复检查点遵循请求的
+临时文件预算；输出发布使用真实写盘结果，保留取消、空间不足、权限错误和原子回滚。
 
-14,356 MiB managed ceiling 中永久保留 4 MiB 给 TaskStore/SQLite WAL；每次没有 execution lease 的
-create 或 terminal/recovery mutation 在 quota mutex 内串行预留 1 MiB；没有 execution lease 的
-exact-set success reconciliation 预留完整 4 MiB。每次写入前都以 retained root 重测物理占用与
-所有活跃 reservation，写后再次重测且验证实际增长不超过 reservation。
-admission failure 的批量收敛遇到首个 reservation 或持久化错误就停止 backend 和后续 mutation，
-不会吞错后继续消耗应急空间。
-upload、snapshot 和 conversion lease 只能消费其余 data ceiling。这样 dequeue 前取消、quota
-等待取消/超时、恢复缺对象，以及 admission failure 的 Failed/Cancelled/Interrupted transition
-在 data ceiling 已满时仍有物理写入空间。每次这类 transition 后立即在 quota mutex 内重测
-managed tree，把实际数据库增长转入 `used`；重测失败则保守计入完整 metadata headroom，令后续
-data reservation 只能使用扣除该最坏增长后的余额，不能重复消费应急空间。
+历史保留策略默认 30 天和 10 GiB，用于清理历史任务。运行中的文件及下载快照独立计数，
+每次释放后重新测量受管理目录。元数据操作仍串行记账并保留 4 MiB 的数据库增长预留；
+该预留用于校验 TaskStore/WAL 增长，不作为正文、图片数量或转换输出大小的上限。
+附件清单按实际内容增长，读取时校验层级、文件身份、完整成员集合与 SHA-256。
+写盘失败会清理未提交的 stage，原有已发布结果保持完整。
 
 HTTP upload 具有 30 秒 idle 与 30 分钟 total deadline，并监听 server shutdown；artifact response
 具有相同 total deadline和 shutdown cancellation。每个 response 另有独立 timer 持有可撤销的

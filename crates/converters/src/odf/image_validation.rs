@@ -8,7 +8,10 @@ use std::path::Path;
 pub(super) fn unsupported_media(media_type: &str) -> bool {
     matches!(
         media_type,
-        "image/svg+xml" | "application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\""
+        "image/svg+xml"
+            | "application/pdf"
+            | "application/x-openoffice-gdimetafile"
+            | "application/x-openoffice-gdimetafile;windows_formatname=\"GDIMetaFile\""
     )
 }
 

@@ -286,13 +286,55 @@ fn adjacent_lists_aggregate_only_for_exact_identity_and_sequence() {
     assert_eq!(kind_split.document.blocks.len(), 2);
 
     for ambiguous in [
-        b"{\\rtf1\\ansi\\ls7 No marker\\par}".as_slice(),
         b"{\\rtf1\\ansi\\ls7\\ilvl1{\\listtext 1.\\tab}Nested\\par}".as_slice(),
         b"{\\rtf1\\ansi\\ls7{\\listtext 1.\\tab}One\\par{\\listtext 3.\\tab}Three\\par}".as_slice(),
         b"{\\rtf1\\ansi\\ls7{\\listtext alpha\\tab}Ambiguous\\par}".as_slice(),
     ] {
-        assert_eq!(convert(ambiguous).unwrap_err().code(), ErrorCode::Malformed);
+        let options = ConversionOptions { error_policy: ErrorPolicy::Strict, ..Default::default() };
+        let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert_eq!(
+            convert_rtf_bytes(ambiguous, &options, &context).unwrap_err().code(),
+            ErrorCode::Malformed
+        );
     }
+}
+
+#[test]
+fn uncertain_list_markers_preserve_literal_text_and_following_paragraphs() {
+    for (source, expected) in [
+        (
+            br"{\rtf1\ansi\ls7{\listtext alpha\tab}Body\par\pard Tail\par}".as_slice(),
+            "alpha BodyTail",
+        ),
+        (
+            br"{\rtf1\ansi\ls7\ilvl1{\listtext 1.\tab}Nested\par\pard Tail\par}".as_slice(),
+            "1. NestedTail",
+        ),
+    ] {
+        let output = convert(source).unwrap();
+        assert_eq!(
+            paragraph_text(&output).split_whitespace().collect::<Vec<_>>().join(" "),
+            expected
+        );
+        assert!(output.diagnostics.iter().any(|d| d.code == "rtf.list.paragraphRecovery"));
+    }
+}
+
+#[test]
+fn missing_list_marker_retains_paragraphs_with_warning_and_strict_error() {
+    let source = b"{\\rtf1\\ansi\\ls7 First item\\par Second item\\par\\pard Tail\\par}";
+    let output = convert(source).unwrap();
+    assert_eq!(paragraph_text(&output), "First itemSecond itemTail");
+    assert_eq!(
+        output.diagnostics.iter().filter(|d| d.code == "rtf.list.paragraphRecovery").count(),
+        2
+    );
+    let options = ConversionOptions { error_policy: ErrorPolicy::Strict, ..Default::default() };
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    assert_eq!(
+        convert_rtf_bytes(source, &options, &context).unwrap_err().code(),
+        ErrorCode::Malformed
+    );
 }
 
 #[test]
@@ -312,10 +354,13 @@ fn table_shape_and_nested_structural_nodes_fail_at_parser_limits() {
         convert(b"{\\rtf1\\ansi\\trowd\\itap2 A\\cell\\row}").unwrap_err().code(),
         ErrorCode::ResourceLimit
     );
+    let table_list = b"{\\rtf1\\ansi\\trowd\\intbl\\ls1{\\listtext 1.\\tab}A\\cell\\row}";
+    let recovered = convert(table_list).unwrap();
+    assert!(recovered.diagnostics.iter().any(|d| d.code == "rtf.list.paragraphRecovery"));
+    let strict = ConversionOptions { error_policy: ErrorPolicy::Strict, ..Default::default() };
+    let context = ExecutionContext::new(ExecutionOptions::default(), strict.limits.clone());
     assert_eq!(
-        convert(b"{\\rtf1\\ansi\\trowd\\intbl\\ls1{\\listtext 1.\\tab}A\\cell\\row}")
-            .unwrap_err()
-            .code(),
+        convert_rtf_bytes(table_list, &strict, &context).unwrap_err().code(),
         ErrorCode::Malformed
     );
     assert_eq!(
@@ -377,11 +422,9 @@ fn control_word_and_hex_run_work_are_incrementally_bounded() {
     );
     let mut parser = super::parser::Parser::new(source, &options, &context).unwrap();
     parser.offset = source.windows(2).position(|value| value == b"\\'").unwrap();
-    parser.control_count = super::parser::MAX_CONTROLS - 1;
-    assert!(matches!(
-        parser.control().unwrap_err(),
-        ConversionError::ResourceLimit { limit: "rtf_control_count", .. }
-    ));
+    parser.control_count = 1_000_000 - 1;
+    parser.control().unwrap();
+    assert!(parser.control_count > 1_000_000);
 
     let mut parser = super::parser::Parser::new(source, &options, &context).unwrap();
     parser.offset = source.windows(2).position(|value| value == b"\\'").unwrap();
@@ -603,13 +646,21 @@ fn shape_picture_wrapper_preserves_block_order_and_rejects_other_children() {
     assert!(matches!(output.document.blocks[2].block, Block::Paragraph(_)));
     assert_eq!(paragraph_text(&output), "beforeafter");
 
+    let text_frame = format!(
+        "{{\\rtf1{{\\shp{{\\*\\shpinst{{\\sp{{\\sn shapeType}}{{\\sv 202}}}}{{\\shptxt before{{\\*\\shppict{{\\pict\\pngblip {png}}}}}after}}}}}}}}"
+    );
+    let frame = convert(text_frame.as_bytes()).unwrap();
+    assert_eq!(paragraph_text(&frame), "beforeafter");
+    assert_eq!(frame.assets.len(), 1);
+    assert_eq!(frame.document.blocks.len(), 3);
+
     let no_picture =
         convert(b"{\\rtf1\\ansi{\\*\\shppict{\\object{\\pict\\pngblip 00}}}safe}").unwrap();
     assert!(no_picture.assets.is_empty());
     assert_eq!(paragraph_text(&no_picture), "safe");
 
     let table_source = format!(
-        "{{\\rtf1\\ansi\\trowd\\cellx100\\intbl before{{\\pict\\pngblip {png}}}after\\cell\\row}}"
+        "{{\\rtf1\\ansi\\trowd\\cellx100\\pard\\plain\\intbl before{{\\pict\\pngblip {png}}}after\\cell\\row}}"
     );
     let table = convert(table_source.as_bytes()).unwrap();
     let Block::Table { rows, .. } = &table.document.blocks[0].block else { panic!("table") };
@@ -666,12 +717,11 @@ fn font_table_is_bounded_deduplicated_and_binary_searched() {
     assert_eq!(paragraph_text(&duplicate), "中文");
 
     let mut source = String::from("{\\rtf1\\ansi{\\fonttbl");
-    for font in 0..=super::parser::MAX_RTF_FONTS {
+    for font in 0..=4096 {
         write!(&mut source, "{{\\f{font}\\fcharset0 F;}}").unwrap();
     }
     source.push_str("}x}");
-    let error = convert(source.as_bytes()).unwrap_err();
-    assert!(matches!(error, ConversionError::ResourceLimit { limit: "rtf_font_count", .. }));
+    assert_eq!(paragraph_text(&convert(source.as_bytes()).unwrap()), "x");
 }
 
 #[test]
@@ -731,4 +781,16 @@ fn futures_lite_for_test<T>(mut future: BoxFuture<'_, T>) -> T {
         Poll::Ready(value) => value,
         Poll::Pending => panic!("test future unexpectedly pending"),
     }
+}
+
+#[test]
+fn unsigned_utf16_producer_units_decode_with_strict_diagnostic() {
+    let source = br"{\rtf1\ansi\uc1\u65313?\par}";
+    assert_eq!(paragraph_text(&convert(source).unwrap()), "Ａ");
+    let options = ConversionOptions { error_policy: ErrorPolicy::Strict, ..Default::default() };
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    assert!(matches!(
+        convert_rtf_bytes(source, &options, &context),
+        Err(ConversionError::Malformed { .. })
+    ));
 }

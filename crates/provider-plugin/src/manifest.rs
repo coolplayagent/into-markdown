@@ -14,6 +14,7 @@ pub const PROVIDER_MANIFEST_NAME: &str = "provider.json";
 const MAX_PLUGIN_FILES: usize = 25_000;
 const MAX_PROVIDER_MANIFEST_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_CAPABILITIES: usize = 64;
+const MAX_JSON_EXACT_INTEGER: u64 = (1_u64 << 53) - 1;
 const MAX_DECLARED_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 
 /// Host API range accepted by a package.
@@ -238,7 +239,7 @@ impl PluginManifest {
                 || resources.max_output_bytes == 0
                 || resources.max_output_bytes > 24 * 1024 * 1024
                 || resources.max_memory_bytes < 32 * 1024 * 1024
-                || resources.max_memory_bytes > MAX_DECLARED_BYTES
+                || resources.max_memory_bytes > MAX_JSON_EXACT_INTEGER
                 || resources.max_temporary_bytes > MAX_DECLARED_BYTES
                 || resources.timeout_ms == 0
                 || resources.timeout_ms > 24 * 60 * 60 * 1000
@@ -444,6 +445,15 @@ mod tests {
     #[test]
     fn validates_complete_capability_authority() {
         manifest().validate().unwrap();
+    }
+
+    #[test]
+    fn request_sized_memory_authority_preserves_exact_protocol_numbers() {
+        let mut manifest = manifest();
+        manifest.capabilities[0].resources.max_memory_bytes = MAX_JSON_EXACT_INTEGER;
+        manifest.validate().unwrap();
+        manifest.capabilities[0].resources.max_memory_bytes += 1;
+        assert!(manifest.validate().is_err());
     }
 
     #[test]

@@ -11,7 +11,6 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 FIXTURE_ID = "ocr-english-clear-1"
 MEMORY_BYTES = 2 * 1024**3
-SIGNED_WORKER_BYTES = 2048 * 1024**2
 MIN_EFFECTIVE_WORKER_BYTES = 1024 * 1024**2
 
 
@@ -43,7 +42,13 @@ def verify_result(document, report, expected, error_type):
             or not 0 < usage.get("sharedLeasePeakBytes", 0) <= MEMORY_BYTES
             or runtime.get("requests") != 1
             or runtime.get("recognitionMemoryRefusals") != 0
-            or not MIN_EFFECTIVE_WORKER_BYTES <= worker_min == worker_max <= SIGNED_WORKER_BYTES
+            or runtime.get("imageSources") != 1
+            or runtime.get("imagesAttempted") != 1
+            or runtime.get("imagesCompleted") != 1
+            or runtime.get("imagesWithText") != 1
+            or runtime.get("imagesFailed") != 0
+            or runtime.get("imagesSkipped") != 0
+            or not MIN_EFFECTIVE_WORKER_BYTES <= worker_min == worker_max <= MEMORY_BYTES
             or usage.get("ocr", {}).get("recognizedChars", 0) < len(expected)):
         raise error_type("installed OCR budget or contribution evidence is incomplete")
     return usage

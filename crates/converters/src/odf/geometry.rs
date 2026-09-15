@@ -144,6 +144,12 @@ pub(super) fn parse_transform(value: Option<&str>) -> Result<Transform, Conversi
                 let (sin, cos) = angle.sin_cos();
                 Transform { a: cos, b: sin, c: -sin, d: cos, e: 0.0, f: 0.0 }
             }
+            ("skewX", [angle]) => {
+                Transform { c: parse_finite(angle, "skewX")?.tan(), ..Transform::IDENTITY }
+            }
+            ("skewY", [angle]) => {
+                Transform { b: parse_finite(angle, "skewY")?.tan(), ..Transform::IDENTITY }
+            }
             ("translate", [x]) => Transform { e: parse_length(x)?, ..Transform::IDENTITY },
             ("translate", [x, y]) => {
                 Transform { e: parse_length(x)?, f: parse_length(y)?, ..Transform::IDENTITY }

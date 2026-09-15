@@ -13,6 +13,25 @@ mod page_lifetime;
 mod resilience;
 
 #[test]
+fn shared_page_ceiling_reaches_runtime_loading_for_both_policies() {
+    let nonce = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let missing =
+        std::env::temp_dir().join(format!("into-md-missing-pdfium-{}-{nonce}", std::process::id()));
+    assert!(!missing.exists());
+    for policy in
+        [into_markdown_core::ErrorPolicy::BestEffort, into_markdown_core::ErrorPolicy::Strict]
+    {
+        let mut options = ConversionOptions { error_policy: policy, ..Default::default() };
+        options.limits.max_pages = u32::MAX;
+        let error = match super::pages::load_runtime(&missing, &options) {
+            Ok(_) => panic!("missing runtime unexpectedly loaded"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ConversionError::ComponentUnavailable { .. }), "{error}");
+    }
+}
+
+#[test]
 fn direct_pdf_probe_accepts_only_the_header_or_one_utf8_bom() {
     let context = ExecutionContext::new(
         into_markdown_core::ExecutionOptions::default(),
@@ -136,6 +155,7 @@ fn native_omit_off_skips_bitmap_work_and_preserves_native_text_order() {
     assert!(scanned.diagnostics.iter().any(|diagnostic| diagnostic.code == "pdf.scannedPage"));
     drop(scanned);
     options.output.asset_mode = AssetMode::Extract;
+    options.error_policy = ErrorPolicy::Strict;
     assert!(matches!(
         convert_pdf(&path, &input, &options, &context),
         Err(ConversionError::ResourceLimit { .. })
@@ -440,6 +460,7 @@ fn character_native_and_ir_peak_has_exact_permit_boundary_before_construction() 
                     index,
                     value: 'x',
                     bounds: PdfRect { left: 1.0, bottom: 1.0, right: 2.0, top: 2.0 },
+                    origin: None,
                     font_name: Some(long_font.clone()),
                     font_size: 12.0,
                     angle_degrees: 0.0,
@@ -455,7 +476,7 @@ fn character_native_and_ir_peak_has_exact_permit_boundary_before_construction() 
         materialize_after_reserve(&low, required, || {
             let characters = materialize()?;
             ir_calls.fetch_add(1, Ordering::SeqCst);
-            text_block(1, &info, &characters)
+            text_block(1, &info, &characters, ErrorPolicy::Strict)
         })
         .is_err()
     );
@@ -469,7 +490,7 @@ fn character_native_and_ir_peak_has_exact_permit_boundary_before_construction() 
     let (block, permit) = materialize_after_reserve(&exact, required, || {
         let characters = materialize()?;
         ir_calls.fetch_add(1, Ordering::SeqCst);
-        text_block(1, &info, &characters)
+        text_block(1, &info, &characters, ErrorPolicy::Strict)
     })
     .unwrap();
     assert_eq!(native_calls.load(Ordering::SeqCst), 1);
@@ -579,6 +600,7 @@ fn character_orientation_is_expressed_in_displayed_page_coordinates() {
         index: 0,
         value: 'x',
         bounds: PdfRect { left: 10.0, bottom: 20.0, right: 20.0, top: 30.0 },
+        origin: Some((10.0, 20.0)),
         font_name: None,
         font_size: 12.0,
         angle_degrees: 0.0,
@@ -592,6 +614,10 @@ fn character_orientation_is_expressed_in_displayed_page_coordinates() {
         assert_eq!(
             provenance(1, None, Some(&character), &info).unwrap().locator.rotation_degrees,
             Some(f32::from(rotation))
+        );
+        assert_eq!(
+            provenance(1, None, Some(&character), &info).unwrap().locator.text_baseline,
+            Some(if matches!(rotation, 0 | 270) { 180.0 } else { -20.0 })
         );
     }
 
@@ -817,7 +843,9 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                     into_markdown_core::ExecutionOptions::default(),
                     into_markdown_core::ResourceLimits::default(),
                 );
-                let output = convert_pdf(&path, &input, &ConversionOptions::default(), &context)
+                let mut native_options = ConversionOptions::default();
+                native_options.ocr.policy = OcrPolicy::Off;
+                let output = convert_pdf(&path, &input, &native_options, &context)
                     .expect("both serialized conversions succeed");
                 assert_eq!(output.document.blocks.len(), 4);
                 assert!(!output.assets.is_empty());
@@ -866,12 +894,18 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                 else {
                     panic!("page")
                 };
-                let Block::Paragraph(first_inlines) = &first_blocks[0].block else {
-                    panic!("text")
-                };
-                let Inline::SourceText { provenance, .. } = &first_inlines[0] else {
-                    panic!("character")
-                };
+                let provenance = first_blocks
+                    .iter()
+                    .find_map(|node| {
+                        let Block::Paragraph(inlines) = &node.block else { return None };
+                        inlines.iter().find_map(|inline| match inline {
+                            Inline::SourceText { value, provenance, .. } if value == "R" => {
+                                Some(provenance)
+                            }
+                            _ => None,
+                        })
+                    })
+                    .expect("native source character after any preceding link annotation");
                 let first_character_bounds = provenance.locator.bounds.unwrap();
                 let raw_character = PdfRect {
                     left: first_character_bounds.x,
@@ -995,6 +1029,7 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
 
     let mut page_limited = ConversionOptions::default();
     page_limited.limits.max_pages = 3;
+    page_limited.error_policy = ErrorPolicy::Strict;
     assert!(matches!(
         convert_pdf(&path, &input, &page_limited, &context),
         Err(ConversionError::ResourceLimit { limit: "max_pages", .. })
@@ -1016,13 +1051,29 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
         metadata: SourceMetadata::default(),
     };
     assert!(matches!(
-        convert_pdf(&path, &damaged, &ConversionOptions::default(), &context),
+        convert_pdf(
+            &path,
+            &damaged,
+            &ConversionOptions {
+                error_policy: ErrorPolicy::Strict,
+                ..ConversionOptions::default()
+            },
+            &context
+        ),
         Err(ConversionError::Malformed { .. })
     ));
     let encrypted =
         ResolvedInput { bytes: Arc::from(encrypted_pdf()), metadata: SourceMetadata::default() };
     assert!(matches!(
-        convert_pdf(&path, &encrypted, &ConversionOptions::default(), &context),
+        convert_pdf(
+            &path,
+            &encrypted,
+            &ConversionOptions {
+                error_policy: ErrorPolicy::Strict,
+                ..ConversionOptions::default()
+            },
+            &context
+        ),
         Err(ConversionError::Encrypted)
     ));
 }
@@ -1044,6 +1095,34 @@ fn rotated_pdf() -> Vec<u8> {
             b"<< /Type /Annot /Subtype /Link /Rect [50 100 90 120] /Dest [4 0 R /Fit] >>".to_vec(),
         ]);
     assemble_pdf(&objects)
+}
+
+#[test]
+#[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+fn clipped_image_with_native_text_uses_page_ocr() {
+    let path = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY"));
+    let input = ResolvedInput {
+        bytes: Arc::from(one_page_fixture(
+            b"BT /F1 8 Tf 10 160 Td (Native text remains available) Tj ET\nq 100.05 0 0 200.05 0 0 cm /Im1 Do Q\n", true)),
+        metadata: SourceMetadata::default(),
+    };
+    for (policy, render) in [(OcrPolicy::Auto, true), (OcrPolicy::Off, false)] {
+        let mut options = ConversionOptions::default();
+        options.ocr.policy = policy;
+        let context = ExecutionContext::new(
+            into_markdown_core::ExecutionOptions::default(),
+            options.limits.clone(),
+        );
+        let output = convert_pdf(&path, &input, &options, &context).unwrap();
+        assert_eq!(
+            output.assets.iter().any(|asset| asset.id.0.starts_with("pdf-page-render-")),
+            render
+        );
+        assert_eq!(output.diagnostics.iter().any(|d| d.code == "pdf.pageOcrPlacement"), render);
+        assert!(!output.diagnostics.iter().any(|d| d.code == "pdf.scannedPage"));
+        drop(output);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
 }
 
 fn text_only_pdf() -> Vec<u8> {

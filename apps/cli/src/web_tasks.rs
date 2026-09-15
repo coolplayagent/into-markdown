@@ -29,7 +29,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 
-const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const STORE_METADATA_HEADROOM: u64 = 4 * 1024 * 1024;
 const STORE_MUTATION_RESERVATION: u64 = 1024 * 1024;
 const MAX_NAME_BYTES: usize = 255;
@@ -39,23 +38,14 @@ const EVENT_REPLAY_CAPACITY: usize = 64;
 const EVENT_BROADCAST_CAPACITY: usize = 128;
 const MAX_ALLOWED_HOSTS: usize = 64;
 const COPY_CHUNK: usize = 64 * 1024;
-const MAX_CHECKPOINT_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_WEB_MEMORY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_WEB_TEMPORARY_BYTES: u64 = 32 * 1024 * 1024 * 1024;
-const MAX_TASK_DURABLE_GROWTH: u64 = 512 * 1024 * 1024;
-const MAX_TASK_METADATA_GROWTH: u64 = 4 * 1024 * 1024;
-const MAX_TASK_TOTAL_DURABLE_GROWTH: u64 =
-    2 * MAX_CHECKPOINT_BYTES + MAX_TASK_DURABLE_GROWTH + MAX_TASK_METADATA_GROWTH;
+// Stored lengths use signed SQLite integers. Conversion resources are governed
+// by the shared Core policy; actual filesystem write failures remain terminal.
+const MAX_ARTIFACT_STORAGE_BYTES: u64 = i64::MAX as u64;
+const TASK_METADATA_RESERVATION: u64 = STORE_METADATA_HEADROOM;
 const DEFAULT_RETENTION_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 const DEFAULT_RETENTION_BYTES: u64 = 10 * 1024 * 1024 * 1024;
-// Retained history plus one conservative durable-growth reservation per worker
-// and an isolated SQLite metadata reserve. This keeps the 10 GiB policy
-// reachable without allowing concurrent work to cross the managed ceiling.
-const MAX_GLOBAL_BYTES: u64 = DEFAULT_RETENTION_BYTES
-    + (MAX_WORKERS as u64 * MAX_TASK_TOTAL_DURABLE_GROWTH)
-    + STORE_METADATA_HEADROOM;
+const MAX_GLOBAL_BYTES: u64 = i64::MAX as u64;
 const MAX_DATA_BYTES: u64 = MAX_GLOBAL_BYTES - STORE_METADATA_HEADROOM;
-const _: () = assert!(DEFAULT_RETENTION_BYTES <= MAX_DATA_BYTES);
 #[cfg(test)]
 thread_local! {
     static SWAP_ROOT_AFTER_TASK_STORE_OPEN: Cell<bool> = const { Cell::new(false) };
@@ -114,6 +104,7 @@ pub(crate) struct WebTaskRequest {
     pub(crate) format: Option<InputFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) batch_id: Option<String>,
+    #[serde(default = "web_options", deserialize_with = "deserialize_web_options")]
     pub(crate) options: ConversionOptions,
     pub(crate) authorization: WebTaskAuthorization,
 }
@@ -207,7 +198,6 @@ fn validate_web_task_request(request: &WebTaskRequest) -> Result<(), WebTaskErro
     if request.workflow == WebWorkflow::MeetingTranscript
         && (!matches!(request.format, Some(InputFormat::Audio | InputFormat::Video))
             || ai.audio_transcription == AiMode::Off
-            || options.ocr.policy != OcrPolicy::Off
             || ai.vision_ocr != AiMode::Off
             || ai.image_description != AiMode::Off
             || ai.layout_repair != AiMode::Off
@@ -692,7 +682,7 @@ impl BoundedVecWriter {
     fn new(limit: usize) -> Result<Self, WebTaskError> {
         let mut bytes = Vec::new();
         bytes
-            .try_reserve_exact(limit)
+            .try_reserve_exact(limit.min(COPY_CHUNK))
             .map_err(|_| WebTaskError::Limit("JSON buffer allocation failed".into()))?;
         Ok(Self { bytes, limit })
     }
@@ -703,6 +693,9 @@ impl Write for BoundedVecWriter {
         if self.bytes.len().checked_add(bytes.len()).is_none_or(|total| total > self.limit) {
             return Err(std::io::Error::other("JSON byte limit exceeded"));
         }
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(|_| std::io::Error::other("JSON buffer allocation failed"))?;
         self.bytes.extend_from_slice(bytes);
         Ok(bytes.len())
     }
@@ -829,14 +822,14 @@ impl Drop for ArtifactSnapshot {
 impl Write for CancellableFile<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         if self.cancellation.is_cancelled() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "task cancelled"));
+            return Err(std::io::Error::other("task cancelled"));
         }
         let requested = u64::try_from(bytes.len())
             .map_err(|_| std::io::Error::other("artifact write length overflow"))?;
         if self
             .staged_bytes
             .checked_add(requested)
-            .is_none_or(|total| total > MAX_TASK_DURABLE_GROWTH)
+            .is_none_or(|total| total > MAX_ARTIFACT_STORAGE_BYTES)
         {
             return Err(std::io::Error::other("task artifact limit exceeded"));
         }
@@ -865,7 +858,7 @@ impl Write for CancellableFile<'_> {
 impl Seek for CancellableFile<'_> {
     fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
         if self.cancellation.is_cancelled() {
-            return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "task cancelled"));
+            return Err(std::io::Error::other("task cancelled"));
         }
         self.file.seek(position)
     }
@@ -1223,8 +1216,8 @@ impl WebTaskBackend {
             .incoming
             .verify_private_namespace()
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        if declared_bytes.is_some_and(|bytes| bytes > MAX_FILE_BYTES) {
-            return Err(WebTaskError::Limit("file exceeds 512 MiB".into()));
+        if declared_bytes.is_some_and(|bytes| bytes > request.options.limits.max_input_bytes) {
+            return Err(WebTaskError::Limit("file exceeds max_input_bytes".into()));
         }
         let nonce = random_hex()?;
         let directory = self
@@ -1520,7 +1513,8 @@ impl WebTaskBackend {
             let input = task
                 .open_regular_private(std::ffi::OsStr::new("input"))
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            (request, read_file_bounded(input, MAX_FILE_BYTES)?)
+            let bytes = read_file_bounded(input, request.options.limits.max_input_bytes)?;
+            (request, bytes)
         };
         let configured = WebTaskRequest {
             schema_version: 1,
@@ -1576,9 +1570,9 @@ impl WebTaskBackend {
             .open_regular_private(std::ffi::OsStr::new("input"))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&input_file)?;
-        let input = read_file_bounded(input_file, MAX_FILE_BYTES)?;
         let request = load_persisted_request(&task)?
             .ok_or_else(|| WebTaskError::Conflict("original request is unavailable".into()))?;
+        let input = read_file_bounded(input_file, request.options.limits.max_input_bytes)?;
         if request.workflow != WebWorkflow::MeetingTranscript {
             return Ok(None);
         }
@@ -1899,7 +1893,7 @@ impl WebTaskBackend {
             .iter()
             .find(|artifact| artifact.kind == ArtifactKind::DocumentIr)
             .ok_or_else(|| WebTaskError::Conflict("document IR artifact is unavailable".into()))?;
-        if ir.byte_len > MAX_TASK_DURABLE_GROWTH {
+        if ir.byte_len > MAX_ARTIFACT_STORAGE_BYTES {
             return Err(WebTaskError::Limit("document IR exceeds the rerender limit".into()));
         }
         let (mut snapshot, _) = self.artifact(id, &ir.storage_key)?;
@@ -1920,7 +1914,7 @@ impl WebTaskBackend {
         document.validate().map_err(|error| {
             WebTaskError::Unsafe(format!("document IR validation failed: {error}"))
         })?;
-        let diagnostics = load_diagnostics_artifact(self, id, &record)?;
+        let diagnostics_artifact = load_diagnostics_artifact(self, id, &record)?;
         let provenance = document_provenance(&document)?;
         let speaker_ids = document_speaker_ids(&document);
         for (speaker, label) in assignments {
@@ -1937,13 +1931,8 @@ impl WebTaskBackend {
         }
         let markdown = into_markdown::render_markdown(&document, &[], &request.options)
             .map_err(|error| WebTaskError::Io(format!("rerender meeting transcript: {error}")))?;
-        let result = into_markdown::ConversionResult::new(
-            document,
-            markdown,
-            Vec::new(),
-            diagnostics,
-            provenance,
-        );
+        let result =
+            restored_result(document, markdown, Vec::new(), diagnostics_artifact, provenance);
         let next_generation = expected_generation
             .checked_add(1)
             .ok_or_else(|| WebTaskError::Limit("artifact generation overflowed".into()))?;
@@ -1952,7 +1941,7 @@ impl WebTaskBackend {
         let artifacts =
             publish_result_named(&self.owner.shared, id, &result, &cancellation, &directory_name)?;
         let replaced =
-            metadata_store_mutation(&self.owner.shared, MAX_TASK_METADATA_GROWTH, |store| {
+            metadata_store_mutation(&self.owner.shared, STORE_METADATA_HEADROOM, |store| {
                 Ok(store.replace_succeeded_artifacts(id, expected_generation, artifacts.clone())?)
             });
         let record = match replaced {
@@ -2005,7 +1994,7 @@ impl WebTaskBackend {
             .iter()
             .find(|artifact| artifact.kind == ArtifactKind::DocumentIr)
             .ok_or_else(|| WebTaskError::Conflict("document IR artifact is unavailable".into()))?;
-        if ir.byte_len > MAX_TASK_DURABLE_GROWTH {
+        if ir.byte_len > MAX_ARTIFACT_STORAGE_BYTES {
             return Err(WebTaskError::Limit("document IR exceeds the label-list limit".into()));
         }
         let (mut snapshot, _) = self.artifact(id, &ir.storage_key)?;
@@ -2129,7 +2118,6 @@ impl WebTaskBackend {
                 return Ok(());
             };
             validate_private_file(&input_file)?;
-            let input = read_file_bounded(input_file, MAX_FILE_BYTES)?;
             let Some(request) = load_persisted_request(&task)? else {
                 terminal_transition(
                     &self.owner.shared,
@@ -2139,6 +2127,7 @@ impl WebTaskBackend {
                 )?;
                 return Ok(());
             };
+            let input = read_file_bounded(input_file, request.options.limits.max_input_bytes)?;
             let (input_fingerprint, options_fingerprint) = Engine::recoverable_fingerprints(
                 &input,
                 Some(&request.name),
@@ -2222,8 +2211,8 @@ impl Upload {
             .bytes
             .checked_add(amount)
             .ok_or_else(|| WebTaskError::Limit("upload length overflow".into()))?;
-        if next > MAX_FILE_BYTES {
-            return Err(WebTaskError::Limit("file exceeds 512 MiB".into()));
+        if next > self.request.options.limits.max_input_bytes {
+            return Err(WebTaskError::Limit("file exceeds max_input_bytes".into()));
         }
         {
             let mut global = lock(&self.backend.owner.shared.disk_bytes);
@@ -2287,7 +2276,7 @@ impl Upload {
             .open_regular_private(std::ffi::OsStr::new("payload"))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&payload)?;
-        let bytes = read_file_bounded(payload, MAX_FILE_BYTES)?;
+        let bytes = read_file_bounded(payload, self.request.options.limits.max_input_bytes)?;
         let options = self.request.options.clone();
         let hint = FormatHint {
             format: self.request.format,
@@ -2579,7 +2568,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
     let deadline = Instant::now() + Duration::from_mins(30);
     let _disk_lease = match DiskLease::acquire_interruptible(
         shared,
-        MAX_TASK_TOTAL_DURABLE_GROWTH,
+        TASK_METADATA_RESERVATION,
         &job.cancellation,
         deadline,
         job.admission_ticket,
@@ -2649,10 +2638,10 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             .open_regular_private(std::ffi::OsStr::new("input"))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         validate_private_file(&input_file)?;
-        let bytes = read_file_bounded(input_file, MAX_FILE_BYTES)?;
         let persisted = load_persisted_request(&task)?.ok_or_else(|| {
             WebTaskError::Unsafe("persisted request is missing before first execution".into())
         })?;
+        let bytes = read_file_bounded(input_file, persisted.options.limits.max_input_bytes)?;
         let persisted_wire = bounded_json(&persisted, 64 * 1024, "persisted request")?;
         let queued_wire = bounded_json(&job.request, 64 * 1024, "queued request")?;
         if !constant_time_equal_bytes(&persisted_wire, &queued_wire) {
@@ -2677,9 +2666,8 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 "task input or persisted request changed after authentication".into(),
             ));
         }
-        let mut execution = limits::execution_options(
+        let execution = limits::execution_options(
             job.cancellation.clone(),
-            deadline.saturating_duration_since(Instant::now()),
             Arc::new(EventProgressListener { shared: Arc::downgrade(shared), id: job.id.clone() }),
         );
         let input = InputRef::bytes(Arc::<[u8]>::from(bytes), Some(persisted.name.clone()));
@@ -2717,7 +2705,6 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
                 })?
         };
         let engine = routed_engine.as_ref().unwrap_or(&shared.engine);
-        execution.timeout = Some(deadline.saturating_duration_since(Instant::now()));
         let mut request = ConversionRequest::new(input);
         request.hint = persisted.hint;
         request.options = persisted.options;
@@ -2858,7 +2845,7 @@ fn promote_published_success(
                 .try_reserve_exact(artifacts.len())
                 .map_err(|_| WebTaskError::Limit("artifact transition allocation failed".into()))?;
             transition_artifacts.extend_from_slice(artifacts);
-            let transition = metadata_store_mutation(shared, MAX_TASK_METADATA_GROWTH, |store| {
+            let transition = metadata_store_mutation(shared, STORE_METADATA_HEADROOM, |store| {
                 Ok(store.transition(
                     id,
                     TaskTransition {
@@ -3007,12 +2994,9 @@ fn publish_result_named(
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     validate_private_directory_handle(&stage)?;
     let staged = (|| {
-        if result.assets.iter().filter(|asset| !asset.bytes.is_empty()).count() > 124 {
-            return Err(WebTaskError::Limit("asset count exceeds 124".into()));
-        }
         let mut entries = Vec::new();
         entries
-            .try_reserve_exact(128)
+            .try_reserve_exact(result.assets.len().saturating_add(4))
             .map_err(|_| WebTaskError::Limit("artifact index allocation failed".into()))?;
         let mut staged_bytes = 0_u64;
         add_artifact(
@@ -3039,7 +3023,7 @@ fn publish_result_named(
         add_json_artifact(
             &stage,
             ArtifactKind::Diagnostics,
-            &DiagnosticsArtifact { schema_version: 1, diagnostics: &result.diagnostics },
+            &DiagnosticsArtifact::from_result(result),
             &mut entries,
             cancellation,
             &mut staged_bytes,
@@ -3075,8 +3059,8 @@ fn publish_result_named(
             &shared.publication_failure,
         )?;
         let manifest = bounded_json(
-            &ArtifactManifest { schema_version: 1, entries: &entries },
-            64 * 1024,
+            &ArtifactManifest::new(result, &entries),
+            isize::MAX as usize,
             "artifact manifest",
         )?;
         write_private_handle_budgeted(
@@ -3240,21 +3224,9 @@ fn document_speaker_ids(document: &into_markdown::Document) -> Vec<String> {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OwnedManifest {
     schema_version: u32,
+    #[serde(default)]
+    bundle_unavailable: bool,
     entries: Vec<ArtifactReference>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArtifactManifest<'a> {
-    schema_version: u32,
-    entries: &'a [ArtifactReference],
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DiagnosticsArtifact<'a> {
-    schema_version: u32,
-    diagnostics: &'a [into_markdown::Diagnostic],
 }
 
 #[derive(Deserialize)]
@@ -3262,19 +3234,31 @@ struct DiagnosticsArtifact<'a> {
 struct OwnedDiagnosticsArtifact {
     schema_version: u32,
     diagnostics: Vec<into_markdown::Diagnostic>,
+    #[serde(default)]
+    outcome: Option<String>,
+    #[serde(default)]
+    ocr_runtime: Option<into_markdown::OcrRuntimeUsageDto>,
 }
+
+mod diagnostics;
+use diagnostics::{ArtifactManifest, DiagnosticsArtifact, restored_result};
 
 fn load_diagnostics_artifact(
     backend: &WebTaskBackend,
     id: &TaskId,
     record: &TaskRecord,
-) -> Result<Vec<into_markdown::Diagnostic>, WebTaskError> {
+) -> Result<OwnedDiagnosticsArtifact, WebTaskError> {
     let Some(reference) =
         record.artifacts.iter().find(|artifact| artifact.kind == ArtifactKind::Diagnostics)
     else {
         // Successful records created before diagnostics became a required Web
         // artifact remain relabelable. They had no durable diagnostics to keep.
-        return Ok(Vec::new());
+        return Ok(OwnedDiagnosticsArtifact {
+            schema_version: 1,
+            diagnostics: Vec::new(),
+            outcome: None,
+            ocr_runtime: None,
+        });
     };
     if reference.byte_len > into_markdown::MAX_DTO_JSON_BYTES as u64 {
         return Err(WebTaskError::Limit("diagnostics exceed the rerender limit".into()));
@@ -3299,11 +3283,15 @@ fn load_diagnostics_artifact(
     let artifact: OwnedDiagnosticsArtifact = serde_json::from_slice(&bytes)
         .map_err(|_| WebTaskError::Unsafe("diagnostics artifact is invalid".into()))?;
     if artifact.schema_version != 1
+        || artifact
+            .outcome
+            .as_deref()
+            .is_some_and(|outcome| !matches!(outcome, "complete" | "degraded"))
         || artifact.diagnostics.len() > into_markdown::MAX_DTO_DIAGNOSTICS
     {
         return Err(WebTaskError::Unsafe("diagnostics artifact is incompatible".into()));
     }
-    Ok(artifact.diagnostics)
+    Ok(artifact)
 }
 
 fn document_provenance(
@@ -3377,8 +3365,8 @@ fn validate_manifest_handle_cancel(
         .open_regular_private(std::ffi::OsStr::new("manifest.json"))
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     validate_private_file(&manifest_file)?;
-    let bytes = read_file_bounded(manifest_file, 64 * 1024)?;
-    validate_json_shape(&bytes, 16, 4096, 4096)?;
+    let bytes = read_file_bounded(manifest_file, isize::MAX as u64)?;
+    validate_json_shape(&bytes, 16, usize::MAX, 4096)?;
     let manifest: OwnedManifest = serde_json::from_slice(&bytes)
         .map_err(|error| WebTaskError::Unsafe(format!("invalid artifact manifest: {error}")))?;
     validate_manifest_metadata(&manifest)?;
@@ -3409,9 +3397,9 @@ fn validate_manifest_handle_cancel(
         total_bytes = total_bytes
             .checked_add(entry.byte_len)
             .ok_or_else(|| WebTaskError::Unsafe("artifact manifest byte total overflow".into()))?;
-        if total_bytes > MAX_TASK_DURABLE_GROWTH {
+        if total_bytes > MAX_ARTIFACT_STORAGE_BYTES {
             return Err(WebTaskError::Unsafe(
-                "Web artifact manifest byte total exceeds 512 MiB".into(),
+                "Web artifact manifest byte total exceeds representable storage".into(),
             ));
         }
         validate_key(&entry.storage_key)?;
@@ -3432,11 +3420,11 @@ fn validate_manifest_handle_cancel(
 }
 
 fn validate_manifest_metadata(manifest: &OwnedManifest) -> Result<(), WebTaskError> {
-    if manifest.schema_version != 1 || manifest.entries.len() > 128 {
+    if manifest.schema_version != 1 {
         return Err(WebTaskError::Unsafe("artifact manifest limits are invalid".into()));
     }
     for (index, entry) in manifest.entries.iter().enumerate() {
-        if entry.byte_len > MAX_TASK_DURABLE_GROWTH
+        if entry.byte_len > MAX_ARTIFACT_STORAGE_BYTES
             || entry.sha256.len() != 64
             || !entry
                 .sha256
@@ -3457,16 +3445,13 @@ fn validate_manifest_metadata(manifest: &OwnedManifest) -> Result<(), WebTaskErr
         ArtifactKind::Diagnostics,
         ArtifactKind::Bundle,
     ] {
-        if manifest.entries.iter().filter(|entry| entry.kind == required).count() != 1 {
+        let expected =
+            usize::from(required != ArtifactKind::Bundle || !manifest.bundle_unavailable);
+        if manifest.entries.iter().filter(|entry| entry.kind == required).count() != expected {
             return Err(WebTaskError::Unsafe(
                 "artifact manifest has an invalid required set".into(),
             ));
         }
-    }
-    let asset_count =
-        manifest.entries.iter().filter(|entry| entry.kind == ArtifactKind::Asset).count();
-    if asset_count > 124 {
-        return Err(WebTaskError::Unsafe("artifact manifest has too many assets".into()));
     }
     for (index, asset) in manifest.entries.iter().enumerate() {
         if asset.kind != ArtifactKind::Asset {
@@ -3531,9 +3516,6 @@ fn add_artifact(
     asset_metadata: Option<(&str, &str, &str)>,
 ) -> Result<(), WebTaskError> {
     cancelled(cancellation)?;
-    if entries.len() >= 128 {
-        return Err(WebTaskError::Limit("artifact count exceeds 128".into()));
-    }
     entries
         .try_reserve(1)
         .map_err(|_| WebTaskError::Limit("artifact index allocation failed".into()))?;
@@ -3575,9 +3557,6 @@ fn add_json_artifact<T: Serialize>(
     publication_failure: &AtomicUsize,
 ) -> Result<(), WebTaskError> {
     cancelled(cancellation)?;
-    if entries.len() >= 128 {
-        return Err(WebTaskError::Limit("artifact count exceeds 128".into()));
-    }
     entries
         .try_reserve(1)
         .map_err(|_| WebTaskError::Limit("artifact index allocation failed".into()))?;
@@ -3586,18 +3565,23 @@ fn add_json_artifact<T: Serialize>(
         .create_regular_private(std::ffi::OsStr::new(&key))
         .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     {
-        let mut writer =
-            CancellableFile { file: &mut file, cancellation, staged_bytes, write_failure_after };
-        serde_json::to_writer_pretty(&mut writer, value)
-            .map_err(|error| WebTaskError::Io(format!("stream JSON artifact: {error}")))?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
+        let mut writer = std::io::BufWriter::with_capacity(
+            COPY_CHUNK,
+            CancellableFile { file: &mut file, cancellation, staged_bytes, write_failure_after },
+        );
+        let written = serde_json::to_writer_pretty(&mut writer, value)
+            .map_err(|error| WebTaskError::Io(format!("stream JSON artifact: {error}")))
+            .and_then(|()| writer.write_all(b"\n").map_err(WebTaskError::from))
+            .and_then(|()| writer.flush().map_err(WebTaskError::from));
+        let _ = writer.into_parts();
+        written?;
     }
     cancelled(cancellation)?;
     publication_failure_checkpoint_atomic(publication_failure, 2)?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&file)? != 1 {
+    if !metadata.is_file() || metadata.len() > MAX_ARTIFACT_STORAGE_BYTES || link_count(&file)? != 1
+    {
         return Err(WebTaskError::Limit("JSON artifact exceeds its durable byte limit".into()));
     }
     drop(file);
@@ -3628,8 +3612,8 @@ fn add_bundle_artifact(
     publication_failure: &AtomicUsize,
 ) -> Result<(), WebTaskError> {
     cancelled(cancellation)?;
-    if entries.len() >= 128 {
-        return Err(WebTaskError::Limit("artifact count exceeds 128".into()));
+    if diagnostics::bundle_unavailable(result) {
+        return Ok(());
     }
     entries
         .try_reserve(1)
@@ -3654,7 +3638,8 @@ fn add_bundle_artifact(
     publication_failure_checkpoint_atomic(publication_failure, 2)?;
     file.sync_all()?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_TASK_DURABLE_GROWTH || link_count(&file)? != 1 {
+    if !metadata.is_file() || metadata.len() > MAX_ARTIFACT_STORAGE_BYTES || link_count(&file)? != 1
+    {
         return Err(WebTaskError::Limit("bundle exceeds its durable byte limit".into()));
     }
     drop(file);
@@ -3921,15 +3906,8 @@ fn reconcile_managed_usage(shared: &Shared) -> Result<(), WebTaskError> {
     Ok(())
 }
 
-fn web_options() -> ConversionOptions {
-    let mut options = ConversionOptions::default();
-    options.limits.max_input_bytes = MAX_FILE_BYTES;
-    options.limits.max_asset_bytes = 64 * 1024 * 1024;
-    options.limits.max_total_asset_bytes = 128 * 1024 * 1024;
-    options.limits.max_memory_bytes = MAX_CHECKPOINT_BYTES;
-    options.limits.max_temporary_bytes = MAX_CHECKPOINT_BYTES;
-    options
-}
+mod defaults;
+use defaults::{deserialize_web_options, web_options};
 
 fn validate_display_name(name: &str) -> Result<(), WebTaskError> {
     if name.is_empty()
@@ -4449,7 +4427,7 @@ fn validate_private_tree(
     let directory =
         parent.open_child_private(name).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     for member in
-        directory.names_bounded(1024).map_err(|error| WebTaskError::Unsafe(error.to_string()))?
+        directory.names_private().map_err(|error| WebTaskError::Unsafe(error.to_string()))?
     {
         match directory.open_regular_private(&member) {
             Ok(file) if link_count(&file)? == 1 => {}
@@ -4486,7 +4464,7 @@ fn remove_private_tree(
     let directory =
         parent.open_child_private(name).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     let names =
-        directory.names_bounded(1024).map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
+        directory.names_private().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     for member in names {
         match directory.open_regular_private(&member) {
             Ok(file) => {
@@ -5270,11 +5248,26 @@ mod tests {
         request.options.ai.markdown_postprocess = AiMode::Off;
         assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
 
-        request.options.limits.max_input_bytes = MAX_FILE_BYTES + 1;
-        assert!(matches!(
-            decode_web_task_request(&serde_json::to_vec(&request).unwrap()),
-            Err(WebTaskError::Invalid(_))
-        ));
+        request.options.limits.max_input_bytes = 512 * 1024 * 1024 + 1;
+        assert!(decode_web_task_request(&serde_json::to_vec(&request).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn web_omitted_limits_use_shared_host_defaults_and_preserve_explicit_overrides() {
+        for options in [
+            serde_json::json!({"error_policy":"best-effort","ocr":{"policy":"auto"}}),
+            serde_json::json!({"limits":{}}),
+        ] {
+            let value = serde_json::json!({"schemaVersion":1,"options":options,"authorization":{"network":false,"privateNetwork":false,"provider":false}});
+            let actual = decode_web_task_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(actual.options.limits, web_options().limits);
+        }
+        let value = serde_json::json!({"schemaVersion":1,"options":{"limits":{"max_pages":23000,"max_memory_bytes":9000000000_u64}},"authorization":{"network":false,"privateNetwork":false,"provider":false}});
+        let actual = decode_web_task_request(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(actual.options.limits.max_pages, 23000);
+        assert_eq!(actual.options.limits.max_memory_bytes, 9000000000);
+        assert_eq!(actual.options.limits.max_total_asset_bytes, 9000000000);
+        assert_eq!(actual.options.limits.max_input_bytes, web_options().limits.max_input_bytes);
     }
 
     #[test]
@@ -5299,13 +5292,13 @@ mod tests {
                 .options
                 .limits
                 .max_presentation_xml_events,
-            2_000_000
+            into_markdown::ResourceLimits::default().max_presentation_xml_events
         );
-        for maximum in [0, 2_000_001] {
+        for maximum in [0] {
             value["options"]["limits"]["max_presentation_xml_events"] = maximum.into();
             assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_err());
         }
-        value["options"]["limits"]["max_presentation_xml_events"] = 100.into();
+        value["options"]["limits"]["max_presentation_xml_events"] = 2_000_001.into();
         assert!(decode_web_task_request(&serde_json::to_vec(&value).unwrap()).is_ok());
     }
 
@@ -6153,7 +6146,7 @@ mod tests {
         let temporary = tempfile::tempfile().unwrap();
         let mut file = temporary;
         let cancellation = CancellationToken::new();
-        let mut staged = MAX_TASK_DURABLE_GROWTH - 1;
+        let mut staged = MAX_ARTIFACT_STORAGE_BYTES - 1;
         let write_failure_after = AtomicUsize::new(usize::MAX);
         {
             let mut writer = CancellableFile {
@@ -6165,7 +6158,26 @@ mod tests {
             assert!(writer.write_all(b"xx").is_err());
         }
         assert_eq!(file.metadata().unwrap().len(), 0);
-        assert_eq!(staged, MAX_TASK_DURABLE_GROWTH - 1);
+        assert_eq!(staged, MAX_ARTIFACT_STORAGE_BYTES - 1);
+    }
+
+    #[test]
+    fn cancelled_publication_write_all_returns_without_retrying() {
+        let mut file = tempfile::tempfile().unwrap();
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut staged_bytes = 0;
+        let failure = AtomicUsize::new(usize::MAX);
+        let mut writer = CancellableFile {
+            file: &mut file,
+            cancellation: &cancellation,
+            staged_bytes: &mut staged_bytes,
+            write_failure_after: &failure,
+        };
+        let error = writer.write_all(b"cancelled content").unwrap_err();
+        assert_ne!(error.kind(), std::io::ErrorKind::Interrupted);
+        assert_eq!(file.metadata().unwrap().len(), 0);
+        assert_eq!(staged_bytes, 0);
     }
 
     #[test]
@@ -6293,14 +6305,13 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
-            disk.used = MAX_DATA_BYTES - MAX_TASK_TOTAL_DURABLE_GROWTH;
+            disk.used = MAX_DATA_BYTES - TASK_METADATA_RESERVATION;
             disk.reserved = 0;
         }
-        let first =
-            DiskLease::acquire(&backend.owner.shared, MAX_TASK_TOTAL_DURABLE_GROWTH).unwrap();
+        let first = DiskLease::acquire(&backend.owner.shared, TASK_METADATA_RESERVATION).unwrap();
         let shared = Arc::clone(&backend.owner.shared);
         let waiter = std::thread::spawn(move || {
-            DiskLease::acquire(&shared, MAX_TASK_TOTAL_DURABLE_GROWTH).map(drop)
+            DiskLease::acquire(&shared, TASK_METADATA_RESERVATION).map(drop)
         });
         let deadline = std::time::Instant::now() + Duration::from_secs(1);
         while backend.owner.shared.disk_waiters.load(Ordering::SeqCst) == 0 {
@@ -6315,11 +6326,11 @@ mod tests {
         assert!(waiter.join().unwrap().is_ok());
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
-            disk.used = MAX_DATA_BYTES - MAX_TASK_TOTAL_DURABLE_GROWTH + 1;
+            disk.used = MAX_DATA_BYTES - TASK_METADATA_RESERVATION + 1;
             disk.reserved = 0;
         }
         assert!(matches!(
-            DiskLease::acquire(&backend.owner.shared, MAX_TASK_TOTAL_DURABLE_GROWTH),
+            DiskLease::acquire(&backend.owner.shared, TASK_METADATA_RESERVATION),
             Err(WebTaskError::Limit(_))
         ));
     }
@@ -6477,40 +6488,6 @@ mod tests {
     }
 
     #[test]
-    fn permanent_store_headroom_allows_terminal_mutation_at_real_data_boundary() {
-        let temporary = tempfile::tempdir().unwrap();
-        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
-        {
-            let mut queue = lock(&backend.owner.shared.queue);
-            queue.stopped = true;
-            backend.owner.shared.queue_changed.notify_all();
-        }
-        for worker in lock(&backend.owner.workers).drain(..) {
-            worker.join().unwrap();
-        }
-        lock(&backend.owner.shared.queue).stopped = false;
-        let mut upload = backend.begin_upload("boundary.txt", None).unwrap();
-        upload.write_chunk(b"terminal metadata boundary").unwrap();
-        let task = upload.finish().unwrap();
-        let filler = backend
-            .owner
-            .shared
-            .root_handle
-            .create_regular_private(std::ffi::OsStr::new("quota-boundary"))
-            .unwrap();
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
-        filler.set_len(MAX_DATA_BYTES - before).unwrap();
-        filler.sync_all().unwrap();
-        reconcile_managed_usage(&backend.owner.shared).unwrap();
-        assert_eq!(lock(&backend.owner.shared.disk_bytes).used, MAX_DATA_BYTES);
-        let cancelled = backend.cancel(&task.id).unwrap();
-        assert_eq!(cancelled.status, TaskStatus::Cancelled);
-        assert!(
-            measured_managed_bytes(&backend.owner.shared.root_handle).unwrap() <= MAX_GLOBAL_BYTES
-        );
-    }
-
-    #[test]
     fn finish_metadata_wait_is_bounded_cleans_incoming_and_allows_the_next_upload() {
         let temporary = tempfile::tempdir().unwrap();
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
@@ -6529,7 +6506,7 @@ mod tests {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
             disk.reserved = 0;
             disk.used = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
-            assert!(disk.used <= baseline + MAX_TASK_METADATA_GROWTH);
+            assert!(disk.used <= baseline + STORE_METADATA_HEADROOM);
         }
         backend.owner.shared.disk_changed.notify_all();
         let mut next = backend.begin_upload("next.txt", None).unwrap();
@@ -6547,17 +6524,14 @@ mod tests {
             disk.used = 3 * 1024 * 1024 * 1024;
             disk.reserved = 0;
         }
-        let lease =
-            DiskLease::acquire(&backend.owner.shared, MAX_TASK_TOTAL_DURABLE_GROWTH).unwrap();
+        let lease = DiskLease::acquire(&backend.owner.shared, TASK_METADATA_RESERVATION).unwrap();
         drop(lease);
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
             disk.used = 0;
         }
         let leases = (0..4)
-            .map(|_| {
-                DiskLease::acquire(&backend.owner.shared, MAX_TASK_TOTAL_DURABLE_GROWTH).unwrap()
-            })
+            .map(|_| DiskLease::acquire(&backend.owner.shared, TASK_METADATA_RESERVATION).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(leases.len(), 4);
     }
@@ -6718,7 +6692,9 @@ mod tests {
     fn one_conversion_failure_does_not_stop_following_work() {
         let temporary = tempfile::tempdir().unwrap();
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
-        let mut invalid = backend.begin_upload("broken.json", None).unwrap();
+        let mut strict = WebTaskRequest::default();
+        strict.options.error_policy = into_markdown::ErrorPolicy::Strict;
+        let mut invalid = backend.begin_upload_configured("broken.json", None, strict).unwrap();
         invalid.write_chunk(br#"{"unterminated":"#).unwrap();
         let invalid = invalid.finish().unwrap();
         let mut valid = backend.begin_upload("valid.txt", None).unwrap();
@@ -6886,17 +6862,11 @@ mod tests {
             upload.write_chunk(b"bounded metadata settlement").unwrap();
             ids.push(upload.finish().unwrap().id);
         }
-        let filler = backend
-            .owner
-            .shared
-            .root_handle
-            .create_regular_private(std::ffi::OsStr::new("metadata-boundary"))
-            .unwrap();
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
-        filler.set_len(MAX_DATA_BYTES - before).unwrap();
-        filler.sync_all().unwrap();
         reconcile_managed_usage(&backend.owner.shared).unwrap();
-        assert_eq!(lock(&backend.owner.shared.disk_bytes).used, MAX_DATA_BYTES);
+        {
+            let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.reserved = MAX_DATA_BYTES - disk.used;
+        }
 
         lock(&backend.owner.shared.disk_bytes).next_ticket = u64::MAX;
         let shared = Arc::clone(&backend.owner.shared);
@@ -6935,16 +6905,11 @@ mod tests {
             upload.write_chunk(b"must remain recoverable").unwrap();
             ids.push(upload.finish().unwrap().id);
         }
-        let filler = backend
-            .owner
-            .shared
-            .root_handle
-            .create_regular_private(std::ffi::OsStr::new("metadata-exhausted"))
-            .unwrap();
-        let before = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
-        filler.set_len(MAX_GLOBAL_BYTES - STORE_MUTATION_RESERVATION + 1 - before).unwrap();
-        filler.sync_all().unwrap();
         reconcile_managed_usage(&backend.owner.shared).unwrap();
+        {
+            let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.reserved = MAX_GLOBAL_BYTES - STORE_MUTATION_RESERVATION + 1 - disk.used;
+        }
 
         lock(&backend.owner.shared.disk_bytes).next_ticket = u64::MAX;
         let shared = Arc::clone(&backend.owner.shared);
@@ -6969,7 +6934,10 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         let mut submitted = Vec::new();
         for index in 0..32 {
-            let mut upload = backend.begin_upload(&format!("{index:02}.txt"), None).unwrap();
+            let mut request = WebTaskRequest::default();
+            request.options.error_policy = into_markdown::ErrorPolicy::Strict;
+            let mut upload =
+                backend.begin_upload_configured(&format!("{index:02}.txt"), None, request).unwrap();
             if index % 7 == 0 {
                 upload.write_chunk(&[0, 0xff, 0]).unwrap();
             } else {
@@ -7405,10 +7373,20 @@ mod tests {
             }],
             ..into_markdown::Document::default()
         };
+        let mut assets = vec![asset];
+        for index in 2..=1100_u32 {
+            assets.push(into_markdown::Asset {
+                id: into_markdown::AssetId(format!("image-{index}")),
+                filename: Some(format!("image-{index}.png")),
+                media_type: "image/png".into(),
+                bytes: index.to_le_bytes().to_vec(),
+                external_uri: None,
+            });
+        }
         let result = into_markdown::ConversionResult::new(
             document,
             "![image](image.png)\n".into(),
-            vec![asset],
+            assets,
             Vec::new(),
             Vec::new(),
         );
@@ -7428,7 +7406,16 @@ mod tests {
             .unwrap()
             .open_child_private(std::ffi::OsStr::new("published"))
             .unwrap();
+        assert_eq!(references.len(), 1104);
         assert!(artifact_sets_equal(&references, &validate_manifest_handle(&published).unwrap()));
+        let task_directory = backend
+            .owner
+            .shared
+            .objects
+            .open_child_private(std::ffi::OsStr::new(task.id.as_str()))
+            .unwrap();
+        validate_private_tree(&task_directory, std::ffi::OsStr::new("published"), 0).unwrap();
+        remove_private_tree(&task_directory, std::ffi::OsStr::new("published"), 0).unwrap();
     }
 
     #[test]

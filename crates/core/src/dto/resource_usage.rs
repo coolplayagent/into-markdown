@@ -56,6 +56,19 @@ impl From<MemoryBudgetSnapshotDto> for RawMemoryBudgetSnapshot {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct RawOcrRuntimeUsage {
+    #[serde(default)]
+    image_sources: u64,
+    #[serde(default)]
+    images_attempted: u64,
+    #[serde(default)]
+    images_completed: u64,
+    #[serde(default)]
+    images_with_text: u64,
+    #[serde(default)]
+    images_failed: u64,
+    #[serde(default)]
+    images_skipped: u64,
+
     requests: u64,
     recognition_memory_refusals: u64,
     worker_budget_min_bytes: u64,
@@ -64,6 +77,12 @@ pub(super) struct RawOcrRuntimeUsage {
 impl From<RawOcrRuntimeUsage> for OcrRuntimeUsageDto {
     fn from(value: RawOcrRuntimeUsage) -> Self {
         Self {
+            image_sources: value.image_sources,
+            images_attempted: value.images_attempted,
+            images_completed: value.images_completed,
+            images_with_text: value.images_with_text,
+            images_failed: value.images_failed,
+            images_skipped: value.images_skipped,
             requests: value.requests,
             recognition_memory_refusals: value.recognition_memory_refusals,
             worker_budget_min_bytes: value.worker_budget_min_bytes,
@@ -74,6 +93,12 @@ impl From<RawOcrRuntimeUsage> for OcrRuntimeUsageDto {
 impl From<OcrRuntimeUsageDto> for RawOcrRuntimeUsage {
     fn from(value: OcrRuntimeUsageDto) -> Self {
         Self {
+            image_sources: value.image_sources,
+            images_attempted: value.images_attempted,
+            images_completed: value.images_completed,
+            images_with_text: value.images_with_text,
+            images_failed: value.images_failed,
+            images_skipped: value.images_skipped,
             requests: value.requests,
             recognition_memory_refusals: value.recognition_memory_refusals,
             worker_budget_min_bytes: value.worker_budget_min_bytes,
@@ -127,6 +152,12 @@ pub(super) fn validate(usage: &BatchResourceUsageDto) -> Result<(), DtoError> {
         }
     }
     if let Some(ocr) = usage.ocr_runtime {
+        if ocr.images_completed.checked_add(ocr.images_failed) != Some(ocr.images_attempted)
+            || ocr.images_attempted.checked_add(ocr.images_skipped) != Some(ocr.image_sources)
+            || ocr.images_with_text > ocr.images_completed
+        {
+            return Err(invalid("ocrRuntime", "OCR source image outcomes must balance"));
+        }
         if ocr.recognition_memory_refusals > ocr.requests
             || (ocr.requests == 0)
                 != (ocr.worker_budget_min_bytes == 0 && ocr.worker_budget_max_bytes == 0)
@@ -166,6 +197,7 @@ mod tests {
                 recognition_memory_refusals: 1,
                 worker_budget_min_bytes: 4,
                 worker_budget_max_bytes: 8,
+                ..OcrRuntimeUsageDto::default()
             }),
             shared_lease_budget_bytes: 16,
             shared_lease_peak_bytes: 12,
@@ -203,6 +235,12 @@ mod tests {
             ("ocrRuntime", "workerBudgetMinBytes", 0),
             ("ocrRuntime", "workerBudgetMaxBytes", 17),
             ("ocrRuntime", "requests", 0),
+            ("ocrRuntime", "imageSources", 1),
+            ("ocrRuntime", "imagesAttempted", 1),
+            ("ocrRuntime", "imagesCompleted", 1),
+            ("ocrRuntime", "imagesFailed", 1),
+            ("ocrRuntime", "imagesSkipped", 1),
+            ("ocrRuntime", "imagesWithText", 1),
         ] {
             let mut modified = original.clone();
             modified["resourceUsage"][field][key] = value.into();

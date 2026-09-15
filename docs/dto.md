@@ -203,7 +203,8 @@ Bundle manifest schema 2 保留既有 `diagnostics.json` 与 `provenance.json` �
 带 `schemaVersion` 的 envelope 只用于独立 HTTP/库响应。这样不会把曾经改变过的成员
 形状伪称为兼容。`assets/` 目录成员始终存在，即使没有资源。
 
-默认上限由 `DtoLimits` 和 `MAX_DTO_*` 常量公开，覆盖 JSON 总字节、深度、结构项、
-单字符串、总字符串、各类记录数和 base64 解码后总量。HTTP 层可按请求策略进一步收紧，
+`DtoLimits` 和 `MAX_DTO_*` 公开 JSON、字符串、记录数及 base64 的可表示范围，
+默认深度约束保持不变。转换结果使用请求的内存预算，交付层允许完整导出已接受的内容。
+调用方可通过显式 `DtoLimits` 限制 JSON 总量、结构项与字符串；HTTP 层可按请求策略进一步收紧，
 但不能绕过这些验证后直接反序列化为内部模型。SSE 的事件包络由相应 Web 任务定义，
 其结果、诊断和报告载荷复用这里的 DTO。

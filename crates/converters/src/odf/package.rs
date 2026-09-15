@@ -131,8 +131,6 @@ impl Package {
         })?;
         if let Some(local) = &local_mimetype {
             bind_mimetype_central(bytes, &mime_entry, local)?;
-        } else {
-            super::raw_zip::validate_relaxed_mimetype_extras(bytes, &mime_entry)?;
         }
         drop(mime_entry);
         if mime_part.size > 256 {
@@ -297,9 +295,7 @@ impl Package {
                 .get(path)
                 .copied()
                 .ok_or_else(|| malformed(Some(path), "referenced image has no ZIP part"))?;
-            if self.skip_unsupported_image(path, options)? {
-                continue;
-            }
+            let source_only = self.source_only_image(path, options)?;
             if part.directory {
                 return Err(malformed(Some(path), "referenced image is a directory"));
             }
@@ -353,15 +349,17 @@ impl Package {
                     malformed(Some(path), "referenced image is not declared in manifest")
                 })?
                 .media_type;
-            validate_image(
-                &bytes,
-                media_type,
-                path,
-                options,
-                context,
-                package_peak,
-                self.preflight,
-            )?;
+            if !source_only {
+                validate_image(
+                    &bytes,
+                    media_type,
+                    path,
+                    options,
+                    context,
+                    package_peak,
+                    self.preflight,
+                )?;
+            }
             self.parts.insert(path.clone(), bytes);
         }
         self.logical_peak = base_peak
@@ -385,7 +383,7 @@ impl Package {
 }
 
 impl Package {
-    fn skip_unsupported_image(
+    fn source_only_image(
         &self,
         path: &str,
         options: &ConversionOptions,
@@ -398,7 +396,7 @@ impl Package {
             super::recovery::require_best_effort(
                 options,
                 path,
-                "unsupported image media requires a static placeholder",
+                "image media is retained as an original attachment",
             )?;
         }
         Ok(unsupported)

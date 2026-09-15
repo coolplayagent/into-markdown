@@ -2,7 +2,14 @@
 
 use super::*;
 
+mod arxiv_regressions;
+mod detached_scripts;
+mod mixed_rows_glyphs;
+mod native_baselines;
 mod relayout_ids;
+mod short_column_edges;
+mod side_tables;
+mod staggered_glyphs;
 use into_markdown_core::{
     AssetId, Block, BlockNode, CancellationToken, ExecutionOptions, Inline, NodeId, OcrEvidence,
     OcrEvidenceStage, OcrEvidenceStep, OcrSourceRegion, Provenance, ProvenanceKind, Rect,
@@ -322,7 +329,7 @@ fn repeated_compact_cells_across_a_wide_gap_remain_a_table() {
 }
 
 #[test]
-fn repeated_long_cell_boundaries_lock_a_wide_two_by_two_table() {
+fn repeated_broad_column_boundaries_require_cell_paths_for_a_table() {
     let input = document(
         [
             source_text(
@@ -348,12 +355,23 @@ fn repeated_long_cell_boundaries_lock_a_wide_two_by_two_table() {
         ]
         .concat(),
     );
-    let actual = rebuild(input);
+    let actual = rebuild(input.clone());
     let tables = page_blocks(&actual)
         .iter()
         .filter(|node| matches!(node.block, Block::Table { .. }))
         .count();
-    assert_eq!(tables, 1);
+    assert_eq!(tables, 0);
+    let cells = vec![
+        Rect { x: 30.0, y: 175.0, width: 270.0, height: 25.0 },
+        Rect { x: 300.0, y: 175.0, width: 200.0, height: 25.0 },
+        Rect { x: 30.0, y: 200.0, width: 270.0, height: 25.0 },
+        Rect { x: 300.0, y: 200.0, width: 200.0, height: 25.0 },
+    ];
+    assert!(
+        page_blocks(&rebuild_with_paths(input, cells))
+            .iter()
+            .any(|node| matches!(node.block, Block::Table { .. }))
+    );
 }
 
 #[test]

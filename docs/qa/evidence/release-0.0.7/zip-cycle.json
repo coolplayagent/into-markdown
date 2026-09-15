@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "8ca9c69526750cd4f0624c59fa6b5851f01b21ee7f871ed881f64538897ac2c2",
+  "manifestSha256": "0a1ac4cafcee0085955d87898913302ef679124eea4a632deffccbd080a2fe04",
+  "binarySha256": "9abba8c9f167921c485046a3d8a23d113db11421759b585f22ebb3709f00e1c0",
+  "modes": [
+    "auto",
+    "off"
+  ],
+  "complete": true,
+  "constituentRuns": [],
+  "replacements": [],
+  "passed": 2,
+  "failed": 0,
+  "seconds": 1.55,
+  "ocrTotals": {"imageSources":2,"imagesAttempted":1,"imagesCompleted":1,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":1},
+  "ocrTotalsByMode": {"auto":{"imageSources":1,"imagesAttempted":1,"imagesCompleted":1,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":0},"off":{"imageSources":1,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":1}},
+  "ocrUnaccountedCases": [],
+  "cases": [
+    {"id":"zip-983613c84c7b8a11","ocr":"auto","sourceSha256":"983613c84c7b8a1189fe8984d2764fba1b54c205907b9789778db18a2222803c","binarySha256":"9abba8c9f167921c485046a3d8a23d113db11421759b585f22ebb3709f00e1c0","passed":true,"exitCode":0,"seconds":1.35,"peakRssBytes":235356160,"markdownSha256":"2ab1490cef5212a11d9e307932b6b105af02d3624d02b7633ab5852b6295a1d5","assetBundleSha256":"64262ac4f13ecafb4530132465bce7af52f3ed97f013dc00de09b503b2730873","outcomes":{"degraded":1},"errorCodes":{},"diagnosticCounts":{"conversion.recovery.originalFile":1},"expectedPages":0,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":2,"originalFileFallback":false,"nestedOriginalFallbackCount":1,"ocrRuntime":{"imageSources":1,"imagesAttempted":1,"imagesCompleted":1,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":0,"requests":1,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":17025631626,"workerBudgetMaxBytes":17025631626},"effectiveBudgetBytes":17179869184},
+    {"id":"zip-983613c84c7b8a11","ocr":"off","sourceSha256":"983613c84c7b8a1189fe8984d2764fba1b54c205907b9789778db18a2222803c","binarySha256":"9abba8c9f167921c485046a3d8a23d113db11421759b585f22ebb3709f00e1c0","passed":true,"exitCode":0,"seconds":0.2,"peakRssBytes":14958592,"markdownSha256":"9a10f3a5b18cc211c48b2c310414671636b6d2d5c622c561e7308b00ba174c33","assetBundleSha256":"64262ac4f13ecafb4530132465bce7af52f3ed97f013dc00de09b503b2730873","outcomes":{"degraded":1},"errorCodes":{},"diagnosticCounts":{"conversion.recovery.originalFile":1},"expectedPages":0,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":2,"originalFileFallback":false,"nestedOriginalFallbackCount":1,"ocrRuntime":{"imageSources":1,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":1,"requests":0,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":0,"workerBudgetMaxBytes":0},"effectiveBudgetBytes":17179869184}
+  ]
+}

@@ -1,8 +1,8 @@
 use super::*;
 use into_markdown_core::{
     Block, BlockNode, BoxFuture, Diagnostic, DiagnosticSeverity, ErrorPolicy, ExecutionOptions,
-    Inline, IrErrorCode, MAX_DOCUMENT_NODES, NodeId, OcrPolicy, Provenance, ProvenanceKind,
-    ResourceLimits, SourceLocator, TransactionalEnrichmentOutcome,
+    Inline, NodeId, OcrPolicy, Provenance, ProvenanceKind, ResourceLimits, SourceLocator,
+    TransactionalEnrichmentOutcome,
 };
 use std::future::Future;
 use std::sync::Arc;
@@ -282,13 +282,13 @@ fn skipped_or_empty_ocr_contribution_keeps_the_original_page() {
 }
 
 #[test]
-fn final_validation_budget_counts_nodes_across_enriched_pages() {
+fn final_validation_accounts_large_documents_without_a_fixed_node_ceiling() {
     let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
     let options = options();
     let fixture = fixture(Ok(EnrichmentPlan::Skip));
     let mut combined = Document::default();
     for number in 1..=2 {
-        let blocks = (0..MAX_DOCUMENT_NODES / 2 - 1)
+        let blocks = (0..50_000 - 1)
             .map(|index| node(format!("page-{number}-rule-{index}"), Block::Rule))
             .collect();
         let page = ConverterOutput::new(
@@ -303,16 +303,12 @@ fn final_validation_budget_counts_nodes_across_enriched_pages() {
         estimate_validation_working_set(&page.document, &[], &[]).unwrap();
         combined.blocks.append(&mut page.document.blocks);
     }
-    // invoke_native applies this same guard to the complete output, not once
-    // per page. The two page containers count toward the exact 100,000 nodes.
-    estimate_validation_working_set(&combined, &[], &[]).unwrap();
+    let before = estimate_validation_working_set(&combined, &[], &[]).unwrap();
     combined.validate().unwrap();
-    combined.blocks.push(node("one-too-many".into(), Block::Rule));
-    assert!(matches!(
-        estimate_validation_working_set(&combined, &[], &[]),
-        Err(ConversionError::ResourceLimit { limit: "documentNodes", .. })
-    ));
-    assert_eq!(combined.validate().unwrap_err().code, IrErrorCode::ResourceLimit);
+    combined.blocks.push(node("additional-node".into(), Block::Rule));
+    let after = estimate_validation_working_set(&combined, &[], &[]).unwrap();
+    assert!(after > before);
+    combined.validate().unwrap();
     assert_eq!(fixture.calls.load(Ordering::SeqCst), 0);
     assert_eq!(context.reserved_memory_bytes(), 0);
 }

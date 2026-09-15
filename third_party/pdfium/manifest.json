@@ -11,7 +11,7 @@
     "FPDF_InitLibraryWithConfig", "FPDF_DestroyLibrary", "FPDF_LoadMemDocument64",
     "FPDF_CloseDocument", "FPDF_GetPageCount", "FPDF_LoadPage", "FPDF_ClosePage",
     "FPDFText_LoadPage", "FPDFText_ClosePage", "FPDFText_CountChars", "FPDFText_GetText",
-    "FPDFText_GetUnicode", "FPDFText_GetCharBox", "FPDFText_GetFontSize",
+    "FPDFText_GetUnicode", "FPDFText_IsHyphen", "FPDFText_GetTextIndexFromCharIndex", "FPDFText_GetCharBox", "FPDFText_GetCharOrigin", "FPDFText_GetMatrix", "FPDFText_GetFontSize",
     "FPDFText_GetFontInfo", "FPDFText_GetCharAngle",
     "FPDF_GetPageWidthF", "FPDF_GetPageHeightF", "FPDF_GetPageBoundingBox", "FPDFPage_GetRotation",
     "FPDFPage_CountObjects", "FPDFPage_GetObject", "FPDFPageObj_GetType",
@@ -22,7 +22,7 @@
     "FPDFLink_GetURL", "FPDFLink_CountRects", "FPDFLink_GetRect", "FPDFLink_CloseWebLinks",
     "FPDFBitmap_CreateEx", "FPDFBitmap_Destroy", "FPDFBitmap_GetBuffer",
     "FPDFBitmap_GetFormat", "FPDFBitmap_GetHeight", "FPDFBitmap_GetStride",
-    "FPDFBitmap_GetWidth", "FPDFImageObj_GetBitmap", "FPDFImageObj_GetImagePixelSize",
+    "FPDFBitmap_GetWidth", "FPDFImageObj_GetRenderedBitmap", "FPDFPageObj_GetMatrix", "FPDFPageObj_SetMatrix", "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError"
   ],

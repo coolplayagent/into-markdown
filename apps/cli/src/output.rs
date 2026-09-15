@@ -3,6 +3,7 @@
 mod assets;
 mod bundle;
 mod commit;
+mod json;
 mod report;
 mod serialization;
 mod stdout;

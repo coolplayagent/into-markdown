@@ -8,6 +8,7 @@ pub(crate) mod image;
 mod image_tests;
 mod merge;
 mod navigation;
+mod original_attachment;
 mod package;
 mod path;
 mod reachability;

@@ -10,6 +10,7 @@ import platform
 import re
 import subprocess
 import time
+import zlib
 
 from samples import SAMPLES, acquire, excerpt, sha256
 
@@ -46,9 +47,23 @@ def mixed_links() -> bytes:
     ])
 
 
-def run_case(exe, root, env, name, inputs, expected=0, flags=()):
+def composite_figure() -> bytes:
+    content = b"0 0 1 rg 20 20 100 60 re f BT /F1 12 Tf 20 100 Td (Nested figure labels) Tj ET"
+    form = (b"<< /Type /XObject /Subtype /Form /BBox [0 0 200 200] /Resources << /Font << /F1 5 0 R >> >> /Length "
+            + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream")
+    return pdf([
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /XObject << /Figure 6 0 R >> >> /Contents 4 0 R >>",
+        stream(b"/Figure Do"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        form,
+    ])
+
+
+def run_case(exe, root, env, name, inputs, expected=0, flags=(), ocr="off"):
     output = root / f"{name}.md"
-    command = [str(exe), "--no-config", *map(str, inputs), "--ocr", "off", "--log-format", "json", "--conflict", "overwrite", "--timeout-ms", "600000", *flags]
+    command = [str(exe), "--no-config", *map(str, inputs), "--ocr", ocr, "--log-format", "json", "--conflict", "overwrite", "--timeout-ms", "600000", *flags]
     command += ["--output", str(output)] if len(inputs) == 1 else ["--output-dir", str(root / name)]
     sentinel = b"Existing output must survive failed conversion\n"
     if expected != 0 and len(inputs) == 1:
@@ -86,7 +101,7 @@ def public_cases(exe, root, env, report):
     record, text = run_case(exe, root, env, "calculus600", [selected], flags=["--max-memory-size", "8GiB", "--max-pdf-layout-comparisons", "120000000", "--asset-mode", "omit"])
     assert record["pages"] == 600 and "Calculus" in text
     report["cases"].append(record)
-    record, error = run_case(exe, root, env, "calculus-full-ir-boundary", [root / "CalculusVolume1-OP.pdf"], expected=5, flags=["--max-memory-size", "8GiB", "--asset-mode", "omit"])
+    record, error = run_case(exe, root, env, "calculus-full-ir-boundary", [root / "CalculusVolume1-OP.pdf"], expected=5, flags=["--error-policy", "strict", "--max-memory-size", "8GiB", "--asset-mode", "omit"])
     assert "documentInlines" in error
     report["cases"].append(record)
 
@@ -114,13 +129,66 @@ def main():
         report["cases"].append(record)
         for name, flags, expected, reason in [
             ("strict", ["--error-policy", "strict"], 3, "annotation[2]"),
-            ("page-budget", ["--max-pdf-page-objects", "1"], 5, "max_pdf_page_objects"),
-            ("total-budget", ["--max-pdf-total-objects", "1"], 5, "max_pdf_total_objects"),
+            ("page-budget", ["--max-pdf-page-objects", "1"], 0, "max_pdf_page_objects"),
+            ("total-budget", ["--max-pdf-total-objects", "1"], 0, "max_pdf_total_objects"),
+            ("strict-page-budget", ["--error-policy", "strict", "--max-pdf-page-objects", "1"], 5, "max_pdf_page_objects"),
+            ("strict-total-budget", ["--error-policy", "strict", "--max-pdf-total-objects", "1"], 5, "max_pdf_total_objects"),
             ("exact-budget", ["--max-pdf-page-objects", "2", "--max-pdf-total-objects", "2"], 0, "Retained public test body"),
         ]:
             record, text = run_case(exe, root, env, name, [source], expected, flags)
-            assert reason in text
+            assert reason in text or reason.replace("_", "\\_") in text
             report["cases"].append(record)
+        blank = root / "blank.pdf"
+        blank.write_bytes(pdf([b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>", b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] >>"]))
+        record, text = run_case(exe, root, env, "blank-page", [blank])
+        assert record["pages"] == 1 and list((root / "blank-page_assets").glob("*.png"))
+        report["cases"].append(record)
+        figure = root / "composite-figure.pdf"
+        figure.write_bytes(composite_figure())
+        record, text = run_case(exe, root, env, "composite-figure", [figure])
+        assert record["pages"] == 1 and "FORM" in text and "Nested figure labels" in text
+        assert list((root / "composite-figure_assets").glob("*.png"))
+        report["cases"].append(record)
+        record, text = run_case(exe, root, env, "recovery-without-repeat-ocr", [figure],
+                                flags=["--max-memory-size", "128MiB"], ocr="auto")
+        assert record["pages"] == 1 and "Nested figure labels" in text
+        assert list((root / "recovery-without-repeat-ocr_assets").glob("*.png"))
+        report["cases"].append(record)
+        large = root / "large-page.pdf"
+        large.write_bytes(pdf([
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 30000 1000] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+            stream(b"BT /F1 24 Tf 100 500 Td (Large page retained body) Tj ET"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        ]))
+        record, text = run_case(exe, root, env, "large-page", [large])
+        assert record["pages"] == 1 and "Large page retained body" in text
+        report["cases"].append(record)
+        wide_image = root / "wide-image.pdf"
+        pixels = zlib.compress(bytes([96]) * 20_000)
+        wide_image.write_bytes(pdf([
+            b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 5 0 R >> /XObject << /Im 6 0 R >> >> /Contents 4 0 R >>",
+            stream(b"BT /F1 12 Tf 20 250 Td (Wide image retained body) Tj ET q 250 0 0 10 20 100 cm /Im Do Q"),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            b"<< /Type /XObject /Subtype /Image /Width 20000 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length "
+            + str(len(pixels)).encode() + b" >>\nstream\n" + pixels + b"\nendstream",
+        ]))
+        record, text = run_case(exe, root, env, "wide-image", [wide_image])
+        assert record["pages"] == 1 and "Wide image retained body" in text
+        assert list((root / "wide-image_assets").glob("*.bmp")), "small wide image lost to a dimension cap"
+        report["cases"].append(record)
+        damaged = root / "damaged.pdf"
+        damaged.write_bytes(b"%PDF-1.4\nreadable original with damaged catalog")
+        record, text = run_case(exe, root, env, "damaged-original", [damaged])
+        originals = list((root / "damaged-original_assets").glob("*.pdf"))
+        assert len(originals) == 1 and sha256(originals[0]) == sha256(damaged)
+        assert "all pages" in text
+        report["cases"].append(record)
+        record, _ = run_case(exe, root, env, "damaged-strict", [damaged], expected=3, flags=["--error-policy", "strict"])
+        report["cases"].append(record)
         other = root / "第二个.pdf"
         other.write_bytes(mixed_links())
         record, _ = run_case(exe, root, env, "batch", [source, other])

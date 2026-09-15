@@ -31,6 +31,21 @@ impl ExecutionContext {
         lock_unpoisoned(&self.shared.resources.ocr).runtime
     }
 
+    /// Record terminal source-image outcomes independently of merged text and worker calls.
+    pub fn record_ocr_images(&self, completed: u64, with_text: u64, failed: u64, skipped: u64) {
+        let mut state = lock_unpoisoned(&self.shared.resources.ocr);
+        let usage = &mut state.runtime;
+        usage.image_sources = usage
+            .image_sources
+            .saturating_add(completed.saturating_add(failed).saturating_add(skipped));
+        usage.images_attempted =
+            usage.images_attempted.saturating_add(completed.saturating_add(failed));
+        usage.images_completed = usage.images_completed.saturating_add(completed);
+        usage.images_with_text = usage.images_with_text.saturating_add(with_text.min(completed));
+        usage.images_failed = usage.images_failed.saturating_add(failed);
+        usage.images_skipped = usage.images_skipped.saturating_add(skipped);
+    }
+
     /// Record an assigned worker allowance without retaining per-image history.
     pub fn record_ocr_request(&self, bytes: u64) {
         let mut state = lock_unpoisoned(&self.shared.resources.ocr);

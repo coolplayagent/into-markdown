@@ -23,6 +23,17 @@ pub fn merge_pdf_ocr(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
+    // Recovery pages already preserve the source image, OCR supplement and native
+    // transcript in reading order. Retrying failed geometry would mix them again.
+    if !source.document.blocks.is_empty()
+        && source
+            .document
+            .blocks
+            .iter()
+            .all(|node| node.provenance.provider == "builtin.pdf.recovery")
+    {
+        return Ok(source);
+    }
     let document = std::mem::take(&mut source.document);
     let mut merged = into_markdown_ocr::merge_document(document, pages, merge_config, context)?;
     source.diagnostics.try_reserve_exact(merged.diagnostics.len()).map_err(|_| {
@@ -53,6 +64,17 @@ pub(crate) fn reconstruct_enriched_pdf(
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
     context.checkpoint()?;
+    // Recovery pages already preserve the source image, OCR supplement and native
+    // transcript in reading order. Retrying failed geometry would mix them again.
+    if !source.document.blocks.is_empty()
+        && source
+            .document
+            .blocks
+            .iter()
+            .all(|node| node.provenance.provider == "builtin.pdf.recovery")
+    {
+        return Ok(source);
+    }
     let document = std::mem::take(&mut source.document);
     let layout_config = LayoutConfig {
         limits: into_markdown_pdf_layout::LayoutLimits {
@@ -66,8 +88,9 @@ pub(crate) fn reconstruct_enriched_pdf(
             ..into_markdown_pdf_layout::LayoutLimits::default()
         },
     };
-    let layout = reconstruct_document(document, &layout_config, context)?;
-    let (document, reservation) = layout.into_parts();
+    let (document, reservation, mut diagnostics) =
+        crate::pdf::recovery::layout(document, &layout_config, &[], options.error_policy, context)?;
+    source.diagnostics.append(&mut diagnostics);
     source.document = document;
     if let Some(reservation) = reservation {
         source.attach_memory_reservation(context, reservation)?;
@@ -173,4 +196,30 @@ mod tests {
             ));
         }
     }
+}
+
+/// Finish page-local layout with document-wide header/footer annotation.
+pub(crate) fn finish_pdf_pages(
+    mut output: ConverterOutput,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+) -> Result<ConverterOutput, ConversionError> {
+    output = crate::pdf::recovery::compact_for_delivery(output, options.error_policy, context)?;
+    if let Err(error) = into_markdown_pdf_layout::annotate_running_matter(
+        &mut output.document,
+        &LayoutConfig::default(),
+        context,
+    ) {
+        if !crate::pdf::recovery::recoverable(options.error_policy, &error) {
+            return Err(error);
+        }
+        context.checkpoint()?;
+        output.diagnostics.push(crate::pdf::recovery::diagnostic(
+            None,
+            "running-matter",
+            "pageLayout",
+            &error,
+        ));
+    }
+    output.account_retained(context)
 }

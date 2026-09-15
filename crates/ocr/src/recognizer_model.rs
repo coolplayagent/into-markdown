@@ -99,10 +99,10 @@ pub fn ppocrv6_recognizer_contract() -> ModelContract {
             name: "x".into(),
             element_type: TensorElementType::Float32,
             dimensions: vec![
-                Dimension::Dynamic { min: 1, max: 8 },
+                Dimension::Dynamic { min: 1, max: usize::MAX },
                 Dimension::Exact(3),
                 Dimension::Exact(48),
-                Dimension::Dynamic { min: 1, max: 3200 },
+                Dimension::Dynamic { min: 1, max: usize::MAX },
             ],
         }],
         overridable_inputs: Vec::new(),
@@ -110,8 +110,8 @@ pub fn ppocrv6_recognizer_contract() -> ModelContract {
             name: "fetch_name_0".into(),
             element_type: TensorElementType::Float32,
             dimensions: vec![
-                Dimension::Dynamic { min: 1, max: 8 },
-                Dimension::Dynamic { min: 1, max: 1024 },
+                Dimension::Dynamic { min: 1, max: usize::MAX },
+                Dimension::Dynamic { min: 1, max: usize::MAX },
                 Dimension::Exact(6906),
             ],
         }],

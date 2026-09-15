@@ -432,10 +432,26 @@ fn structural_work_and_animated_frame_limits_fail_before_codec_entry() {
 }
 
 #[test]
+fn jpeg_camera_trailer_preserves_primary_image_and_original_bytes() {
+    let options = options();
+    let mut bytes = encoded(ImageFormat::Jpeg);
+    bytes.extend_from_slice(b"camera metadata\0SEFT");
+    let decoded = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((decoded.width(), decoded.height()), (3, 2));
+    let output = block_on(convert_image(
+        &input(bytes.clone(), "camera.jpg"),
+        &options,
+        &Services::default(),
+        &context(&options),
+    ))
+    .unwrap();
+    assert_eq!(output.assets[0].bytes, bytes);
+}
+
+#[test]
 fn exact_envelopes_reject_trailing_bytes_and_invalid_png_structure() {
     for (format, name) in [
         (ImageFormat::Png, "trailing.png"),
-        (ImageFormat::Jpeg, "trailing.jpg"),
         (ImageFormat::WebP, "trailing.webp"),
         (ImageFormat::Bmp, "trailing.bmp"),
     ] {
@@ -473,17 +489,39 @@ fn exact_envelopes_reject_trailing_bytes_and_invalid_png_structure() {
     .unwrap_err();
     assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed);
     assert_eq!(reserved_bit_context.reserved_memory_bytes(), 0);
+}
 
-    let mut tiff = multi_tiff();
-    tiff.push(0);
-    let error = block_on(convert_image(
-        &input(tiff, "trailing.tiff"),
+#[test]
+fn tiff_unused_bytes_preserve_decoding_and_all_frames() {
+    let options = options();
+    let mut bytes = multi_tiff();
+    bytes.extend_from_slice(b"producer metadata retained after image segments");
+    let output = block_on(convert_image(
+        &input(bytes, "trailing.tiff"),
         &options,
         &Services::default(),
         &context(&options),
     ))
-    .unwrap_err();
-    assert_eq!(error.code(), into_markdown_core::ErrorCode::Malformed);
+    .unwrap();
+    assert_eq!(output.document.blocks.len(), 2);
+    assert_eq!(output.assets.len(), 3);
+
+    let mut bytes = oriented_tiff();
+    let old_ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+    let directory = bytes[old_ifd..].to_vec();
+    bytes.extend_from_slice(&[0x7f; 14]);
+    let new_ifd = u32::try_from(bytes.len()).unwrap();
+    bytes.extend_from_slice(&directory);
+    bytes[4..8].copy_from_slice(&new_ifd.to_le_bytes());
+    let output = block_on(convert_image(
+        &input(bytes, "relocated-directory.tiff"),
+        &options,
+        &Services::default(),
+        &context(&options),
+    ))
+    .unwrap();
+    assert_eq!(output.document.blocks.len(), 1);
+    assert_eq!(output.assets.len(), 2);
 }
 
 #[test]
@@ -731,6 +769,11 @@ fn remote_vision_ocr_runs_when_local_ocr_is_off_without_fabricating_local_eviden
     assert!(matches!(inlines.as_slice(), [Inline::Text { value, .. }] if value == "remote text"));
     assert_eq!(context.resource_usage().ocr_recognized_regions, 1);
     assert_eq!(context.resource_usage().ocr_recognized_chars, 11);
+    let usage = context.ocr_runtime_usage();
+    assert_eq!(usage.image_sources, 1);
+    assert_eq!(usage.images_completed, 1);
+    assert_eq!(usage.images_with_text, 1);
+    assert_eq!(usage.images_skipped, 0);
 }
 
 impl OcrEngine for WorkingSetOcr {

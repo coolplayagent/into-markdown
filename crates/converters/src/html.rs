@@ -1,5 +1,8 @@
 //! Offline HTML5 parsing and deterministic semantic extraction.
 
+mod charset;
+use charset::html_charset;
+
 use base64::Engine as _;
 use html5ever::interface::tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink};
 use html5ever::tendril::{StrTendril, TendrilSink};
@@ -22,7 +25,7 @@ use super::text::{DecodedText, LogicalMemory, decode_source};
 
 const FORMATS: &[InputFormat] = &[InputFormat::Html];
 const PROVIDER_ID: &str = "builtin.converter.html";
-const MAX_HTML_EVENTS: usize = 1_000_000;
+const PARSER_WORK_ESTIMATE_UNITS: usize = 1_000_000;
 const META_PRESCAN_BYTES: usize = 1024;
 const CHECKPOINT_EVENTS: usize = 1024;
 const SOURCE_LOCATION_MESSAGE: &str = "HTML5 tree construction can synthesize or reparent nodes; ambiguous DOM nodes intentionally have no fabricated byte span";
@@ -973,13 +976,6 @@ impl Dom {
         }
         let next = self.events.get().saturating_add(1);
         self.events.set(next);
-        if next > MAX_HTML_EVENTS {
-            self.set_error_once(ConversionError::ResourceLimit {
-                limit: "html_events",
-                detail: format!("HTML parser exceeded {MAX_HTML_EVENTS} tree events"),
-            });
-            return false;
-        }
         if next.is_multiple_of(CHECKPOINT_EVENTS)
             && let Err(error) = self.context.checkpoint()
         {
@@ -1375,7 +1371,21 @@ pub(crate) fn convert_html(
     options: &ConversionOptions,
     context: &ExecutionContext,
 ) -> Result<ConverterOutput, ConversionError> {
-    convert_html_with_images(input, &[], options, context)
+    match convert_html_with_images(input, &[], options, context) {
+        Err(ConversionError::Malformed { detail, .. })
+            if detail == "HTML contains no visible document content" =>
+        {
+            crate::media::source_attachment::empty_body(
+                input,
+                options,
+                context,
+                "text/html",
+                "HTML analysis found no main document body. The complete original HTML is attached for inspection.",
+                ConverterOutput::default(),
+            )
+        }
+        result => result,
+    }
 }
 
 /// A container-owned image that may replace one exact canonical `cid:` reference.
@@ -1423,7 +1433,7 @@ fn convert_html_with_images(
     diagnostics.extend(decoded_diagnostics);
     diagnostics.extend(charset_diagnostics);
     // This reservation represents cooperative parser work, not html5ever's allocator or RSS.
-    let event_units = decoded.text.len().saturating_mul(4).min(MAX_HTML_EVENTS);
+    let event_units = decoded.text.len().saturating_mul(4).min(PARSER_WORK_ESTIMATE_UNITS);
     let parser_work = decoded
         .text
         .len()
@@ -1570,44 +1580,6 @@ pub(crate) fn convert_feed_html_fragment(
             Err(error)
         }
     }
-}
-
-fn html_charset(
-    input: &ResolvedInput,
-    options: &ConversionOptions,
-    context: &ExecutionContext,
-) -> Result<(Option<String>, Vec<Diagnostic>), ConversionError> {
-    let explicit = options
-        .text
-        .charset
-        .as_deref()
-        .or_else(|| input.metadata.media_type.as_deref().and_then(media_type_charset));
-    if let Some(explicit) = explicit {
-        let mut diagnostics = Vec::new();
-        if let Some(meta) = prescan_meta_charset(&input.bytes, context)?
-            && !meta.eq_ignore_ascii_case(explicit)
-        {
-            diagnostics.push(warning(
-                "html.metaCharsetIgnored",
-                format!("meta charset {meta} conflicts with explicit charset {explicit}"),
-            ));
-        }
-        return Ok((Some(explicit.to_owned()), diagnostics));
-    }
-    Ok((prescan_meta_charset(&input.bytes, context)?, Vec::new()))
-}
-
-fn media_type_charset(value: &str) -> Option<&str> {
-    value
-        .split(';')
-        .skip(1)
-        .find_map(|parameter| {
-            let (name, value) = parameter.split_once('=')?;
-            name.trim()
-                .eq_ignore_ascii_case("charset")
-                .then(|| value.trim().trim_matches(['\'', '"']))
-        })
-        .filter(|value| !value.is_empty())
 }
 
 fn prescan_meta_charset(
@@ -3978,19 +3950,20 @@ mod tests {
     }
 
     #[test]
-    fn only_navigation_has_stable_empty_body_failure() {
-        let error = convert_html(
-            &ResolvedInput {
-                bytes: Arc::from(b"<nav><p>menu only</p></nav>".as_slice()),
-                metadata: SourceMetadata::default(),
-            },
-            &ConversionOptions::default(),
-            &context(),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, ConversionError::Malformed { part: Some(part), .. } if part == "html")
-        );
+    fn only_navigation_retains_original_with_explicit_recovery() {
+        let input = ResolvedInput {
+            bytes: Arc::from(b"<nav><p>menu only</p></nav>".as_slice()),
+            metadata: SourceMetadata::default(),
+        };
+        let output = convert_html(&input, &ConversionOptions::default(), &context()).unwrap();
+        assert_eq!(output.assets[0].bytes.as_slice(), input.bytes.as_ref());
+        assert!(output.diagnostics.iter().any(|d| d.code == "conversion.recovery.originalFile"));
+        let mut strict = ConversionOptions::default();
+        strict.error_policy = into_markdown_core::ErrorPolicy::Strict;
+        assert!(matches!(
+            convert_html(&input, &strict, &context()),
+            Err(ConversionError::EmptyContent)
+        ));
     }
 
     #[test]
@@ -4053,6 +4026,14 @@ mod tests {
             .as_deref(),
             Some("windows-1252")
         );
+    }
+
+    #[test]
+    fn html_tree_events_continue_past_million_without_a_hidden_stop() {
+        let dom = Dom::new(&ConversionOptions::default(), &context()).unwrap();
+        dom.events.set(1_000_000);
+        assert!(dom.event());
+        assert!(dom.error.borrow().is_none());
     }
 
     #[test]

@@ -6,7 +6,7 @@ use super::{
     normalize_lf, render_code_span, render_error, single_line, validate_link_target,
 };
 
-fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
+pub(super) fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
     match inline {
         Inline::Text { value, marks }
         | Inline::SourceText { value, marks, .. }
@@ -15,7 +15,7 @@ fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
     }
 }
 
-fn same_marks(left: &[InlineMark], right: &[InlineMark]) -> bool {
+pub(super) fn same_marks(left: &[InlineMark], right: &[InlineMark]) -> bool {
     left.len() == right.len() && left.iter().all(|mark| right.contains(mark))
 }
 

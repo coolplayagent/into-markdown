@@ -414,7 +414,7 @@ fn tiff_limits(limits: &ResourceLimits) -> Result<TiffLimits, ConversionError> {
     // a smaller fixed constant rejects high-resolution exports even when the
     // caller explicitly grants enough decompression and request memory.
     decoder_limits.intermediate_buffer_size = allocation;
-    decoder_limits.ifd_value_size = allocation.min(16 * 1024 * 1024);
+    decoder_limits.ifd_value_size = allocation;
     Ok(decoder_limits)
 }
 
@@ -487,7 +487,7 @@ mod resource_bound_tests {
     use super::*;
 
     #[test]
-    fn tiff_segment_limit_tracks_the_request_budget_without_a_fixed_64_mib_cap() {
+    fn tiff_buffers_and_metadata_follow_the_request_budget() {
         let granted = 512 * 1024 * 1024;
         let limits = ResourceLimits {
             max_memory_bytes: granted,
@@ -497,7 +497,7 @@ mod resource_bound_tests {
         let decoder = tiff_limits(&limits).unwrap();
         assert_eq!(decoder.decoding_buffer_size, granted as usize);
         assert_eq!(decoder.intermediate_buffer_size, granted as usize);
-        assert_eq!(decoder.ifd_value_size, 16 * 1024 * 1024);
+        assert_eq!(decoder.ifd_value_size, granted as usize);
     }
 
     #[test]

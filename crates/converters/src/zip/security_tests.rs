@@ -343,3 +343,31 @@ fn le16(output: &mut Vec<u8>, value: u16) {
 fn le32(output: &mut Vec<u8>, value: u32) {
     output.extend_from_slice(&value.to_le_bytes());
 }
+
+#[test]
+fn mixed_encryption_inventory_preserves_readable_members_without_decoding_secrets() {
+    let mut bytes = stored(&[("readable.txt", b"Readable body"), ("secret.txt", b"secret")]);
+    let central = central_offsets(&bytes)[1];
+    let local = local_offset(&bytes, central);
+    bytes[local + 6..local + 8].copy_from_slice(&1_u16.to_le_bytes());
+    bytes[central + 8..central + 10].copy_from_slice(&1_u16.to_le_bytes());
+    let options = ConversionOptions::default();
+    assert_eq!(open(&bytes, &options).unwrap_err().code(), ErrorCode::Encrypted);
+    let context = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+    let mut budget = ArchiveBudget::new(&options, &context);
+    let mut archive = Archive::open_recovering(&bytes, 1, &mut budget, true).unwrap();
+    let entries = archive.take_entries();
+    assert_eq!(archive.read_entry(&entries[0], &mut budget).unwrap().bytes, b"Readable body");
+    assert!(matches!(
+        archive.read_entry(&entries[1], &mut budget),
+        Err(ConversionError::Encrypted)
+    ));
+    let central = central_offsets(&bytes)[0];
+    let local = local_offset(&bytes, central);
+    bytes[local + 6..local + 8].copy_from_slice(&1_u16.to_le_bytes());
+    bytes[central + 8..central + 10].copy_from_slice(&1_u16.to_le_bytes());
+    assert!(matches!(
+        Archive::open_recovering(&bytes, 1, &mut budget, true),
+        Err(ConversionError::Encrypted)
+    ));
+}

@@ -35,6 +35,14 @@ impl<'a> LegacyBudget<'a> {
         Ok(Self { options, context, entries: 0, expanded_bytes: 0, work: 0, assets: 0 })
     }
 
+    pub(super) fn jpeg_end(&self, bytes: &[u8]) -> Result<usize, ConversionError> {
+        crate::image_converter::envelope::jpeg_codestream_end(
+            bytes,
+            &self.options.limits,
+            self.context,
+        )
+    }
+
     pub(super) fn checkpoint(&self) -> Result<(), ConversionError> {
         self.context.checkpoint()
     }

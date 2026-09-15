@@ -1,3 +1,5 @@
+#[path = "source_attachment.rs"]
+pub(crate) mod source_attachment;
 use into_markdown_core::{
     Block, BoxFuture, ChineseScript, ConversionError, ConversionOptions, Converter,
     ConverterOutput, Diagnostic, DiagnosticSeverity, DiarizationRequest, Document,
@@ -75,12 +77,7 @@ impl Converter for MediaConverter {
                     detail: "media transcription requires an installed local media plugin or an enabled remote Provider".into(),
                 }
             })?;
-            let media_type =
-                input.metadata.media_type.as_deref().unwrap_or(match candidate.format {
-                    InputFormat::Audio => "audio/octet-stream",
-                    InputFormat::Video => "video/octet-stream",
-                    _ => unreachable!(),
-                });
+            let media_type = source_media_type(input, candidate);
             let mut result = transcriber
                 .transcribe(
                     TranscriptionRequest {
@@ -207,9 +204,38 @@ impl Converter for MediaConverter {
                     .properties
                     .insert("media.languageConfidence".into(), format!("{confidence:.6}"));
             }
-            Ok(ConverterOutput::new(document, Vec::new(), diagnostics))
+            let output = ConverterOutput::new(document, Vec::new(), diagnostics);
+            finish_transcript(input, options, context, media_type, output)
         })
     }
+}
+
+fn source_media_type<'a>(input: &'a ResolvedInput, candidate: &FormatCandidate) -> &'a str {
+    input.metadata.media_type.as_deref().unwrap_or(match candidate.format {
+        InputFormat::Audio => "audio/octet-stream",
+        InputFormat::Video => "video/octet-stream",
+        _ => unreachable!(),
+    })
+}
+
+fn finish_transcript(
+    input: &ResolvedInput,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    media_type: &str,
+    output: ConverterOutput,
+) -> Result<ConverterOutput, ConversionError> {
+    if into_markdown_core::document_is_empty(&output.document) {
+        return source_attachment::empty_body(
+            input,
+            options,
+            context,
+            media_type,
+            "Transcription completed without accepted speech text. The complete original media is attached for listening or further transcription.",
+            output,
+        );
+    }
+    Ok(output)
 }
 
 fn valid_anonymous_speaker(value: &str, maximum: u16) -> bool {

@@ -243,9 +243,9 @@ markdown-postprocess
   `--max-decompressed-size`、`--max-memory-size`、输入/资产额度和当前可用共享预算共同决定。
   提高这些预算可处理更大的源图，但不会放宽识别模型的文字区域、归一化宽度、张量和输出结构
   边界。Web 请求继续受服务端固定资源 profile 约束。
-- 正式 OCR provider 的 coordinator 与 ONNX worker 共享 2 GiB 物理内存硬上限。它独立于源图
-  尺寸准入，识别请求还会被当前请求的共享内存预算进一步收紧；上限保持有限，以便异常模型或
-  子进程稳定返回 `resourceLimit`，不会演变为机器级内存失控。
+- 正式 OCR provider 的 coordinator 与 ONNX worker 共享当前请求分配的物理内存预算。
+  工作额度取请求配置与剩余共享工作租约，释放上一图片的工作区后继续处理下一图片。
+  包元数据使用协议可精确表示的整数范围；实际执行始终按本次分配的额度观测和约束进程组。
 - PDF、Office、ODF、EPUB、HTML、Notebook、ZIP 与 MSG 的内嵌图片 OCR 共享逐图片工作集
   生命周期：完整结构和资产边界先验证，归一化及 provider 工作区只保留当前图片，实际识别
   正文按产生量占用共享预算。`--asset-mode omit` 会在每个图片身份完成后释放 payload，并在
@@ -253,30 +253,21 @@ markdown-postprocess
 - 单帧、无 alpha 通道且无需 OCR、视觉 AI 或旋转归一化的 PNG、JPEG、BMP 和静态 WebP，
   在完整封装校验后只读取图像头并直通原始编码，不分配整张 RGBA 像素缓冲。TIFF、动画 WebP
   以及确实需要推理或归一化的图片仍按完整帧工作集预检；超出共享预算时返回资源限制。
-- PPTX 每个 XML 部件默认最多 2,000,000 个非 EOF 事件（开始、空元素、结束、文本等），
-  包含未选中的 MCE 分支；`--max-presentation-xml-events` 可调整且必须大于零。
-  深度、几何、解压、内存与最终 IR 限制继续独立生效。Web 请求最多取默认值，可下调。
-- PDF 单页原始对象默认上限 100,000，单份 PDF 累计原始对象默认上限 10,000,000，
-  版面比较默认上限 12,000,000。对应 `--max-pdf-page-objects`、
-  `--max-pdf-total-objects`、`--max-pdf-layout-comparisons`；均拒绝零值，单页最多
-  10,000,000。最终 IR、资产、页数、内存和执行时间继续独立限制。
-- 本地 CLI 的 `auto` 在每次调用开始时探测一次总内存 T 与可用内存 A，系统余量
-  R = max(1 GiB, T / 8)，共享预算 B = min(3T / 4, A − R)。A 不足以覆盖余量时拒绝准入。
-  仅探测到 T 时采用 min(2 GiB, T / 4)，仅探测到 A 时采用 min(2 GiB, A − 1 GiB)，
-  两者均不可得时采用 2 GiB；缺失值在预算快照中保留为 null。预算覆盖整个批处理，
-  不随 `--jobs` 倍增。CLI 参数优先于配置，显式数值保持原值。本地未显式配置资产额度时，
-  总资产额度取 clamp(B / 2, 1 GiB, 4 GiB)，单项资产额度取
-  min(clamp(B / 4, 256 MiB, 2 GiB), 总资产额度)；配置文件与命令行对两个字段的显式值
-  分别优先。Core API 默认值与 Web 安全上限保持固定。
-- 本地未显式配置的 `max_asset_bytes` 与 `max_total_asset_bytes` 是软额度。转换器得到完整
-  资产清单后，可在不改变 B 的前提下对每个字段精确提升一次；提升值不得超过 B，并产生
-  `resource.<limit>.limitRaised`。配置文件或命令行的显式值始终是不可突破的用户边界。
-  `max_memory_bytes`、解压/嵌套安全额度及 Web/Core API 额度不会自动提升。
+- 文件、解压成员、页数、对象与事件数量默认采用接口可表示范围，转换按实际内存和磁盘工作量运行。
+  `--max-presentation-xml-events`、`--max-pdf-page-objects`、`--max-pdf-total-objects` 等显式限制继续生效。
+  PDF 单页对象数遵循 PDFium 有符号整数范围；每页每次版面比较默认预算为 12,000,000。
+  比较预算耗尽时，最佳努力模式保留正文并交付页面图像。
+- 本地 CLI 的 `auto` 使用探测到的总内存作为整次批处理的稳定共享预算 B。可用内存快照
+  用于报告观察；系统缓存或其他应用造成的瞬时变化由操作系统管理。总内存探测缺失时使用
+  已知可用内存，均不可得时使用 Core 默认预算 2 GiB。缺失探测值保持 null，
+  `systemReserveBytes` 为 0。预算不随 `--jobs` 倍增，CLI 与配置中的显式内存值保持原值。
+  本地未显式配置的总资产额度取 B，单项额度取 min(B, 总资产额度)。两个资产字段的
+  显式值分别优先；Web 与 CLI 共用运行服务所在机器的自动预算，Core API 支持调用方提供预算。
 - 超过统一 IR 节点阈值的大型 XLS、XLSX 与 XLSB 会按工作簿顺序切成每块最多 2048 行的 TSV fenced
   block，所有块仍写入同一个最终 Markdown，并报告 `spreadsheet.largeTablePaged`。普通
   工作簿继续输出 GFM table；分页不会放宽 `max_table_rows`、`max_table_cells` 或 ZIP
   解压边界，发布门禁可显式提高这些结构上限，同时继续由共享内存预算约束实际处理。
-- `best-effort` 是默认错误策略，表示在固定安全预算内交付可定位的部分结果。OCR `auto`
+- `best-effort` 是默认错误策略，表示在实际资源预算内交付可定位的恢复结果。OCR `auto`
   和 `always` 遇到单页/单图的识别私有内存、识别作用域 `max_memory_bytes`、宽度、crop
   像素、张量、输出、regions 和 decoded 上限时，回滚该视觉单元并保留原图、原生正文或
   就地占位；扫描页和无原生正文页同样继续后续内容。隔离进程结构化报告的
@@ -289,7 +280,7 @@ markdown-postprocess
   `resource.<limit>.sequenceTruncated`；独立附件、关系或 ZIP 成员可回滚时使用
   `resource.<limit>.unitOmitted`。单项资产超限时保留外部引用或就地 alt 占位；总资产额度
   达到后保留已接纳 payload 并截断后续 payload。`strict` 在第一个同类错误处失败。
-- 源文件准入、必要根结构、加密、压缩炸弹/越界/嵌套安全、共享内存无法容纳固定诊断或
+- 源文件读取失败、加密、越界访问、共享内存无法容纳固定诊断或
   最终渲染、provider 崩溃/协议错误、取消、超时以及输出提交 I/O 保持终止。CLI 流式产物
   在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM；
   临时空间不足时 best-effort 保留引用并省略后续 payload，strict 失败。

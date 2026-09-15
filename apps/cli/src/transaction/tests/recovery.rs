@@ -426,7 +426,9 @@ fn recovery_ignores_only_an_incomplete_journal_tail() {
 #[test]
 
 fn deep_parent_without_a_lease_never_uses_an_ancestor_scan_limit() {
-    for depth in [130_usize, 500] {
+    // Keep sibling transaction names within macOS PATH_MAX while exercising
+    // directory depths beyond the former 128-ancestor boundary.
+    for depth in [130_usize, 450] {
         let temporary = tempfile::tempdir().unwrap();
         let mut parent = temporary.path().canonicalize().unwrap();
         let mut supported = true;

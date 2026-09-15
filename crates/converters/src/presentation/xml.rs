@@ -58,7 +58,7 @@ pub(super) fn preflight_xml(
     config.allow_unmatched_ends = false;
     config.check_end_names = true;
     config.check_comments = true;
-    let maximum_depth = usize::from(options.limits.max_nesting_depth);
+    let maximum_depth = usize::from(options.limits.max_nesting_depth).min(bytes.len() / 3);
     let working_set_bytes = u64::try_from(bytes.len())
         .unwrap_or(u64::MAX)
         .checked_mul(4)

@@ -17,7 +17,8 @@ use into_markdown_core::{
 use std::collections::BTreeMap;
 
 const TSV_CHUNK_TARGET_BYTES: usize = 4 * 1024 * 1024;
-pub(in crate::workbook) const NATIVE_TABLE_NODE_CEILING: u64 = MAX_DOCUMENT_NODES as u64;
+// Flush bounded table chunks without imposing a document-wide content ceiling.
+pub(in crate::workbook) const NATIVE_TABLE_NODE_CEILING: u64 = 100_000;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum EmissionMode {

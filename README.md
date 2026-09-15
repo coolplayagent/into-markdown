@@ -3,27 +3,26 @@
 [English](README.en.md) · [文档导航](docs/README.md)
 
 Into Markdown 是本地优先、默认离线的文档转 Markdown 产品。它提供统一的 Rust 转换核心、
-`into-md` CLI、本地 Web 工作台、稳定 JSON/Bundle 接口，以及两个自包含的可选能力插件。
+`into-md` CLI、本地 Web 工作台、稳定 JSON/Bundle 接口，内置 OCR，以及自包含的可选语音插件。
 所有内容先进入带诊断与溯源的 Document IR，再由唯一的确定性渲染器生成 GFM。
 
 ## 产品组成
 
 - Core：CLI、Web 工作台、Document IR、格式检测与转换、PDFium、安全输出事务、插件与
-  Provider 管理、安装后验收工具。
-- OCR 插件 `official.ocr.ppocrv6`：PP-OCRv6、ONNX Runtime、worker、模型与字符表。
+  Provider 管理、内置 OCR 与安装后验收工具。
+- 内置 OCR：PP-OCRv6、ONNX Runtime、worker、模型与字符表随 Core 提供。
 - 语音插件 `official.media.whisper`：FFmpeg、Whisper、VAD、说话人分离模型与运行时。
 - Agent Skill `into-markdown`：指导兼容 agent 使用已安装的 `into-md`，同时提供独立 ZIP 并
   以相同字节内置于每个平台 Core。
 
-OCR 与语音所需的模型和运行时随完整能力插件安装、校验和更新。普通转换复用已安装的
-插件；能力安装由显式 `setup` 操作完成。
+OCR 随 Core 校验和更新。语音所需模型和运行时随完整语音插件安装；`setup media` 显式安装语音能力，普通转换复用已安装插件。
 
 ## 支持范围
 
 当前格式 catalog 包含 PDF、DOCX、PPTX、XLSX、ODT/ODS/ODP、RTF、EPUB、
 TXT、Markdown、HTML、CSV/TSV、JSON、XML、RSS/Atom Feed、Jupyter Notebook、图片、ZIP、
-Outlook MSG、音频和视频。Office 97–2003 的 DOC/PPT/XLS 由 Core 原生提供；OCR、语音转写与
-说话人分离由对应能力插件提供。
+Outlook MSG、音频和视频。Office 97–2003 的 DOC/PPT/XLS 与 OCR 由 Core 提供；语音转写与
+说话人分离由语音插件提供。
 
 支持 macOS ARM64、Linux x86_64、Linux ARM64 和 Windows x86_64；不支持 macOS x86_64。
 最终用户的签名校验、安装、离线插件导入、排障和卸载见[安装与部署](docs/user-guide.md)；
@@ -63,13 +62,12 @@ into-md documents/ --recursive --output-dir markdown/ \
 ```sh
 into-md capabilities list --json
 into-md capabilities show ocr --json
-into-md setup ocr
 into-md setup media
 into-md doctor --json
 into-md ui
 ```
 
-`setup` 是安装并验证完整官方能力插件的显式管理命令。`into-md ui` 只监听
+`setup media` 显式安装并验证语音插件；OCR 随 Core 提供。`into-md ui` 只监听
 `127.0.0.1`，提供批量转换、进度与取消、任务历史、产物预览/下载，以及格式、能力、
 Provider、插件、配置和诊断管理。Web 与 CLI 复用相同的能力路由、配置和安全边界。
 
@@ -78,8 +76,7 @@ Provider、插件、配置和诊断管理。Web 与 CLI 复用相同的能力路
 
 ## Agent Skill
 
-Agent Skill 由用户将发布件 `into-markdown-skill.zip` 解压到 agent 的 skill 发现目录，或从
-每个平台 Core 内的 `share/into-markdown/skills/into-markdown/` 复制或建立链接。Codex 可显式
+Agent Skill 由用户将发布件 `into-markdown-skill.zip` 解压到 agent 的 skill 发现目录。Codex 可显式
 调用 `$into-markdown`，也可在匹配的转换任务中自动选择它。
 
 安装、校验与发布契约见 [Agent Skill 发布与安装](docs/agent-skill.md)。

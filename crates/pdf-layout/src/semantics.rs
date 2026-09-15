@@ -139,7 +139,9 @@ pub(crate) fn take_line_inlines(line: Line) -> Result<Vec<Inline>, ConversionErr
         .try_reserve_exact(line.atoms.len().saturating_mul(2))
         .map_err(|_| memory("layout inline materialization"))?;
     let mut prior: Option<(Rect, u16, char)> = None;
-    for atom in line.atoms {
+    let baseline = crate::baseline::reference(&line.atoms);
+    for mut atom in line.atoms {
+        crate::baseline::mark_script(&mut atom, baseline)?;
         let text = lines::inline_text(&atom.inline);
         let first = text.chars().next();
         if let (Some((bounds, orientation, last)), Some(first)) = (prior, first)
@@ -152,6 +154,10 @@ pub(crate) fn take_line_inlines(line: Line) -> Result<Vec<Inline>, ConversionErr
             prior = Some((atom.bounds, atom.orientation, last));
         }
         spaced.push(atom.inline);
+        if atom.space_after {
+            spaced.push(Inline::Text { value: " ".into(), marks: Vec::new() });
+            prior = prior.map(|(bounds, orientation, _)| (bounds, orientation, ' '));
+        }
     }
     Ok(spaced)
 }
@@ -175,9 +181,10 @@ fn gap_requires_space(
 fn append_line(output: &mut Vec<Inline>, mut next: Vec<Inline>) -> Result<(), ConversionError> {
     let left = last_text_char(output);
     let right = first_text_char(&next);
-    if left.is_some_and(|value| value.is_ascii_alphanumeric())
-        && right.is_some_and(|value| value.is_ascii_alphanumeric())
-        && left.is_none_or(|value| value != '-')
+    if left.is_some_and(|value| {
+        value.is_ascii_alphanumeric()
+            || matches!(value, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '"')
+    }) && right.is_some_and(|value| value.is_ascii_alphanumeric())
     {
         output.try_reserve(1).map_err(|_| memory("layout paragraph space"))?;
         output.push(Inline::Text { value: " ".into(), marks: Vec::new() });
@@ -329,10 +336,19 @@ fn footnote_marker(line: &Line, median: Option<f32>, page_height: f32) -> Option
         return None;
     }
     let rest = &trimmed[digits.len()..];
-    if !(rest.starts_with(' ') || rest.starts_with('.') || rest.starts_with(')')) {
+    // Decimal section/table numbers such as 1.1 carry their own identity.
+    let separator = if rest.starts_with(char::is_whitespace) {
+        0
+    } else if let Some(after) = rest.strip_prefix(['.', ')']) {
+        if !after.starts_with(char::is_whitespace) {
+            return None;
+        }
+        1
+    } else {
         return None;
-    }
-    Some((digits.chars().count() + 1, digits))
+    };
+    let leading = text.chars().count() - trimmed.chars().count();
+    Some((leading + digits.chars().count() + separator + 1, digits))
 }
 
 fn strip_prefix(inlines: &mut Vec<Inline>, mut characters: usize) {

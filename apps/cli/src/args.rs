@@ -270,7 +270,7 @@ pub struct ConversionArgs {
     pub max_pages: Option<u32>,
 
     /// Maximum raw PDF objects on one page (default: 100000).
-    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=10_000_000))]
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..=i32::MAX as i64))]
     pub max_pdf_page_objects: Option<u32>,
 
     /// Maximum cumulative raw page objects in one PDF (default: 10000000).

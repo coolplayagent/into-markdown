@@ -1112,7 +1112,7 @@ fn parser_logical_work_bytes(
     let event_units = max_parser_events(input_bytes)?;
     let event_work =
         event_units.checked_mul(PARSER_EVENT_LOGICAL_WORK_BYTES).ok_or_else(memory_overflow)?;
-    let depth_units = usize::from(max_nesting_depth).checked_add(1).ok_or_else(memory_overflow)?;
+    let depth_units = usize::from(max_nesting_depth).min(input_bytes) + 1;
     let depth_work =
         depth_units.checked_mul(PARSER_DEPTH_LOGICAL_WORK_BYTES).ok_or_else(memory_overflow)?;
     PARSER_FIXED_LOGICAL_WORK_BYTES

@@ -7,6 +7,7 @@ pub(crate) enum SourceKind {
 }
 
 pub(crate) struct Atom {
+    pub(crate) space_after: bool,
     pub(crate) inline: Inline,
     pub(crate) bounds: Rect,
     pub(crate) font_size: Option<f32>,

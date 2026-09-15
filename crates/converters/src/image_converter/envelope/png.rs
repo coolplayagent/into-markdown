@@ -2,8 +2,6 @@ use super::meter::Meter;
 use super::{Summary, limit, malformed, unsupported};
 use into_markdown_core::{ConversionError, ExecutionContext, ResourceLimits};
 
-const MAX_CHUNKS: usize = 100_000;
-
 pub(super) fn validate(
     bytes: &[u8],
     limits: &ResourceLimits,
@@ -25,7 +23,7 @@ pub(super) fn validate(
         chunks = chunks
             .checked_add(1)
             .ok_or_else(|| limit("image_chunks", "PNG chunk count overflowed"))?;
-        if chunks > MAX_CHUNKS || chunks > limits.max_archive_entries as usize {
+        if chunks > limits.max_archive_entries as usize {
             return Err(limit("image_chunks", "PNG has too many chunks"));
         }
         let header = bytes

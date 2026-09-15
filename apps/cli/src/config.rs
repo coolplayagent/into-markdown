@@ -2047,7 +2047,7 @@ mod tests {
                 .unwrap()
                 .limits
                 .max_presentation_xml_events,
-            2_000_000
+            into_markdown::ResourceLimits::default().max_presentation_xml_events
         );
     }
 

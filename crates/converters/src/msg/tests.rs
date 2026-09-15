@@ -127,7 +127,7 @@ fn html_cid_and_by_value_attachment_are_offline_assets() {
 }
 
 #[test]
-fn cid_resources_require_an_exact_reference_and_an_audited_image() {
+fn audited_cid_images_remain_visible_in_body_or_attachments() {
     let unreferenced = message(
         vec![AttachmentFixture::value(
             "logo.png",
@@ -143,7 +143,7 @@ fn cid_resources_require_an_exact_reference_and_an_audited_image() {
     let output = convert(&unreferenced).unwrap();
     assert!(paragraph_text(&output).contains("Attachments"));
     assert!(
-        !output
+        output
             .document
             .blocks
             .iter()
@@ -172,6 +172,44 @@ fn cid_resources_require_an_exact_reference_and_an_audited_image() {
             .any(|block| matches!(block.block, into_markdown_core::Block::Image { .. }))
     );
     assert!(output.diagnostics.iter().any(|diagnostic| diagnostic.code == "html.cidImageRejected"));
+}
+
+#[test]
+fn mislabeled_bitmap_cid_is_visible_and_keeps_original_pixels() {
+    let mut bitmap = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(8, 8).write_to(&mut bitmap, image::ImageFormat::Bmp).unwrap();
+    let bitmap = bitmap.into_inner();
+    for html in [
+        b"<main><img src='cid:logo@example.test'></main>".as_slice(),
+        b"<main><p>Body without inline reference</p></main>".as_slice(),
+    ] {
+        let bytes = message(
+            vec![AttachmentFixture::value(
+                "logo.gif",
+                "image/gif",
+                Some("logo@example.test"),
+                bitmap.clone(),
+            )],
+            vec![],
+            None,
+            Some(html),
+            None,
+        );
+        let output = convert(&bytes).unwrap();
+        assert_eq!(output.assets[0].media_type, "image/bmp");
+        assert_eq!(output.assets[0].filename.as_deref(), Some("logo.bmp"));
+        assert_eq!(output.assets[0].bytes, bitmap);
+        assert_eq!(
+            output
+                .document
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.block, into_markdown_core::Block::Image { .. }))
+                .count(),
+            1
+        );
+        assert!(!output.diagnostics.iter().any(|d| d.code == "html.cidImageRejected"));
+    }
 }
 
 #[test]

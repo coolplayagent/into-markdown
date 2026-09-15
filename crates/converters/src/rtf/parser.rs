@@ -8,13 +8,9 @@ use into_markdown_core::{
     ProvenanceKind, ResourceReservation, SourceLocator, TableRow, estimate_validation_working_set,
 };
 
-pub(super) const MAX_CONTROLS: u64 = 1_000_000;
 pub(super) const MAX_NUMERIC_DIGITS: usize = 10;
 pub(super) const MAX_CONTROL_WORD_LEN: usize = 32;
-pub(super) const MAX_DIAGNOSTICS: usize = 4096;
 pub(super) const CHECKPOINT_INTERVAL: usize = 4096;
-pub(super) const MAX_METADATA_BYTES: usize = 64 * 1024;
-pub(super) const MAX_RTF_FONTS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Destination {
@@ -22,6 +18,7 @@ pub(super) enum Destination {
     FieldContainer,
     InfoContainer,
     ShapePictureContainer,
+    ShapeContainer,
     Skip,
     FontTable,
     Pict,
@@ -103,6 +100,7 @@ pub(super) struct TableBuilder {
     pub(super) table_width: Option<u64>,
     pub(super) node_reserved: bool,
     pub(super) active: bool,
+    pub(super) row_open: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,9 +382,6 @@ impl<'a> Parser<'a> {
         message: &str,
         locator: Option<SourceLocator>,
     ) -> Result<(), ConversionError> {
-        if self.diagnostics.len() >= MAX_DIAGNOSTICS {
-            return Err(limit("rtf_diagnostics", format!(">= {MAX_DIAGNOSTICS}")));
-        }
         self.memory
             .grow(u64::try_from(code.len().saturating_add(message.len())).unwrap_or(u64::MAX))?;
         reserve_vec(&mut self.diagnostics, 1, &mut self.memory)?;

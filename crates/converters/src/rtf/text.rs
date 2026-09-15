@@ -1,7 +1,7 @@
 //! Codepage, Unicode, fallback, and inline text decoding.
 
 use super::budget::{hex, limit, locator, malformed, reserve_string, reserve_vec};
-use super::parser::{CHECKPOINT_INTERVAL, Destination, MAX_METADATA_BYTES, Parser};
+use super::parser::{CHECKPOINT_INTERVAL, Destination, Parser};
 use encoding_rs::{
     BIG5, Encoding, GBK, SHIFT_JIS, UTF_8, WINDOWS_1250, WINDOWS_1251, WINDOWS_1252,
 };
@@ -193,8 +193,13 @@ impl Parser<'_> {
             | Destination::MetaTitle
             | Destination::MetaAuthor
             | Destination::FieldInstruction => {
-                if self.capture.len().saturating_add(value.len()) > MAX_METADATA_BYTES {
-                    return Err(limit("rtf_capture_bytes", "destination capture exceeds 64 KiB"));
+                if self.capture.len().saturating_add(value.len()) as u64
+                    > self.options.limits.max_field_bytes
+                {
+                    return Err(limit(
+                        "max_field_bytes",
+                        "RTF destination capture exceeds the request limit",
+                    ));
                 }
                 reserve_string(&mut self.capture, value.len(), &mut self.memory)?;
                 self.capture.push_str(value);

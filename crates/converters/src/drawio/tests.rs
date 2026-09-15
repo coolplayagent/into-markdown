@@ -353,12 +353,14 @@ fn original_byte_spans_identify_cells_and_encoded_payloads() {
 }
 
 #[test]
-fn hostile_width_cell_counts_and_bombs_are_fatal_and_release_memory() {
+fn large_attribute_sets_convert_and_explicit_resource_failures_release_memory() {
     let mut attrs = String::new();
     for i in 0..4097 {
         write!(attrs, " k{i}='v'").unwrap();
     }
     let wide = format!("<mxGraphModel{attrs}><root/></mxGraphModel>");
+    let wide_output = run(&wide, &ConversionOptions::default()).unwrap();
+    wide_output.document.validate().unwrap();
     let mut cells = String::new();
     for i in 0..100_001 {
         write!(cells, "<mxCell id='{i}'/>").unwrap();
@@ -368,7 +370,7 @@ fn hostile_width_cell_counts_and_bombs_are_fatal_and_release_memory() {
         "<mxGraphModel><root>{}</root></mxGraphModel>",
         " ".repeat(2_000_000)
     )));
-    for (source, limit) in [(wide, 64_000_000), (many, 64_000_000), (bomb, 10_000)] {
+    for (source, limit) in [(many, 64_000_000), (bomb, 10_000)] {
         let mut options = ConversionOptions::default();
         options.limits.max_decompressed_bytes = limit;
         options.limits.max_memory_bytes = 256 * 1024 * 1024;

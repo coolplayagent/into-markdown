@@ -5,7 +5,22 @@ use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
     ExecutionContext, InputFormat, Provenance, ResourceReservation,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) fn asset_indices(
+    output: &ConverterOutput,
+    context: &ExecutionContext,
+) -> Result<BTreeMap<AssetId, usize>, ConversionError> {
+    // Keep indices instead of cloning payloads through normalization and merging.
+    let mut indices = BTreeMap::new();
+    for (index, asset) in output.assets.iter().enumerate() {
+        if index % 256 == 0 {
+            context.checkpoint()?;
+        }
+        indices.insert(asset.id.clone(), index);
+    }
+    Ok(indices)
+}
 
 #[derive(Clone)]
 pub(super) struct VisualRef {

@@ -526,7 +526,7 @@ fn append_download_integrity(
     }
 }
 
-pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 48] = [
+pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 54] = [
     "FPDF_InitLibraryWithConfig",
     "FPDF_DestroyLibrary",
     "FPDF_LoadMemDocument64",
@@ -539,7 +539,11 @@ pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 48] = [
     "FPDFText_CountChars",
     "FPDFText_GetText",
     "FPDFText_GetUnicode",
+    "FPDFText_IsHyphen",
+    "FPDFText_GetTextIndexFromCharIndex",
     "FPDFText_GetCharBox",
+    "FPDFText_GetCharOrigin",
+    "FPDFText_GetMatrix",
     "FPDFText_GetFontSize",
     "FPDFText_GetFontInfo",
     "FPDFText_GetCharAngle",
@@ -571,7 +575,9 @@ pub(crate) const PDFIUM_REQUIRED_EXPORTS: [&str; 48] = [
     "FPDFBitmap_GetHeight",
     "FPDFBitmap_GetStride",
     "FPDFBitmap_GetWidth",
-    "FPDFImageObj_GetBitmap",
+    "FPDFImageObj_GetRenderedBitmap",
+    "FPDFPageObj_GetMatrix",
+    "FPDFPageObj_SetMatrix",
     "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",

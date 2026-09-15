@@ -1,6 +1,8 @@
 //! Fail-closed `PDFium` boundary.
 #![allow(missing_docs)]
 #![allow(clippy::missing_errors_doc)]
+#[cfg(test)]
+mod image_tests;
 mod native;
 
 use std::ffi::{CStr, CString};
@@ -90,23 +92,15 @@ impl Default for Limits {
 
 impl Limits {
     fn validate(self) -> Result<Self, Error> {
+        // Counts and dimensions cross PDFium's signed C integer boundary.
+        // Byte budgets belong to the caller; accepting a larger budget does not allocate it.
         for (name, actual, maximum) in [
-            ("max_document_bytes", self.max_document_bytes, 1024 * 1024 * 1024),
-            ("max_pages", u64::from(self.max_pages), 1_000_000),
-            ("max_text_units_per_page", u64::from(self.max_text_units_per_page), 64 * 1024 * 1024),
-            (
-                "max_render_dimension",
-                u64::from(self.max_render_dimension),
-                u64::try_from(i32::MAX).unwrap_or(u64::MAX),
-            ),
-            ("max_render_pixels", self.max_render_pixels, 400_000_000),
-            ("max_images_per_page", u64::from(self.max_images_per_page), 1_000_000),
-            ("max_page_objects", u64::from(self.max_page_objects), 10_000_000),
-            ("max_password_bytes", u64::from(self.max_password_bytes), 64 * 1024),
-            ("max_bitmap_bytes", self.max_bitmap_bytes, 1_600_000_000),
-            ("max_links_per_page", u64::from(self.max_links_per_page), 1_000_000),
-            ("max_link_bytes", u64::from(self.max_link_bytes), 1024 * 1024),
-            ("max_font_name_bytes", u64::from(self.max_font_name_bytes), 64 * 1024),
+            ("max_pages", u64::from(self.max_pages), i32::MAX as u64),
+            ("max_text_units_per_page", u64::from(self.max_text_units_per_page), i32::MAX as u64),
+            ("max_render_dimension", u64::from(self.max_render_dimension), i32::MAX as u64),
+            ("max_images_per_page", u64::from(self.max_images_per_page), i32::MAX as u64),
+            ("max_page_objects", u64::from(self.max_page_objects), i32::MAX as u64),
+            ("max_links_per_page", u64::from(self.max_links_per_page), i32::MAX as u64),
         ] {
             if actual > maximum {
                 return Err(Error::ResourceLimit { limit: name, actual, maximum });
@@ -180,6 +174,8 @@ trait Backend: Send + Sync {
     fn render(&self, page: usize, width: u32, height: u32) -> Result<Vec<u8>, Error>;
     fn image_bitmap(
         &self,
+        document: usize,
+        page: usize,
         image: usize,
         limits: Limits,
         planned_bytes: u64,
@@ -686,6 +682,13 @@ pub struct PlannedPathBounds<'plan, 'document> {
     plan: PathBoundsAllocationPlan,
 }
 impl PlannedPathBounds<'_, '_> {
+    /// Whether this page contains FORM or SHADING objects whose graphics need
+    /// rendering in addition to the top-level PATH and IMAGE inventories.
+    #[must_use]
+    pub const fn contains_composite_visuals(&self) -> bool {
+        self.plan.contains_composite_visuals
+    }
+
     #[must_use]
     pub const fn allocation_bytes(&self) -> u64 {
         self.plan.bytes
@@ -725,6 +728,8 @@ impl PlannedBitmap<'_, '_> {
     pub fn materialize(self) -> Result<ImageBitmap, Error> {
         let _guard = self.image.page.document.runtime.0.lock()?;
         let bitmap = self.image.page.document.runtime.0.backend.image_bitmap(
+            self.image.page.document.raw,
+            self.image.page.raw,
             self.image.raw,
             self.image.page.document.runtime.0.limits,
             self.allocation_bytes,
@@ -788,6 +793,8 @@ pub struct Character {
     pub index: u32,
     pub value: char,
     pub bounds: PdfRect,
+    /// Native text origin in unrotated PDF page coordinates.
+    pub origin: Option<(f32, f32)>,
     pub font_name: Option<String>,
     pub font_size: f32,
     pub angle_degrees: f32,
@@ -916,6 +923,7 @@ struct ImageAllocationPlan {
 struct PathBoundsAllocationPlan {
     bytes: u64,
     count: u32,
+    contains_composite_visuals: bool,
 }
 
 fn try_uninit_boxed_slice<T>(
@@ -1098,6 +1106,7 @@ mod tests {
                 index: 0,
                 value: 'o',
                 bounds: PdfRect { left: 1.0, bottom: 2.0, right: 3.0, top: 4.0 },
+                origin: None,
                 font_name: Some("Mock".into()),
                 font_size: 12.0,
                 angle_degrees: 0.0,
@@ -1170,6 +1179,7 @@ mod tests {
             Ok(PathBoundsAllocationPlan {
                 bytes: u64::from(count) * u64::try_from(std::mem::size_of::<PdfRect>()).unwrap(),
                 count,
+                contains_composite_visuals: false,
             })
         }
         fn links(
@@ -1232,6 +1242,8 @@ mod tests {
         }
         fn image_bitmap(
             &self,
+            _: usize,
+            _: usize,
             _: usize,
             _: Limits,
             planned_bytes: u64,
@@ -1318,6 +1330,18 @@ mod tests {
             Limits { max_render_dimension: u32::MAX, ..Limits::default() }.validate(),
             Err(Error::ResourceLimit { limit: "max_render_dimension", .. })
         ));
+        assert!(
+            Limits {
+                max_document_bytes: 8 * 1024 * 1024 * 1024,
+                max_render_dimension: 100_000,
+                max_render_pixels: 500_000_000,
+                max_bitmap_bytes: 2_000_000_000,
+                max_link_bytes: 2 * 1024 * 1024,
+                ..Limits::default()
+            }
+            .validate()
+            .is_ok()
+        );
         let password_limited_runtime = runtime(
             Arc::new(Mock::default()),
             Limits { max_password_bytes: 1, ..Limits::default() },
@@ -1581,6 +1605,31 @@ mod tests {
         ));
     }
 
+    #[test]
+    #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
+    fn native_line_end_hyphens_preserve_readable_text_and_characters() {
+        let path = std::env::var_os("PDFIUM_LIBRARY").expect("PDFIUM_LIBRARY is required");
+        let runtime = Pdfium::load_pinned(Path::new(&path), Limits::default()).unwrap();
+        let content = b"BT /F1 12 Tf 10 80 Td (inter-) Tj 0 -14 Td (national cooperation) Tj ET";
+        let bytes = assemble_pdf(&[
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".to_vec(),
+            stream_object("", content),
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        ]);
+        let document = runtime.open(Arc::from(bytes), None).unwrap();
+        let page = document.page(0).unwrap();
+        let text = page.text_page().unwrap();
+        let plain = text.text().unwrap();
+        assert!(plain.contains("inter-"), "{plain:?}");
+        assert!(plain.contains("national cooperation"), "{plain:?}");
+        assert!(!plain.contains(['\u{fffd}', '\u{fffe}', '\u{2}']));
+        let characters: String = text.characters().unwrap().iter().map(|c| c.value).collect();
+        assert!(characters.contains("inter-"), "{characters:?}");
+        assert!(!characters.contains(['\u{fffd}', '\u{fffe}', '\u{2}']));
+    }
+
     pub(crate) fn minimal_pdf() -> Vec<u8> {
         let content = b"BT /F1 4 Tf 10 60 Td (Hello PDFium https://example.test/) Tj ET\nq 10 0 0 10 10 10 cm /Im1 Do Q\n";
         let objects = [
@@ -1636,7 +1685,7 @@ mod tests {
         assemble_pdf(&objects)
     }
 
-    fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
+    pub(crate) fn assemble_pdf(objects: &[Vec<u8>]) -> Vec<u8> {
         let mut pdf = b"%PDF-1.4\n%\x80\x80\x80\x80\n".to_vec();
         let mut offsets = Vec::new();
         for (index, object) in objects.iter().enumerate() {
@@ -1662,7 +1711,7 @@ mod tests {
         pdf
     }
 
-    fn stream_object(dictionary: &str, bytes: &[u8]) -> Vec<u8> {
+    pub(crate) fn stream_object(dictionary: &str, bytes: &[u8]) -> Vec<u8> {
         let mut object =
             format!("<< {dictionary} /Length {} >>\nstream\n", bytes.len()).into_bytes();
         object.extend_from_slice(bytes);

@@ -17,7 +17,6 @@ mod opc;
 mod orchestrator;
 mod output;
 mod preflight;
-mod resource_profile;
 mod schema;
 mod xlsb;
 mod xlsx;

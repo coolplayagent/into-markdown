@@ -15,7 +15,7 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 | 图片 | PNG；JPEG；TIFF；WebP；BMP |
 | 音视频 | Audio；Video（经受认证 FFmpeg 解码并由语音能力插件转写） |
 | 容器与消息 | ZIP；Outlook MSG |
-| 可识别、需先解压 | RAR4/RAR5（`unsupported`） |
+| 可识别、可保留原件 | RAR4/RAR5（`best-effort` 交付原件；内容提取需先解压） |
 | 受控输入基础 | HTTP(S) SourceResolver（默认离线，须显式网络授权） |
 
 每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
@@ -44,8 +44,7 @@ PNG/SVG 内嵌编辑模型提取在本格式范围之外。
 来源使用页和单元序号；未压缩模型记录真实字节区间，压缩单元记录原始编码载荷区间。
 
 输入、累计解码/解压字节、页数、字段、XML/分组深度、表格和内存复用请求限制；
-扫描另限累计 1,000,000 个事件/属性、单元素 4,096 个属性、100,000 个单元，
-并遵循统一 IR 节点与 inline 上限。中间解码载荷计入累计解压预算，逐页释放临时对象。
+扫描持续检查取消与超时，单元与文本遵循统一 IR 节点及 inline 上限。中间解码载荷计入累计解压预算，逐页释放临时对象。
 文件、stdin、内存、批量及 ZIP 内条目通过同一转换器，CLI/API/Web 与安装能力目录同步。
 
 实现参考 [diagram-design 的 drawio_extract.py](https://github.com/cathrynlavery/diagram-design/blob/cc2f51f3fd215536cbfc0cf376ea3b513478e9cb/skills/diagram-design/scripts/drawio_extract.py)，
@@ -97,7 +96,8 @@ unchanged. Signature evidence selects a parser and does not bypass its validatio
 图片转换器只按完整 magic 与 container envelope 接受 PNG、JPEG、Classic TIFF/BigTIFF、
 WebP 和 BMP，不信任扩展名或 MIME。进入 decoder 前会验证 PNG chunk 顺序与 CRC、JPEG
 marker/segment/entropy、WebP RIFF/chunk/frame、BMP DIB/pixel range，以及 TIFF IFD 链和
-strip/tile range；文件尾必须由格式声明精确覆盖。尺寸、累计像素、帧数、结构项、解压、
+strip/tile range。JPEG 保留结束标记后的相机元数据；TIFF 按目录偏移定位有效数据，允许
+目录和图像数据之间及末尾的未使用字节。尺寸、累计像素、帧数、结构项、解压、
 asset、内存、取消与 deadline 均受同一请求预算约束。TIFF 和动画 WebP 的每帧映射为独立
 Page；方向在受界像素上应用，DPI 只读取有限数字字段，ICC/Exif/XMP 自由文本与 active
 payload 不执行。
@@ -161,7 +161,7 @@ CFB reader 在分配和发布前验证 version/sector shift、DIFAT/FAT/miniFAT�
 
 ## OpenDocument（ODT、ODS、ODP）
 
-OpenDocument 转换器完全离线实现 ODF 1.2/1.3 的安全子集，不调用 LibreOffice 或其他办公软件。
+OpenDocument 转换器完全离线实现 ODF 1.0–1.4 的静态内容子集，不调用 LibreOffice 或其他办公软件。
 包必须以无 extra/data-descriptor、未压缩、首项且内容/CRC/size 精确匹配的 `mimetype` local header
 开始，并与唯一 central directory 双向绑定；全部 raw 名为严格 UTF-8，非 ASCII 时必须设置 bit 11，
 且禁止 Unicode Path/name-changing extra 与 entry comment。`META-INF/manifest.xml` 的根媒体类型、版本、封闭 core/image/
@@ -339,7 +339,7 @@ GFM renderer 输出。nbformat 4.5 起 cell ID 必填、唯一并遵循官方 1�
 稳定 namespaced metadata 保留，重复 update-display 仍保持源序，不执行回写。
 
 MIME bundle 使用固定优先级：PNG、JPEG、GIF、WebP，随后是 Markdown、plain text、HTML。
-图片同时校验 MIME、严格 base64、data URI 前缀、解码预算和文件签名；附件名禁止路径分隔符、
+图片同时校验 MIME、允许 ASCII 空白折行的 base64、data URI 前缀、解码预算和文件签名；附件名禁止路径分隔符、
 点路径与控制字符。Markdown attachment 只在 parser 识别出的 exact image URI target 上绑定，
 不会改写 prose 或 code；missing reference 和当前 IR 无法表达的 attachment link 稳定拒绝，
 inline attachment image 因统一 IR 仅支持 block image 也稳定拒绝，且成功结果不会保留内部
@@ -541,9 +541,11 @@ ZIP 与 EPUB 保留解码后的逻辑名称，用于成员查找、标题、引�
 文件。归档成员在内存读取，资产继续通过内容寻址安全层落盘。
 
 RAR4/5 依据[官方签名](https://www.rarlab.com/technote.htm)识别，扩展名和 MIME 作为提示。
-完整签名返回 `unsupported` 并建议先解压；截断签名返回损坏诊断。混合 ZIP 保留可转换
-成员，并在对应成员的诊断中报告 RAR；目录与 Web 格式列表将其显示为“可识别，请先解压后转换”。
+默认 `best-effort` 保留完整 RAR 原件，返回 `Degraded` 并在对应位置说明内容提取需要先解压。
+`strict` 对完整签名返回 `unsupported` / `archiveExtractionRequired`，对截断签名返回损坏诊断。
+混合 ZIP 保留已转换成员，并将 RAR 成员作为独立原件附件交付。自引用 ZIP 通过祖先内容哈希
+识别循环，保留原件和成员定位后继续其他成员，避免重复解压和 OCR。
 
-含成员的普通 ZIP 在完整目录检查后按 ZIP 路由，即使后缀为 DOCX、PPTX、XLSX、EPUB 或 ODF。空容器、具有文档包标记或目录检查不完整的容器保留兼容候选，以维持损坏、加密和资源限制错误。格式目录中的 `Unsupported` 状态同样参与准入；真实 RAR 沿用先解压提示，普通文本使用 `.rar` 后缀返回 `unsupported`，显式格式仍执行所选解析器。
+含成员的普通 ZIP 在完整目录检查后按 ZIP 路由，即使后缀为 DOCX、PPTX、XLSX、EPUB 或 ODF。空容器、具有文档包标记或目录检查不完整的容器保留兼容候选，以维持损坏、加密和资源限制错误。格式目录中的 `Unsupported` 状态同样参与准入；真实 RAR 在默认策略下交付原件并保留解压提示；普通文本使用 `.rar` 后缀且未得到有效格式识别时返回 `unsupported`，显式格式仍执行所选解析器。
 
-A fully inspected nonempty generic ZIP routes to ZIP even with an Office, EPUB, or ODF suffix. Empty containers, package markers or incomplete directory inspection retain compatible candidates for parser-specific damage, encryption, and resource errors. Catalog entries marked `Unsupported` participate in admission: real RAR retains extraction guidance, while plain text named `.rar` returns `unsupported`; an explicit format still selects its parser.
+A fully inspected nonempty generic ZIP routes to ZIP even with an Office, EPUB, or ODF suffix. Empty containers, package markers or incomplete directory inspection retain compatible candidates for parser-specific damage, encryption, and resource errors. Catalog entries marked `Unsupported` participate in admission. Best-effort RAR delivery preserves the original with extraction guidance; strict mode retains its typed error. An explicit format selects its parser. Recursive ZIP ancestry is checked by content hash so a cycle retains its original member without repeated extraction or OCR.

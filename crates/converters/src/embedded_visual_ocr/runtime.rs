@@ -7,6 +7,14 @@ use into_markdown_core::{
     recovery_diagnostic,
 };
 
+#[derive(Clone, Default)]
+pub(super) struct CachedContribution {
+    pub(super) recognition_completed: bool,
+    pub(super) nodes: Vec<BlockNode>,
+    pub(super) diagnostics: Vec<Diagnostic>,
+    pub(super) telemetry: Option<(OcrInputIdentity, u64, u64)>,
+}
+
 pub(super) fn require_scanned_pages(
     references: &mut [VisualRef],
     diagnostics: &[Diagnostic],
@@ -260,6 +268,7 @@ pub(super) async fn recognize(
     diagnostics.extend(contribution.diagnostics);
     Ok((
         CachedContribution {
+            recognition_completed: contribution.recognition_completed,
             nodes: contribution.nodes,
             diagnostics,
             telemetry: Some((

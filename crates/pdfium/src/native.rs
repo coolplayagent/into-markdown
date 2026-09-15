@@ -16,8 +16,11 @@ use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+mod images;
 mod links;
 mod runtime_path;
+mod text;
+mod visual_bounds;
 use runtime_path::contains_link_or_reparse;
 
 struct FixedOutput<T> {
@@ -129,7 +132,11 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDFText_CountChars",
     "FPDFText_GetText",
     "FPDFText_GetUnicode",
+    "FPDFText_IsHyphen",
+    "FPDFText_GetTextIndexFromCharIndex",
     "FPDFText_GetCharBox",
+    "FPDFText_GetCharOrigin",
+    "FPDFText_GetMatrix",
     "FPDFText_GetFontSize",
     "FPDFText_GetFontInfo",
     "FPDFText_GetCharAngle",
@@ -161,7 +168,9 @@ const CONSUMED_EXPORTS: &[&str] = &[
     "FPDFBitmap_GetHeight",
     "FPDFBitmap_GetStride",
     "FPDFBitmap_GetWidth",
-    "FPDFImageObj_GetBitmap",
+    "FPDFImageObj_GetRenderedBitmap",
+    "FPDFPageObj_GetMatrix",
+    "FPDFPageObj_SetMatrix",
     "FPDFImageObj_GetImagePixelSize",
     "FPDF_RenderPageBitmap",
     "FPDF_GetLastError",
@@ -420,16 +429,21 @@ fn last_error_code(value: c_ulong) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-type GetBitmap = unsafe extern "C" fn(Handle) -> Handle;
+type GetRenderedBitmap = unsafe extern "C" fn(Handle, Handle, Handle) -> Handle;
+type GetObjectMatrix = unsafe extern "C" fn(Handle, *mut text::Matrix) -> c_int;
+type SetObjectMatrix = unsafe extern "C" fn(Handle, *const text::Matrix) -> c_int;
 type GetImagePixelSize = unsafe extern "C" fn(Handle, *mut c_uint, *mut c_uint) -> c_int;
 type GetBitmapInt = unsafe extern "C" fn(Handle) -> c_int;
 type GetBitmapBuffer = unsafe extern "C" fn(Handle) -> *mut c_void;
 type GetDouble = unsafe extern "C" fn(Handle, c_int) -> f64;
 type GetFloat = unsafe extern "C" fn(Handle, c_int) -> f32;
 type GetUnicode = unsafe extern "C" fn(Handle, c_int) -> c_uint;
+type CharacterQuery = unsafe extern "C" fn(Handle, c_int) -> c_int;
 type GetActionType = unsafe extern "C" fn(Handle) -> c_ulong;
 type GetCharBox =
     unsafe extern "C" fn(Handle, c_int, *mut f64, *mut f64, *mut f64, *mut f64) -> c_int;
+type GetCharOrigin = unsafe extern "C" fn(Handle, c_int, *mut f64, *mut f64) -> c_int;
+type GetCharMatrix = unsafe extern "C" fn(Handle, c_int, *mut text::Matrix) -> c_int;
 type GetFontInfo = unsafe extern "C" fn(Handle, c_int, *mut c_void, c_ulong, *mut c_int) -> c_ulong;
 type GetPageFloat = unsafe extern "C" fn(Handle) -> f32;
 type GetBounds = unsafe extern "C" fn(Handle, *mut f32, *mut f32, *mut f32, *mut f32) -> c_int;
@@ -489,7 +503,11 @@ pub(crate) struct Native {
     text_count: Count,
     get_text: GetText,
     text_unicode: GetUnicode,
+    text_is_hyphen: CharacterQuery,
+    text_index: CharacterQuery,
     text_char_box: GetCharBox,
+    text_char_origin: GetCharOrigin,
+    text_char_matrix: GetCharMatrix,
     text_font_size: GetDouble,
     text_font_info: GetFontInfo,
     text_char_angle: GetFloat,
@@ -518,7 +536,9 @@ pub(crate) struct Native {
     destroy_bitmap: Close,
     render_page: Render,
     last_error: LastError,
-    image_bitmap: GetBitmap,
+    image_bitmap: GetRenderedBitmap,
+    object_matrix: GetObjectMatrix,
+    set_object_matrix: SetObjectMatrix,
     image_pixel_size: GetImagePixelSize,
     bitmap_width: GetBitmapInt,
     bitmap_height: GetBitmapInt,
@@ -572,7 +592,11 @@ impl Native {
             text_count: symbol!("FPDFText_CountChars", Count),
             get_text: symbol!("FPDFText_GetText", GetText),
             text_unicode: symbol!("FPDFText_GetUnicode", GetUnicode),
+            text_is_hyphen: symbol!("FPDFText_IsHyphen", CharacterQuery),
+            text_index: symbol!("FPDFText_GetTextIndexFromCharIndex", CharacterQuery),
             text_char_box: symbol!("FPDFText_GetCharBox", GetCharBox),
+            text_char_origin: symbol!("FPDFText_GetCharOrigin", GetCharOrigin),
+            text_char_matrix: symbol!("FPDFText_GetMatrix", GetCharMatrix),
             text_font_size: symbol!("FPDFText_GetFontSize", GetDouble),
             text_font_info: symbol!("FPDFText_GetFontInfo", GetFontInfo),
             text_char_angle: symbol!("FPDFText_GetCharAngle", GetFloat),
@@ -607,7 +631,9 @@ impl Native {
             destroy_bitmap: symbol!("FPDFBitmap_Destroy", Close),
             render_page: symbol!("FPDF_RenderPageBitmap", Render),
             last_error: symbol!("FPDF_GetLastError", LastError),
-            image_bitmap: symbol!("FPDFImageObj_GetBitmap", GetBitmap),
+            image_bitmap: symbol!("FPDFImageObj_GetRenderedBitmap", GetRenderedBitmap),
+            object_matrix: symbol!("FPDFPageObj_GetMatrix", GetObjectMatrix),
+            set_object_matrix: symbol!("FPDFPageObj_SetMatrix", SetObjectMatrix),
             image_pixel_size: symbol!("FPDFImageObj_GetImagePixelSize", GetImagePixelSize),
             bitmap_width: symbol!("FPDFBitmap_GetWidth", GetBitmapInt),
             bitmap_height: symbol!("FPDFBitmap_GetHeight", GetBitmapInt),
@@ -853,7 +879,22 @@ impl Backend for Native {
             .map_err(|_| invalid("text", "negative copied count"))?
             .min(units.len());
         // SAFETY: the entire fixed buffer was zero-initialized before the FFI call.
-        let units = unsafe { units.assume_init() };
+        let mut units = unsafe { units.assume_init() };
+        // PDFium represents line-end hyphens with control characters internally
+        // and U+FFFE in GetText. Consult the character identity before replacing
+        // a text unit, so unrelated missing glyphs remain visible as such.
+        for index in 0..count {
+            let index =
+                c_int::try_from(index).map_err(|_| invalid("text", "index exceeds C int"))?;
+            if unsafe { (self.text_is_hyphen)(text as Handle, index) } == 1 {
+                let position = unsafe { (self.text_index)(text as Handle, index) };
+                if let Ok(position) = usize::try_from(position)
+                    && position < copied.saturating_sub(1)
+                {
+                    units[position] = u16::from(b'-');
+                }
+            }
+        }
         let content = if units.get(copied.saturating_sub(1)) == Some(&0) {
             &units[..copied.saturating_sub(1)]
         } else {
@@ -916,12 +957,7 @@ impl Backend for Native {
         for index in 0..count {
             let c_index =
                 c_int::try_from(index).map_err(|_| invalid("characters", "index exceeds C int"))?;
-            let raw = unsafe { (self.text_unicode)(text as Handle, c_index) };
-            let value = char::from_u32(raw)
-                .filter(|value| {
-                    *value != '\0' && (!value.is_control() || matches!(value, '\n' | '\r' | '\t'))
-                })
-                .unwrap_or('\u{fffd}');
+            let value = self.character_value(text, c_index);
             let (mut left, mut right, mut bottom, mut top) = (0.0, 0.0, 0.0, 0.0);
             if unsafe {
                 (self.text_char_box)(
@@ -937,12 +973,9 @@ impl Backend for Native {
                 return Err(self.error("text_char_box"));
             }
             let bounds = finite_rect("text_char_box", left, bottom, right, top)?;
-            let font_size = unsafe { (self.text_font_size)(text as Handle, c_index) };
+            let font_size = self.character_font_size(text, c_index)?;
             let angle_radians = unsafe { (self.text_char_angle)(text as Handle, c_index) };
             let angle_degrees = character_angle(angle_radians)?;
-            if !font_size.is_finite() || font_size < 0.0 || font_size > f64::from(f32::MAX) {
-                return Err(invalid("character_style", "non-finite font size or angle"));
-            }
             let mut flags = 0_i32;
             let needed = unsafe {
                 (self.text_font_info)(
@@ -981,6 +1014,7 @@ impl Backend for Native {
                     index,
                     value,
                     bounds,
+                    origin: self.character_origin(text, c_index),
                     font_name,
                     font_size: f64_to_f32(font_size),
                     angle_degrees,
@@ -1113,40 +1147,7 @@ impl Backend for Native {
         max_objects: u32,
         checkpoint: &mut dyn FnMut() -> bool,
     ) -> Result<PathBoundsAllocationPlan, Error> {
-        let count = nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })?;
-        if count > max_objects {
-            return Err(Error::ResourceLimit {
-                limit: "max_page_objects",
-                actual: u64::from(count),
-                maximum: u64::from(max_objects),
-            });
-        }
-        let mut paths = 0_u32;
-        for index in 0..count {
-            path_scan_checkpoint(index, "path_bounds_plan_checkpoint", checkpoint)?;
-            let object = unsafe {
-                (self.get_object)(
-                    page as Handle,
-                    c_int::try_from(index)
-                        .map_err(|_| invalid("path_bounds_plan", "index exceeds C int"))?,
-                )
-            };
-            if object.is_null() {
-                return Err(self.error("get_object"));
-            }
-            if unsafe { (self.object_type)(object) } == 2 {
-                // Validate the same bounds during preflight so allocation is
-                // never authorized by a malformed or non-finite PATH object.
-                object_bounds(self, object, "path_bounds_plan")?;
-                paths = paths
-                    .checked_add(1)
-                    .ok_or_else(|| invalid("path_bounds_plan", "count overflow"))?;
-            }
-        }
-        let bytes = u64::from(paths)
-            .checked_mul(u64::try_from(std::mem::size_of::<PdfRect>()).unwrap_or(u64::MAX))
-            .ok_or_else(|| invalid("path_bounds_plan", "allocation overflow"))?;
-        Ok(PathBoundsAllocationPlan { bytes, count: paths })
+        self.plan_visual_bounds(page, max_objects, checkpoint)
     }
     fn page_object_count(&self, page: usize) -> Result<u32, Error> {
         nonnegative("object_count", unsafe { (self.object_count)(page as Handle) })
@@ -1307,86 +1308,22 @@ impl Backend for Native {
             return Err(self.error("create_bitmap"));
         }
         unsafe {
-            (self.render_page)(bitmap, page as Handle, 0, 0, width_c, height_c, 0, 0x10 | 0x800);
+            // Preserve the BGRA contract consumed by BMP and PNG encoders.
+            (self.render_page)(bitmap, page as Handle, 0, 0, width_c, height_c, 0, 0x800);
         };
         unsafe { (self.destroy_bitmap)(bitmap) };
         Ok(bytes.into_vec())
     }
     fn image_bitmap(
         &self,
+        document: usize,
+        page: usize,
         image: usize,
         limits: Limits,
         planned_bytes: u64,
     ) -> Result<ImageBitmap, Error> {
-        let bitmap = unsafe { (self.image_bitmap)(image as Handle) };
-        if bitmap.is_null() {
-            return Err(self.error("image_bitmap"));
-        }
-        let bitmap = BitmapGuard { raw: bitmap, destroy: self.destroy_bitmap };
-        let width = nonnegative("image_bitmap_width", unsafe { (self.bitmap_width)(bitmap.raw) })?;
-        let height =
-            nonnegative("image_bitmap_height", unsafe { (self.bitmap_height)(bitmap.raw) })?;
-        let stride =
-            nonnegative("image_bitmap_stride", unsafe { (self.bitmap_stride)(bitmap.raw) })?;
-        for dimension in [width, height] {
-            if dimension > limits.max_render_dimension {
-                return Err(Error::ResourceLimit {
-                    limit: "max_render_dimension",
-                    actual: u64::from(dimension),
-                    maximum: u64::from(limits.max_render_dimension),
-                });
-            }
-        }
-        let pixels = u64::from(width)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| invalid("image_bitmap", "pixel count overflow"))?;
-        if pixels > limits.max_render_pixels {
-            return Err(Error::ResourceLimit {
-                limit: "max_render_pixels",
-                actual: pixels,
-                maximum: limits.max_render_pixels,
-            });
-        }
-        let (format, bytes_per_pixel) = match unsafe { (self.bitmap_format)(bitmap.raw) } {
-            1 => (PixelFormat::Gray, 1_u32),
-            2 => (PixelFormat::Bgr, 3),
-            3 => (PixelFormat::Bgrx, 4),
-            4 => (PixelFormat::Bgra, 4),
-            value => return Err(invalid("image_bitmap_format", &format!("unknown {value}"))),
-        };
-        let minimum_stride = width
-            .checked_mul(bytes_per_pixel)
-            .ok_or_else(|| invalid("image_bitmap", "minimum stride overflow"))?;
-        if stride < minimum_stride {
-            return Err(invalid("image_bitmap", "native stride is shorter than one row"));
-        }
-        let size = u64::from(stride)
-            .checked_mul(u64::from(height))
-            .ok_or_else(|| invalid("image_bitmap", "buffer size overflow"))?;
-        if size > limits.max_bitmap_bytes {
-            return Err(Error::ResourceLimit {
-                limit: "max_bitmap_bytes",
-                actual: size,
-                maximum: limits.max_bitmap_bytes,
-            });
-        }
-        let output_bound = planned_bytes / 2;
-        if size > output_bound {
-            return Err(invalid("image_bitmap", "decoded size exceeded preflight plan"));
-        }
-        let capacity = usize::try_from(size)
-            .map_err(|_| invalid("image_bitmap", "buffer does not fit usize"))?;
-        let source = unsafe { (self.bitmap_buffer)(bitmap.raw) }.cast::<u8>();
-        if source.is_null() && capacity != 0 {
-            return Err(self.error("image_bitmap_buffer"));
-        }
-        let mut bytes = zeroed_boxed_bytes(capacity, "image_bitmap")?;
-        if capacity != 0 {
-            // SAFETY: PDFium reports `stride * height` bytes owned by `bitmap`; the bitmap remains
-            // alive through this copy, and all arithmetic/allocation was checked above.
-            bytes.copy_from_slice(unsafe { std::slice::from_raw_parts(source, capacity) });
-        }
-        Ok(ImageBitmap { width, height, stride, format, bytes: bytes.into_vec() })
+        let bitmap = self.render_image_bitmap(document, page, image)?;
+        self.copy_image_bitmap(bitmap, limits, planned_bytes)
     }
     fn image_bitmap_allocation_bytes(&self, image: usize, limits: Limits) -> Result<u64, Error> {
         let (mut width, mut height) = (0_u32, 0_u32);
@@ -1423,7 +1360,8 @@ impl Backend for Native {
                 maximum: limits.max_bitmap_bytes,
             });
         }
-        bytes.checked_mul(2).ok_or_else(|| invalid("image_plan", "bitmap peak overflow"))
+        // Account for source pixels, mask, rendered bitmap and the owned output copy.
+        bytes.checked_mul(4).ok_or_else(|| invalid("image_plan", "bitmap peak overflow"))
     }
 }
 

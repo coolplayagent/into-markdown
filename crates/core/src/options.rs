@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// Recovery policy for non-critical format defects and optional enhancements.
 ///
-/// Optional OCR may omit one recognition unit after a typed worker-private
-/// memory refusal, with source-local diagnostics. Shared resource, security,
-/// integrity, cancellation, timeout, and I/O failures remain terminal.
+/// Best-effort retains available text, images, or original bytes when parsing
+/// and optional enhancements fail, with source-local recovery diagnostics.
+/// Unreadable sources, cancellation, deadlines, output I/O failures, and
+/// explicit resource ceilings retain their error states.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ErrorPolicy {
@@ -29,6 +30,7 @@ pub enum OcrPolicy {
 
 /// Local OCR settings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OcrOptions {
     /// Routing policy.
     pub policy: OcrPolicy,
@@ -122,6 +124,7 @@ pub enum AiMode {
 
 /// Per-capability AI routing configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AiOptions {
     /// Vision-based OCR.
     pub vision_ocr: AiMode,
@@ -155,6 +158,7 @@ impl Default for AiOptions {
 
 /// Network security policy. Network access is denied by default.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct NetworkOptions {
     /// Master network permission.
     pub enabled: bool,
@@ -199,7 +203,7 @@ pub struct ResourceLimits {
     pub max_presentation_xml_events: u64,
     /// Maximum PDF/page-like units.
     pub max_pages: u32,
-    /// Maximum raw PDF objects on one page (1..=10,000,000).
+    /// Maximum raw PDF objects on one page, within the native signed count range.
     pub max_pdf_page_objects: u32,
     /// Maximum cumulative raw page objects in one PDF, counted once per page.
     pub max_pdf_total_objects: u64,
@@ -232,32 +236,31 @@ pub struct ResourceLimits {
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_input_bytes: 512 * 1024 * 1024,
-            max_decompressed_bytes: 1024 * 1024 * 1024,
-            max_archive_entries: 100_000,
-            max_archive_depth: 16,
-            max_archive_entry_bytes: 256 * 1024 * 1024,
-            max_archive_compression_ratio: 100,
-            max_nesting_depth: 256,
-            max_presentation_xml_events: 2_000_000,
-            max_pages: 10_000,
-            max_pdf_page_objects: 100_000,
-            max_pdf_total_objects: 10_000_000,
+            max_input_bytes: 9_007_199_254_740_991,
+            max_decompressed_bytes: 9_007_199_254_740_991,
+            max_archive_entries: u32::MAX,
+            max_archive_depth: u16::MAX,
+            max_archive_entry_bytes: 9_007_199_254_740_991,
+            max_archive_compression_ratio: u32::MAX,
+            max_nesting_depth: u16::MAX,
+            max_presentation_xml_events: 9_007_199_254_740_991,
+            max_pages: u32::MAX,
+            max_pdf_page_objects: i32::MAX as u32,
+            max_pdf_total_objects: 9_007_199_254_740_991,
             max_pdf_layout_comparisons: 12_000_000,
-            max_asset_bytes: 256 * 1024 * 1024,
-            max_total_asset_bytes: 1024 * 1024 * 1024,
+            max_asset_bytes: 9_007_199_254_740_991,
+            max_total_asset_bytes: 9_007_199_254_740_991,
             max_memory_bytes: 2 * 1024 * 1024 * 1024,
-            // Speech decoding and legacy Office normalization are isolated in
-            // capability processes but share this request-scoped disk budget.
-            // Their audited manifests are bounded at 4 GiB.
-            max_temporary_bytes: 4 * 1024 * 1024 * 1024,
-            max_table_rows: 100_000,
+            // Temporary storage grows with actual work; explicit budgets remain authoritative.
+            max_temporary_bytes: 9_007_199_254_740_991,
+            // Counts remain exactly representable in JSON; memory budgets govern tables.
+            max_table_rows: 9_007_199_254_740_991,
             max_table_columns: 16_384,
-            max_table_cells: 1_000_000,
-            max_field_bytes: 16 * 1024 * 1024,
-            max_feed_entries: 10_000,
-            max_feed_text_bytes: 64 * 1024 * 1024,
-            max_feed_html_bytes: 64 * 1024 * 1024,
+            max_table_cells: 9_007_199_254_740_991,
+            max_field_bytes: 9_007_199_254_740_991,
+            max_feed_entries: u32::MAX,
+            max_feed_text_bytes: 9_007_199_254_740_991,
+            max_feed_html_bytes: 9_007_199_254_740_991,
         }
     }
 }
@@ -268,10 +271,10 @@ impl ResourceLimits {
     /// # Errors
     /// Returns a named resource error for a zero or unsupported page budget.
     pub fn validate_pdf(&self) -> Result<(), crate::ConversionError> {
-        if !(1..=10_000_000).contains(&self.max_pdf_page_objects) {
+        if !(1..=i32::MAX as u32).contains(&self.max_pdf_page_objects) {
             return Err(crate::ConversionError::ResourceLimit {
                 limit: "max_pdf_page_objects",
-                detail: format!("{} must be within 1..=10000000", self.max_pdf_page_objects),
+                detail: format!("{} must be within 1..={}", self.max_pdf_page_objects, i32::MAX),
             });
         }
         if self.max_pdf_layout_comparisons == 0 {
@@ -395,6 +398,7 @@ impl Default for OutputOptions {
 
 /// Complete policy passed through the conversion pipeline.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ConversionOptions {
     /// Handling of recoverable, non-security format defects.
     #[serde(default)]
@@ -447,13 +451,17 @@ mod tests {
         old.as_object_mut().unwrap().remove("max_pdf_total_objects");
         old.as_object_mut().unwrap().remove("max_pdf_layout_comparisons");
         let mut decoded: ResourceLimits = serde_json::from_value(old).unwrap();
-        assert_eq!(decoded.max_pdf_page_objects, 100_000);
-        assert_eq!(decoded.max_pdf_total_objects, 10_000_000);
+        assert_eq!(decoded.max_pdf_page_objects, i32::MAX as u32);
+        assert_eq!(decoded.max_pdf_total_objects, 9_007_199_254_740_991);
         assert_eq!(decoded.max_pdf_layout_comparisons, 12_000_000);
         decoded.validate_pdf().unwrap();
         decoded.max_pdf_page_objects = 0;
         assert!(decoded.validate_pdf().is_err());
         decoded.max_pdf_page_objects = 10_000_001;
+        decoded.validate_pdf().unwrap();
+        decoded.max_pdf_page_objects = i32::MAX as u32;
+        decoded.validate_pdf().unwrap();
+        decoded.max_pdf_page_objects += 1;
         assert!(decoded.validate_pdf().is_err());
         decoded.max_pdf_page_objects = 100_000;
         decoded.max_pdf_total_objects = 0;
@@ -496,7 +504,7 @@ mod presentation_budget_tests {
     #[test]
     fn old_resource_requests_keep_the_presentation_default() {
         let decoded: ResourceLimits = serde_json::from_str("{}").unwrap();
-        assert_eq!(decoded.max_presentation_xml_events, 2_000_000);
+        assert_eq!(decoded.max_presentation_xml_events, 9_007_199_254_740_991);
         let mut configured = decoded;
         configured.max_presentation_xml_events = 3_000_000;
         assert_eq!(

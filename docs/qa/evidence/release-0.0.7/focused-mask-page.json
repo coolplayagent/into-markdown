@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "id": "pdf-3ef3b998b7ad2335",
+  "sourceSha256": "07ff23e18f431ec812a6c954ce57c3ec1e92dbc2ea01e16f228eb22ba97de370",
+  "sourcePage": 2,
+  "derivedSourceSha256": "a1975ffe11d9c43dc3083d0ccbcbb212f83d9822b9010761cfc2d8f793b4873e",
+  "focusedReportSha256": "5f7dae845b41b48025af6d4a86e70935aa68c0602265c46d5331d1efb1b7285e",
+  "fullReport": "target/real-world-007/pdf-placement-v51/pdf-3ef3b998b7ad2335/result/report.json",
+  "fullReportSha256": "8836f3d6dd29beef004b1aca3fb3eaaf71ed2f79ca557203768fb5b4c5d007a8",
+  "fullRunOcr": {"imageSources":1649,"imagesAttempted":595,"imagesCompleted":595,"imagesWithText":574,"imagesFailed":0,"imagesSkipped":1054,"requests":595,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":10838034733,"workerBudgetMaxBytes":16883531847},
+  "focusedOcr": {"imageSources":2,"imagesAttempted":2,"imagesCompleted":2,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":0,"requests":2,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":16998911747,"workerBudgetMaxBytes":17011959324},
+  "scope": "The full 594-page conversion passed with page OCR. Its single remaining masked-image page is replayed from the original PDF on the mask-aware candidate; the original full-run binary authority is preserved.",
+  "visualReview": {"sourceRenderSha256":"1698aa9d7dad27a209032598113478947648f0783c9d3225da46e111b366f165","sourceContent":"Library endpaper with a dark MATH-STAT. LIBRARY stamp and low-contrast repeating university marks.","finding":"The delivered images preserve the endpaper and stamp. OCR returns MATH-STAT. but does not fully recover the stamp or repeating background text. This remains partial recognition; the full-document text-result ratio is 574/595, with blank images still included in that denominator."}
+}

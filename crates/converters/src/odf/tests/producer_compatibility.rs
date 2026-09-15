@@ -176,3 +176,37 @@ fn referenced_master_footer_supplies_real_text_not_an_empty_slide_shell() {
     let Block::Slide { blocks, .. } = &output.document.blocks[0].block else { panic!() };
     assert_eq!(blocks[0].provenance.locator.part.as_deref(), Some("styles.xml"));
 }
+
+#[test]
+fn calc_conditional_formatting_and_row_visibility_keep_cell_text() {
+    let ns = crate::odf::compatibility::CALCEXT_NS;
+    let content = format!(
+        "<office:document-content {NS} xmlns:calcext='{ns}'><office:body><office:spreadsheet><table:table table:name='S'><table:table-row table:visibility='filter'><table:table-cell><text:p>Retained cell</text:p></table:table-cell></table:table-row><calcext:conditional-formats><calcext:conditional-format calcext:target-range-address='S.A1'><calcext:condition calcext:value='greater-than(0)' calcext:apply-style-name='Good'/></calcext:conditional-format></calcext:conditional-formats></table:table></office:spreadsheet></office:body></office:document-content>"
+    );
+    let bytes = package(InputFormat::Ods, &content, &[]);
+    let output = convert(&bytes, InputFormat::Ods, ResourceLimits::default()).unwrap();
+    let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+    assert!(markdown.contains("Retained cell"));
+    assert!(output.diagnostics.iter().any(|d| d.code == "odf.layoutMetadata"));
+}
+
+#[test]
+fn vector_attachments_preserve_original_bytes_and_body() {
+    for (name, mime, payload) in [
+        ("figure.pdf", "application/pdf", b"%PDF-source".as_slice()),
+        ("figure.svm", "application/x-openoffice-gdimetafile", b"VCLMTF-source".as_slice()),
+    ] {
+        let content = format!(
+            "<office:document-content {NS}><office:body><office:text><text:p>Before</text:p><draw:frame text:anchor-page-number='1'><draw:image xlink:href='{name}'/></draw:frame><text:p>After</text:p></office:text></office:body></office:document-content>"
+        );
+        let bytes = package(InputFormat::Odt, &content, &[(name, mime, payload)]);
+        let output = convert(&bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
+        assert_eq!(output.assets.len(), 1);
+        assert_eq!(output.assets[0].bytes, payload);
+        let markdown =
+            render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
+        assert!(markdown.contains("Before") && markdown.contains("After"));
+        assert!(!markdown.contains("!["));
+        assert!(output.diagnostics.iter().any(|d| d.code == "odf.imageOriginal"));
+    }
+}

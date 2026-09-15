@@ -47,6 +47,15 @@ pub(super) fn detect(
     context: &ExecutionContext,
 ) -> Result<FormatDetection, ConversionError> {
     context.checkpoint()?;
+    if input.bytes.starts_with(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+        && super::cfb_directory_stream_names(&input.bytes).is_ok_and(|names| {
+            ["EncryptionInfo", "EncryptedPackage"]
+                .iter()
+                .all(|required| names.iter().any(|name| name.eq_ignore_ascii_case(required)))
+        })
+    {
+        return Err(ConversionError::Encrypted);
+    }
     let mut compatible_hints = Vec::new();
     if let Some(candidates) = binary_candidates(&input.bytes, &mut compatible_hints) {
         return Ok(binary_detection(input, hint, candidates, compatible_hints));

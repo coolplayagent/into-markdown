@@ -5,13 +5,13 @@ use super::IMAGE_BITMAP_MATERIALIZATIONS;
 use super::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, ConverterOutput,
     Diagnostic, DiagnosticSeverity, Document, ExecutionContext, HashSet, Limits,
-    MAX_RENDER_DIMENSION, MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE, NodeId, OcrPolicy,
-    PageCoverage, Path, Pdfium, Rect, ResourceReservation, account_asset,
-    allocation_capacity_bound, asset_record_overhead, character_working_set_bytes, checked_count,
-    content_asset_id, diagnostic_overhead, displayed_dimensions, image_bitmap_to_bmp,
-    image_pixels_required, map_pdfium_error, materialize_after_reserve, normalize_rect,
-    output_block_overhead, page_locator, provenance, render_dimensions, rendered_bitmap_to_bmp,
-    request_path_scan, resource, retain_existing_reservation, retain_output_bytes, text_block,
+    MIN_NATIVE_TEXT_CHARS, MIN_SCAN_IMAGE_COVERAGE, NodeId, OcrPolicy, PageCoverage, Path, Pdfium,
+    Rect, ResourceReservation, account_asset, allocation_capacity_bound, asset_record_overhead,
+    character_working_set_bytes, checked_count, content_asset_id, diagnostic_overhead,
+    displayed_dimensions, image_bitmap_to_png, image_pixels_required, map_pdfium_error,
+    materialize_after_reserve, normalize_rect, output_block_overhead, page_locator, provenance,
+    render_dimensions, rendered_bitmap_to_bmp, request_path_scan, resource,
+    retain_existing_reservation, retain_output_bytes, text_block,
 };
 
 #[derive(Default)]
@@ -75,26 +75,26 @@ pub(super) fn load_runtime(
     options: &ConversionOptions,
 ) -> Result<Pdfium, ConversionError> {
     options.limits.validate_pdf()?;
-    let bitmap_limit =
-        options.limits.max_asset_bytes.min(options.limits.max_memory_bytes).min(400_000_000);
+    let bitmap_limit = options.limits.max_memory_bytes;
     let limits = Limits {
-        max_document_bytes: options.limits.max_input_bytes.min(1024 * 1024 * 1024),
+        max_document_bytes: options.limits.max_input_bytes,
         max_pages: if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort {
             options.limits.max_pages.max(into_markdown_core::ResourceLimits::default().max_pages)
         } else {
             options.limits.max_pages
-        },
-        max_text_units_per_page: u32::try_from(into_markdown_core::MAX_DOCUMENT_INLINES)
-            .unwrap_or(u32::MAX),
-        max_render_dimension: MAX_RENDER_DIMENSION,
+        }
+        .min(i32::MAX as u32),
+        max_text_units_per_page: into_markdown_core::MAX_DOCUMENT_INLINES.min(i32::MAX as usize)
+            as u32,
+        max_render_dimension: i32::MAX as u32,
         max_render_pixels: bitmap_limit / 4,
-        max_images_per_page: 10_000,
+        max_images_per_page: options.limits.max_pdf_page_objects,
         max_page_objects: options.limits.max_pdf_page_objects,
         max_password_bytes: 1024,
         max_bitmap_bytes: bitmap_limit,
-        max_links_per_page: 10_000,
-        max_link_bytes: 8 * 1024,
-        max_font_name_bytes: 4 * 1024,
+        max_links_per_page: i32::MAX as u32,
+        max_link_bytes: u32::try_from(options.limits.max_memory_bytes).unwrap_or(u32::MAX),
+        max_font_name_bytes: u32::try_from(options.limits.max_memory_bytes).unwrap_or(u32::MAX),
     };
     Pdfium::load_pinned(runtime_path, limits).map_err(map_pdfium_error)
 }
@@ -130,24 +130,6 @@ impl PdfOutput {
         })
     }
 
-    pub(super) fn record_page_truncation(
-        &mut self,
-        observed: u32,
-        selected: u32,
-    ) -> Result<(), ConversionError> {
-        if observed <= selected {
-            return Ok(());
-        }
-        self.diagnostics.try_reserve(1).map_err(|error| {
-            resource(
-                "max_memory_bytes",
-                format!("cannot reserve PDF truncation diagnostic: {error}"),
-            )
-        })?;
-        self.diagnostics.push(super::page_truncation_diagnostic(observed, selected));
-        Ok(())
-    }
-
     #[allow(clippy::too_many_lines)]
     pub(super) fn extract_page(
         self,
@@ -173,9 +155,7 @@ impl PdfOutput {
         let page_objects = page.object_count().map_err(map_pdfium_error)?;
         counts.account_page_objects(page_objects, page_number, options)?;
         let info = page.info().map_err(map_pdfium_error)?;
-        let path_plan = request_path_scan(context, |checkpoint| {
-            page.plan_path_bounds_with_checkpoint(checkpoint)
-        })?;
+        let path_plan = super::recovery::plan_paths(&page, options, context)?;
         let path_allocation_bytes = path_plan.allocation_bytes();
         let (raw_path_bounds, raw_path_memory) =
             materialize_after_reserve(context, path_allocation_bytes, || {
@@ -240,7 +220,7 @@ impl PdfOutput {
             blocks
                 .try_reserve(1)
                 .map_err(|_| resource("max_memory_bytes", "PDF block allocation failed"))?;
-            blocks.push(text_block(page_number, &info, &characters)?);
+            blocks.push(text_block(page_number, &info, &characters, options.error_policy)?);
         }
         super::links::PageLinks {
             number: page_number,
@@ -261,9 +241,15 @@ impl PdfOutput {
             materialize_after_reserve(context, image_plan_bytes, || {
                 image_plan.materialize().map_err(map_pdfium_error)
             })?;
+        let mut needs_page_frame = false;
         for image in &images {
             context.checkpoint()?;
-            coverage.add(normalize_rect(image.bounds(), &info)?, &info);
+            let bounds = normalize_rect(image.bounds(), &info)?;
+            coverage.add(bounds, &info);
+            let mut locator = page_locator(page_number, &info);
+            locator.bounds = Some(bounds);
+            needs_page_frame |=
+                crate::embedded_visual_ocr::source_coordinate_frame(&locator).is_none();
         }
         let printable = characters
             .iter()
@@ -272,8 +258,8 @@ impl PdfOutput {
         let scanned =
             printable < MIN_NATIVE_TEXT_CHARS && coverage.ratio() >= MIN_SCAN_IMAGE_COVERAGE;
         let ocr_policy = crate::embedded_visual_ocr::effective_ocr_policy(options);
-        let render_requested =
-            ocr_policy == OcrPolicy::Always || (ocr_policy == OcrPolicy::Auto && scanned);
+        let render_requested = ocr_policy == OcrPolicy::Always
+            || (ocr_policy == OcrPolicy::Auto && (scanned || needs_page_frame));
         for image in images {
             context.checkpoint()?;
             // A full displayed-page render already includes every embedded
@@ -292,7 +278,7 @@ impl PdfOutput {
                     materialize_after_reserve(context, bitmap_plan_bytes, || {
                         bitmap_plan.materialize().map_err(map_pdfium_error)
                     })?;
-                let (encoded, encoded_memory) = image_bitmap_to_bmp(&bitmap, options, context)?;
+                let (encoded, encoded_memory) = image_bitmap_to_png(&bitmap, options, context)?;
                 drop(bitmap);
                 drop(bitmap_memory);
                 account_asset(&encoded, &mut counts.asset_bytes, options)?;
@@ -309,8 +295,8 @@ impl PdfOutput {
                     })?;
                     assets.push(Asset {
                         id: AssetId(id.clone()),
-                        filename: Some(format!("{id}.bmp")),
-                        media_type: "image/bmp".into(),
+                        filename: Some(format!("{id}.png")),
+                        media_type: "image/png".into(),
                         bytes: encoded,
                         external_uri: None,
                     });
@@ -396,20 +382,15 @@ impl PdfOutput {
                 provenance: rendered_provenance,
             });
         }
-        if scanned {
-            retain_output_bytes(context, &mut retained_memory, diagnostic_overhead()?)?;
-            diagnostics
-                .try_reserve(1)
-                .map_err(|_| resource("max_memory_bytes", "diagnostic allocation failed"))?;
-            diagnostics.push(Diagnostic {
-                code: "pdf.scannedPage".into(),
-                severity: DiagnosticSeverity::Info,
-                message: format!(
-                    "page {page_number} has fewer than {MIN_NATIVE_TEXT_CHARS} printable native characters and image coverage of at least 50%"
-                ),
-                locator: Some(page_locator(page_number, &info)),
-            });
-        }
+        record_page_ocr_decisions(
+            render_requested && needs_page_frame,
+            scanned,
+            page_number,
+            &info,
+            &mut diagnostics,
+            &mut retained_memory,
+            context,
+        )?;
         counts.nodes = checked_count(
             counts.nodes,
             1,
@@ -437,11 +418,22 @@ impl PdfOutput {
         let Self {
             mut document,
             assets,
-            diagnostics,
+            mut diagnostics,
             mut retained_memory,
             path_evidence,
             path_memory,
         } = self;
+        if options.error_policy == into_markdown_core::ErrorPolicy::BestEffort
+            && document
+                .blocks
+                .iter()
+                .any(|node| matches!(&node.block, Block::Page { blocks, .. } if blocks.is_empty()))
+        {
+            return Err(super::malformed(
+                "page",
+                "no extractable content; preserve the rendered page",
+            ));
+        }
         let retain_image_pixels = image_pixels_required(options);
         let layout_config = into_markdown_pdf_layout::LayoutConfig {
             limits: into_markdown_pdf_layout::LayoutLimits {
@@ -456,13 +448,15 @@ impl PdfOutput {
                     .min(into_markdown_core::MAX_DOCUMENT_NODES),
             },
         };
-        let layout = into_markdown_pdf_layout::reconstruct_document_with_path_evidence(
-            document,
-            &layout_config,
-            &path_evidence,
-            context,
-        )?;
-        let (rebuilt_document, layout_reservation) = layout.into_parts();
+        let (rebuilt_document, layout_reservation, mut recovery_diagnostics) =
+            super::recovery::layout(
+                document,
+                &layout_config,
+                &path_evidence,
+                options.error_policy,
+                context,
+            )?;
+        diagnostics.append(&mut recovery_diagnostics);
         drop(path_evidence);
         drop(path_memory);
         document = rebuilt_document;
@@ -511,4 +505,41 @@ mod object_budget_tests {
             Err(ConversionError::ResourceLimit { limit: "documentNodes", .. })
         ));
     }
+}
+
+fn record_page_ocr_decisions(
+    needs_page_frame: bool,
+    scanned: bool,
+    page_number: u32,
+    info: &super::PageInfo,
+    diagnostics: &mut Vec<Diagnostic>,
+    retained_memory: &mut Vec<ResourceReservation>,
+    context: &ExecutionContext,
+) -> Result<(), ConversionError> {
+    if needs_page_frame {
+        retain_output_bytes(context, retained_memory, diagnostic_overhead()?)?;
+        diagnostics.push(Diagnostic {
+            code: "pdf.pageOcrPlacement".into(),
+            severity: DiagnosticSeverity::Info,
+            message:
+                "Image placement uses displayed-page OCR to preserve clipping and page coordinates"
+                    .into(),
+            locator: Some(page_locator(page_number, info)),
+        });
+    }
+    if scanned {
+        retain_output_bytes(context, retained_memory, diagnostic_overhead()?)?;
+        diagnostics
+            .try_reserve(1)
+            .map_err(|_| resource("max_memory_bytes", "diagnostic allocation failed"))?;
+        diagnostics.push(Diagnostic {
+            code: "pdf.scannedPage".into(),
+            severity: DiagnosticSeverity::Info,
+            message: format!(
+                "page {page_number} has fewer than {MIN_NATIVE_TEXT_CHARS} printable native characters and image coverage of at least 50%"
+            ),
+            locator: Some(page_locator(page_number, info)),
+        });
+    }
+    Ok(())
 }

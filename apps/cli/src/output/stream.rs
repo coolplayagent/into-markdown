@@ -69,7 +69,7 @@ mod json;
 mod plan;
 mod sink;
 
-use io::{ChunkRecordingWriter, IndentingWriter, copy_reader, copy_spool, replay_spool_chunks};
+use io::{IndentingWriter, copy_reader, copy_spool};
 use json::JsonStringSpool;
 use plan::RepresentationPlan;
 
@@ -85,8 +85,6 @@ pub(crate) struct StructuredSpool {
     plan: RepresentationPlan,
     capabilities: ArtifactSinkCapabilities,
     ir: Option<TemporaryFile>,
-    ir_write_chunks: Vec<usize>,
-    ir_chunk_lease: Option<ResourceReservation>,
     markdown: Option<TemporaryFile>,
     markdown_json: Option<JsonStringSpool>,
     diagnostics: Option<TemporaryFile>,
@@ -134,17 +132,11 @@ impl StructuredSpool {
         } else {
             Vec::new()
         };
-        let ir_chunk_lease = plan
-            .semantic_ir()
-            .then(|| context.reserve_memory(0).map_err(CliError::from))
-            .transpose()?;
         Ok(Self {
             context,
             plan,
             capabilities: plan.capabilities(),
             ir,
-            ir_write_chunks: Vec::new(),
-            ir_chunk_lease,
             markdown,
             markdown_json,
             diagnostics,
@@ -307,7 +299,6 @@ impl StructuredSpool {
         let valid = self.markdown.is_some() == self.plan.raw_markdown()
             && self.markdown_json.is_some() == self.plan.escaped_markdown()
             && self.ir.is_some() == self.plan.semantic_ir()
-            && self.ir_chunk_lease.is_some() == self.plan.semantic_ir()
             && self.document_phase.is_some() == self.plan.semantic_ir()
             && self.diagnostics.is_some() == self.plan.inventories()
             && self.provenance.is_some() == self.plan.inventories()

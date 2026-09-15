@@ -1,0 +1,13 @@
+{
+  "sourceAuthority": {"sourceId":"pdf-cc54715a4a47401e","sourceSha256":"8131868f890f2e8d40c18de0e73f74854cc2beeb88e12ddcd1f70e548ffd4d63","derivedSha256":"095ee7be69c18b4dcfc0df49e3b587d1f3b8be45e2d68839af23948b85867e78","sourcePages":679,"selectedPages":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32],"method":"pypdf 6.10.0 page copy; original file unchanged; installed-artifact regression fixture."},
+  "candidateSha256": "1a6ccf6a41f86a635018a2ca1fb325ddbfc9373b771f4e4efd909dbb1bf8303c",
+  "passed": true,
+  "resourceUsage": {"memory":{"totalBytes":17179869184,"availableBytes":0,"systemReserveBytes":0,"autoBudgetBytes":17179869184,"effectiveBudgetBytes":3221225472,"automatic":false},"ocrRuntime":{"imageSources":94,"imagesAttempted":32,"imagesCompleted":32,"imagesWithText":26,"imagesFailed":0,"imagesSkipped":62,"requests":32,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":3033814393,"workerBudgetMaxBytes":3060845219},"sharedLeaseBudgetBytes":3221225472,"sharedLeasePeakBytes":3221225472,"temporaryLeaseBudgetBytes":9007199254740991,"temporaryLeasePeakBytes":44614091,"ocr":{"recognizedRegions":1553,"recognizedChars":50456}},
+  "pages": 32,
+  "sourceImageResources": 63,
+  "pageRenderSources": 31,
+  "coveredOriginalImagesSkipped": 62,
+  "completedOcr": 32,
+  "recognitionMemoryRefusals": 0,
+  "publishedImages": {"count":33,"encodedBytes":22101490,"equivalentRgbaBytes":2311625552}
+}

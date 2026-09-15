@@ -13,7 +13,6 @@ use crate::workbook::opc::content_types::{
     parse_content_types, require_content_type, validate_content_type_authority,
 };
 use crate::workbook::opc::package::{PackageEntry, canonical_part_name, has_extension, read_entry};
-use crate::workbook::resource_profile::xlsx_auto_profile;
 use crate::workbook::schema::{
     XLSB_SHARED_STRINGS_CT, XLSB_STYLES_CT, XML_SHARED_STRINGS_CT, XML_STYLES_CT,
 };
@@ -214,9 +213,6 @@ pub(super) fn preflight_package(
     let (kind, content_macro) =
         root_workbook_authority(&mut zip, &entry_map, &content_types, options, context)?;
     macro_present |= content_macro;
-    let profiled_options =
-        (kind == WorkbookKind::Xml).then(|| xlsx_auto_profile(options, available_memory));
-    let options = profiled_options.as_ref().unwrap_or(options);
     if let Some((_, name, size)) =
         entries.iter().find(|(_, _, size)| *size > options.limits.max_archive_entry_bytes)
     {

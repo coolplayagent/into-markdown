@@ -153,7 +153,9 @@ pub(super) fn validate(
         ifd = layout.read_offset(bytes, next_offset, little)?;
         frames += 1;
     }
-    intervals.require_exact_coverage(bytes, layout.alignment())?;
+    // TIFF directories and pixel segments are addressed by offsets. Producers
+    // may leave unused bytes between or after them; the owned ranges above
+    // still validate bounds, overlap, directory cycles and request budgets.
     Ok(Summary { frames, animated: frames > 1 })
 }
 
@@ -196,13 +198,6 @@ impl Layout {
         match self {
             Self::Classic => 8,
             Self::Big => 16,
-        }
-    }
-
-    const fn alignment(self) -> usize {
-        match self {
-            Self::Classic => 4,
-            Self::Big => 8,
         }
     }
 

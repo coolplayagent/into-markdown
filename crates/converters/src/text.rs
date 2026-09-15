@@ -91,97 +91,8 @@ impl Converter for TextConverter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Charset {
-    Utf8,
-    Utf16Le,
-    Utf16Be,
-    Windows1252,
-    Gb18030,
-    Big5,
-    ShiftJis,
-}
-
-impl Charset {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Utf8 => "utf-8",
-            Self::Utf16Le => "utf-16le",
-            Self::Utf16Be => "utf-16be",
-            Self::Windows1252 => "windows-1252",
-            Self::Gb18030 => "gb18030",
-            Self::Big5 => "big5",
-            Self::ShiftJis => "shift_jis",
-        }
-    }
-
-    const fn encoding(self) -> &'static Encoding {
-        match self {
-            Self::Utf8 => UTF_8,
-            Self::Utf16Le => UTF_16LE,
-            Self::Utf16Be => UTF_16BE,
-            Self::Windows1252 => WINDOWS_1252,
-            Self::Gb18030 => GB18030,
-            Self::Big5 => BIG5,
-            Self::ShiftJis => SHIFT_JIS,
-        }
-    }
-}
-
-fn normalize_charset(label: &str) -> Result<Charset, ConversionError> {
-    let label = label.trim();
-    let charset = if charset_label_eq(label, "utf-8") || charset_label_eq(label, "utf8") {
-        Charset::Utf8
-    } else if charset_label_eq(label, "utf-16le") || charset_label_eq(label, "utf16le") {
-        Charset::Utf16Le
-    } else if charset_label_eq(label, "utf-16be") || charset_label_eq(label, "utf16be") {
-        Charset::Utf16Be
-    } else if charset_label_eq(label, "windows-1252")
-        || charset_label_eq(label, "windows1252")
-        || charset_label_eq(label, "cp1252")
-    {
-        Charset::Windows1252
-    } else if charset_label_eq(label, "gb18030") || charset_label_eq(label, "gb-18030") {
-        Charset::Gb18030
-    } else if charset_label_eq(label, "big5") || charset_label_eq(label, "big-5") {
-        Charset::Big5
-    } else if charset_label_eq(label, "shift-jis")
-        || charset_label_eq(label, "shiftjis")
-        || charset_label_eq(label, "sjis")
-        || charset_label_eq(label, "cp932")
-        || charset_label_eq(label, "windows-31j")
-    {
-        Charset::ShiftJis
-    } else {
-        return Err(ConversionError::Malformed {
-            part: Some("charset".into()),
-            detail: format!("unsupported character encoding label: {label}"),
-        });
-    };
-    Ok(charset)
-}
-
-fn charset_label_eq(label: &str, expected: &str) -> bool {
-    label
-        .bytes()
-        .map(|byte| match byte {
-            b'_' | b' ' => b'-',
-            _ => byte.to_ascii_lowercase(),
-        })
-        .eq(expected.bytes())
-}
-
-fn bom(bytes: &[u8]) -> Option<(Charset, usize)> {
-    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-        Some((Charset::Utf8, 3))
-    } else if bytes.starts_with(&[0xff, 0xfe]) {
-        Some((Charset::Utf16Le, 2))
-    } else if bytes.starts_with(&[0xfe, 0xff]) {
-        Some((Charset::Utf16Be, 2))
-    } else {
-        None
-    }
-}
+mod charset;
+use charset::{Charset, bom, normalize_charset};
 
 pub(crate) fn sniff_text(
     bytes: &[u8],
@@ -538,8 +449,10 @@ fn detect_legacy(
         Some(Charset::Big5)
     } else if guessed == SHIFT_JIS {
         Some(Charset::ShiftJis)
-    } else {
+    } else if guessed == UTF_8 {
         None
+    } else {
+        Some(Charset::Other(guessed))
     })
 }
 
@@ -1860,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_allowlist_decodes_mixed_language_text() {
+    fn legacy_encodings_decode_mixed_language_text() {
         for (charset, sample) in [
             (Charset::Windows1252, "Café déjà vu — naïve façade €"),
             (Charset::Gb18030, "中华人民共和国简体中文编码测试，这是一段确定的中文文本。"),
@@ -1889,6 +1802,26 @@ mod tests {
                 output.document.blocks[0].provenance.locator.byte_end,
                 Some(encoded.len() as u64)
             );
+        }
+    }
+
+    #[test]
+    fn declared_arabic_greek_and_cyrillic_encodings_preserve_text() {
+        for (label, sample) in [
+            ("iso-8859-6", "هذه وثيقة عربية تحتوي على نص واضح"),
+            ("windows-1253", "Ελληνικό κείμενο για δοκιμή"),
+            ("koi8-r", "Документ содержит русский текст"),
+        ] {
+            let encoding = Encoding::for_label(label.as_bytes()).unwrap();
+            let (bytes, _, errors) = encoding.encode(sample);
+            assert!(!errors);
+            let mut options = ConversionOptions::default();
+            options.text.charset = Some(label.into());
+            let output = convert_text(&input(&bytes), &options, &context()).unwrap();
+            let Block::Paragraph(content) = &output.document.blocks[0].block else {
+                panic!("paragraph");
+            };
+            assert_eq!(content[0], Inline::Text { value: sample.into(), marks: Vec::new() });
         }
     }
 
@@ -2006,19 +1939,30 @@ mod tests {
     }
 
     #[test]
-    fn excessive_soft_lines_fail_as_resource_limit_before_invalid_ir() {
+    fn large_soft_line_documents_preserve_content_with_actual_memory_accounting() {
         let source = "x\n".repeat(500_001);
-        let error =
+        let result =
             convert_text(&input(source.as_bytes()), &ConversionOptions::default(), &context())
-                .unwrap_err();
-        assert_eq!(error.code(), into_markdown_core::ErrorCode::ResourceLimit);
-        assert!(error.to_string().contains("max_document_inlines"));
+                .unwrap();
+        let Block::Paragraph(inlines) = &result.document.blocks[0].block else {
+            panic!("paragraph expected")
+        };
+        assert_eq!(inlines.len(), 1_000_001);
+        result.document.validate().unwrap();
+        drop(result);
+        let mut options = ConversionOptions::default();
+        options.limits.max_memory_bytes = 1024 * 1024;
+        let limited = ExecutionContext::new(ExecutionOptions::default(), options.limits.clone());
+        assert!(matches!(
+            convert_text(&input(source.as_bytes()), &options, &limited),
+            Err(ConversionError::ResourceLimit { .. })
+        ));
     }
 
     #[test]
     fn unknown_charset_and_bom_conflict_are_rejected() {
         let mut options = ConversionOptions::default();
-        options.text.charset = Some("x-user-defined".into());
+        options.text.charset = Some("x-not-real".into());
         assert!(convert_text(&input(b"text"), &options, &context()).is_err());
         options.text.charset = Some("utf-16be".into());
         assert!(convert_text(&input(&[0xff, 0xfe, 0x41, 0]), &options, &context()).is_err());

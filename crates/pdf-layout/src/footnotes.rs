@@ -3,6 +3,56 @@ use crate::memory;
 use into_markdown_core::{Block, BlockNode, ConversionError, Inline};
 use std::fmt::Write as _;
 
+/// Ambiguous repeated numeric markers retain their literal text. Existing
+/// definitions own their labels, including across OCR-triggered re-layout.
+pub(crate) fn resolve_collisions(
+    rebuilt: &mut [crate::model::RebuiltBlock],
+    retained: &[BlockNode],
+    budget: &mut LayoutBudget<'_>,
+) -> Result<(), ConversionError> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    let mut stack: Vec<&BlockNode> = retained.iter().collect();
+    while let Some(node) = stack.pop() {
+        budget.checkpoint_item()?;
+        match &node.block {
+            Block::Footnote { label, blocks } => {
+                counts.insert(label.clone(), 2);
+                stack.extend(blocks);
+            }
+            Block::Page { blocks, .. } => stack.extend(blocks),
+            _ => {}
+        }
+    }
+    for block in rebuilt.iter() {
+        budget.checkpoint_item()?;
+        if let Block::Footnote { label, .. } = &block.node.block {
+            *counts.entry(label.clone()).or_default() += 1;
+        }
+    }
+    for block in rebuilt {
+        budget.checkpoint_item()?;
+        if let Block::Footnote { label, .. } = &block.node.block
+            && counts.get(label).is_some_and(|count| *count > 1)
+        {
+            let Block::Footnote { label, blocks } =
+                std::mem::replace(&mut block.node.block, Block::Rule)
+            else {
+                unreachable!()
+            };
+            let marker = label.rsplit('-').next().unwrap_or(&label);
+            let mut content = vec![Inline::Text { value: format!("{marker} "), marks: Vec::new() }];
+            for child in blocks {
+                if let Block::Paragraph(mut text) = child.block {
+                    content.append(&mut text);
+                }
+            }
+            block.node.block = Block::Paragraph(content);
+            block.node.provenance.locator.part = Some("pdf/ambiguous-footnote".into());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn label(page: u32, digits: &str) -> Result<String, ConversionError> {
     let capacity =
         digits.len().checked_add(32).ok_or_else(|| memory("layout footnote label length"))?;

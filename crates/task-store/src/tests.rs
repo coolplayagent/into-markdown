@@ -320,7 +320,7 @@ fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
         .execute_batch(&format!(
             "ALTER TABLE tasks DROP COLUMN completed_at_ms;\
                  ALTER TABLE tasks DROP COLUMN artifact_generation;\
-                 DROP TRIGGER artifacts_limit; DROP TRIGGER artifacts_terminal;\
+                 DROP TRIGGER IF EXISTS artifacts_limit; DROP TRIGGER artifacts_terminal;\
                  ALTER TABLE artifacts RENAME TO artifacts_v3;\
                  CREATE TABLE artifacts(\
                    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,\
@@ -968,14 +968,12 @@ fn limits_reject_oversized_pages_children_and_noncanonical_references() {
     let file =
         fs::OpenOptions::new().write(true).open(oversized.path().join(DATABASE_FILE)).unwrap();
     file.set_len(258 * 1024 * 1024).unwrap();
-    assert!(matches!(
-        TaskStore::open(oversized.path(), BusyControl::default()),
-        Err(TaskStoreError::Limit(_))
-    ));
+    let reopened = TaskStore::open(oversized.path(), BusyControl::default()).unwrap();
+    drop(reopened);
 }
 
 #[test]
-fn terminal_transaction_accepts_the_complete_128_artifact_boundary() {
+fn terminal_transaction_persists_more_than_128_artifacts() {
     let (_directory, mut store) = store();
     let task = create(&mut store);
     store.transition(&task.id, transition(TaskStatus::Pending, TaskStatus::Running, 1)).unwrap();
@@ -983,8 +981,8 @@ fn terminal_transaction_accepts_the_complete_128_artifact_boundary() {
         .transition(&task.id, transition(TaskStatus::Running, TaskStatus::Converted, 900_000))
         .unwrap();
     let mut completed = succeeded_transition();
-    completed.artifacts.try_reserve_exact(124).unwrap();
-    for index in 0..124 {
+    completed.artifacts.try_reserve_exact(300).unwrap();
+    for index in 0..300 {
         completed.artifacts.push(ArtifactReference {
             storage_key: format!("{:032x}", index + 4),
             kind: ArtifactKind::Asset,
@@ -997,7 +995,8 @@ fn terminal_transaction_accepts_the_complete_128_artifact_boundary() {
     }
     let succeeded = store.transition(&task.id, completed).unwrap();
     assert_eq!(succeeded.status, TaskStatus::Succeeded);
-    assert_eq!(succeeded.artifacts.len(), 128);
+    assert_eq!(succeeded.artifacts.len(), 304);
+    assert_eq!(store.get(&task.id).unwrap().unwrap().artifacts.len(), 304);
 }
 
 #[test]

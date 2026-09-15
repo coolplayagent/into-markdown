@@ -20,6 +20,7 @@ struct TableBuild {
     row_header: bool,
     row_open: bool,
     cell_open: bool,
+    flattened_nested_content: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -645,15 +646,7 @@ fn parse_word_part(
                             options,
                             state,
                         )?;
-                        let node = state.node(
-                            Block::Table { rows: t.rows, alignments: Vec::<TableAlignment>::new() },
-                            part,
-                        )?;
-                        if let Some(parent) = tables.last_mut() {
-                            parent.cell_blocks.push(node);
-                        } else {
-                            state.document.blocks.push(node);
-                        }
+                        append_table(t.rows, t.flattened_nested_content, &mut tables, part, state)?;
                     }
                 } else if name == "body" {
                     body_depth = None;

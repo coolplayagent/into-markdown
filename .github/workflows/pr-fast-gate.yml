@@ -61,6 +61,7 @@ jobs:
           python3 -m unittest \
             tools.platform-release.test_release \
             tools.platform-release.test_pr_fast_gate \
+            tools.pdf-resilience.test_arxiv \
             tools.portable-release.test_assemble \
             tools.portable-release.test_native_acceptance \
             tools.portable-release.test_post_release_e2e \

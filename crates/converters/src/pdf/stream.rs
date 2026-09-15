@@ -40,7 +40,15 @@ impl ConverterStream for PdfConverter {
         sink: &'a mut dyn ConverterEventSink,
     ) -> LocalBoxFuture<'a, Result<ConverterStreamCompletion, ConversionError>> {
         Box::pin(async move {
-            let path = self.runtime_path()?;
+            let path = match self.runtime_path() {
+                Ok(path) => path,
+                Err(error) => {
+                    return stream_converter_output(
+                        super::recovery::unavailable_runtime(input, options, context, &error)?,
+                        sink,
+                    );
+                }
+            };
             let _permit = acquire_pdf_conversion(context).await?;
             if !page_ocr_requested(options) {
                 return stream_converter_output(
@@ -53,8 +61,21 @@ impl ConverterStream for PdfConverter {
                 let output = super::working_visual::discard(output, context)?;
                 return stream_converter_output(output, sink);
             }
-            let runtime = pages::load_runtime(&path, options)?;
-            let pdf = open_document(&runtime, input, context)?;
+            let original = super::recovery::Original::prepare(input, context)?;
+            let runtime = match pages::load_runtime(&path, options) {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let output = original.page(None, 0, "runtime", &error, options, context)?;
+                    return stream_converter_output(original.attach(output, context)?, sink);
+                }
+            };
+            let pdf = match open_document(&runtime, input, context) {
+                Ok(pdf) => pdf,
+                Err(error) => {
+                    let output = original.page(None, 0, "document", &error, options, context)?;
+                    return stream_converter_output(original.attach(output, context)?, sink);
+                }
+            };
             let observed_pages = pdf.page_count();
             let selected_pages = observed_pages.min(options.limits.max_pages);
             let mut counts = pages::Counts::default();
@@ -68,21 +89,27 @@ impl ConverterStream for PdfConverter {
             for page_index in 0..selected_pages {
                 context.checkpoint()?;
                 sink.checkpoint()?;
-                let page = pages::PdfOutput::new(1, context)?
-                    .extract_page(
-                        &pdf,
-                        page_index,
-                        options,
-                        context,
-                        &mut counts,
-                        options.output.asset_mode == AssetMode::Omit,
-                    )?
-                    .finish(options, context)?;
-                let page = sink.enrich_page(page).await?;
+                output = original.prepare_delivery(
+                    output,
+                    options,
+                    &mut published_asset_ids,
+                    context,
+                )?;
+                let page = extract_and_enrich(
+                    &pdf,
+                    page_index,
+                    &mut counts,
+                    &original,
+                    options,
+                    context,
+                    sink,
+                )
+                .await?;
                 append_page(
                     &mut output,
                     page,
                     options.output.asset_mode,
+                    true,
                     &mut published_asset_ids,
                     context,
                 )?;
@@ -96,22 +123,76 @@ impl ConverterStream for PdfConverter {
             }
             // Keep document-wide native/OCR layout and running-matter policy,
             // now over semantic text only, without retaining page pixels.
-            let output = crate::pdf_ocr::reconstruct_enriched_pdf(output, options, context)?;
-            stream_converter_output(output.account_retained(context)?, sink)
+            output =
+                original.prepare_delivery(output, options, &mut published_asset_ids, context)?;
+            let output = crate::pdf_ocr::finish_pdf_pages(output, options, context)?;
+            stream_converter_output(original.attach(output, context)?, sink)
         })
     }
 }
 
-fn append_page(
+async fn extract_and_enrich(
+    pdf: &into_markdown_pdfium::Document<'_>,
+    page_index: u32,
+    counts: &mut pages::Counts,
+    original: &super::recovery::Original,
+    options: &ConversionOptions,
+    context: &ExecutionContext,
+    sink: &mut dyn ConverterEventSink,
+) -> Result<ConverterOutput, ConversionError> {
+    let result = pages::PdfOutput::new(1, context)
+        .and_then(|page| {
+            page.extract_page(
+                pdf,
+                page_index,
+                options,
+                context,
+                counts,
+                options.output.asset_mode == AssetMode::Omit,
+            )
+        })
+        .and_then(|page| page.finish(options, context));
+    let (stage, error) = match result {
+        Ok(page) => match sink.enrich_page(page).await {
+            Ok(page) => match crate::pdf_ocr::reconstruct_enriched_pdf(page, options, context) {
+                Ok(page) => return Ok(page),
+                Err(error) => ("layout", error),
+            },
+            Err(error) => ("ocr", error),
+        },
+        Err(error) => ("extraction", error),
+    };
+    let recovered = original.page(Some(pdf), page_index, stage, &error, options, context)?;
+    // A recovery rendering is a new OCR source. Submit it once at the page
+    // boundary; the sink records this attempt and suppresses aggregate retries.
+    // Preserve the image and available text if that final recognition fails.
+    match sink.enrich_page(recovered).await {
+        Ok(page) => Ok(page),
+        Err(ocr_error) if super::recovery::recoverable(options.error_policy, &ocr_error) => {
+            let mut page = original.page(Some(pdf), page_index, stage, &error, options, context)?;
+            page.diagnostics.push(super::recovery::diagnostic(
+                Some(page_index + 1),
+                "recoveryOcr",
+                "pageImage",
+                &ocr_error,
+            ));
+            page.reconcile_retained_output(context)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn append_page(
     output: &mut ConverterOutput,
     page: ConverterOutput,
     asset_mode: AssetMode,
+    finish_ocr: bool,
     published_asset_ids: &mut HashSet<AssetId>,
     context: &ExecutionContext,
 ) -> Result<(), ConversionError> {
     context.checkpoint()?;
-    let mut page = super::working_visual::discard(page, context)?;
-    if asset_mode == AssetMode::Omit {
+    let mut page = if finish_ocr { super::working_visual::discard(page, context)? } else { page };
+    if finish_ocr && asset_mode == AssetMode::Omit {
         remove_images(&mut page.document.blocks, context)?;
         page.assets.clear();
     } else {

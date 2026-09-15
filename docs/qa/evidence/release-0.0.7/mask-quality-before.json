@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "qualityPassed": false,
+  "failures": [
+    {"case":["masked-dictionary-pages","auto"],"errors":["imagesWithText below reviewed minimum 3: 0"]},
+    {"case":["soft-mask-text","auto"],"errors":["required content missing: Clear scans verify document conversion quality and character order.","content occurrence count differs: Clear scans verify document conversion quality and character order.: 0 != 1"]}
+  ],
+  "expectationSha256": "4b975d2b2d34087670f8d3b758dfa659e59dd737a52f92601d7982839a38e40b",
+  "reportSha256": "fc7b2981f6fe4215a5f34108886236e445eae58ca47a16c9c2b8f792f0ebe51a",
+  "reviewSha256": "4958950e9cd5a9259e38f17e42e70c3d52fa315f21c16a23277b943c5ac4c9fb",
+  "binarySha256": "9bf351db3fab1b99bd68561327f95f1f728c0be776453ef3dcfd33c47c6b47c9",
+  "reviewPolicy": "source-content",
+  "allRecoveryPagesRequired": false
+}

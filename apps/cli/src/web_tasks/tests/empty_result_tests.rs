@@ -125,11 +125,12 @@ fn alt_chunk_only_docx() -> Vec<u8> {
 }
 
 #[test]
-fn rar_failure_reason_survives_web_task_persistence() {
+fn strict_rar_failure_reason_survives_web_task_persistence() {
     let temporary = tempfile::tempdir().unwrap();
     let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
-    let mut upload =
-        backend.begin_upload_configured("renamed.txt", Some(8), WebTaskRequest::default()).unwrap();
+    let mut request = WebTaskRequest::default();
+    request.options.error_policy = into_markdown::ErrorPolicy::Strict;
+    let mut upload = backend.begin_upload_configured("renamed.txt", Some(8), request).unwrap();
     upload.write_chunk(b"Rar!\x1a\x07\x01\x00").unwrap();
     let record = upload.finish().unwrap();
     let record = wait_terminal(&backend, &record.id);
@@ -157,4 +158,69 @@ fn presentation_resource_reason_survives_web_task_persistence() {
     let failure = backend.web_record(record).unwrap().failure.unwrap();
     assert_eq!(failure.code, "resourceLimit");
     assert_eq!(failure.reason_code.as_deref(), Some("max_presentation_xml_events"));
+}
+
+#[test]
+fn best_effort_rar_persists_readable_original_and_degraded_diagnostic() {
+    let temporary = tempfile::tempdir().unwrap();
+    let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+    let mut upload =
+        backend.begin_upload_configured("renamed.txt", Some(8), WebTaskRequest::default()).unwrap();
+    upload.write_chunk(b"Rar!\x1a\x07\x01\x00").unwrap();
+    let record = upload.finish().unwrap();
+    let record = wait_terminal(&backend, &record.id);
+    assert_eq!(record.status, TaskStatus::Succeeded);
+    let diagnostics =
+        record.artifacts.iter().find(|a| a.kind == ArtifactKind::Diagnostics).unwrap();
+    let (mut file, _) = backend.artifact(&record.id, &diagnostics.storage_key).unwrap();
+    let mut text = String::new();
+    file.read_to_string(&mut text).unwrap();
+    assert!(text.contains("conversion.recovery.originalFile"));
+    let original = record
+        .artifacts
+        .iter()
+        .find(|a| a.media_type.as_deref() == Some("application/vnd.rar"))
+        .unwrap();
+    let (mut file, _) = backend.artifact(&record.id, &original.storage_key).unwrap();
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"Rar!\x1a\x07\x01\x00");
+    assert!(backend.web_record(record).unwrap().failure.is_none());
+}
+
+#[test]
+fn external_images_preserve_web_delivery_and_survive_reopen() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = temporary.path().join("backend");
+    let backend = WebTaskBackend::open(&directory).unwrap();
+    let source = b"<html><body><p>Remote image report</p><img src=\"https://example.invalid/image.png\" alt=\"Source diagram\"></body></html>";
+    let request = WebTaskRequest { format: Some(InputFormat::Html), ..WebTaskRequest::default() };
+    let mut upload = backend.begin_upload_configured("remote.html", None, request).unwrap();
+    upload.write_chunk(source).unwrap();
+    let record = upload.finish().unwrap();
+    let record = wait_terminal(&backend, &record.id);
+    assert_eq!(record.status, TaskStatus::Succeeded);
+    assert!(
+        !record
+            .artifacts
+            .iter()
+            .any(|a| matches!(a.kind, ArtifactKind::Bundle | ArtifactKind::Asset))
+    );
+    let artifact = record.artifacts.iter().find(|a| a.kind == ArtifactKind::Markdown).unwrap();
+    let (mut file, _) = backend.artifact(&record.id, &artifact.storage_key).unwrap();
+    let mut markdown = String::new();
+    file.read_to_string(&mut markdown).unwrap();
+    assert!(markdown.contains("Remote image report"));
+    assert!(markdown.contains("https://example.invalid/image.png"));
+    let diagnostics = load_diagnostics_artifact(&backend, &record.id, &record).unwrap();
+    assert_eq!(diagnostics.outcome.as_deref(), Some("degraded"));
+    assert!(diagnostics.diagnostics.iter().any(|d| d.code == "webBundleExternalAssets"));
+    drop(file);
+    drop(backend);
+    let reopened = WebTaskBackend::open(&directory).unwrap();
+    let restored = reopened.get(&record.id).unwrap();
+    assert_eq!(restored.status, TaskStatus::Succeeded);
+    for artifact in &restored.artifacts {
+        reopened.artifact(&restored.id, &artifact.storage_key).unwrap();
+    }
 }

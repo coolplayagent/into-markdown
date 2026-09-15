@@ -22,18 +22,12 @@ use std::time::Duration;
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 const TOKEN_BYTES: usize = 16;
 #[cfg(any(unix, windows))]
-const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-#[cfg(any(unix, windows))]
 const HEADER_BLOCK_BYTES: usize = 4 * 1024;
 #[cfg(any(unix, windows))]
 // A maximally nested Table node adds node/block/rows/row/cells/cell/blocks
 // containers around the next public IR level. The fixed allowance covers the
 // checkpoint envelope, document metadata, and enum representation.
 pub(super) const MAX_CHECKPOINT_JSON_DEPTH: usize = into_markdown_core::MAX_DOCUMENT_DEPTH * 8 + 32;
-#[cfg(any(unix, windows))]
-const MAX_JSON_CONTAINER_ENTRIES: u64 = 1_100_000;
-#[cfg(any(unix, windows))]
-const MAX_JSON_VALUES: u64 = 4_000_000;
 #[cfg(any(unix, windows))]
 const JSON_VALUE_ALLOCATION_BYTES: u64 = 32;
 #[cfg(any(unix, windows))]
@@ -535,9 +529,6 @@ impl RecoveryStore {
                     .metadata()
                     .map_err(|error| recovery_io("inspect checkpoint", error))?
                     .len();
-                if size > MAX_CHECKPOINT_BYTES {
-                    return Err(recovery_error("limit", "checkpoint exceeds the 2 GiB limit"));
-                }
                 let mut memory = context.reserve_memory(size)?;
                 let capacity = usize::try_from(size).map_err(|_| {
                     recovery_error("limit", "checkpoint size cannot be represented in memory")
@@ -678,7 +669,16 @@ impl RecoveryStore {
                 writer.write_all(MAGIC).map_err(|_| writer.error())?;
                 let (payload_bytes, payload_sha256) = {
                     let mut hashing = HashingWriter::new(&mut writer);
-                    if let Err(error) = serde_json::to_writer(&mut hashing, payload) {
+                    let serialized = {
+                        let mut buffered =
+                            std::io::BufWriter::with_capacity(64 * 1024, &mut hashing);
+                        let result = serde_json::to_writer(&mut buffered, payload)
+                            .and_then(|()| buffered.flush().map_err(serde_json::Error::io));
+                        // Discard unwritten bytes on failure; rollback owns the temporary file.
+                        let _ = buffered.into_parts();
+                        result
+                    };
+                    if let Err(error) = serialized {
                         return Err(hashing.error(&error));
                     }
                     hashing.finish()
@@ -784,9 +784,6 @@ fn inspect_file(
 ) -> Result<TaskCheckpoint, ConversionError> {
     let size = file.metadata().map_err(|error| recovery_io("inspect checkpoint", error))?.len();
     let minimum = u64::try_from(MAGIC.len() + HEADER_BLOCK_BYTES).unwrap_or(u64::MAX);
-    if size > MAX_CHECKPOINT_BYTES {
-        return Err(recovery_error("limit", "checkpoint exceeds the 2 GiB limit"));
-    }
     if size < minimum {
         return Err(recovery_error("corrupt", "checkpoint envelope is truncated"));
     }
@@ -925,10 +922,9 @@ fn preflight_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonStats,
                         "checkpoint JSON comma is outside a container",
                     ));
                 };
-                *entries = entries.saturating_add(1);
-                if *entries > MAX_JSON_CONTAINER_ENTRIES {
-                    return Err(recovery_error("limit", "checkpoint JSON container is too wide"));
-                }
+                *entries = entries.checked_add(1).ok_or_else(|| {
+                    recovery_error("limit", "checkpoint JSON entry count overflow")
+                })?;
             }
             b':' | b' ' | b'\t' | b'\r' | b'\n' => primitive = false,
             _ if !primitive => {
@@ -946,11 +942,9 @@ fn preflight_json(bytes: &[u8], context: &ExecutionContext) -> Result<JsonStats,
 
 #[cfg(any(unix, windows))]
 fn checked_value(values: u64) -> Result<u64, ConversionError> {
-    let values = values.saturating_add(1);
-    if values > MAX_JSON_VALUES {
-        return Err(recovery_error("limit", "checkpoint JSON contains too many values"));
-    }
-    Ok(values)
+    values
+        .checked_add(1)
+        .ok_or_else(|| recovery_error("limit", "checkpoint JSON value count overflow"))
 }
 
 #[cfg(any(unix, windows))]
@@ -991,8 +985,8 @@ impl BudgetWriter {
 impl Write for BudgetWriter {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let amount = u64::try_from(bytes.len()).map_err(io::Error::other)?;
-        if self.written.checked_add(amount).is_none_or(|size| size > MAX_CHECKPOINT_BYTES) {
-            let error = recovery_error("limit", "checkpoint write exceeds the 2 GiB limit");
+        if self.written.checked_add(amount).is_none() {
+            let error = recovery_error("limit", "checkpoint write length overflow");
             return Err(self.fail(error));
         }
         if let Err(error) = self.reservation.grow(amount) {

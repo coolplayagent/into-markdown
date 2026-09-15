@@ -241,7 +241,12 @@ fn epub3_spine_navigation_links_footnotes_and_referenced_image_are_stable() {
     let mut link_targets = Vec::new();
     let mut footnote_references = Vec::new();
     collect_links(&result.document.blocks, &mut link_targets, &mut footnote_references);
-    assert!(link_targets.iter().any(|target| target == "OPS/text/two.xhtml#target"));
+    assert!(
+        link_targets.iter().any(|target| target == "#epub-spine-000002-heading"),
+        "document={:?}; diagnostics={:?}",
+        result.document,
+        result.diagnostics
+    );
     assert_eq!(footnote_references, vec!["epub-footnote-000001", "epub-footnote-000001"]);
     assert_eq!(result
         .document
@@ -362,7 +367,7 @@ fn metadata_duplicate_ids_fail_only_when_they_make_retained_relationships_ambigu
         ),
     ] {
         assert_eq!(
-            convert(epub3_book(ambiguous.as_bytes(), Some(nav3()))).unwrap_err().code(),
+            convert_strict(epub3_book(ambiguous.as_bytes(), Some(nav3()))).unwrap_err().code(),
             ErrorCode::Malformed
         );
     }
@@ -496,7 +501,7 @@ fn epub2_ncx_xml_base_and_manifest_fallback_are_supported() {
     let mut links = Vec::new();
     let mut footnotes = Vec::new();
     collect_links(&result.document.blocks, &mut links, &mut footnotes);
-    assert!(links.iter().any(|target| target == "OPS/text/one.xhtml#one"));
+    assert!(links.iter().any(|target| target == "#epub-spine-000001-heading"));
     assert!(has_nested_list(&result.document.blocks));
 }
 
@@ -565,7 +570,7 @@ fn malformed_mimetype_and_missing_fragment_are_rejected() {
         .position(|window| window == b"application/epub+zip")
         .unwrap();
     wrong[position] = b'X';
-    assert_eq!(convert(wrong).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(wrong).unwrap_err().code(), ErrorCode::Malformed);
     let broken_two = br#"<html xmlns="http://www.w3.org/1999/xhtml"><body><main><h1>Two</h1><p>Omega</p></main></body></html>"#;
     let broken = epub(&[
         ("META-INF/container.xml", container()),
@@ -580,7 +585,7 @@ fn malformed_mimetype_and_missing_fragment_are_rejected() {
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(broken).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(broken).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -627,7 +632,7 @@ fn best_effort_recovers_noncanonical_mimetype_layout_but_strict_rejects_it() {
     assert_eq!(convert_strict(crlf).unwrap_err().code(), ErrorCode::Malformed);
 
     let trailing_space = epub_with_mimetype_content(&entries, b"application/epub+zip ");
-    assert_eq!(convert(trailing_space).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(trailing_space).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -651,7 +656,7 @@ fn package_version_metadata_navigation_and_multiple_rootfiles_follow_epub_contra
     ];
     for package in invalid {
         assert_eq!(
-            convert(epub3_book(package.as_bytes(), Some(nav3()))).unwrap_err().code(),
+            convert_strict(epub3_book(package.as_bytes(), Some(nav3()))).unwrap_err().code(),
             ErrorCode::Malformed
         );
     }
@@ -670,7 +675,7 @@ fn package_version_metadata_navigation_and_multiple_rootfiles_follow_epub_contra
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
 
     let too_deep = deep_nav(16);
     assert!(matches!(
@@ -754,7 +759,7 @@ fn package_reference_cycles_missing_ids_and_alias_entries_fail_closed() {
             ("OPS/images/cover.png", PNG),
             ("OPS/styles/book.css", b"body{}"),
         ]);
-        assert_eq!(convert(bytes).unwrap_err().code(), ErrorCode::Malformed);
+        assert_eq!(convert_strict(bytes).unwrap_err().code(), ErrorCode::Malformed);
     }
 
     let aliases = epub(&[
@@ -771,7 +776,7 @@ fn package_reference_cycles_missing_ids_and_alias_entries_fail_closed() {
         ("OPS/images/cover.png", PNG),
         ("OPS/styles/book.css", b"body{}"),
     ]);
-    assert_eq!(convert(aliases).unwrap_err().code(), ErrorCode::Malformed);
+    assert_eq!(convert_strict(aliases).unwrap_err().code(), ErrorCode::Malformed);
 }
 
 #[test]
@@ -799,7 +804,7 @@ fn missing_spine_targets_are_omitted_only_when_linear_content_remains() {
         .replace("idref=\"one\"", "idref=\"missing-one\"")
         .replace("idref=\"two\"", "idref=\"missing-two\"");
     assert_eq!(
-        convert(epub3_book(all_missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
+        convert_strict(epub3_book(all_missing.as_bytes(), Some(nav3()))).unwrap_err().code(),
         ErrorCode::Malformed
     );
 }
@@ -918,4 +923,26 @@ fn archive_tree_entry_expansion_ratio_and_memory_limits_apply_before_parsing() {
         convert_with(bytes, memory, ExecutionOptions::default()),
         Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
     ));
+}
+
+#[test]
+fn recovered_chapter_preserves_raw_archive_bytes_and_other_chapters() {
+    let original = b"<?xml version='1.0'?>\n<html xmlns='http://www.w3.org/1999/xhtml'><head><title></title></head><body><!-- retained original chapter comment --><p> </p></body></html>";
+    let source = epub(&[
+        ("META-INF/container.xml", container()),
+        ("OPS/content.opf", epub3_package()),
+        ("OPS/nav.xhtml", nav3()),
+        ("OPS/text/one.xhtml", original),
+        ("OPS/text/two.xhtml", chapter_two()),
+        ("OPS/text/extra.xhtml", chapter_two()),
+        ("OPS/images/cover.png", PNG),
+        ("OPS/styles/book.css", b"body{}"),
+    ]);
+    let result = convert(source).unwrap();
+    assert_eq!(result.outcome(), ConversionOutcome::Degraded);
+    assert!(result.markdown.contains("Omega"));
+    assert!(result.assets.iter().any(|asset| asset.bytes == original));
+    assert!(result.diagnostics.iter().any(|d| d.code == "conversion.recovery.originalFile"
+        && d.locator.as_ref().and_then(|l| l.part.as_deref()) == Some("OPS/text/one.xhtml")));
+    result.document.validate().unwrap();
 }

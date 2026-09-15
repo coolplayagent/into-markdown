@@ -79,21 +79,19 @@ fn jpeg_trailing_bytes_preserve_pixels_and_assets_with_located_diagnostics() {
 }
 
 #[test]
-fn jpeg_strict_and_standalone_keep_exact_eof_contract() {
+fn jpeg_standalone_retains_trailer_while_strict_embedded_normalization_rejects_loss() {
     let original = asset(&[0xa5; 17]);
     let mut options = ConversionOptions::default();
     options.ocr.policy = OcrPolicy::Auto;
     for policy in [ErrorPolicy::BestEffort, ErrorPolicy::Strict] {
         options.error_policy = policy;
-        assert!(matches!(
-            envelope::validate(
-                format::RasterFormat::Jpeg,
-                &original.bytes,
-                &options.limits,
-                &context(&options)
-            ),
-            Err(ConversionError::Malformed { .. })
-        ));
+        envelope::validate(
+            format::RasterFormat::Jpeg,
+            &original.bytes,
+            &options.limits,
+            &context(&options),
+        )
+        .unwrap();
     }
     let ocr = source_bound_ocr(false);
     let services = Services { ocr: Some(ocr.clone()), ..Services::default() };

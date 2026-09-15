@@ -30,12 +30,6 @@ pub(crate) fn png(
         .checked_mul(2)
         .and_then(|value| value.checked_add(64 * 1024))
         .ok_or_else(|| resource("max_memory_bytes", "PNG output plan overflow"))?;
-    if capacity > limits.max_asset_bytes {
-        return Err(resource(
-            "max_asset_bytes",
-            format!("normalized PNG plan {capacity} exceeds the configured asset budget"),
-        ));
-    }
     let working = capacity
         .checked_add(if composite_white { raw } else { 0 })
         .ok_or_else(|| resource("max_memory_bytes", "PNG working-memory plan overflow"))?;
@@ -83,6 +77,8 @@ pub(crate) fn png(
             format!("normalized PNG {} exceeds max_asset_bytes", bytes.len()),
         ));
     }
+    bytes.shrink_to_fit();
+    memory.shrink(capacity.saturating_sub(bytes.capacity() as u64))?;
     Ok(EncodedImage { bytes, memory })
 }
 
@@ -106,4 +102,34 @@ fn encode(
 
 fn resource(limit: &'static str, detail: impl Into<String>) -> ConversionError {
     ConversionError::ResourceLimit { limit, detail: detail.into() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use into_markdown_core::ExecutionOptions;
+
+    #[test]
+    fn compressed_frames_retain_payload_credit_and_obey_encoded_asset_limit() {
+        let limits = ResourceLimits {
+            max_memory_bytes: 2 * 1024 * 1024,
+            max_asset_bytes: 32 * 1024,
+            ..ResourceLimits::default()
+        };
+        let context = ExecutionContext::new(ExecutionOptions::default(), limits.clone());
+        let pixels = RgbaImage::from_pixel(256, 256, image::Rgba([255, 255, 255, 255]));
+        let mut frames = Vec::new();
+        for _ in 0..64 {
+            frames.push(png(&pixels, true, &limits, &context).unwrap());
+        }
+        assert!(context.reserved_memory_bytes() < 1024 * 1024);
+        assert_eq!(image::load_from_memory(&frames[0].bytes).unwrap().to_rgba8(), pixels);
+        let tiny = ResourceLimits { max_asset_bytes: 1, ..limits };
+        assert!(matches!(
+            png(&pixels, false, &tiny, &context),
+            Err(ConversionError::ResourceLimit { limit: "max_asset_bytes", .. })
+        ));
+        drop(frames);
+        assert_eq!(context.reserved_memory_bytes(), 0);
+    }
 }

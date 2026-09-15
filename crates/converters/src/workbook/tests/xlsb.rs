@@ -110,6 +110,13 @@ fn xlsb_parser_driving_collections_are_exact_before_calamine() {
     push_xlsb_record(&mut oversized_sst, 0x009f, &declaration);
     assert!(matches!(
         scan_binary_shared_strings(&oversized_sst, &options, &context),
+        Err(ConversionError::Malformed { .. })
+    ));
+
+    let mut limited = options.clone();
+    limited.limits.max_table_cells = 1_000_000;
+    assert!(matches!(
+        scan_binary_shared_strings(&oversized_sst, &limited, &context),
         Err(ConversionError::ResourceLimit { limit: "max_table_cells", .. })
     ));
 
@@ -130,7 +137,7 @@ fn xlsb_parser_driving_collections_are_exact_before_calamine() {
     push_xlsb_record(&mut oversized_styles, 0x0269, &u32::MAX.to_le_bytes());
     assert!(matches!(
         scan_binary_style_counts(&oversized_styles, &options, &context),
-        Err(ConversionError::ResourceLimit { limit: "max_table_cells", .. })
+        Err(ConversionError::Malformed { .. })
     ));
 
     let mut mismatched_styles = Vec::new();
@@ -149,7 +156,7 @@ fn xlsb_parser_driving_collections_are_exact_before_calamine() {
     push_xlsb_record(&mut oversized_externals, 0x016a, &u32::MAX.to_le_bytes());
     assert!(matches!(
         scan_binary_workbook_surface(&oversized_externals, &options, &context),
-        Err(ConversionError::ResourceLimit { limit: "max_table_cells", .. })
+        Err(ConversionError::Malformed { .. })
     ));
 
     let mut exact_externals = Vec::new();

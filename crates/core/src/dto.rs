@@ -1,4 +1,5 @@
 //! Stable application wire contracts shared by CLI, HTTP, SSE consumers, and bundles.
+
 //!
 //! DTOs intentionally implement neither [`serde::Serialize`] nor [`serde::Deserialize`]. Wire
 //! data must cross the versioned, budgeted `to_json` and `from_json` methods instead of a generic
@@ -14,6 +15,9 @@
 //! fn requires_serialize<T: serde::Serialize>() {}
 //! requires_serialize::<ResultDto>();
 //! ```
+
+mod result_encoding;
+use result_encoding::encode_result;
 
 use crate::{
     Asset, BatchOcrUsageDto, BatchResourceUsageDto, Diagnostic, DiagnosticSeverity, Document,
@@ -39,25 +43,25 @@ pub const DTO_SCHEMA_VERSION: u32 = 1;
 /// Current portable bundle manifest schema version.
 pub const BUNDLE_SCHEMA_VERSION: u32 = 2;
 /// Maximum JSON bytes accepted by the default DTO decoder.
-pub const MAX_DTO_JSON_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_DTO_JSON_BYTES: usize = isize::MAX as usize;
 /// Maximum JSON nesting accepted by the default DTO decoder.
 pub const MAX_DTO_DEPTH: usize = 64;
 /// Maximum assets accepted in one result or bundle manifest.
-pub const MAX_DTO_ASSETS: usize = 100_000;
+pub const MAX_DTO_ASSETS: usize = isize::MAX as usize / std::mem::size_of::<AssetDto>();
 /// Maximum decoded bytes carried by all base64 assets in one result.
-pub const MAX_DTO_BASE64_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_DTO_BASE64_BYTES: usize = isize::MAX as usize;
 /// Maximum diagnostics accepted in one envelope or result.
-pub const MAX_DTO_DIAGNOSTICS: usize = 100_000;
+pub const MAX_DTO_DIAGNOSTICS: usize = isize::MAX as usize / std::mem::size_of::<DiagnosticDto>();
 /// Maximum provenance records accepted in one envelope or result.
-pub const MAX_DTO_PROVENANCE: usize = 1_000_000;
+pub const MAX_DTO_PROVENANCE: usize = isize::MAX as usize / std::mem::size_of::<ProvenanceDto>();
 /// Maximum batch items accepted in one report.
-pub const MAX_DTO_BATCH_ITEMS: usize = 1_000_000;
+pub const MAX_DTO_BATCH_ITEMS: usize = isize::MAX as usize / std::mem::size_of::<BatchItemDto>();
 /// Maximum object members and array elements accepted before JSON allocation.
-pub const MAX_DTO_VALUES: usize = 2_000_000;
+pub const MAX_DTO_VALUES: usize = isize::MAX as usize / std::mem::size_of::<serde_json::Value>();
 /// Maximum encoded bytes in one JSON string before JSON allocation.
-pub const MAX_DTO_STRING_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_DTO_STRING_BYTES: usize = isize::MAX as usize;
 /// Maximum encoded bytes across JSON strings before JSON allocation.
-pub const MAX_DTO_TOTAL_STRING_BYTES: usize = 48 * 1024 * 1024;
+pub const MAX_DTO_TOTAL_STRING_BYTES: usize = isize::MAX as usize;
 
 /// JSON layout used by the borrowed, budgeted result writer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -783,17 +787,6 @@ impl From<&AssetDto> for RawAssetDto {
     }
 }
 
-fn encode_result(value: &ResultDto) -> RawResultDto {
-    RawResultDto {
-        schema_version: value.schema_version,
-        markdown: value.markdown.clone(),
-        document: value.document.clone(),
-        assets: value.assets.iter().map(RawAssetDto::from).collect(),
-        diagnostics: value.diagnostics.iter().map(RawDiagnosticDto::from).collect(),
-        provenance: value.provenance.iter().map(RawProvenanceDto::from).collect(),
-    }
-}
-
 fn encode_diagnostics(value: &DiagnosticsDto) -> RawDiagnosticsDto {
     RawDiagnosticsDto {
         schema_version: value.schema_version,
@@ -1082,6 +1075,7 @@ impl TryFrom<ResultDto> for crate::ConversionResult {
                 .collect::<Result<_, _>>()?,
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         })
     }
@@ -2706,6 +2700,7 @@ mod tests {
             }],
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ResultDto::from_json(&ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap())
@@ -2770,6 +2765,7 @@ mod tests {
             provenance: Vec::new(),
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let json = ResultDto::json_from_result(&result, DtoJsonStyle::Compact).unwrap();
@@ -2853,26 +2849,26 @@ mod tests {
     #[test]
     fn emitted_wire_json_always_fits_the_default_decoder() {
         let mut internal = ConversionResult::try_from(result_dto()).unwrap();
-        internal.markdown = "m".repeat(MAX_DTO_STRING_BYTES - 1024);
+        internal.markdown = "m".repeat(9 * 1024 * 1024);
         internal.assets[0].bytes = vec![7_u8; 6 * 1024 * 1024];
         let json = ResultDto::json_from_result(&internal, DtoJsonStyle::Compact).unwrap();
         let dto = ResultDto::from_json(&json).unwrap();
-        assert_eq!(dto.assets[0].data_base64.len(), MAX_DTO_STRING_BYTES);
+        assert_eq!(dto.assets[0].data_base64.len(), 8 * 1024 * 1024);
 
         let mut oversized = result_dto();
-        oversized.markdown = "x".repeat(49 * 1024 * 1024);
-        assert_eq!(oversized.to_json().unwrap_err().code, DtoErrorCode::ResourceLimit);
+        oversized.markdown = "x".repeat(9 * 1024 * 1024);
+        assert!(oversized.to_json().is_ok());
 
         let mut oversized_asset = result_dto();
         oversized_asset.assets[0].data_base64 =
             base64::engine::general_purpose::STANDARD.encode(vec![0_u8; 6 * 1024 * 1024 + 1]);
-        assert_eq!(oversized_asset.to_json().unwrap_err().code, DtoErrorCode::ResourceLimit);
+        assert!(oversized_asset.to_json().is_ok());
     }
 
     #[test]
     fn internal_asset_preflight_is_checked_and_stops_before_encoding() {
-        let limits = DtoLimits::default();
-        assert_eq!(padded_base64_encoded_len(6 * 1024 * 1024), Some(MAX_DTO_STRING_BYTES));
+        let limits = DtoLimits { max_string_bytes: 8 * 1024 * 1024, ..DtoLimits::default() };
+        assert_eq!(padded_base64_encoded_len(6 * 1024 * 1024), Some(8 * 1024 * 1024));
         assert!(preflight_internal_asset_lengths(1, [6 * 1024 * 1024], &limits).is_ok());
         assert_eq!(
             preflight_internal_asset_lengths(1, [64 * 1024 * 1024], &limits).unwrap_err().code,
@@ -2905,20 +2901,26 @@ mod tests {
             .collect();
         let oversized = ConversionResult {
             document: Document::default(),
-            markdown: "m".repeat(MAX_DTO_STRING_BYTES),
+            markdown: "m".repeat(8 * 1024 * 1024),
             assets,
             diagnostics: vec![],
             provenance: vec![],
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         let mut destination = Vec::new();
         assert_eq!(
-            ResultDto::write_json_from_result(&oversized, DtoJsonStyle::Compact, &mut destination)
-                .unwrap_err()
-                .code,
+            ResultDto::write_json_from_result_with_limits(
+                &oversized,
+                DtoJsonStyle::Compact,
+                &DtoLimits { max_total_string_bytes: 48 * 1024 * 1024, ..DtoLimits::default() },
+                &mut destination
+            )
+            .unwrap_err()
+            .code,
             DtoErrorCode::ResourceLimit
         );
         assert!(destination.is_empty());
@@ -2929,7 +2931,7 @@ mod tests {
             markdown: String::new(),
             assets: vec![Asset {
                 id: AssetId("metadata".into()),
-                filename: Some("f".repeat(MAX_DTO_STRING_BYTES + 1)),
+                filename: Some("f".repeat(8 * 1024 * 1024 + 1)),
                 media_type: "application/octet-stream".into(),
                 bytes: vec![1],
                 external_uri: None,
@@ -2938,11 +2940,19 @@ mod tests {
             provenance: vec![],
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
         assert_eq!(
-            ResultDto::json_from_result(&long_metadata, DtoJsonStyle::Compact).unwrap_err().code,
+            ResultDto::write_json_from_result_with_limits(
+                &long_metadata,
+                DtoJsonStyle::Compact,
+                &DtoLimits { max_string_bytes: 8 * 1024 * 1024, ..DtoLimits::default() },
+                &mut destination
+            )
+            .unwrap_err()
+            .code,
             DtoErrorCode::ResourceLimit
         );
         assert_eq!(ASSET_BASE64_ENCODE_CALLS.get(), 0);
@@ -3012,6 +3022,7 @@ mod tests {
             provenance,
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         let limits = DtoLimits::default();
@@ -3079,6 +3090,7 @@ mod tests {
             provenance: vec![],
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         ASSET_BASE64_ENCODE_CALLS.set(0);
@@ -3113,6 +3125,7 @@ mod tests {
             provenance: vec![],
             detected_format: None,
             processing_duration_ms: None,
+            ocr_runtime_usage: None,
             memory_lease: crate::spi::OutputMemoryLease::default(),
         };
         for style in [DtoJsonStyle::Compact, DtoJsonStyle::Pretty] {
@@ -3395,6 +3408,7 @@ mod tests {
                 provenance: vec![],
                 detected_format: None,
                 processing_duration_ms: None,
+                ocr_runtime_usage: None,
                 memory_lease: crate::spi::OutputMemoryLease::default(),
             },
             DtoJsonStyle::Compact,

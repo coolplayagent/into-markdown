@@ -1,12 +1,8 @@
 //! Prepared single-execution conversion for caller-owned artifact sinks.
 
-use crate::{
-    Engine, PreparedArtifactConversion, artifact_output, invoke_converter_preflighted,
-    invoke_enrichers_skipping, rendering, stream_execution,
-};
+use crate::{Engine, PreparedArtifactConversion, artifact_output, rendering};
 use into_markdown_core::{
-    ArtifactSink, ConversionError, ConversionSummary, ConverterStreamMode, ExecutionStage,
-    StreamConsumerKind,
+    ArtifactSink, ConversionError, ConversionSummary, ExecutionStage, StreamConsumerKind,
 };
 
 pub(crate) async fn execute(
@@ -29,54 +25,15 @@ pub(crate) async fn execute(
     } = inner;
     let execution_timer = crate::timing::ProcessingTimer::start();
     context.report(ExecutionStage::Converting, None, None, Some(attempt.converter.id()))?;
-    let native = attempt.converter.stream_support().filter(|stream| {
-        stream.stream_mode_for(
+    let output = engine
+        .convert_and_enrich(
+            &attempt,
             source.input(),
-            &attempt.candidate,
             &request.options,
-            StreamConsumerKind::Immediate,
-        ) == ConverterStreamMode::Native
-    });
-    let (output, completed_page_ocr) = if let Some(stream) = native {
-        let native = stream_execution::invoke_native_immediate(
-            stream,
-            source.input(),
-            &attempt.candidate,
-            &request.options,
-            &engine.services,
-            &engine.enrichers,
             &context,
+            StreamConsumerKind::Immediate,
         )
         .await?;
-        (native.output, native.completed_page_ocr)
-    } else {
-        (
-            invoke_converter_preflighted(
-                attempt.converter.as_ref(),
-                source.input(),
-                &attempt.candidate,
-                &request.options,
-                &engine.services,
-                &context,
-                |_| Ok(()),
-            )
-            .await?,
-            false,
-        )
-    };
-    let output = invoke_enrichers_skipping(
-        &engine.enrichers,
-        output,
-        crate::EnricherInvocation::after_page_enrichment(
-            attempt.converter.id(),
-            attempt.candidate.format,
-            &request.options,
-            &engine.services,
-            &context,
-            completed_page_ocr.then_some(crate::page_enrichment::EMBEDDED_OCR),
-        ),
-    )
-    .await?;
     let output = if request.options.output.asset_mode == into_markdown_core::AssetMode::Omit {
         output.discard_asset_payloads(&context)?
     } else {

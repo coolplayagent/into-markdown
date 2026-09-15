@@ -95,7 +95,7 @@ fn coordinate_frame(
 }
 
 /// A placement that can carry image-local OCR into the container's coordinates.
-pub(super) fn source_coordinate_frame(source: &SourceLocator) -> Option<into_markdown_core::Rect> {
+pub(crate) fn source_coordinate_frame(source: &SourceLocator) -> Option<into_markdown_core::Rect> {
     let bounds = source.bounds?;
     let page_width = source.page_width?;
     let page_height = source.page_height?;

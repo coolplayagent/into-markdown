@@ -23,13 +23,13 @@
     },
     {
       "path": "tools/macos-release/release.py",
-      "bytes": 34122,
-      "sha256": "ccad8dc2976f5634040c1d736c3480e82834f55af6bf2f79085a12606e805034"
+      "bytes": 34119,
+      "sha256": "aa04304da411960627c593a7eae680720ebac424018696e1f687900af5ea9d39"
     },
     {
       "path": "tools/platform-release/release.py",
-      "bytes": 41883,
-      "sha256": "8eccdf548fa12c8eda5335099ae08ab39ee46b5e202fce72538bb35cbbac35d7"
+      "bytes": 41729,
+      "sha256": "898f4f44a867b090b0bfd48695113ca523fd25a7dadcfad6c54bbb6224a73030"
     }
   ],
   "licenses": [
@@ -72,12 +72,12 @@
         {
           "bytes": 346959,
           "path": "SBOM.spdx.json",
-          "sha256": "11b6e22576dc8b77246cb8fed50128ab14d667368698914cba8f94e2cd473753"
+          "sha256": "03d5ef02b2ca9c9d0887315178849f08ca0cc9ed76381ecf13c7087219927527"
         },
         {
           "bytes": 264922,
           "path": "SOURCES.json",
-          "sha256": "39fc9f3382591f3a45d52a927aa2a50eab460cdd5a370573db46d5cd3a23d8e5"
+          "sha256": "a6b722644b3f9da7ef2c5697576e46c9ce096836dcd5014386c5da76cbd4ad26"
         },
         {
           "bytes": 5985,
@@ -102,12 +102,12 @@
         {
           "bytes": 346948,
           "path": "SBOM.spdx.json",
-          "sha256": "9415fea70c6152ad77911a67452ce1aa25fe16001df7e92b3e9bd4c45f9edb46"
+          "sha256": "516a83cb55adc1cdf2641fcbdc8db6483fdb46b9730d011269b81c7344416d75"
         },
         {
           "bytes": 264989,
           "path": "SOURCES.json",
-          "sha256": "2392bc54a07e60191171885becc9d8f37c8c3ceceac3232578fd3f1baea0d781"
+          "sha256": "4125258846f9bd96d083d76a2f704266c9113b03f51738b482a0abaf07847998"
         },
         {
           "bytes": 5985,
@@ -372,12 +372,12 @@
         {
           "bytes": 347009,
           "path": "SBOM.spdx.json",
-          "sha256": "3749f7e4da1b53a8d66dda3b69a4c358c549a6eb05c40e2132542fffb456de1b"
+          "sha256": "5ee94d2bc80139bba413adc60f634eeaa346dfaffb33a95dfbe13967a8752646"
         },
         {
           "bytes": 264995,
           "path": "SOURCES.json",
-          "sha256": "13303b700fbedd0f30dd2f19daa4b134df39c741a40906d052c87e0d98eafcaf"
+          "sha256": "904997eee0c94f0105675ff07db01ec393a9183814d5475c20aecad9d2056485"
         },
         {
           "bytes": 5985,
@@ -402,12 +402,12 @@
         {
           "bytes": 346946,
           "path": "SBOM.spdx.json",
-          "sha256": "96e87dbe94a74a30fb007c2c22bac1b5c07fc453cbcfc0a26651e99b723e1f6a"
+          "sha256": "701924ed34b0ac7f5f2320e392a20c83bdfae057b731b0da2b04ecbd506927f5"
         },
         {
           "bytes": 264984,
           "path": "SOURCES.json",
-          "sha256": "49b5c4739d1073907d74964484c2ae5dae11f202368de86753a8c6ea1087f2da"
+          "sha256": "c6a9f79c31bbbb695403593fd08192a1fd42e4c54cc400b583e612d8a5190d16"
         },
         {
           "bytes": 5985,

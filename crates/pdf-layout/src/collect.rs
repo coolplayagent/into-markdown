@@ -37,6 +37,9 @@ fn block_is_collectable(
     width: f32,
     height: f32,
 ) -> Result<bool, ConversionError> {
+    if node.provenance.locator.part.as_deref() == Some("pdf/ambiguous-footnote") {
+        return Ok(false);
+    }
     if matches!(node.block, Block::Footnote { .. })
         || (matches!(node.block, Block::Table { .. })
             && node.provenance.provider == crate::LAYOUT_PROVIDER)
@@ -142,6 +145,14 @@ fn collect_inlines(
                     provenance.locator.bounds.ok_or_else(|| malformed("pdfLayoutMissingBounds"))?;
                 let Some(bounds) = clipped_rect(bounds, width, height)? else {
                     if is_native_separator(&value) {
+                        // PDFium emits real word spaces with zero-area geometry.
+                        // Carry those spaces on the preceding source unit so
+                        // geometric sorting preserves the author's word boundary.
+                        if value.contains(' ')
+                            && let Some(prior) = atoms.last_mut()
+                        {
+                            prior.space_after = true;
+                        }
                         continue;
                     }
                     return Err(malformed("pdfLayoutVisibleTextMissingGeometry"));
@@ -157,6 +168,7 @@ fn collect_inlines(
                     orientation,
                     source_index: *source_index,
                     source_kind: SourceKind::Native,
+                    space_after: false,
                 });
                 *source_index =
                     source_index.checked_add(1).ok_or_else(|| memory("source index"))?;
@@ -182,9 +194,17 @@ fn collect_inlines(
                     orientation,
                     source_index: *source_index,
                     source_kind: SourceKind::Ocr,
+                    space_after: false,
                 });
                 *source_index =
                     source_index.checked_add(1).ok_or_else(|| memory("source index"))?;
+            }
+            Inline::Text { value, .. } if value.chars().all(char::is_whitespace) => {
+                if value.contains(' ')
+                    && let Some(prior) = atoms.last_mut()
+                {
+                    prior.space_after = true;
+                }
             }
             Inline::Link { content, .. } => {
                 collect_inlines(content, page, width, height, source_index, atoms, budget)?;

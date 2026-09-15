@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "reportSha256": "5f7dae845b41b48025af6d4a86e70935aa68c0602265c46d5331d1efb1b7285e",
+  "manifestSha256": "63628883c50f8652c6dc3ce0ad821fafd44a29594ae339223b2beeb0174fd1ee",
+  "binarySha256": "c947f6e128140a17a0089c7eb5cc222f969339427d2bedd5d33fa26f61c7bb88",
+  "modes": [
+    "auto",
+    "off"
+  ],
+  "complete": true,
+  "constituentRuns": [],
+  "replacements": [],
+  "passed": 2,
+  "failed": 0,
+  "seconds": 23.912,
+  "ocrTotals": {"imageSources":4,"imagesAttempted":2,"imagesCompleted":2,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":2},
+  "ocrTotalsByMode": {"auto":{"imageSources":2,"imagesAttempted":2,"imagesCompleted":2,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":0},"off":{"imageSources":2,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":2}},
+  "ocrUnaccountedCases": [],
+  "cases": [
+    {"id":"newton-page-2","ocr":"auto","sourceSha256":"a1975ffe11d9c43dc3083d0ccbcbb212f83d9822b9010761cfc2d8f793b4873e","binarySha256":"c947f6e128140a17a0089c7eb5cc222f969339427d2bedd5d33fa26f61c7bb88","passed":true,"exitCode":0,"seconds":20.963,"peakRssBytes":358105088,"markdownSha256":"6722179f1416118d67fb31870842ef00dca2ed500cc046212ef0e96fd749696d","assetBundleSha256":"7e41e91817b7e7e7beae63d9d99ed660b737ae3d67d26699a218654341e178e9","outcomes":{"degraded":1},"errorCodes":{},"diagnosticCounts":{"ocr.lowConfidence":47},"expectedPages":1,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":2,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":2,"imagesAttempted":2,"imagesCompleted":2,"imagesWithText":1,"imagesFailed":0,"imagesSkipped":0,"requests":2,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":16998911747,"workerBudgetMaxBytes":17011959324},"effectiveBudgetBytes":17179869184},
+    {"id":"newton-page-2","ocr":"off","sourceSha256":"a1975ffe11d9c43dc3083d0ccbcbb212f83d9822b9010761cfc2d8f793b4873e","binarySha256":"c947f6e128140a17a0089c7eb5cc222f969339427d2bedd5d33fa26f61c7bb88","passed":true,"exitCode":0,"seconds":2.949,"peakRssBytes":270647296,"markdownSha256":"72ba0d85cb434dc28189e94dafd5535c9979ebbebe094f581379dce26fa678c6","assetBundleSha256":"7e41e91817b7e7e7beae63d9d99ed660b737ae3d67d26699a218654341e178e9","outcomes":{"complete":1},"errorCodes":{},"diagnosticCounts":{},"expectedPages":1,"uncoveredPages":[],"brokenAssetCount":0,"assetCount":2,"originalFileFallback":false,"nestedOriginalFallbackCount":0,"ocrRuntime":{"imageSources":2,"imagesAttempted":0,"imagesCompleted":0,"imagesWithText":0,"imagesFailed":0,"imagesSkipped":2,"requests":0,"recognitionMemoryRefusals":0,"workerBudgetMinBytes":0,"workerBudgetMaxBytes":0},"effectiveBudgetBytes":17179869184}
+  ]
+}

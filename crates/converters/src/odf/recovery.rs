@@ -51,6 +51,15 @@ pub(super) fn ensure_static_body(state: &ParseState) -> Result<(), ConversionErr
             "script-bearing document has no recoverable static body",
         ));
     }
+    let has_page_structure = state.document.blocks.iter().any(|node| {
+        matches!(
+            node.block,
+            into_markdown_core::Block::Slide { .. } | into_markdown_core::Block::Sheet { .. }
+        )
+    });
+    if into_markdown_core::document_is_empty(&state.document) && !has_page_structure {
+        return Err(ConversionError::EmptyContent);
+    }
     Ok(())
 }
 
@@ -357,4 +366,30 @@ fn optional_subtree(
         ));
     }
     None
+}
+
+#[cfg(test)]
+mod empty_body_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_title_does_not_certify_a_visible_document_body() {
+        let mut state = ParseState::default();
+        state.document.metadata.title = Some("Document title".into());
+        assert!(matches!(ensure_static_body(&state), Err(ConversionError::EmptyContent)));
+        state.document.blocks.push(into_markdown_core::BlockNode {
+            id: into_markdown_core::NodeId("body".into()),
+            provenance: into_markdown_core::Provenance {
+                kind: into_markdown_core::ProvenanceKind::NativeParser,
+                provider: "test".into(),
+                locator: Default::default(),
+                confidence: None,
+            },
+            block: into_markdown_core::Block::Paragraph(vec![into_markdown_core::Inline::Text {
+                value: "Visible body".into(),
+                marks: Vec::new(),
+            }]),
+        });
+        ensure_static_body(&state).unwrap();
+    }
 }

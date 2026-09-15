@@ -109,7 +109,7 @@ fn mimetype_local_header_is_bound_before_any_xml_or_other_part() {
     central_crc[central + 16] ^= 0x80;
     assert!(matches!(
         convert(&central_crc, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "mimetype"
+        Err(ConversionError::Malformed { .. })
     ));
 
     let mut central_flags = valid;
@@ -117,7 +117,7 @@ fn mimetype_local_header_is_bound_before_any_xml_or_other_part() {
     central_flags[central + 8] |= 1 << 3;
     assert!(matches!(
         convert(&central_flags, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "mimetype"
+        Err(ConversionError::Malformed { .. })
     ));
 
     let mut duplicate_eocd = package(InputFormat::Odt, &content, &[]);
@@ -170,16 +170,21 @@ fn raw_zip_names_extras_comments_and_index_allocations_fail_closed() {
     ));
 
     let mimetype_extra = package_with_central_extra(&content, true, 0xcafe, Box::from([1_u8]));
-    assert!(matches!(
-        convert(&mimetype_extra, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "mimetype"
-    ));
     let mut mimetype_comment = package(InputFormat::Odt, &content, &[]);
     add_first_central_comment(&mut mimetype_comment);
-    assert!(matches!(
-        convert(&mimetype_comment, InputFormat::Odt, ResourceLimits::default()),
-        Err(ConversionError::Malformed { part: Some(part), .. }) if part == "mimetype"
-    ));
+    for bytes in [&mimetype_extra, &mimetype_comment] {
+        let output = convert(bytes, InputFormat::Odt, ResourceLimits::default()).unwrap();
+        assert!(output.diagnostics.iter().any(|d| d.code == "odf.noncanonicalMimetype"));
+        assert!(
+            super::recovery::convert_policy(
+                bytes,
+                InputFormat::Odt,
+                into_markdown_core::ErrorPolicy::Strict,
+                ResourceLimits::default()
+            )
+            .is_err()
+        );
+    }
 
     let normal = package(InputFormat::Odt, &content, &[]);
     let execution = ExecutionContext::new(

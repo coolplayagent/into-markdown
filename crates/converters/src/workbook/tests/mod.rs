@@ -35,11 +35,15 @@ fn abnormal_declarations_survive_physical_process_limit() {
             &[("xl/sharedStrings.xml", abnormal_sst.to_owned())],
         );
         let root = limited_context(64 * 1024 * 1024);
-        let outcome = convert_with_credit(&input, &ConversionOptions::default(), &root);
+        let output = convert_with_credit(&input, &ConversionOptions::default(), &root).unwrap();
+        assert!(!output.diagnostics.is_empty());
+        let mut strict = ConversionOptions::default();
+        strict.error_policy = into_markdown_core::ErrorPolicy::Strict;
         assert!(matches!(
-            outcome,
-            Err(ConversionError::ResourceLimit { limit: "max_table_cells", .. })
+            convert_with_credit(&input, &strict, &root),
+            Err(ConversionError::Malformed { .. })
         ));
+
         eprintln!("{MARKER}");
         return;
     }

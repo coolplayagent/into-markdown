@@ -42,12 +42,12 @@ pub(super) fn validate_document_versions(
     ] {
         if root
             .and_then(|root| root.attr(OFFICE_NS, "version"))
-            .is_some_and(|version| !matches!(version, "1.0" | "1.1" | "1.2" | "1.3"))
+            .is_some_and(|version| !matches!(version, "1.0" | "1.1" | "1.2" | "1.3" | "1.4"))
         {
             return Err(malformed(Some(part), "unsupported ODF XML part version"));
         }
     }
-    if !matches!(manifest_version, "1.0" | "1.1" | "1.2" | "1.3") {
+    if !matches!(manifest_version, "1.0" | "1.1" | "1.2" | "1.3" | "1.4") {
         return Err(malformed(Some("META-INF/manifest.xml"), "unsupported ODF package version"));
     }
     Ok(())

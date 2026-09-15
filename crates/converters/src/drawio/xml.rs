@@ -142,9 +142,6 @@ fn validate_attributes(e: &BytesStart<'_>, budget: &mut Budget<'_>) -> Result<()
     let mut keys = Vec::new();
     for attr in e.attributes().with_checks(false) {
         budget.event()?;
-        if keys.len() >= 4096 {
-            return Err(limit("drawio_xml_attributes", "XML element exceeds 4096 attributes"));
-        }
         let attr = attr.map_err(|e| malformed(e.to_string()))?;
         budget.field(attr.value.len())?;
         let text = std::str::from_utf8(&attr.value).map_err(|e| malformed(e.to_string()))?;

@@ -57,24 +57,27 @@ HTML 转换器同样复用文本 decoder、compact byte mapping 与 `ExecutionCo
 ## PDF 提取与预算
 
 Rust `ResourceLimits` 和请求 JSON 的 `options.limits` 共用
-`max_pdf_page_objects: u32`（100,000）、`max_pdf_total_objects: u64`（10,000,000）
-及 `max_pdf_layout_comparisons: u64`（12,000,000）。省略字段使用默认值，显式零值
-失败。单页对象最高 10,000,000；Web 请求以默认值作为各字段上限。累计对象数检查
-溢出，扫描超限错误附预算名称、实际值、上限和页码。最终 IR 限制独立生效。
-版面比较预算按每次整份 PDF 版面重建计数，原生提取和 OCR 重建分别应用。
+`max_pdf_page_objects: u32`（默认 PDFium 有符号整数上界）、
+`max_pdf_total_objects: u64`（默认 JSON 精确整数上界）及
+`max_pdf_layout_comparisons: u64`（12,000,000）。省略字段使用共享默认值，显式零值失败。
+用户指定的对象数与页数限制保留；扫描超限诊断附预算名称、实际值、上限和页码。
+
+版面比较预算按每页每次 PDF 版面重建计数，原生提取和 OCR 重建分别应用。
+文字片段校验按顺序复用临时空间；内存计划统计同时存活的 ID／脚注集合和单项校验峰值。
 
 PDFium 边界保留严格便捷接口 `TextPage::plan_links` / `PlannedLinks::materialize`。
 调用方可用 `plan_link_extraction(LinkPolicy, checkpoint)` 规划带策略的链接提取，
 先为 `allocation_bytes()` 预留内存，再用 `materialize_with_checkpoint` 得到
 `LinkExtraction { links, diagnostics }`。规划和物化使用相同枚举与分类，检查扫描数、
-有效结果数、诊断容量、URI 分配及分类/几何变化；无进度、失效句柄和资源错误不会降级。
+有效结果数、诊断容量、URI 分配及分类/几何变化；异常交给页面事务处理。
 `LinkIdentity` 保留注释或网页来源及原始序号，网页链接还保留矩形序号。
 
 Core 的 `best-effort` 恢复不可用链接矩形以及含内部 NUL 或无效编码的 URI，使用
 `pdf.linkOmitted` 和页面 locator 记录并省略单个链接；规划阶段按最坏情况预留诊断容量。
 `strict` 对这些链接失败。有限倒序和部分越界矩形在两种策略下均规范化并保留。
-URI 长度上限、枚举异常、资源错误与规划变化保持硬错误，其他 PDF 对象继续执行原有
-几何校验。
+页面提取、排版或 OCR 异常按原生正文、页面图像、原 PDF 附件逐级恢复，使用
+`Degraded`、页码、阶段和恢复方式记录交付结果。取消、超时、输入读取和输出写入失败
+保留各自错误。正式交付的恢复图像跳过后续 OCR，内部 OCR 工作图像在页面结束后释放。
 
 ## 可选服务
 
@@ -168,8 +171,7 @@ reference。不同 root、drive 或 UNC share 稳定返回 `assetPathUnsupported
 执行 `chmod`。所有状态操作绑定打开时的目录 handle 与 identity，并在操作边界用该
 handle 的 `fstat` 重验 owner/mode；打开后放宽权限会 fail closed。token 级持久锁保证
 并发调用只产生一个持久结果。checkpoint 临时写入使用同一
-`ExecutionContext` 的 temporary budget；完整读取在 owned serde 前先执行 2 GiB 大小、
-JSON depth/width/value 预检并预留内存，depth 边界可容纳公共 IR 的最大合法深度。资源采用
+`ExecutionContext` 的 temporary budget；完整读取在 owned serde 前按实际文件、字符串和结构大小预留内存，并校验 JSON depth，depth 边界可容纳公共 IR 的最大合法深度。资源采用
 声明解码长度的规范 padded base64 wire；编码、请求资源上限和共存峰值校验通过后
 才分配解码缓冲。尚无经审计相对目录 primitive 的平台会稳定返回
 `componentUnavailable`。
@@ -237,9 +239,8 @@ source buffer 按已初始化的逻辑 payload bytes 计费，并用 `try_reserv
 协作式逻辑预算。Rust 库的确定性 `ResourceLimits::default()` 使用 2 GiB；本地 CLI/Desktop
 按调用开始时的一次机器快照选择批处理共享预算，公式与探测缺口规则见 [CLI 内存策略](cli.md)。
 未显式配置时，本地资产额度从最终共享预算派生；各资产字段的显式值独立优先。
-CLI 可在精确资产预检后把未显式设置的单项/总资产软额度各提升一次，但提升值仍受调用开始时
-固定的 `max_memory_bytes` 约束；显式额度、Core API 与 Web 安全 profile 不参与自适应。
-Web 安全上限保持独立。`--jobs` 不会复制该预算；当前
+CLI 默认单项与总资产额度直接使用共享内存预算；单项额度同时受总资产额度约束。
+Web 与 CLI 使用转换服务所在机器的同一套默认策略。`--jobs` 不会复制该预算；当前
 converter preflight 需要完整请求 envelope 时，批调度器会等待前一项的结果提交后再放行。
 source scratch 会在共享转换前释放，不再叠加 64 KiB scratch。
 图片和 OCR 源图不使用独立的固定宽高或像素阈值：格式解析器先认证非零尺寸并用 checked
@@ -376,9 +377,9 @@ regions 与 decoded 限制，以及进程边界的 `ocrWidthLimit`、`ocrPixelLi
 Linux 进程组观测累加当前 `smaps_rollup` 的 PSS、SwapPss 及独立 huge-page 字段，
 共享普通页面按比例计入，历史进程峰值单独用于测量报告。已退出进程的 ENOENT/ESRCH
 视为离开进程组；其他观测失败终止请求并报告进程异常。内存超额错误包含观测字节数及额度。
-正式 OCR capability 对 provider coordinator 与认证 ONNX worker 的进程组设置 2 GiB 物理内存
-硬上限；请求内识别额度仍取用户配置、认证 capability 上限和共享工作租约可用量的最小值。
-该上限覆盖公开语料及扫描页实测的模型启动峰值，同时保留失控子进程的有限隔离边界。
+正式 OCR capability 的包元数据允许协议可精确表示的整数范围。provider coordinator 与认证
+ONNX worker 的实际物理内存额度取请求配置、认证 capability 额度和共享工作租约可用量的
+最小值。工作进程按这次分配的额度运行，并持续观测进程组资源占用。
 容器格式的内嵌图片 OCR 先验证完整引用、资产、尺寸和结构边界，再借用请求剩余内存作为有限
 工作 envelope；归一化与 provider 工作集按单图片峰值准入，真实 OCR 节点按产生量累计。
 `AssetMode::Omit` 在每个图片身份识别完成后释放其 payload，所有格式在渲染前再次统一清除

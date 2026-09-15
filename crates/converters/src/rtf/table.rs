@@ -3,8 +3,8 @@
 use super::budget::{limit, malformed, parameter_i32, reserve_vec};
 use super::parser::{CellMerge, ListKey, Paragraph, Parser};
 use into_markdown_core::{
-    Block, BlockNode, Cell, ConversionError, Inline, ListItem, ListKind, MAX_TABLE_COLUMNS,
-    TableRow,
+    Block, BlockNode, Cell, ConversionError, DiagnosticSeverity, ErrorPolicy, Inline, ListItem,
+    ListKind, MAX_TABLE_COLUMNS, TableRow,
 };
 
 impl Parser<'_> {
@@ -13,7 +13,9 @@ impl Parser<'_> {
             return Ok(());
         }
         let in_table = self.table.active || self.state().in_table;
-        let has_list = self.state().list_id.is_some() || self.pending_list_marker.is_some();
+        let preserve_paragraph = self.recover_missing_list_marker(end)?;
+        let has_list = !preserve_paragraph
+            && (self.state().list_id.is_some() || self.pending_list_marker.is_some());
         if in_table && has_list {
             return Err(malformed(
                 "RTF lists nested in table cells cannot be represented by this bounded state",
@@ -98,6 +100,33 @@ impl Parser<'_> {
         Ok(())
     }
 
+    fn recover_missing_list_marker(&mut self, end: usize) -> Result<bool, ConversionError> {
+        let has_list = self.state().list_id.is_some() || self.pending_list_marker.is_some();
+        let uncertain = self.pending_list_marker.as_deref().is_none_or(|marker| {
+            matches!(list_marker(marker), Err(ConversionError::Malformed { .. }))
+        });
+        let preserve_paragraph = has_list
+            && (uncertain
+                || self.state().list_level.unwrap_or(0) != 0
+                || self.table.active
+                || self.state().in_table)
+            && self.options.error_policy == ErrorPolicy::BestEffort;
+        if preserve_paragraph {
+            if let Some(mut marker) = self.pending_list_marker.take() {
+                reserve_vec(&mut self.paragraph.inlines, 1, &mut self.memory)?;
+                marker.push(' ');
+                self.paragraph.inlines.insert(0, Inline::Text { value: marker, marks: Vec::new() });
+            }
+            self.add_diagnostic(
+                "rtf.list.paragraphRecovery",
+                DiagnosticSeverity::Warning,
+                "list structure is uncertain; available marker and paragraph text are retained in source order",
+                Some(super::budget::locator(self.paragraph.start.unwrap_or(end), end)),
+            )?;
+        }
+        Ok(preserve_paragraph)
+    }
+
     pub(super) fn finish_field_result(&mut self) -> Result<(), ConversionError> {
         let field =
             self.field.as_mut().ok_or_else(|| malformed("field result has no enclosing field"))?;
@@ -160,6 +189,7 @@ impl Parser<'_> {
         self.table.last_cell_boundary = None;
         self.table.row_width = 0;
         self.state_mut().in_table = true;
+        self.table.row_open = true;
         Ok(())
     }
 
@@ -365,6 +395,7 @@ impl Parser<'_> {
         self.table.cell_definition_index = 0;
         self.table.last_cell_boundary = None;
         self.table.row_width = 0;
+        self.table.row_open = false;
         Ok(())
     }
 
@@ -396,6 +427,7 @@ impl Parser<'_> {
             self.push_block(table)?;
         }
         self.table.active = false;
+        self.table.row_open = false;
         self.table.table_width = None;
         self.table.node_reserved = false;
         Ok(())

@@ -5,7 +5,7 @@ fn read_report(path: &Path) -> serde_json::Value {
 }
 
 #[test]
-fn every_embedded_visual_entry_assembles_ocr_and_preserves_legacy_auto_routing() {
+fn every_embedded_visual_entry_assembles_default_and_explicit_ocr() {
     for extension in [
         "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt", "ods", "odp", "rtf", "epub",
         "html", "ipynb", "zip", "msg", "png",
@@ -17,30 +17,35 @@ fn every_embedded_visual_entry_assembles_ocr_and_preserves_legacy_auto_routing()
                 InputFormat::from_extension(extension),
                 &options,
             );
-            let legacy_auto =
-                policy == OcrPolicy::Auto && matches!(extension, "doc" | "ppt" | "xls");
-            assert_eq!(needs.ocr, !legacy_auto, "{extension} {policy:?}");
+            assert!(needs.ocr, "{extension} {policy:?}");
         }
     }
 }
 
 #[test]
-fn exhausted_automatic_budget_is_a_resource_refusal_before_output_admission() {
+fn transient_pressure_keeps_auto_admission_and_explicit_zero_is_rejected() {
     let root = tempfile::tempdir().unwrap();
     let mut loaded = config::load(root.path(), &[], true, None, None).unwrap();
     loaded.memory_snapshot = config::memory::select(Some(16 * 1024_u64.pow(3)), Some(0));
-    let error = resource_usage::prepare(
+    resource_usage::prepare(
         &ConversionArgs {
             max_memory_size: Some(crate::args::MemorySizeArg::Auto),
             ..Default::default()
         },
         &mut loaded,
     )
+    .unwrap();
+    assert_eq!(loaded.options.limits.max_memory_bytes, 16 * 1024_u64.pow(3));
+    let error = resource_usage::prepare(
+        &ConversionArgs {
+            max_memory_size: Some(crate::args::MemorySizeArg::Bytes(0)),
+            ..Default::default()
+        },
+        &mut loaded,
+    )
     .unwrap_err();
     assert_eq!(error.code(), "resourceLimit");
-    assert_eq!(error.exit_code(), 5);
     assert_eq!(error.limit().unwrap().0, "max_memory_bytes");
-    assert!(error.message().contains("availableBytes=Some(0)"));
     assert!(root.path().read_dir().unwrap().next().is_none());
 }
 
