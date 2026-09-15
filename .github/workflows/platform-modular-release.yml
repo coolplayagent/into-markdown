@@ -65,7 +65,7 @@ jobs:
       - name: Bootstrap fixed Linux container
         if: runner.os == 'Linux'
         run: |
-          dnf install --assumeyes binutils clang-libs cmake curl file gcc gcc-c++ git gnupg2 gzip jq make openssl patch perl pkgconf-pkg-config python3.11 tar which xz
+          dnf install --assumeyes --nobest binutils clang-libs cmake curl file gcc gcc-c++ git gnupg2 gzip jq make openssl patch perl pkgconf-pkg-config python3.11 tar which xz
           if [ "$(uname -m)" = x86_64 ]; then
             dnf --enablerepo=powertools install --assumeyes gcc-toolset-15-gcc gcc-toolset-15-gcc-c++ nasm
             toolset_bin=/opt/rh/gcc-toolset-15/root/usr/bin
