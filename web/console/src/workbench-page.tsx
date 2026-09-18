@@ -185,7 +185,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   return <section className="workbench-route" aria-labelledby="workbench-title">
     <div className="page-heading compact-heading"><div><p className="eyebrow">DOCUMENT TO MARKDOWN</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div></div>
-    {runtime?.connectionError && <p className="picker-feedback" role="status">{runtime.connectionErrorCode ? diagnosticLabel(runtime.connectionErrorCode, t) : t("streamError")} <button type="button" className="text-button" onClick={runtime.wake}>{t("retry")}</button></p>}
+    {runtime?.connectionError && <p className="picker-feedback" role="status">{!runtime.connectionErrorCode || ["unreachable", "requestTimeout"].includes(runtime.connectionErrorCode) ? t("serviceWaiting") : diagnosticLabel(runtime.connectionErrorCode, t)}</p>}
     <div className="task-workspace"><div className="conversion-layout">
       <section className="card upload-card" aria-labelledby="upload-heading" onPaste={localPicker.onPaste}>
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
@@ -233,6 +233,7 @@ function normalizeStatus(status: string): CapabilityAdmin["status"] {
 function uploadLabel(entry: UploadEntry, locale: string) {
   const zh = locale === "zh-CN";
   const labels = { waiting: zh ? "等待导入" : "Waiting to import", uploading: zh ? "导入中" : "Importing", receiving: zh ? "服务端接收处理中" : "Preparing received file", cancelled: zh ? "已取消" : "Cancelled", reselect: zh ? "需要重新选择文件" : "Select the file again" };
+  if (entry.waitingForService) return zh ? "等待程序回应，将自动继续" : "Waiting for the app; continuing automatically";
   const label = labels[entry.uploadState ?? "waiting"];
   return entry.uploadState === "uploading" && !entry.localSelection ? `${label} · ${Math.min(100, Math.round((entry.uploaded ?? 0) / Math.max(1, entry.file.size) * 100))}%` : label;
 }

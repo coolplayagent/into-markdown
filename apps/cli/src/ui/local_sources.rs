@@ -261,25 +261,45 @@ pub(super) async fn receive(
         return rejection(StatusCode::NOT_FOUND, "localSelectionExpired");
     };
     *selection.touched.lock().unwrap() = Clock::now();
-    let backend = state.tasks.clone();
-    let mut receipt = match backend.receipt(&id) {
-        Ok(receipt) => receipt,
-        Err(error) => return web_task_rejection(error),
-    };
-    if receipt.name != selection.name || receipt.size != selection.metadata.len() {
-        return rejection(StatusCode::CONFLICT, "localSourceChanged");
+    match start_selected(
+        state.tasks.clone(),
+        state.local_sources.clone(),
+        id,
+        selection_id,
+        selection,
+        permit,
+    )
+    .await
+    {
+        Ok(Ok(wire)) => (StatusCode::ACCEPTED, Json(wire)).into_response(),
+        Ok(Err(response)) => response,
+        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
     }
-    if receipt.state != "waiting" {
-        return Json(receipt.wire()).into_response();
-    }
-    receipt.local_copy = true;
-    if let Err(error) = backend.change_receipt(&mut receipt, "waiting", None, None) {
-        return web_task_rejection(error);
-    }
-    let wire = receipt.wire();
-    let sources = state.local_sources.clone();
+}
+fn start_selected(
+    backend: WebTaskBackend,
+    sources: Arc<LocalSources>,
+    id: String,
+    selection_id: String,
+    selection: Arc<Selection>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+) -> tokio::sync::oneshot::Receiver<Result<serde_json::Value, Response>> {
+    let (ready, response) = tokio::sync::oneshot::channel();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let prepared = prepare_selected(&backend, &id, &selection);
+        let (wire, start_copy) = match prepared {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = ready.send(Err(error));
+                return;
+            }
+        };
+        // The owned worker continues even when the browser loses this response.
+        let _ = ready.send(Ok(wire));
+        if !start_copy {
+            return;
+        }
         let result = copy_selected(&backend, &id, &selection);
         if let Err(code) = result {
             if let Ok(mut receipt) = backend.receipt(&id) {
@@ -291,10 +311,26 @@ pub(super) async fn receive(
         if result.is_ok() {
             sources.selections.lock().unwrap().remove(&selection_id);
         }
-        // Interrupted imports retain their grant until its idle expiry.
     });
-    (StatusCode::ACCEPTED, Json(wire)).into_response()
+    response
 }
+fn prepare_selected(
+    backend: &WebTaskBackend,
+    id: &str,
+    selection: &Selection,
+) -> Result<(serde_json::Value, bool), Response> {
+    let mut receipt = backend.receipt(id).map_err(web_task_rejection)?;
+    if receipt.name != selection.name || receipt.size != selection.metadata.len() {
+        return Err(rejection(StatusCode::CONFLICT, "localSourceChanged"));
+    }
+    if receipt.state != "waiting" {
+        return Ok((receipt.wire(), false));
+    }
+    receipt.local_copy = true;
+    backend.change_receipt(&mut receipt, "waiting", None, None).map_err(web_task_rejection)?;
+    Ok((receipt.wire(), true))
+}
+
 fn unchanged(selection: &Selection) -> bool {
     selection.file.metadata().is_ok_and(|current| {
         current.len() == selection.metadata.len()
@@ -404,6 +440,143 @@ fn native_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn slow_local_receipt_keeps_runtime_responsive_and_survives_lost_response() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("slow.txt");
+        std::fs::write(&path, b"complete despite the lost response").unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let sources = Arc::new(LocalSources::default());
+        let grants = sources.files(vec![path]).unwrap();
+        let selection_id = grants[0]["id"].as_str().unwrap().to_owned();
+        let selection = sources.selections.lock().unwrap().get(&selection_id).unwrap().clone();
+        let id = "d".repeat(32);
+        backend
+            .create_receipt(
+                &id,
+                &selection.name,
+                selection.metadata.len(),
+                crate::web_tasks::WebTaskRequest::default(),
+            )
+            .unwrap();
+        let (locked, acquired) = std::sync::mpsc::channel();
+        let blocker = backend.clone();
+        let thread = std::thread::spawn(move || {
+            blocker.test_with_store_lock(|| {
+                locked.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(400));
+            })
+        });
+        acquired.recv().unwrap();
+        let gate = Arc::new(Semaphore::new(1));
+        let started = Clock::now();
+        let response = start_selected(
+            backend.clone(),
+            sources.clone(),
+            id.clone(),
+            selection_id,
+            selection,
+            gate.clone().acquire_owned().await.unwrap(),
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "local import blocked the HTTP runtime"
+        );
+        drop(response);
+        tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
+        let deadline = Clock::now() + Duration::from_secs(10);
+        loop {
+            let receipt = backend.receipt(&id).unwrap();
+            if let Some(task_id) = receipt.task_id {
+                let task = backend.get(&task_id).unwrap();
+                if task.status == into_markdown::TaskStatus::Succeeded {
+                    break;
+                }
+                assert!(!matches!(
+                    task.status,
+                    into_markdown::TaskStatus::Failed | into_markdown::TaskStatus::Interrupted
+                ));
+            }
+            assert!(Clock::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(gate.available_permits(), 1);
+        assert!(sources.selections.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn twenty_local_csv_xlsx_batches_complete_without_manual_retry() {
+        let temporary = tempfile::tempdir().unwrap();
+        let csv = temporary.path().join("本地表格.csv");
+        let text = format!(
+            "id,value\n{}",
+            (0..1000).map(|index| format!("{index},local row {index}\n")).collect::<String>()
+        );
+        std::fs::write(&csv, text).unwrap();
+        let xlsx =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/small/xlsx/normal.xlsx");
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let sources = Arc::new(LocalSources::default());
+        let gate = Arc::new(Semaphore::new(1));
+        for batch in 0..20 {
+            let mut tasks = Vec::new();
+            for (index, path) in [csv.clone(), xlsx.clone()].into_iter().enumerate() {
+                let grants = sources.files(vec![path]).unwrap();
+                let selection_id = grants[0]["id"].as_str().unwrap().to_owned();
+                let selection =
+                    sources.selections.lock().unwrap().get(&selection_id).unwrap().clone();
+                let id = format!("{:032x}", batch * 2 + index + 1);
+                backend
+                    .create_receipt(
+                        &id,
+                        &selection.name,
+                        selection.metadata.len(),
+                        crate::web_tasks::WebTaskRequest::default(),
+                    )
+                    .unwrap();
+                let response = start_selected(
+                    backend.clone(),
+                    sources.clone(),
+                    id.clone(),
+                    selection_id,
+                    selection,
+                    gate.clone().acquire_owned().await.unwrap(),
+                );
+                assert!(response.await.unwrap().is_ok());
+                let deadline = Clock::now() + Duration::from_secs(10);
+                loop {
+                    let receipt = backend.receipt(&id).unwrap();
+                    if let Some(task_id) = receipt.task_id {
+                        tasks.push(task_id);
+                        break;
+                    }
+                    assert!(!matches!(
+                        receipt.state.as_str(),
+                        "failed" | "cancelled" | "interrupted"
+                    ));
+                    assert!(Clock::now() < deadline);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }
+            let deadline = Clock::now() + Duration::from_secs(10);
+            loop {
+                let records: Vec<_> = tasks.iter().map(|id| backend.get(id).unwrap()).collect();
+                if records.iter().all(|task| task.status == into_markdown::TaskStatus::Succeeded) {
+                    break;
+                }
+                assert!(records.iter().all(|task| !matches!(
+                    task.status,
+                    into_markdown::TaskStatus::Failed | into_markdown::TaskStatus::Interrupted
+                )));
+                assert!(Clock::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+        assert_eq!(gate.available_permits(), 1);
+        assert!(sources.selections.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn grants_hide_paths_expire_and_reject_modified_sources() {
         let temporary = tempfile::tempdir().unwrap();

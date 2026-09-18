@@ -1466,3 +1466,57 @@ test("cancelled local imports release their grants and require reselection", asy
   assert.equal(released, token); assert.equal(runtime.canRetryUpload("local"), false);
   assert.equal(runtime.entries[0]?.uploadState, "cancelled"); runtime.stop();
 });
+
+test("request timeout is distinct from an unavailable service", async () => {
+  installWindow();
+  const api = createApiClient(token, async () => { throw new DOMException("slow service", "TimeoutError"); });
+  await assert.rejects(api.getTask("b".repeat(32)), (error: unknown) => error instanceof ApiError && error.code === "requestTimeout");
+});
+
+test("local receipt and task read recover without resubmitting the file", async () => {
+  installWindow(); let puts = 0; let reads = 0; let details = 0;
+  const record = task("succeeded");
+  const api = createApiClient(token, async (input, init) => {
+    const method = init?.method ?? "GET";
+    const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+    if (!String(input).includes("/uploads/")) {
+      if (++details === 1) throw new DOMException("slow detail", "TimeoutError");
+      return json(record);
+    }
+    if (method === "PUT") { puts++; throw new TypeError("response lost after accepting copy"); }
+    if (method === "GET" && ++reads === 1) throw new DOMException("slow receipt", "TimeoutError");
+    return json({ id: "b".repeat(32), state: method === "POST" ? "waiting" : "accepted", taskId: method === "POST" ? null : record.id, error: null, localCopy: true });
+  });
+  const result = await api.importLocal!({ id: token, name: "local.xlsx", size: 123 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, new AbortController().signal, "b".repeat(32));
+  assert.equal(result.id, record.id); assert.equal(puts, 1); assert.equal(reads, 2); assert.equal(details, 2);
+});
+
+test("receipt creation retry keeps the original submission identity", async () => {
+  installWindow(); let creates = 0; let puts = 0; const paths = new Set<string>();
+  const record = task("succeeded");
+  const api = createApiClient(token, async (input, init) => {
+    const path = String(input);
+    if (path.includes("/uploads/")) paths.add(path);
+    if (init?.method === "POST" && ++creates === 1) throw new TypeError("lost creation response");
+    if (init?.method === "PUT") puts++;
+    const value = path.includes("/uploads/") ? { id: "b".repeat(32), state: init?.method === "POST" ? "waiting" : "accepted", taskId: init?.method === "POST" ? null : record.id, error: null } : record;
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  });
+  await api.importLocal!({ id: token, name: "local.txt", size: 2 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, new AbortController().signal, "b".repeat(32));
+  assert.equal(creates, 2); assert.equal(puts, 1); assert.equal(paths.size, 1);
+});
+
+test("automatic local recovery is visible and cancellable", async () => {
+  installWindow(); let calls = 0; const controller = new AbortController(); const waiting: boolean[] = [];
+  const api = createApiClient(token, async () => { calls++; throw new TypeError("service temporarily unavailable"); });
+  const promise = api.importLocal!({ id: token, name: "local.txt", size: 2 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, controller.signal, "b".repeat(32), value => { waiting.push(value); if (value) controller.abort(); });
+  await assert.rejects(promise, { name: "AbortError" });
+  assert.deepEqual(waiting, [true]); assert.equal(calls, 1);
+});
+
+test("local recovery preserves server rejection instead of retrying it", async () => {
+  installWindow(); let calls = 0;
+  const api = createApiClient(token, async () => { calls++; return new Response(JSON.stringify({ code: "unsafeStorage" }), { status: 500, headers: { "Content-Type": "application/json" } }); });
+  await assert.rejects(api.importLocal!({ id: token, name: "local.txt", size: 2 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, new AbortController().signal), (error: unknown) => error instanceof ApiError && error.code === "unsafeStorage");
+  assert.equal(calls, 1);
+});

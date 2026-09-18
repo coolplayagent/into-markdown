@@ -1,3 +1,4 @@
+import { awaitService, transientServiceError, type ServiceWait } from "./service-recovery";
 import { localSourceClient, abortableDelay, type LocalSelection } from "./local-sources";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_EVENT_BYTES = 64 * 1024;
@@ -402,7 +403,7 @@ export interface ApiClient {
   localAvailable?(signal?: AbortSignal): Promise<boolean>;
   selectLocal?(kind: "pick" | "paste", signal: AbortSignal): Promise<LocalSelection[]>;
   releaseLocal?(id: string): Promise<void>;
-  importLocal?(file: LocalSelection, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string): Promise<TaskRecord>;
+  importLocal?(file: LocalSelection, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string, waiting?: ServiceWait): Promise<TaskRecord>;
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
   capabilitySnapshot(signal?: AbortSignal): Promise<CapabilitySnapshot>;
   startCapabilityCheck?(id: CapabilityAdmin["id"], signal?: AbortSignal): Promise<CapabilityCheck>;
@@ -412,7 +413,7 @@ export interface ApiClient {
   stagePluginPackage?(file: File, signal?: AbortSignal): Promise<StagedPluginPackage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   summaries?(ids: string[], signal?: AbortSignal): Promise<TaskSummary[]>;
-  uploadProgress?(file: File, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string): Promise<TaskRecord>;
+  uploadProgress?(file: File, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string, waiting?: ServiceWait): Promise<TaskRecord>;
   receipt?(id: string, signal?: AbortSignal): Promise<UploadReceipt>;
   cancelUpload?(id: string): Promise<void>;
   upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
@@ -572,10 +573,11 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
 }
 
 function receiptUploader(session: string, auth: () => Record<string, string>, jsonRequest: (path: string, init: RequestInit, limit?: number) => Promise<unknown>, getTask: (id: string, signal: AbortSignal) => Promise<TaskRecord>) {
-  async function uploadWithReceipt(file: File | LocalSelection, request: unknown, progress: (loaded: number) => void, signal: AbortSignal, submissionId = crypto.randomUUID().replaceAll("-", ""), selectionId?: string): Promise<TaskRecord> {
+  async function uploadWithReceipt(file: File | LocalSelection, request: unknown, progress: (loaded: number) => void, signal: AbortSignal, submissionId = crypto.randomUUID().replaceAll("-", ""), selectionId?: string, waiting?: ServiceWait): Promise<TaskRecord> {
     const path = `/api/uploads/${submissionId}`;
     const headers = { ...auth(), "X-Into-Md-Filename-B64": base64UrlUtf8(file.name), "X-Into-Md-Request": base64UrlJson(request), "X-Into-Md-Size": String(file.size) };
-    let receipt = parseReceipt(await jsonRequest(path, { method: "POST", headers, signal }));
+    const read = () => awaitService(() => jsonRequest(path, { method: "GET", headers: auth(), signal }).then(parseReceipt), signal, waiting);
+    let receipt = await awaitService(() => jsonRequest(path, { method: "POST", headers, signal }).then(parseReceipt), signal, waiting);
     for (let attempt = 0; receipt.state === "waiting"; attempt++) {
       try {
         receipt = selectionId
@@ -595,11 +597,11 @@ function receiptUploader(session: string, auth: () => Record<string, string>, js
       } catch (error) {
         if (signal.aborted) throw error;
         // Reconcile a lost response before permitting a user retry.
-        receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
-        if (receipt.state === "waiting" && error instanceof ApiError && error.code === "uploadBusy" && attempt < 5) {
-          await abortableDelay(Math.min(8000, 500 * 2 ** attempt), signal); continue;
+        receipt = await read();
+        if (receipt.state === "waiting" && !receipt.localCopy && (error instanceof ApiError && error.code === "uploadBusy" || selectionId && transientServiceError(error))) {
+          waiting?.(true); await abortableDelay(Math.min(5000, 500 * 2 ** Math.min(attempt, 4)), signal); continue;
         }
-        if (receipt.state === "waiting") throw error;
+        if (receipt.state === "waiting" && !receipt.localCopy) throw error;
       }
       if (receipt.state === "waiting") {
         // The server owns an asynchronous local copy; observe it instead of sending again.
@@ -614,10 +616,10 @@ function receiptUploader(session: string, auth: () => Record<string, string>, js
         const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 1000);
         signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
       });
-      receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
+      receipt = await read();
     }
     if (selectionId) progress(file.size);
-    return getTask(receipt.taskId, signal);
+    return awaitService(() => getTask(receipt.taskId!, signal), signal, waiting);
   }
   return uploadWithReceipt;
 }
@@ -633,13 +635,20 @@ function parseReceipt(value: unknown): UploadReceipt {
 
 function jsonRequester(fetcher: typeof fetch) {
   async function jsonRequest(path: string, init: RequestInit, limit?: number): Promise<unknown> {
-    const signal = AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(path === "/api/tasks" && init.method === "POST" ? 30 * 60 * 1000 : 30000)]);
-    init = { ...init, signal };
-    let response: Response;
-    try { response = await fetcher(path, { cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...init }); }
-    catch (error) { if (error instanceof DOMException && error.name === "AbortError") throw error; throw new ApiError("unreachable"); }
-    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") throw new ApiError("invalidResponse");
-    const value = await readBoundedJson(response, limit); if (!response.ok) throw new ApiError(requestCode(value)); return value;
+    const callerSignal = init.signal;
+    const signal = AbortSignal.any([...(callerSignal ? [callerSignal] : []), AbortSignal.timeout(path === "/api/tasks" && init.method === "POST" ? 30 * 60 * 1000 : 30000)]);
+    try {
+      const response = await fetcher(path, { cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...init, signal });
+      if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") throw new ApiError("invalidResponse");
+      const value = await readBoundedJson(response, limit);
+      if (!response.ok) throw new ApiError(requestCode(value));
+      return value;
+    } catch (error) {
+      if (callerSignal?.aborted) throw new DOMException("Aborted", "AbortError");
+      if (signal.reason?.name === "TimeoutError" || error instanceof DOMException && error.name === "TimeoutError") throw new ApiError("requestTimeout");
+      if (error instanceof ApiError || error instanceof DOMException && error.name === "AbortError") throw error;
+      throw new ApiError("unreachable");
+    }
   }
   return jsonRequest;
 }
@@ -667,9 +676,9 @@ function parseSummaries(value: unknown): TaskSummary[] {
 
 function importMethods(uploadWithReceipt: ReturnType<typeof receiptUploader>): Pick<ApiClient, "importLocal" | "uploadProgress" | "uploadMeeting"> {
   return {
-    importLocal: (file, options, batchId, progress, signal, submissionId) => uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId, file.id),
-    async uploadProgress(file, options, batchId, progress, signal, submissionId) {
-      return uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId);
+    importLocal: (file, options, batchId, progress, signal, submissionId, waiting) => uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId, file.id, waiting),
+    async uploadProgress(file, options, batchId, progress, signal, submissionId, waiting) {
+      return uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId, undefined, waiting);
     },
     async uploadMeeting(file, options, signal, submissionId) {
       return uploadWithReceipt(file, meetingTaskRequest(file, options), () => {}, signal ?? new AbortController().signal, submissionId);
