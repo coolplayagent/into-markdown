@@ -132,7 +132,7 @@
     },
     {
       "path": "apps/cli/src/ui.rs",
-      "lines": 2301,
+      "lines": 2204,
       "functions": [
         {
           "symbol": "download_artifact",
@@ -140,7 +140,7 @@
         },
         {
           "symbol": "serve",
-          "lines": 114
+          "lines": 113
         },
         {
           "symbol": "stage_plugin_package",
@@ -155,19 +155,15 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4501,
+      "lines": 4442,
       "functions": [
         {
-          "symbol": "impl Upload::finish",
-          "lines": 149
-        },
-        {
           "symbol": "impl WebTaskBackend::artifact",
-          "lines": 134
+          "lines": 120
         },
         {
           "symbol": "impl WebTaskBackend::open_internal",
-          "lines": 110
+          "lines": 106
         },
         {
           "symbol": "impl WebTaskBackend::recover_record",
@@ -197,10 +193,6 @@
         },
         {
           "key": "item|add_json_artifact|too_many_arguments",
-          "count": 1
-        },
-        {
-          "key": "item|impl Upload::finish|too_many_lines",
           "count": 1
         },
         {
@@ -2147,7 +2139,7 @@
     },
     {
       "path": "crates/task-store/src/lib.rs",
-      "lines": 2310,
+      "lines": 2238,
       "functions": [],
       "allowances": [
         {
@@ -2404,7 +2396,7 @@
       "functions": [
         {
           "symbol": "createApiClient",
-          "lines": 147
+          "lines": 141
         }
       ],
       "allowances": []
@@ -2415,7 +2407,7 @@
       "functions": [
         {
           "symbol": "MeetingPage",
-          "lines": 402
+          "lines": 400
         }
       ],
       "allowances": []
@@ -2426,7 +2418,7 @@
       "functions": [
         {
           "symbol": "ResultDialog",
-          "lines": 134
+          "lines": 133
         }
       ],
       "allowances": []

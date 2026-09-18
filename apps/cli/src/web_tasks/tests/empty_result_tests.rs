@@ -14,7 +14,7 @@ fn empty_source_and_omitted_chunk_preserve_the_web_terminal_contract() {
     let mut empty_request =
         WebTaskRequest { format: Some(InputFormat::Text), ..WebTaskRequest::default() };
     empty_request.options.error_policy = into_markdown::ErrorPolicy::BestEffort;
-    let mut upload = backend.begin_upload_configured("empty.txt", Some(3), empty_request).unwrap();
+    let mut upload = backend.begin_upload_configured("empty.txt", Some(2), empty_request).unwrap();
     upload.write_chunk(b" \n").unwrap();
     let empty = upload.finish().unwrap();
     let empty = wait_terminal(&backend, &empty.id);

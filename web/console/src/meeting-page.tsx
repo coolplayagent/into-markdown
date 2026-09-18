@@ -1,3 +1,4 @@
+import { useTaskRuntime, useTaskRevision } from "./task-provider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2, CircleAlert, Download, FileAudio, LoaderCircle, Mic, Pause, Play, Radio,
@@ -93,6 +94,8 @@ function progressMessage(stage: string | undefined, message: string | null | und
 }
 
 export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTaskId?: string | undefined }) {
+  const runtime = useTaskRuntime();
+  useTaskRevision();
   const { locale, t } = useI18n();
   const { navigate } = useRouter();
   const capabilities = useCapabilities();
@@ -129,7 +132,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
   const [recordingSource, setRecordingSource] = useState<RecordingSource>("microphone");
-  const [task, setTask] = useState<TaskRecord | null>(null);
+  const [localTask, setTask] = useState<TaskRecord | null>(null);
+  const task = runtime?.meetingTask ?? localTask;
   const [cancellingTaskId, setCancellingTaskId] = useState<string | null>(null);
   const [recent, setRecent] = useState<TaskRecord[]>([]);
   const [stage, setStage] = useState("");
@@ -158,13 +162,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       const samples = new Uint8Array(analyser.fftSize);
       const draw = () => {
         analyser.getByteTimeDomainData(samples);
-        let energy = 0;
-        for (const sample of samples) {
-          const normalized = (sample - 128) / 128;
-          energy += normalized * normalized;
-        }
-        const rms = Math.sqrt(energy / samples.length);
-        const level = recorder.current?.state === "recording" ? Math.min(1, Math.max(0.06, rms * 8)) : 0.06;
+        const level = recorder.current?.state === "recording" ? waveformLevel(samples) : 0.06;
         setWaveform((current) => [...current.slice(1), level]);
         meterFrame.current = window.requestAnimationFrame(draw);
       };
@@ -196,7 +194,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   }, [locale]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const tasks = await listAllTasks(api, signal);
+    const tasks = runtime ? (await api.listTasks({ limit: 100, workflow: "meetingTranscript", active: true }, signal)).tasks : await listAllTasks(api, signal);
     if (!diarizationTouched.current) {
       setOptions((current) => ({
         ...current, diarize: quickDiarization?.status === "ready",
@@ -386,6 +384,7 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       catch { setMessage(t("recordingStorageUnavailable")); return; }
     }
     watcher.current?.abort();
+    if (runtime) runtime.meetingTask = null;
     setTask(null); setStage(""); setCancellingTaskId(null);
     setFile(next); setFromDraft(false); setState("idle"); setElapsed(0); setMessage("");
   };
@@ -393,8 +392,8 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
   const settleTask = useCallback((record: TaskRecord) => {
     setCancellingTaskId(null);
     setTask(record); setRecent((items) => [record, ...items.filter((item) => item.id !== record.id)]);
-    if (record.status === "succeeded") selectTask(record.id);
-  }, [selectTask]);
+    runtime?.put(record);
+  }, [runtime]);
 
   const watchTask = useCallback((taskId: string) => {
     watcher.current?.abort();
@@ -429,12 +428,12 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
       }).catch(() => {});
     };
     reconcileTerminalRecord();
-    const reconcile = window.setInterval(reconcileTerminalRecord, 1_000);
+    const reconcile = runtime ? undefined : window.setInterval(reconcileTerminalRecord, 1_000);
     return () => { watcher.current?.abort(); window.clearInterval(reconcile); };
-  }, [api, settleTask, watchedTaskActive, watchedTaskId, watchTask]);
+  }, [api, runtime, settleTask, watchedTaskActive, watchedTaskId, watchTask]);
 
   const submit = async () => {
-    if (!file || task && !TERMINAL.has(task.status)) return;
+    if (!file || runtime?.meetingUploading || task && !TERMINAL.has(task.status)) return;
     if (audioChecking) { setMessage(t("checkingSystem")); return; }
     if (audioStatus?.available !== true) { setMessage(t("audioNeedsSetupNearby")); return; }
     const remoteTranscriptionSelected = transcriptionCapability?.currentSource.startsWith("provider:") === true;
@@ -520,10 +519,10 @@ export function MeetingPage({ api, initialTaskId }: { api: ApiClient; initialTas
           {(!audioChecking && audioStatus?.available === false || !diarizationChecking && diarizationStatus?.available === false) && <RouteLink className="prepare-media" href="/admin/capabilities"><CircleAlert size={16} />{t("prepareAudioComponents")}</RouteLink>}
         </div>
         </section>
-        <div className={`transcript-action-panel ${task?.status ?? "idle"}`}><div className="transcript-action-buttons">{task && !TERMINAL.has(task.status) ? <button className="secondary" type="button" disabled={cancellingTranscription} onClick={() => void cancelTranscription()}>{cancellingTranscription ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />}{t(cancellingTranscription ? "cancellingTranscription" : "cancelTranscription")}</button> : task ? <><button type="button" onClick={() => selectTask(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}{t(task.status === "succeeded" ? "viewTranscript" : "taskDetails")}</button><button className="secondary" type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={18} />{t("regenerateTranscript")}</button></> : <button type="button" disabled={!file || state === "stopping"} onClick={() => void submit()}><FileAudio size={19} />{t("generateTranscript")}</button>}</div></div>
-        <div className="transcript-status-bar" role="status" aria-live="polite"><span><strong>{task ? taskName(task, t("meetingTranscript")) : t("generateTranscript")}</strong>{" · "}{task ? `${cancellingTranscription ? t("cancellingTranscription") : t(task.status)}${!cancellingTranscription && !TERMINAL.has(task.status) && stage ? ` · ${executionStageLabel(stage, locale)}` : ""}` : file ? t("recordingReady") : t("chooseRecordingBeforeTranscript")}</span>{task && !TERMINAL.has(task.status) && <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>
+        <div className={`transcript-action-panel ${task?.status ?? "idle"}`}><div className="transcript-action-buttons">{task && !TERMINAL.has(task.status) ? <button className="secondary" type="button" disabled={cancellingTranscription} onClick={() => void cancelTranscription()}>{cancellingTranscription ? <LoaderCircle className="spin" size={16} /> : <Square size={16} />}{t(cancellingTranscription ? "cancellingTranscription" : "cancelTranscription")}</button> : task ? <><button type="button" onClick={() => selectTask(task.id)}>{task.status === "succeeded" ? <CheckCircle2 size={18} /> : <CircleAlert size={18} />}{t(task.status === "succeeded" ? "viewTranscript" : "taskDetails")}</button><button className="secondary" type="button" disabled={!file || runtime?.meetingUploading || state === "stopping"} onClick={() => void submit()}><FileAudio size={18} />{t("regenerateTranscript")}</button></> : <button type="button" disabled={!file || runtime?.meetingUploading || state === "stopping"} onClick={() => void submit()}><FileAudio size={19} />{t("generateTranscript")}</button>}</div></div>
+        <div className="transcript-status-bar" role="status" aria-live="polite"><span><strong>{task ? taskName(task, t("meetingTranscript")) : t("generateTranscript")}</strong>{" · "}{task ? `${cancellingTranscription ? t("cancellingTranscription") : t(task.status)}${!cancellingTranscription && !TERMINAL.has(task.status) && stage ? ` · ${executionStageLabel(stage, locale)}` : ""}` : runtime?.meetingUploading ? `${t("uploading")} · ${runtime.meetingUploadName}` : file ? t("recordingReady") : t("chooseRecordingBeforeTranscript")}</span>{task && !TERMINAL.has(task.status) && <progress max="100" value={progress} aria-label={`${progress}%`} />}</div>
       </div>
-    </div><HistoryPanel tasks={transcriptHistory} fallbackName={t("meetingTranscript")} onOpen={selectTask} feedback={historyFeedback} /></div>
+    </div><HistoryPanel {...(runtime ? { api, workflow: "meetingTranscript" as const } : {})} tasks={transcriptHistory} fallbackName={t("meetingTranscript")} onOpen={selectTask} feedback={historyFeedback} /></div>
     {activeTaskId && <ResultDialog api={api} taskId={activeTaskId} onSelectTask={selectTask} onClose={closeResult} onTaskRemoved={(id) => setRecent((items) => items.filter((item) => item.id !== id))} onTaskUpdated={updateVisibleTask} />}
   </section>;
 }
@@ -545,4 +544,13 @@ function SpeechCapabilityStrip({ transcription, transcriptionStatus, transcripti
     <div className="capability-item"><span className="capability-icon"><FileAudio size={21} aria-hidden="true" /></span><div><strong>{t("audioTranscription")}</strong>{status(transcriptionChecking, transcriptionStatus, transcription)}</div></div>
     <div className="capability-item"><span className="capability-icon"><Users size={21} aria-hidden="true" /></span><div><strong>{t("distinguishSpeakers")}</strong>{status(diarizationChecking, diarizationStatus, diarization)}</div></div>
   </section>;
+}
+
+function waveformLevel(samples: Uint8Array): number {
+  let energy = 0;
+  for (const sample of samples) {
+    const normalized = (sample - 128) / 128;
+    energy += normalized * normalized;
+  }
+  return Math.min(1, Math.max(0.06, Math.sqrt(energy / samples.length) * 8));
 }

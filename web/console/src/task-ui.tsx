@@ -123,6 +123,8 @@ export function taskFailureLabel(task: TaskRecord, t: (key: MessageKey) => strin
 
 export function executionStageLabel(stage: string, locale: Locale): string {
   const labels: Readonly<Record<string, [string, string]>> = {
+    waitingDisk: ["等待磁盘预算", "Waiting for disk budget"],
+    waitingWorker: ["等待转换名额", "Waiting for a conversion worker"],
     resolving: ["准备文件", "Preparing file"],
     detecting: ["识别格式", "Identifying format"],
     probing: ["选择转换方式", "Selecting converter"],

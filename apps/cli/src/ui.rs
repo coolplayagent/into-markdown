@@ -1,5 +1,8 @@
 //! Loopback-only Web entry point and its security boundary.
 
+mod task_flow;
+use task_flow::*;
+
 use crate::args::UiArgs;
 use crate::error::{CliError, ExitClass};
 use crate::web_tasks::{
@@ -83,6 +86,8 @@ struct AppState {
     admin_config: crate::admin::AdminConfigContext,
     admin_grants: Arc<Mutex<std::collections::HashMap<String, AdminGrant>>>,
     admin_gate: Arc<Semaphore>,
+    preview_gate: Arc<Semaphore>,
+    upload_gate: Arc<Semaphore>,
     loaded: Arc<RwLock<crate::config::LoadedConfig>>,
     capabilities: CapabilityCache,
     capability_checks: Arc<Mutex<std::collections::BTreeMap<String, CapabilityCheckEntry>>>,
@@ -436,6 +441,9 @@ struct TaskListQuery {
     status: Option<into_markdown::TaskStatus>,
     pinned: Option<bool>,
     batch_id: Option<String>,
+    workflow: Option<String>,
+    search: Option<String>,
+    active: Option<bool>,
 }
 
 #[derive(serde::Deserialize)]
@@ -616,11 +624,14 @@ where
         admin_config,
         admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
         admin_gate: Arc::new(Semaphore::new(1)),
+        preview_gate: Arc::new(Semaphore::new(2)),
+        upload_gate: Arc::new(Semaphore::new(2)),
         loaded: Arc::new(RwLock::new(loaded)),
         capabilities,
         capability_checks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
     };
     schedule_capability_refresh(&state);
+    schedule_task_maintenance(&state);
     let api = Router::new()
         .route("/status", post(status).fallback(api_method_not_allowed))
         .route("/capabilities/status", get(capability_snapshot).fallback(api_method_not_allowed))
@@ -636,14 +647,10 @@ where
             "/capabilities/{id}/install",
             post(install_capability).fallback(api_method_not_allowed),
         )
-        .route("/tasks", get(list_tasks).post(upload_task).fallback(api_method_not_allowed))
+        .merge(task_flow_routes())
         .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
         .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
         .route("/admin/plugin-package", post(stage_plugin_package).fallback(api_method_not_allowed))
-        .route("/tasks/{id}", get(task_status).delete(cancel_task).fallback(api_method_not_allowed))
-        .route("/tasks/{id}/cancel", post(cancel_task).fallback(api_method_not_allowed))
-        .route("/tasks/{id}/retry", post(retry_task).fallback(api_method_not_allowed))
-        .route("/tasks/{id}/pin", post(pin_task).fallback(api_method_not_allowed))
         .route(
             "/tasks/{id}/speakers",
             get(speaker_labels).post(relabel_speakers).fallback(api_method_not_allowed),
@@ -1603,114 +1610,6 @@ async fn upload_task(State(state): State<AppState>, request: Request) -> Respons
     }
 }
 
-async fn list_tasks(State(state): State<AppState>, request: Request) -> Response {
-    let Ok(query) = parse_task_list_query(request.uri().query()) else {
-        return rejection(StatusCode::BAD_REQUEST, "invalidHistoryQuery");
-    };
-    let headers = request.headers();
-    if headers.contains_key(header::CONTENT_TYPE) || !request_body_is_empty(headers) {
-        return rejection(StatusCode::BAD_REQUEST, "requestBodyNotAllowed");
-    }
-    let after = match (query.after_updated_at_ms, query.after_id) {
-        (None, None) => None,
-        (Some(updated_at_ms), Some(id)) => match into_markdown::TaskId::parse(id) {
-            Ok(id) => Some(into_markdown::TaskCursor { updated_at_ms, id }),
-            Err(_) => return rejection(StatusCode::BAD_REQUEST, "invalidCursor"),
-        },
-        _ => return rejection(StatusCode::BAD_REQUEST, "invalidCursor"),
-    };
-    match tokio::task::spawn_blocking(move || {
-        let backend = state.tasks;
-        let page = match query.batch_id.as_deref() {
-            Some(batch_id) => backend.list_batch(
-                query.limit.unwrap_or(25),
-                after.as_ref(),
-                query.status,
-                query.pinned,
-                batch_id,
-            )?,
-            None => backend.list(
-                query.limit.unwrap_or(25),
-                after.as_ref(),
-                query.status,
-                query.pinned,
-            )?,
-        };
-        let tasks = page
-            .tasks
-            .into_iter()
-            .map(|record| backend.web_record(record))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok::<_, WebTaskError>((tasks, page.next))
-    })
-    .await
-    {
-        Ok(Ok((tasks, next))) => Json(TaskListDto {
-            schema_version: 1,
-            tasks,
-            next_cursor: next
-                .map(|cursor| TaskCursorDto { updated_at_ms: cursor.updated_at_ms, id: cursor.id }),
-        })
-        .into_response(),
-        Ok(Err(error)) => web_task_rejection(error),
-        Err(_) => rejection(StatusCode::INTERNAL_SERVER_ERROR, "backendWorkerFailed"),
-    }
-}
-
-fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery, ()> {
-    let mut query = TaskListQuery {
-        limit: None,
-        after_updated_at_ms: None,
-        after_id: None,
-        status: None,
-        pinned: None,
-        batch_id: None,
-    };
-    let Some(value) = value else { return Ok(query) };
-    for field in value.split('&') {
-        let (name, value) = field.split_once('=').ok_or(())?;
-        if value.is_empty() || value.contains('%') || value.contains('+') {
-            return Err(());
-        }
-        match name {
-            "limit" if query.limit.is_none() => query.limit = Some(value.parse().map_err(|_| ())?),
-            "afterUpdatedAtMs" if query.after_updated_at_ms.is_none() => {
-                query.after_updated_at_ms = Some(value.parse().map_err(|_| ())?);
-            }
-            "afterId" if query.after_id.is_none() => query.after_id = Some(value.to_owned()),
-            "pinned" if query.pinned.is_none() => {
-                query.pinned = Some(match value {
-                    "true" => true,
-                    "false" => false,
-                    _ => return Err(()),
-                });
-            }
-            "batchId"
-                if query.batch_id.is_none()
-                    && value.len() == 32
-                    && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    && !value.bytes().any(|byte| byte.is_ascii_uppercase()) =>
-            {
-                query.batch_id = Some(value.to_owned());
-            }
-            "status" if query.status.is_none() => {
-                query.status = Some(match value {
-                    "pending" => into_markdown::TaskStatus::Pending,
-                    "running" => into_markdown::TaskStatus::Running,
-                    "converted" => into_markdown::TaskStatus::Converted,
-                    "succeeded" => into_markdown::TaskStatus::Succeeded,
-                    "failed" => into_markdown::TaskStatus::Failed,
-                    "interrupted" => into_markdown::TaskStatus::Interrupted,
-                    "cancelled" => into_markdown::TaskStatus::Cancelled,
-                    _ => return Err(()),
-                });
-            }
-            _ => return Err(()),
-        }
-    }
-    Ok(query)
-}
-
 async fn task_status(State(state): State<AppState>, AxumPath(id): AxumPath<String>) -> Response {
     let Ok(id) = into_markdown::TaskId::parse(id) else {
         return rejection(StatusCode::BAD_REQUEST, "invalidTaskId");
@@ -1925,13 +1824,16 @@ async fn task_events(
     };
     let shutdown = state.shutdown.clone();
     let stream = futures::stream::unfold(
-        (id, backend, subscription, shutdown),
-        |(id, backend, mut subscription, mut shutdown)| async move {
+        (id, backend, subscription, shutdown, false),
+        |(id, backend, mut subscription, mut shutdown, finished)| async move {
+            if finished {
+                return None;
+            }
             loop {
                 if let Some(event) = subscription.replay.pop_front() {
                     return Some((
                         Ok::<Event, Infallible>(sse_event(&event)),
-                        (id, backend, subscription, shutdown),
+                        (id, backend, subscription, shutdown, event.terminal),
                     ));
                 }
                 tokio::select! {
@@ -1943,7 +1845,7 @@ async fn task_events(
                         Ok(event) if event.task_id == id => {
                             return Some((
                                 Ok::<Event, Infallible>(sse_event(&event)),
-                                (id, backend, subscription, shutdown),
+                                (id, backend, subscription, shutdown, event.terminal),
                             ));
                         }
                         Ok(_) => {}

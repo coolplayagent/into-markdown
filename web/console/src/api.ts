@@ -39,6 +39,10 @@ export interface ArtifactReference {
   byteLen: number; sha256: string; assetId?: string | null; mediaType?: string | null;
   filename?: string | null;
 }
+export interface TaskSummary extends TaskRecord { waitingReason?: "worker" | "disk"; generation: string; sequence: number; execution?: TaskEvent["execution"] }
+export type TaskDetail = TaskRecord;
+export type ResultPreview = ArtifactPreview;
+export interface UploadReceipt { id: string; state: string; taskId: string | null; error: string | null }
 export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
 export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
@@ -55,7 +59,7 @@ export interface SpeakerLabel { id: string; name: string }
 export interface SpeakerLabels { schemaVersion: 1; artifactGeneration: number; speakers: SpeakerLabel[] }
 export interface TaskCursor { updatedAtMs: number; id: string }
 export interface TaskPage { tasks: TaskRecord[]; nextCursor?: TaskCursor }
-export interface TaskFilters { limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean; batchId?: string }
+export interface TaskFilters { workflow?: "conversion" | "meetingTranscript"; search?: string; active?: boolean; limit?: number; after?: TaskCursor; status?: TaskStatus; pinned?: boolean; batchId?: string }
 export interface CleanupSummary { schemaVersion: 1; deletedTasks: number; reclaimedBytes: number }
 export interface TaskEvent {
   schemaVersion: 1; sequence: number; taskId: string; kind: "snapshot" | "progress";
@@ -319,7 +323,7 @@ async function readBoundedJson(response: Response, limit = Number.MAX_SAFE_INTEG
   try {
     while (true) { const result = await reader.read(); if (result.done) break; length += result.value.byteLength;
       if (length > limit) { await reader.cancel(); throw new ApiError("responseTooLarge"); } chunks.push(result.value); }
-  } finally { reader.releaseLock(); }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
   const bytes = new Uint8Array(length); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new ApiError("invalidResponse"); }
@@ -402,8 +406,12 @@ export interface ApiClient {
   installCapability(id: "ocr" | "media", signal?: AbortSignal): Promise<void>;
   stagePluginPackage?(file: File, signal?: AbortSignal): Promise<StagedPluginPackage>;
   getTask(id: string, signal?: AbortSignal): Promise<TaskRecord>;
+  summaries?(ids: string[], signal?: AbortSignal): Promise<TaskSummary[]>;
+  uploadProgress?(file: File, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string): Promise<TaskRecord>;
+  receipt?(id: string, signal?: AbortSignal): Promise<UploadReceipt>;
+  cancelUpload?(id: string): Promise<void>;
   upload(file: File, options: WorkbenchOptions, batchId: string, signal?: AbortSignal): Promise<TaskRecord>;
-  uploadMeeting(file: File, options: MeetingOptions, signal?: AbortSignal): Promise<TaskRecord>;
+  uploadMeeting(file: File, options: MeetingOptions, signal?: AbortSignal, submissionId?: string): Promise<TaskRecord>;
   cancel(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   retry(id: string, signal?: AbortSignal): Promise<TaskRecord>;
   setPinned(id: string, pinned: boolean, signal?: AbortSignal): Promise<TaskRecord>;
@@ -418,24 +426,10 @@ export interface ApiClient {
   adminGrant(action: AdminAction, signal?: AbortSignal): Promise<string>;
   adminAction(action: AdminAction, signal?: AbortSignal): Promise<AdminActionOutcome>;
 }
-async function readBoundedBytes(response: Response, limit: number): Promise<Uint8Array> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) throw new ApiError("responseTooLarge");
-  if (!response.body) throw new ApiError("invalidResponse");
-  const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let length = 0;
-  try { while (true) { const result = await reader.read(); if (result.done) break; length += result.value.byteLength; if (length > limit) { await reader.cancel(); throw new ApiError("responseTooLarge"); } chunks.push(result.value); } }
-  finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; } return bytes;
-}
 export function createApiClient(session: string, fetcher: typeof fetch = fetch): ApiClient {
   const auth = (): Record<string, string> => ({ "X-Into-Md-Session": session });
-  async function jsonRequest(path: string, init: RequestInit, limit?: number): Promise<unknown> {
-    let response: Response;
-    try { response = await fetcher(path, { cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...init }); }
-    catch (error) { if (error instanceof DOMException && error.name === "AbortError") throw error; throw new ApiError("unreachable"); }
-    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") throw new ApiError("invalidResponse");
-    const value = await readBoundedJson(response, limit); if (!response.ok) throw new ApiError(requestCode(value)); return value;
-  }
+  const jsonRequest = jsonRequester(fetcher);
+  const uploadWithReceipt = receiptUploader(session, auth, jsonRequest, (id, signal) => client.getTask(id, signal));
   const client: ApiClient = {
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
     async capabilitySnapshot(signal) { return parseCapabilitySnapshot(await jsonRequest("/api/capabilities/status", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536)); },
@@ -476,29 +470,34 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
       if (filters.after) { query.set("afterUpdatedAtMs", String(filters.after.updatedAtMs)); query.set("afterId", filters.after.id); }
       if (filters.status) query.set("status", filters.status); if (filters.pinned !== undefined) query.set("pinned", String(filters.pinned));
       if (filters.batchId) query.set("batchId", filters.batchId);
+      if (filters.workflow) query.set("workflow", filters.workflow);
+      if (filters.search) query.set("search", base64UrlUtf8(filters.search));
+      if (filters.active !== undefined) query.set("active", String(filters.active));
       return parseTaskList(await jsonRequest(`/api/tasks?${query}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }));
     },
-    async getTask(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
+    async summaries(ids, signal) {
+      const value = await jsonRequest("/api/tasks/summaries", { method: "POST", headers: { ...auth(), "Content-Type": "application/json" }, body: JSON.stringify({ ids }), ...(signal ? { signal } : {}) });
+      return parseSummaries(value);
+    },
+    async receipt(id, signal) { return parseReceipt(await jsonRequest(`/api/uploads/${id}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
+    async cancelUpload(id) { await jsonRequest(`/api/uploads/${id}`, { method: "DELETE", headers: auth() }); },
+    async uploadProgress(file, options, batchId, progress, signal, submissionId) {
+      return uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId);
+    },
+    async getTask(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/detail`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
     async upload(file, options, batchId, signal) {
       const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options, batchId));
       return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
     },
-    async uploadMeeting(file, options, signal) {
-      const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(meetingTaskRequest(file, options));
-      return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
+    async uploadMeeting(file, options, signal, submissionId) {
+      return uploadWithReceipt(file, meetingTaskRequest(file, options), () => {}, signal ?? new AbortController().signal, submissionId);
     },
     async cancel(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async retry(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/retry`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async setPinned(id, pinned, signal) { const headers = auth(); headers["Content-Type"] = "application/json"; return parseTask(await jsonRequest(`/api/tasks/${id}/pin`, { method: "POST", headers, body: JSON.stringify({ pinned }), ...(signal ? { signal } : {}) })); },
     async speakerLabels(id, signal) {
       const value = await jsonRequest(`/api/tasks/${id}/speakers`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536);
-      if (!isObject(value) || value.schemaVersion !== 1 || !Number.isSafeInteger(value.artifactGeneration)
-        || Number(value.artifactGeneration) < 0 || !Array.isArray(value.speakers) || value.speakers.length > 64
-        || value.speakers.some((speaker) => !isObject(speaker) || typeof speaker.id !== "string"
-          || !/^speaker-(?:[1-9]|[1-5][0-9]|6[0-4])$/.test(speaker.id) || typeof speaker.name !== "string"
-          || speaker.name.length === 0 || speaker.name.length > 80 || speaker.name.trim() !== speaker.name
-          || /[\u0000-\u001f\u007f]/.test(speaker.name))) throw new ApiError("invalidResponse");
-      return value as unknown as SpeakerLabels;
+      return parseSpeakerLabels(value);
     },
     async relabelSpeakers(id, expectedGeneration, speakers, signal) {
       const headers = auth(); headers["Content-Type"] = "application/json";
@@ -544,19 +543,13 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
               lastEventId = eventId; onEvent(event); if (event.terminal) return;
             }
           }
-        } finally { reader.releaseLock(); }
+        } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
       }
     },
     async preview(id, key, signal) {
-      let response: Response;
-      const headers = auth(); headers.Range = `bytes=0-${MAX_PREVIEW_BYTES - 1}`;
-      try { response = await fetcher(`/api/tasks/${id}/artifacts/${key}`, { method: "GET", headers, cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...(signal ? { signal } : {}) }); }
-      catch { throw new ApiError("unreachable"); }
-      if (response.status !== 200 && response.status !== 206) throw new ApiError("previewFailed");
-      const bytes = await readBoundedBytes(response, MAX_PREVIEW_BYTES);
-      let text: string; try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new ApiError("invalidPreview"); }
-      const declared = Number(response.headers.get("content-range")?.split("/")[1]);
-      return { text, truncated: response.status === 206 && Number.isFinite(declared) && declared > bytes.byteLength, contentType: response.headers.get("content-type")?.split(";", 1)[0] ?? "application/octet-stream" };
+      const value = await jsonRequest(`/api/tasks/${id}/previews/${key}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 2 * 1024 * 1024);
+      if (!isObject(value) || typeof value.text !== "string" || typeof value.truncated !== "boolean" || typeof value.contentType !== "string" || new TextEncoder().encode(value.text).length > MAX_PREVIEW_BYTES) throw new ApiError("invalidPreview");
+      return { text: value.text, truncated: value.truncated, contentType: value.contentType };
     },
     async download(id, key, signal) {
       let response: Response;
@@ -573,4 +566,87 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
     },
   };
   return Object.freeze(client);
+}
+
+function receiptUploader(session: string, auth: () => Record<string, string>, jsonRequest: (path: string, init: RequestInit, limit?: number) => Promise<unknown>, getTask: (id: string, signal: AbortSignal) => Promise<TaskRecord>) {
+  async function uploadWithReceipt(file: File, request: unknown, progress: (loaded: number) => void, signal: AbortSignal, submissionId = crypto.randomUUID().replaceAll("-", "")): Promise<TaskRecord> {
+    const path = `/api/uploads/${submissionId}`;
+    const headers = { ...auth(), "X-Into-Md-Filename-B64": base64UrlUtf8(file.name), "X-Into-Md-Request": base64UrlJson(request), "X-Into-Md-Size": String(file.size) };
+    let receipt = parseReceipt(await jsonRequest(path, { method: "POST", headers, signal }));
+    if (receipt.state === "waiting") {
+      try {
+        receipt = await new Promise<UploadReceipt>((resolve, reject) => {
+          if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
+          const xhr = new XMLHttpRequest(); const abort = () => xhr.abort();
+          xhr.open("PUT", path); xhr.timeout = 30 * 60 * 1000;
+          xhr.setRequestHeader("X-Into-Md-Session", session);
+          xhr.upload.onprogress = event => progress(event.loaded);
+          xhr.onload = () => { try { const value: unknown = JSON.parse(xhr.responseText); if (xhr.status < 200 || xhr.status >= 300) throw new ApiError(requestCode(value)); resolve(parseReceipt(value)); } catch (error) { reject(error); } };
+          xhr.onerror = () => reject(new ApiError("unreachable")); xhr.ontimeout = () => reject(new ApiError("uploadTimeout"));
+          xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
+          xhr.onloadend = () => signal.removeEventListener("abort", abort);
+          signal.addEventListener("abort", abort, { once: true }); xhr.send(file);
+        });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // Reconcile a lost response before permitting a user retry.
+        receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
+        if (receipt.state === "waiting" || receipt.state === "uploading") throw error;
+      }
+    }
+    progress(file.size);
+    while (!receipt.taskId) {
+      if (["failed", "cancelled", "interrupted"].includes(receipt.state)) throw new ApiError(receipt.error ?? "uploadFailed");
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
+        const timer = setTimeout(() => { signal.removeEventListener("abort", abort); resolve(); }, 1000);
+        signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
+      });
+      receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
+    }
+    return getTask(receipt.taskId, signal);
+  }
+  return uploadWithReceipt;
+}
+
+function parseReceipt(value: unknown): UploadReceipt {
+  if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
+    || typeof value.state !== "string" || !["waiting", "uploading", "receiving", "accepted", "failed", "cancelled", "interrupted"].includes(value.state)
+    || value.taskId !== null && (typeof value.taskId !== "string" || !/^[0-9a-f]{32}$/.test(value.taskId))
+    || value.error !== null && (typeof value.error !== "string" || value.error.length > 128)) throw new ApiError("invalidResponse");
+  return value as unknown as UploadReceipt;
+}
+
+function jsonRequester(fetcher: typeof fetch) {
+  async function jsonRequest(path: string, init: RequestInit, limit?: number): Promise<unknown> {
+    const signal = AbortSignal.any([...(init.signal ? [init.signal] : []), AbortSignal.timeout(path === "/api/tasks" && init.method === "POST" ? 30 * 60 * 1000 : 30000)]);
+    init = { ...init, signal };
+    let response: Response;
+    try { response = await fetcher(path, { cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", ...init }); }
+    catch (error) { if (error instanceof DOMException && error.name === "AbortError") throw error; throw new ApiError("unreachable"); }
+    if (response.headers.get("content-type")?.split(";", 1)[0]?.trim() !== "application/json") throw new ApiError("invalidResponse");
+    const value = await readBoundedJson(response, limit); if (!response.ok) throw new ApiError(requestCode(value)); return value;
+  }
+  return jsonRequest;
+}
+
+function parseSpeakerLabels(value: unknown): SpeakerLabels {
+      if (!isObject(value) || value.schemaVersion !== 1 || !Number.isSafeInteger(value.artifactGeneration)
+        || Number(value.artifactGeneration) < 0 || !Array.isArray(value.speakers) || value.speakers.length > 64
+        || value.speakers.some((speaker) => !isObject(speaker) || typeof speaker.id !== "string"
+          || !/^speaker-(?:[1-9]|[1-5][0-9]|6[0-4])$/.test(speaker.id) || typeof speaker.name !== "string"
+          || speaker.name.length === 0 || speaker.name.length > 80 || speaker.name.trim() !== speaker.name
+          || /[\u0000-\u001f\u007f]/.test(speaker.name))) throw new ApiError("invalidResponse");
+      return value as unknown as SpeakerLabels;
+}
+
+function parseSummaries(value: unknown): TaskSummary[] {
+      if (!isObject(value) || !Array.isArray(value.tasks)) throw new ApiError("invalidResponse");
+      if (value.tasks.length > 100) throw new ApiError("invalidResponse");
+      return value.tasks.map(item => {
+        const task = parseTask(item);
+        if (!isObject(item) || typeof item.generation !== "string" || !/^[0-9a-f]{32}$/.test(item.generation) || !Number.isSafeInteger(item.sequence) || Number(item.sequence) < 0) throw new ApiError("invalidResponse");
+        const event = parseTaskEvent({ ...item, schemaVersion: 1, taskId: task.id, kind: "snapshot", terminal: ["succeeded", "failed", "interrupted", "cancelled"].includes(task.status), execution: item.execution ?? undefined });
+        return { ...task, ...(item.waitingReason === "worker" || item.waitingReason === "disk" ? { waitingReason: item.waitingReason } : {}), generation: item.generation, sequence: Number(item.sequence), ...(event.execution ? { execution: event.execution } : {}) };
+      });
 }

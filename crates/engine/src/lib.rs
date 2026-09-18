@@ -229,6 +229,45 @@ impl Engine {
         ))
     }
 
+    /// Fingerprint a streamed input using the same framing as in-memory recovery.
+    pub fn recoverable_fingerprints_reader(
+        mut reader: impl std::io::Read,
+        size: u64,
+        name: Option<&str>,
+        hint: &FormatHint,
+        options: &ConversionOptions,
+    ) -> Result<(String, String), ConversionError> {
+        use sha2::{Digest, Sha256};
+        let fail = |error: std::io::Error| ConversionError::Recovery {
+            reason: "internal".into(),
+            detail: error.to_string(),
+        };
+        let mut hash = Sha256::new();
+        let prefix = b"into-markdown-input-v1";
+        hash.update((prefix.len() as u64).to_le_bytes());
+        hash.update(prefix);
+        hash.update(size.to_le_bytes());
+        let mut remaining = size;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining > 0 {
+            let wanted = remaining.min(buffer.len() as u64) as usize;
+            reader.read_exact(&mut buffer[..wanted]).map_err(fail)?;
+            hash.update(&buffer[..wanted]);
+            remaining -= wanted as u64;
+        }
+        if reader.read(&mut buffer[..1]).map_err(fail)? != 0 {
+            return Err(fail(std::io::Error::other("input size changed")));
+        }
+        let metadata = serde_json::to_vec(&(name, None::<&str>, None::<&str>, size))
+            .map_err(|error| fail(std::io::Error::other(error)))?;
+        hash.update((metadata.len() as u64).to_le_bytes());
+        hash.update(metadata);
+        Ok((
+            format!("{:x}", hash.finalize()),
+            recovery::fingerprint_json(&(hint.clone(), options.clone()))?,
+        ))
+    }
+
     /// Convert with durable, process-restart-safe phase checkpoints.
     ///
     /// The current input and conversion configuration are fingerprinted on
