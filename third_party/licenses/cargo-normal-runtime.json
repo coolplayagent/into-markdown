@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "root": "into-markdown-cli",
-  "cargo_lock_sha256": "e5c54f41572937cce3d9d9b64380bfc82f78db16da9f00e3ccb02627b9add923",
+  "cargo_lock_sha256": "b39f4efce8092e6f97d1e063a363f19b12f4845dfc4330547e838fc9a3b0db02",
   "workspace_manifest_sha256": {
-    "Cargo.toml": "0b0620e673bdd7ca9ebed4d778553e0fd5031befce6ee1b3e2bc53bee6ec9b01",
+    "Cargo.toml": "ab05eb29313dcb95e0707b52ab428559258da4618b4bf37f2b5db3b2d1ac2ffc",
     "apps/cli/Cargo.toml": "5a7badd4acb08c0ea95413aacd2bf2d129bb100290ba1793322b298ad4e96580",
     "apps/official-provider/Cargo.toml": "ff280ebe22ace51d7d9ed6b895cd29ebe636aacefb49d72ac5148830fbabaa75",
     "crates/ai/Cargo.toml": "adffc09c06b695fe830fe58647a2cd1f18df627b1932331b372c690843781eeb",
