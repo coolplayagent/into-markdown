@@ -107,6 +107,7 @@ const DIAGNOSTIC_MESSAGES: Readonly<Record<string, MessageKey>> = {
   internal: "internalFailure",
   conversionFailed: "conversionFailedReason",
   unsafeStorage: "storageFailure",
+  requestTimeout: "serviceSlow",
   queueUnavailable: "storageFailure",
   backendIo: "importFailure",
   uploadBusy: "importBusy",

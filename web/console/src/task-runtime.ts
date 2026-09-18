@@ -8,6 +8,7 @@ export interface UploadEntry {
   file: File;
   localSelection?: LocalSelection;
   localGrantReleased?: boolean;
+  waitingForService?: boolean;
   originalSize?: number;
   task?: TaskRecord;
   stage?: string;
@@ -135,7 +136,7 @@ export class TaskRuntime {
         if (!entry.submissionId || !this.source.receipt) continue;
         try {
           const receipt = await this.source.receipt(entry.submissionId, controller.signal);
-          if (receipt.taskId) { const task = await this.source.getTask(receipt.taskId, controller.signal); this.patch(entry.key, { task }); this.put(task); }
+          if (receipt.taskId) { const task = await this.source.getTask(receipt.taskId, controller.signal); this.patch(entry.key, { task, error: undefined, waitingForService: false }); this.put(task); }
           else if (receipt.state === "receiving" || receipt.localCopy && ["waiting", "uploading"].includes(receipt.state)) this.patch(entry.key, { uploadState: "receiving" });
         } catch { if (controller.signal.aborted) return; }
       }
@@ -184,8 +185,8 @@ export class TaskRuntime {
           if (error instanceof ApiError && error.code === "notFound") return null;
           throw error;
         });
-        if (receipt?.taskId) { const task = await this.api.getTask(receipt.taskId); this.patch(key, { task, error: undefined }); this.wake(); return; }
-        if (receipt?.state === "receiving") { this.patch(key, { error: "uploadPreparing" }); return; }
+        if (receipt?.taskId) { const task = await this.api.getTask(receipt.taskId); this.patch(key, { task, error: undefined, waitingForService: false }); this.wake(); return; }
+        if (receipt?.state === "receiving" || receipt?.localCopy && ["waiting", "uploading"].includes(receipt.state)) { this.patch(key, { error: undefined, uploadState: "receiving" }); this.wake(); return; }
         if (receipt) await this.source.cancelUpload?.(entry.submissionId);
       }
       this.submit([key], options, entry.batchId!);
@@ -203,7 +204,7 @@ export class TaskRuntime {
     if (entry?.submissionId && entry.uploadState !== "waiting") void this.source.cancelUpload?.(entry.submissionId).catch(error => {
       if (!(error instanceof ApiError && error.code === "notFound")) this.patch(key, { error: "unreachable" });
     });
-    this.setEntries(items => items.map(e => e.key === key ? { ...e, uploadState: "cancelled" } : e));
+    this.setEntries(items => items.map(e => e.key === key ? { ...e, uploadState: "cancelled", waitingForService: false } : e));
   }
   private pump() {
     while (this.active < 1 && this.queue.length && !this.stopped) {
@@ -215,13 +216,14 @@ export class TaskRuntime {
       const controller = new AbortController(); this.controllers.set(job.key, controller);
       this.patch(job.key, { uploadState: "uploading", uploaded: 0, startedAt: Date.now() });
       const progress = (loaded: number) => this.patch(job.key, { uploaded: loaded, uploadState: loaded >= (entry.originalSize ?? entry.file.size) ? "receiving" : "uploading" });
+      const waiting = (value: boolean) => this.patch(job.key, { waitingForService: value, error: undefined });
       const upload = entry.localSelection && this.source.importLocal
-        ? this.source.importLocal(entry.localSelection, job.options, job.batchId, progress, controller.signal, entry.submissionId)
+        ? this.source.importLocal(entry.localSelection, job.options, job.batchId, progress, controller.signal, entry.submissionId, waiting)
         : this.source.uploadProgress
-        ? this.source.uploadProgress(entry.file, job.options, job.batchId, progress, controller.signal, entry.submissionId)
+        ? this.source.uploadProgress(entry.file, job.options, job.batchId, progress, controller.signal, entry.submissionId, waiting)
         : this.source.upload(entry.file, job.options, job.batchId, controller.signal);
       void upload.then(task => {
-        this.patch(job.key, { task, stage: task.status }); this.put(task); this.wake();
+        this.patch(job.key, { task, stage: task.status, error: undefined, waitingForService: false }); this.put(task); this.wake();
       }).catch(error => {
         this.patch(job.key, controller.signal.aborted ? { uploadState: "cancelled" } : { error: error instanceof ApiError ? error.code : "unreachable" });
       }).finally(() => { this.active -= 1; this.controllers.delete(job.key); this.changed(); this.pump(); });
@@ -255,7 +257,7 @@ export class TaskRuntime {
       for (const entry of this.entries.filter(e => !e.task && e.uploadState === "receiving" && e.submissionId && !this.controllers.has(e.key)).slice(0, 2)) {
         if (!this.source.receipt) continue;
         const receipt = await this.source.receipt(entry.submissionId!, controller.signal);
-        if (receipt.taskId) { const task = await this.source.getTask(receipt.taskId, controller.signal); this.patch(entry.key, { task }); this.put(task); }
+        if (receipt.taskId) { const task = await this.source.getTask(receipt.taskId, controller.signal); this.patch(entry.key, { task, error: undefined, waitingForService: false }); this.put(task); }
         else if (["failed", "interrupted", "cancelled"].includes(receipt.state)) this.patch(entry.key, { uploadState: "reselect", error: receipt.error ?? "uploadFailed" });
       }
       const ids = [...new Set([...this.observers.keys(), ...[...this.tasks.values()].filter(task => !terminal.has(task.status)).map(task => task.id)])];

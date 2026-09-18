@@ -44,20 +44,19 @@ pub(super) fn metadata_store_mutation<T>(
     // publication remain outside this lock and use their own quota reservations.
     let mut store = lock(&shared.task_store);
     let preflight = (|| {
-        let measured = measured_live_managed_bytes(&shared.root_handle)?;
         let database = database_budget(shared, &store, reservation)?;
         let planned = quota
             .used
             .checked_add(quota.reserved)
-            .and_then(|bytes| bytes.max(measured).checked_add(database.physical_reservation));
+            .and_then(|bytes| bytes.checked_add(database.physical_reservation));
         if planned.is_none_or(|total| total > MAX_GLOBAL_BYTES) {
             return Err(WebTaskError::Limit(
                 "durable task metadata reservation is unavailable".into(),
             ));
         }
-        Ok((measured, database))
+        Ok(database)
     })();
-    let (measured_before, database) = match preflight {
+    let database = match preflight {
         Ok(value) => value,
         Err(error) => {
             drop(store);
@@ -66,20 +65,21 @@ pub(super) fn metadata_store_mutation<T>(
             return Err(error);
         }
     };
-    quota.used = measured_before;
     let result = mutation(&mut store);
     let settlement = (|| {
         let after = measured_managed_bytes(&database.directory)?;
         let main_growth = database.main.metadata()?.len().saturating_sub(database.main_bytes);
-        Ok::<_, WebTaskError>((after.saturating_sub(database.bytes), main_growth))
+        Ok::<_, WebTaskError>((after, main_growth))
     })();
     drop(store);
-    let settlement = settlement.and_then(|(growth, main_growth)| {
-        let measured_after = measured_live_managed_bytes(&shared.root_handle)?;
-        quota.used = measured_after;
+    let settlement = settlement.and_then(|(after, main_growth)| {
+        let growth = after.saturating_sub(database.bytes);
+        quota.used = quota.used.saturating_add(growth);
+        // Shrinking the database is settled by the background storage audit.
+        // Admission uses the conservatively charged count until that audit.
         // Retain the per-mutation journal bound as well as the complete physical
         // budget, including checkpoint debt. Unrelated file writes never enter it.
-        if growth > database.physical_reservation || measured_after > MAX_GLOBAL_BYTES
+        if growth > database.physical_reservation || quota.used.checked_add(quota.reserved).is_none_or(|bytes| bytes > MAX_GLOBAL_BYTES)
             || growth.saturating_sub(main_growth) > reservation
             || main_growth > database.checkpoint_debt.saturating_add(reservation) {
             eprintln!("web stage=storageCheck code=metadataReservationExceeded growth={growth} main_growth={main_growth} checkpoint_debt={} reservation={reservation}", database.checkpoint_debt);

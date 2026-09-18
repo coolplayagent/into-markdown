@@ -28,12 +28,25 @@ try {
   page = await browser.newPage();
   page.on('pageerror', error => errors.push(error.message));
   const received = new Map();
+  let lostCreate = false, lostRead = false;
+  const simulateLostResponses = process.env.INTO_MD_LOST_RESPONSES === '1';
   let held = false;
   const hold = new Promise(resolve => { releaseUpload = resolve; });
   await page.route('**/api/uploads/*', async route => {
     const request = route.request();
     if (request.method() === 'POST') {
       received.set(request.url(), Buffer.from(request.headers()['x-into-md-filename-b64'], 'base64url').toString());
+      if (simulateLostResponses && !lostCreate) {
+        lostCreate = true;
+        await route.fetch();
+        await route.abort('failed');
+        return;
+      }
+    }
+    if (simulateLostResponses && request.method() === 'GET' && !lostRead) {
+      lostRead = true;
+      await route.abort('failed');
+      return;
     }
     if (request.method() === 'PUT' && received.get(request.url())?.endsWith('.pptx')) { held = true; await hold; }
     await route.continue();
@@ -46,7 +59,7 @@ try {
   await page.locator('.convert-button').click();
   const small = page.locator('.current-task-link').filter({ hasText: 'normal.xlsx' });
   await page.waitForFunction(() => document.querySelectorAll('.current-batch-scroll li').length === 2);
-  await new Promise(resolve => setTimeout(resolve, 300));
+  await new Promise(resolve => setTimeout(resolve, simulateLostResponses ? 1500 : 300));
   assert.ok(held, 'PowerPoint transport is deliberately held');
   assert.equal(received.size, 1, 'Only the first file is admitted while its transfer is held');
   await page.locator('.primary-nav a[href="/meetings"]').click();
@@ -54,6 +67,7 @@ try {
   await page.locator('.primary-nav a[href="/workbench"]').click();
   await page.locator('.current-task-link').filter({ hasText: '.pptx' }).waitFor({ timeout: 60000 });
   await small.waitFor({ timeout: 60000 });
+  if (simulateLostResponses) assert.ok(lostCreate && lostRead, 'Lost responses recover without manual retry');
   await small.click();
   await page.locator('.markdown-preview').waitFor();
   await page.locator('.result-close').click();

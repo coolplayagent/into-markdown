@@ -1137,6 +1137,12 @@ pub struct WebTaskBackend {
 
 impl WebTaskBackend {
     #[cfg(test)]
+    pub(crate) fn test_with_store_lock(&self, action: impl FnOnce()) {
+        let _store = lock(&self.owner.shared.task_store);
+        action();
+    }
+
+    #[cfg(test)]
     pub(crate) fn test_reserved_bytes(&self) -> u64 {
         lock(&self.owner.shared.disk_bytes).reserved
     }
@@ -6787,12 +6793,19 @@ mod tests {
         let mut upload = backend.begin_upload("overlap.txt", None).unwrap();
         let amount = 8 * STORE_MUTATION_RESERVATION;
         let mut reservation = QuotaReservation::acquire(&backend.owner.shared, amount).unwrap();
+        let before = lock(&backend.owner.shared.disk_bytes).used;
         metadata_store_mutation(&backend.owner.shared, STORE_MUTATION_RESERVATION, |_store| {
             upload.file.as_mut().unwrap().write_all(&vec![b'x'; amount as usize])?;
             Ok(())
         })
         .unwrap();
+        assert_eq!(
+            lock(&backend.owner.shared.disk_bytes).used,
+            before,
+            "file writes are settled by their own reservation"
+        );
         reservation.commit(amount);
+        assert_eq!(lock(&backend.owner.shared.disk_bytes).used, before + amount);
         assert!(!lock(&backend.owner.shared.queue).stopped);
         assert!(measured_managed_bytes(&backend.owner.shared.root_handle).unwrap() >= amount);
     }
