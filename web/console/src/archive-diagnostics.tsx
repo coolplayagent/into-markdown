@@ -15,12 +15,13 @@ export function archiveMembers(text: string): string[] {
 
 export interface ConversionObservations {
   outcome?: "complete" | "degraded";
+  summaryTruncated?: boolean;
   reasons: string[];
   ocr?: { imageSources: number; imagesAttempted: number; imagesCompleted: number; imagesFailed: number; imagesSkipped: number };
 }
 export function conversionObservations(text: string): ConversionObservations {
   const value = JSON.parse(text);
-  const result: ConversionObservations = { reasons: [] };
+  const result: ConversionObservations = { reasons: [], summaryTruncated: value?.summaryTruncated === true };
   if (value?.outcome === "complete" || value?.outcome === "degraded") result.outcome = value.outcome;
   if (Array.isArray(value?.diagnostics)) result.reasons = value.diagnostics.flatMap((item: any) => {
     if (item?.severity !== "warning" || typeof item.message !== "string") return [];
@@ -44,9 +45,8 @@ export function ArchiveDiagnostics({ api, task }: { api: ApiClient; task: TaskRe
     setMembers([]); setOmissions([]); setObservations({ reasons: [] }); setUnavailable(false);
     if (artifact) void api.preview(task.id, artifact.storageKey, controller.signal).then(async (preview) => {
       if (controller.signal.aborted) return;
-      const text = preview.truncated
-        ? await (await api.download(task.id, artifact.storageKey, controller.signal)).blob.text()
-        : preview.text;
+      if (preview.truncated) { setUnavailable(true); return; }
+      const text = preview.text;
       if (controller.signal.aborted) return;
       setMembers(archiveMembers(text));
       setObservations(conversionObservations(text));
@@ -58,6 +58,7 @@ export function ArchiveDiagnostics({ api, task }: { api: ApiClient; task: TaskRe
   return <>{task.status === "succeeded" && <aside className="preview-notice" aria-label={t("diagnostics")}>
     {observations.outcome === "degraded" && <><strong>{locale === "zh-CN" ? "转换完成，部分内容已降级" : "Conversion completed with some degraded content"}</strong>
       <ul>{observations.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul></>}
+    {observations.summaryTruncated && <p>{locale === "zh-CN" ? "此处显示诊断摘要，完整记录可在资源中下载。" : "Showing a diagnostic summary. Download the full record from resources."}</p>}
     {observations.ocr && <p>{locale === "zh-CN"
       ? `OCR 图片总数 ${observations.ocr.imageSources}；尝试 ${observations.ocr.imagesAttempted}，完成 ${observations.ocr.imagesCompleted}，失败 ${observations.ocr.imagesFailed}，跳过 ${observations.ocr.imagesSkipped}`
       : `OCR images ${observations.ocr.imageSources}; attempted ${observations.ocr.imagesAttempted}, completed ${observations.ocr.imagesCompleted}, failed ${observations.ocr.imagesFailed}, skipped ${observations.ocr.imagesSkipped}`}</p>}

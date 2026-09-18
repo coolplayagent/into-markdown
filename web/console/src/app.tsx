@@ -1,3 +1,4 @@
+import { TaskProvider, useTaskApi } from "./task-provider";
 import { useEffect, useRef } from "react";
 import { ChevronDown, CircleAlert, Languages, LoaderCircle, Settings2, ShieldCheck } from "lucide-react";
 import type { ApiClient } from "./api";
@@ -28,7 +29,8 @@ function ServiceBadge() {
   return <span className={`service-badge ${state}`} role="status"><Icon size={17} aria-hidden="true" className={state === "checking" ? "spin" : ""} /><span>{t(state === "ready" ? "systemReady" : state === "error" ? "systemNeedsAttention" : "checkingSystem")}</span></span>;
 }
 
-function Content({ api }: { api: ApiClient }) {
+function Content({ api: supplied }: { api: ApiClient }) {
+  const api = useTaskApi(supplied);
   const { path } = useRouter();
   const { t } = useI18n();
   const main = useRef<HTMLElement>(null);
@@ -62,5 +64,5 @@ function Shell({ api }: { api: ApiClient }) {
 }
 
 export function App({ api }: { api: ApiClient }) {
-  return <I18nProvider><ThemeProvider><Router><CapabilityProvider api={api}><Shell api={api} /></CapabilityProvider></Router></ThemeProvider></I18nProvider>;
+  return <I18nProvider><ThemeProvider><Router><CapabilityProvider api={api}><TaskProvider api={api}><Shell api={api} /></TaskProvider></CapabilityProvider></Router></ThemeProvider></I18nProvider>;
 }

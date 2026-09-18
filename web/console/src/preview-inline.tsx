@@ -17,7 +17,7 @@ function flanks(source: string, start: number, size: number): [boolean, boolean]
     !beforeSpace && (!beforePunctuation || afterSpace || afterPunctuation)];
 }
 
-type Budget = { left: number; work: number };
+export type Budget = { left: number; work: number };
 
 function closing(source: string, marker: string, start: number, native: boolean, budget: Budget): number {
   const nested: number[] = [];
@@ -64,8 +64,8 @@ function decodeText(source: string): string {
 }
 
 /** Render a bounded inline subset exclusively through inert React elements. */
-export function renderInline(source: string): ReactNode {
-  return parse(source, 0, { left: 1_000, work: Math.min(source.length * 16, 2_000_000) });
+export function renderInline(source: string, budget: Budget = { left: 1_000, work: Math.min(source.length * 16, 2_000_000) }): ReactNode {
+  return parse(source, 0, budget);
 }
 
 function parse(source: string, depth: number, budget: Budget): ReactNode {

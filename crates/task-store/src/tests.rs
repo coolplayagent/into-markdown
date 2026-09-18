@@ -318,7 +318,7 @@ fn legacy_asset_fixture(version: i64) -> (tempfile::TempDir, TaskId) {
     store
         .connection
         .execute_batch(&format!(
-            "ALTER TABLE tasks DROP COLUMN completed_at_ms;\
+            "DROP TABLE web_previews; DROP TABLE web_receipt_parts; DROP TABLE web_receipts; DROP TABLE web_tasks; ALTER TABLE tasks DROP COLUMN completed_at_ms;\
                  ALTER TABLE tasks DROP COLUMN artifact_generation;\
                  DROP TRIGGER IF EXISTS artifacts_limit; DROP TRIGGER artifacts_terminal;\
                  ALTER TABLE artifacts RENAME TO artifacts_v3;\
@@ -1094,4 +1094,30 @@ fn backup_abort_never_publishes_partial_destination() {
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(".backup-"))
         .count();
     assert_eq!(orphan_count, 1);
+}
+
+#[test]
+fn abandoned_receipts_expire_in_bounded_pages_without_removing_active_transports() {
+    let directory = private_temp();
+    let store = TaskStore::open(directory.path(), BusyControl::default()).unwrap();
+    for (index, state) in
+        ["waiting", "failed", "cancelled", "interrupted", "uploading", "receiving"]
+            .iter()
+            .enumerate()
+    {
+        let id = format!("{index:032x}");
+        assert!(store.write_web_receipt(&id, None, state, None, "{}").unwrap());
+    }
+    assert_eq!(store.prune_web_receipts(0).unwrap(), 0);
+    assert_eq!(store.prune_web_receipts(i64::MAX).unwrap(), 4);
+    assert!(store.web_receipt(&format!("{:032x}", 0)).unwrap().is_none());
+    assert!(store.web_receipt(&format!("{:032x}", 4)).unwrap().is_some());
+    assert!(store.web_receipt(&format!("{:032x}", 5)).unwrap().is_some());
+    assert_eq!(
+        store
+            .connection
+            .query_row("SELECT count(*) FROM web_receipt_parts", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
 }

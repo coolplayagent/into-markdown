@@ -1,6 +1,12 @@
 //! Durable upload, conversion queue, and artifact publication for the local Web service.
 
 mod limits;
+mod query;
+mod receipts;
+pub(crate) use receipts::UploadReceipt;
+mod timing;
+pub(crate) use timing::trace_upload;
+mod upload;
 
 use crate::output;
 #[cfg(unix)]
@@ -23,7 +29,7 @@ use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -273,6 +279,10 @@ struct PersistedRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     batch_id: Option<String>,
     options: ConversionOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    receipt_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry_of: Option<TaskId>,
 }
 
 /// Browser-facing task metadata recovered from the authenticated request file.
@@ -290,6 +300,8 @@ pub(crate) struct WebTaskRecord {
     pub(crate) batch_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) failure: Option<WebTaskFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) retry_of: Option<TaskId>,
 }
 
 /// Stable, non-secret failure information rendered next to the failed task.
@@ -342,6 +354,8 @@ struct Shared {
     snapshots: SafeDir,
     trash: SafeDir,
     task_store: Mutex<TaskStore>,
+    metadata: Mutex<BTreeMap<TaskId, query::Metadata>>,
+    previews: Mutex<VecDeque<(String, query::ResultPreview)>>,
     history_mutation: Mutex<()>,
     recovery: RecoveryStore,
     engine: Engine,
@@ -351,6 +365,7 @@ struct Shared {
     queue_changed: Condvar,
     disk_bytes: Mutex<DiskQuota>,
     disk_changed: Condvar,
+    maintenance_requested: Arc<tokio::sync::Notify>,
     write_failure_after: AtomicUsize,
     #[cfg(test)]
     active_workers: AtomicUsize,
@@ -455,6 +470,7 @@ pub(crate) enum TaskEventKind {
 }
 
 struct TaskEventLog {
+    stage_started: Instant,
     next_sequence: u64,
     terminal: bool,
     latest_record: TaskRecord,
@@ -467,6 +483,7 @@ struct EventHubState {
 
 struct EventHub {
     generation: String,
+    sequence: AtomicU64,
     state: Mutex<EventHubState>,
     sender: broadcast::Sender<Arc<TaskEventDto>>,
 }
@@ -477,9 +494,27 @@ pub(crate) struct TaskEventSubscription {
 }
 
 impl EventHub {
+    fn trim_completed(state: &mut EventHubState) {
+        while state.logs.len() >= 256 {
+            let oldest = state
+                .logs
+                .iter()
+                .filter(|(_, log)| log.terminal)
+                .min_by_key(|(_, log)| log.latest_record.updated_at_ms)
+                .map(|(id, _)| id.clone());
+            let Some(id) = oldest else { break };
+            state.logs.remove(&id);
+        }
+    }
+
     fn new(generation: String) -> Self {
         let (sender, _) = broadcast::channel(EVENT_BROADCAST_CAPACITY);
-        Self { generation, state: Mutex::new(EventHubState { logs: BTreeMap::new() }), sender }
+        Self {
+            generation,
+            sequence: AtomicU64::new(1),
+            state: Mutex::new(EventHubState { logs: BTreeMap::new() }),
+            sender,
+        }
     }
 
     fn event(
@@ -490,8 +525,8 @@ impl EventHub {
         progress_millionths: u32,
         execution: Option<ProgressEvent>,
     ) -> Arc<TaskEventDto> {
-        let sequence = log.next_sequence;
-        log.next_sequence = log.next_sequence.saturating_add(1);
+        let sequence = self.sequence.fetch_add(1, Ordering::Relaxed);
+        log.next_sequence = sequence.saturating_add(1);
         Arc::new(TaskEventDto {
             schema_version: 1,
             sequence,
@@ -518,13 +553,15 @@ impl EventHub {
 
     fn restart(&self, record: &TaskRecord) {
         let mut state = lock(&self.state);
+        Self::trim_completed(&mut state);
         let next_sequence = state.logs.get(&record.id).map_or(1, |log| log.next_sequence);
         state.logs.insert(
             record.id.clone(),
             TaskEventLog {
+                stage_started: Instant::now(),
                 next_sequence,
                 terminal: false,
-                latest_record: record.clone(),
+                latest_record: compact_event_record(record),
                 events: VecDeque::new(),
             },
         );
@@ -532,10 +569,12 @@ impl EventHub {
 
     fn publish_snapshot(&self, record: &TaskRecord) {
         let mut state = lock(&self.state);
+        Self::trim_completed(&mut state);
         let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            stage_started: Instant::now(),
             next_sequence: 1,
             terminal: false,
-            latest_record: record.clone(),
+            latest_record: compact_event_record(record),
             events: VecDeque::new(),
         });
         if record.updated_at_ms < log.latest_record.updated_at_ms
@@ -543,7 +582,11 @@ impl EventHub {
         {
             return;
         }
-        log.latest_record = record.clone();
+        if log.latest_record.status != record.status {
+            timing::transition(&log.latest_record, log.stage_started.elapsed());
+            log.stage_started = Instant::now();
+        }
+        log.latest_record = compact_event_record(record);
         let event =
             self.event(log, record, TaskEventKind::Snapshot, record.progress_millionths, None);
         self.append(log, event);
@@ -551,10 +594,12 @@ impl EventHub {
 
     fn publish_progress(&self, record: &TaskRecord, progress: ProgressEvent) {
         let mut state = lock(&self.state);
+        Self::trim_completed(&mut state);
         let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            stage_started: Instant::now(),
             next_sequence: 1,
             terminal: false,
-            latest_record: record.clone(),
+            latest_record: compact_event_record(record),
             events: VecDeque::new(),
         });
         if log.terminal {
@@ -568,14 +613,20 @@ impl EventHub {
 
     fn subscribe(&self, record: &TaskRecord, cursor: Option<(&str, u64)>) -> TaskEventSubscription {
         let mut state = lock(&self.state);
+        Self::trim_completed(&mut state);
         let log = state.logs.entry(record.id.clone()).or_insert_with(|| TaskEventLog {
+            stage_started: Instant::now(),
             next_sequence: 1,
             terminal: false,
-            latest_record: record.clone(),
+            latest_record: compact_event_record(record),
             events: VecDeque::new(),
         });
         if record.updated_at_ms > log.latest_record.updated_at_ms {
-            log.latest_record = record.clone();
+            if log.latest_record.status != record.status {
+                timing::transition(&log.latest_record, log.stage_started.elapsed());
+                log.stage_started = Instant::now();
+            }
+            log.latest_record = compact_event_record(record);
         }
         let replayable = cursor.is_some_and(|(generation, sequence)| {
             generation == self.generation
@@ -608,6 +659,13 @@ impl EventHub {
     }
 }
 
+fn compact_event_record(record: &TaskRecord) -> TaskRecord {
+    let mut snapshot = record.clone();
+    snapshot.artifacts.clear();
+    snapshot.diagnostics.clear();
+    snapshot
+}
+
 struct EventProgressListener {
     shared: Weak<Shared>,
     id: TaskId,
@@ -634,10 +692,17 @@ fn is_terminal(status: TaskStatus) -> bool {
 }
 
 struct DiskQuota {
+    revision: u64,
     used: u64,
     reserved: u64,
     next_ticket: u64,
     waiters: VecDeque<u64>,
+}
+
+impl DiskQuota {
+    fn new(used: u64) -> Self {
+        Self { revision: 0, used, reserved: 0, next_ticket: 0, waiters: VecDeque::new() }
+    }
 }
 
 struct DiskLease<'a> {
@@ -812,9 +877,6 @@ impl Drop for ArtifactSnapshot {
     fn drop(&mut self) {
         let mut disk = lock(&self.shared.disk_bytes);
         disk.reserved = disk.reserved.saturating_sub(self.charged_bytes);
-        if let Ok(measured) = measured_managed_bytes(&self.shared.root_handle) {
-            disk.used = measured;
-        }
         self.shared.disk_changed.notify_all();
     }
 }
@@ -942,6 +1004,7 @@ impl<'a> DiskLease<'a> {
                 .checked_add(amount)
                 .ok_or_else(|| WebTaskError::Limit("global storage accounting overflow".into()))?;
             if required > MAX_DATA_BYTES {
+                shared.maintenance_requested.notify_one();
                 remove_disk_waiter(&mut quota, ticket);
                 shared.disk_changed.notify_all();
                 return Err(WebTaskError::Limit(
@@ -982,20 +1045,60 @@ fn remove_disk_waiter(quota: &mut DiskQuota, ticket: u64) {
 
 impl Drop for DiskLease<'_> {
     fn drop(&mut self) {
-        let mut quota = lock(&self.shared.disk_bytes);
-        quota.reserved = quota.reserved.saturating_sub(self.amount);
-        // Reconcile every completed reservation even while other jobs remain
-        // active. Otherwise a continuously full worker pool could repeatedly
-        // spend the same released reservation without charging durable bytes.
-        // Counting another active job's partial files in both `used` and its
-        // full reservation is intentionally conservative and never unsafe.
-        quota.used = measured_managed_bytes(&self.shared.root_handle).unwrap_or_else(|_| {
-            // Concurrent descriptor-bound publication can make a full-tree
-            // measurement transiently unavailable. Preserve safety by charging
-            // the entire released plan, without permanently poisoning the
-            // backend as though the disk were already full.
-            quota.used.saturating_add(self.amount).min(MAX_GLOBAL_BYTES)
-        });
+        settle_disk_lease(self.shared, self.amount);
+    }
+}
+
+/// Keep the reservation while scanning outside the accounting lock. Concurrent
+/// accounting changes settle conservatively against the complete reserved plan.
+fn settle_disk_lease(shared: &Shared, amount: u64) {
+    let revision = lock(&shared.disk_bytes).revision;
+    let measured = measured_managed_bytes(&shared.root_handle);
+    let mut current = lock(&shared.disk_bytes);
+    current.reserved = current.reserved.saturating_sub(amount);
+    current.used = if current.revision == revision {
+        measured.unwrap_or_else(|_| current.used.saturating_add(amount).min(MAX_GLOBAL_BYTES))
+    } else {
+        current.used.saturating_add(amount).min(MAX_GLOBAL_BYTES)
+    };
+    current.revision = current.revision.wrapping_add(1);
+    shared.disk_changed.notify_all();
+}
+
+/// Short quota accounting sections leave filesystem operations independent.
+struct QuotaReservation<'a> {
+    shared: &'a Shared,
+    amount: u64,
+}
+impl<'a> QuotaReservation<'a> {
+    fn acquire(shared: &'a Shared, amount: u64) -> Result<Self, WebTaskError> {
+        let mut disk = lock(&shared.disk_bytes);
+        disk.revision = disk.revision.wrapping_add(1);
+        if disk
+            .used
+            .checked_add(disk.reserved)
+            .and_then(|v| v.checked_add(amount))
+            .is_none_or(|v| v > MAX_DATA_BYTES)
+        {
+            shared.maintenance_requested.notify_one();
+            return Err(WebTaskError::Limit("global storage quota exceeded".into()));
+        }
+        disk.reserved += amount;
+        Ok(Self { shared, amount })
+    }
+    fn commit(&mut self, amount: u64) {
+        let mut disk = lock(&self.shared.disk_bytes);
+        disk.revision = disk.revision.wrapping_add(1);
+        disk.reserved -= amount;
+        disk.used = disk.used.saturating_add(amount);
+        self.amount -= amount;
+    }
+}
+impl Drop for QuotaReservation<'_> {
+    fn drop(&mut self) {
+        let mut disk = lock(&self.shared.disk_bytes);
+        disk.revision = disk.revision.wrapping_add(1);
+        disk.reserved = disk.reserved.saturating_sub(self.amount);
         self.shared.disk_changed.notify_all();
     }
 }
@@ -1053,6 +1156,19 @@ impl WebTaskBackend {
         self.owner.shared.media_services.update_config(loaded);
     }
 
+    pub(crate) fn maintenance_signal(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.owner.shared.maintenance_requested)
+    }
+
+    fn restore_service(&self) -> Result<(), WebTaskError> {
+        self.recover()?;
+        self.rebuild_metadata()?;
+        self.recover_receipts()?;
+        cleanup_crash_residue(&self.owner.shared.incoming, &self.owner.shared.objects)?;
+        self.cleanup(RetentionPolicy::default(), unix_now_ms()?)?;
+        Ok(())
+    }
+
     fn open_internal(
         root: PathBuf,
         loaded: Option<(crate::config::LoadedConfig, PathBuf)>,
@@ -1100,7 +1216,6 @@ impl WebTaskBackend {
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         }
         cleanup_flat_private(&snapshots, "payload")?;
-        cleanup_crash_residue(&incoming, &objects)?;
         recover_retention_trash(&objects, &trash, &task_store, &recovery)?;
         let used = measured_managed_bytes(&root_handle)?;
         if used > MAX_GLOBAL_BYTES {
@@ -1115,6 +1230,8 @@ impl WebTaskBackend {
             snapshots,
             trash,
             task_store: Mutex::new(task_store),
+            metadata: Mutex::new(BTreeMap::new()),
+            previews: Mutex::new(VecDeque::new()),
             history_mutation: Mutex::new(()),
             recovery,
             engine,
@@ -1125,13 +1242,9 @@ impl WebTaskBackend {
             events: EventHub::new(random_hex()?),
             queue: Mutex::new(QueueState::default()),
             queue_changed: Condvar::new(),
-            disk_bytes: Mutex::new(DiskQuota {
-                used,
-                reserved: 0,
-                next_ticket: 0,
-                waiters: VecDeque::new(),
-            }),
+            disk_bytes: Mutex::new(DiskQuota::new(used)),
             disk_changed: Condvar::new(),
+            maintenance_requested: Arc::new(tokio::sync::Notify::new()),
             write_failure_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
             active_workers: AtomicUsize::new(0),
@@ -1178,8 +1291,7 @@ impl WebTaskBackend {
             publication_failure: AtomicUsize::new(0),
         });
         let backend = Self { owner: Arc::new(Owner { shared, workers: Mutex::new(Vec::new()) }) };
-        backend.recover()?;
-        backend.cleanup(RetentionPolicy::default(), unix_now_ms()?)?;
+        backend.restore_service()?;
         for index in 0..MAX_WORKERS {
             let shared = Arc::clone(&backend.owner.shared);
             let worker = std::thread::Builder::new()
@@ -1208,7 +1320,6 @@ impl WebTaskBackend {
         declared_bytes: Option<u64>,
         request: WebTaskRequest,
     ) -> Result<Upload, WebTaskError> {
-        self.cleanup(RetentionPolicy::default(), unix_now_ms()?)?;
         validate_display_name(display_name)?;
         validate_web_task_request(&request)?;
         self.owner
@@ -1242,6 +1353,16 @@ impl WebTaskBackend {
             request,
             bytes: 0,
             committed: false,
+            receipt_id: None,
+            retry_of: None,
+            input_hash: declared_bytes.map(|size| {
+                let mut hash = Sha256::new();
+                let prefix = b"into-markdown-input-v1";
+                hash.update((prefix.len() as u64).to_le_bytes());
+                hash.update(prefix);
+                hash.update(size.to_le_bytes());
+                (hash, size)
+            }),
         })
     }
 
@@ -1256,15 +1377,28 @@ impl WebTaskBackend {
 
     /// Enrich a durable task record with bounded, non-secret browser metadata.
     pub(crate) fn web_record(&self, record: TaskRecord) -> Result<WebTaskRecord, WebTaskError> {
-        let _history = lock(&self.owner.shared.history_mutation);
-        let request = self.persisted_request(&record.id)?;
-        let failure = load_task_failure(&self.owner.shared, &record.id)?;
+        let metadata = lock(&self.owner.shared.metadata).get(&record.id).cloned();
+        let metadata = match metadata {
+            Some(value) => Some(value),
+            None => {
+                if let Some(request) = self.persisted_request(&record.id)? {
+                    self.index_metadata(&record.id, &request)?;
+                }
+                lock(&self.owner.shared.metadata).get(&record.id).cloned()
+            }
+        };
+        let failure = if matches!(record.status, TaskStatus::Failed | TaskStatus::Interrupted) {
+            load_task_failure(&self.owner.shared, &record.id)?
+        } else {
+            None
+        };
         Ok(WebTaskRecord {
             record,
-            workflow: request.as_ref().map_or(WebWorkflow::Conversion, |value| value.workflow),
-            display_name: request.as_ref().map(|request| request.name.clone()),
-            format: request.as_ref().and_then(|request| request.hint.format),
-            batch_id: request.and_then(|request| request.batch_id),
+            workflow: metadata.as_ref().map_or(WebWorkflow::Conversion, |m| m.workflow),
+            display_name: metadata.as_ref().map(|m| m.name.clone()),
+            format: metadata.as_ref().and_then(|m| m.format),
+            retry_of: metadata.as_ref().and_then(|m| m.retry_of.clone()),
+            batch_id: metadata.and_then(|m| m.batch),
             failure,
         })
     }
@@ -1371,11 +1505,14 @@ impl WebTaskBackend {
 
     pub(crate) fn set_pinned(&self, id: &TaskId, pinned: bool) -> Result<TaskRecord, WebTaskError> {
         let _history = lock(&self.owner.shared.history_mutation);
-        metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
-            store.get(id)?.ok_or(WebTaskError::NotFound)?;
-            store.set_pinned(id, pinned)?;
-            store.get(id)?.ok_or(WebTaskError::NotFound)
-        })
+        let record =
+            metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+                store.get(id)?.ok_or(WebTaskError::NotFound)?;
+                store.set_pinned(id, pinned)?;
+                store.get(id)?.ok_or(WebTaskError::NotFound)
+            })?;
+        self.owner.shared.events.publish_snapshot(&record);
+        Ok(record)
     }
 
     /// Permanently remove one terminal task. The object tree is first moved to
@@ -1386,8 +1523,7 @@ impl WebTaskBackend {
     }
 
     fn delete_inner(&self, id: &TaskId, allow_pinned: bool) -> Result<(), WebTaskError> {
-        let mut store = lock(&self.owner.shared.task_store);
-        let record = store.get(id)?.ok_or(WebTaskError::NotFound)?;
+        let record = lock(&self.owner.shared.task_store).get(id)?.ok_or(WebTaskError::NotFound)?;
         if !is_terminal(record.status) {
             return Err(WebTaskError::Conflict("active task cannot be deleted".into()));
         }
@@ -1453,9 +1589,11 @@ impl WebTaskBackend {
             return Err(WebTaskError::Unsafe(error.to_string()));
         }
 
-        if let Err(error) = retention_failure_checkpoint(&self.owner.shared, 1)
-            .and_then(|()| store.delete_terminal(id, allow_pinned).map_err(Into::into))
-        {
+        if let Err(error) = retention_failure_checkpoint(&self.owner.shared, 1).and_then(|()| {
+            lock(&self.owner.shared.task_store)
+                .delete_terminal(id, allow_pinned)
+                .map_err(Into::into)
+        }) {
             self.owner
                 .shared
                 .recovery
@@ -1472,7 +1610,10 @@ impl WebTaskBackend {
                 .map_err(|restore| WebTaskError::Unsafe(restore.to_string()))?;
             return Err(error);
         }
-        drop(store);
+        lock(&self.owner.shared.events.state).logs.remove(id);
+        lock(&self.owner.shared.metadata).remove(id);
+        lock(&self.owner.shared.previews)
+            .retain(|(key, _)| !key.starts_with(&format!("{}:", id.as_str())));
         // Once the SQLite commit succeeds, the encoded trash entry is the
         // durable deletion intent. A crash or failure from here is completed
         // idempotently by `recover_retention_trash` on the next start.
@@ -1484,6 +1625,7 @@ impl WebTaskBackend {
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         remove_quarantined_task(&self.owner.shared.trash, trash_name)?;
         let mut disk = lock(&self.owner.shared.disk_bytes);
+        disk.revision = disk.revision.wrapping_add(1);
         disk.used = measured_managed_bytes(&self.owner.shared.root_handle)?;
         self.owner.shared.disk_changed.notify_all();
         Ok(())
@@ -1493,10 +1635,10 @@ impl WebTaskBackend {
         if let Some(record) = self.resume_cancelled_media(id)? {
             return Ok(record);
         }
-        let (request, bytes) = {
+        let (request, mut input, size) = {
             // Keep deletion and retention from quarantining the source while
-            // retry authenticates and copies it. Release the lock before the
-            // new upload runs its own automatic retention pass.
+            // retry authenticates its open descriptor. The descriptor keeps the
+            // original bytes available throughout the bounded streaming copy.
             let _history = lock(&self.owner.shared.history_mutation);
             let record = self.get(id)?;
             if !is_terminal(record.status) {
@@ -1513,8 +1655,12 @@ impl WebTaskBackend {
             let input = task
                 .open_regular_private(std::ffi::OsStr::new("input"))
                 .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            let bytes = read_file_bounded(input, request.options.limits.max_input_bytes)?;
-            (request, bytes)
+            validate_private_file(&input)?;
+            let size = input.metadata()?.len();
+            if size > request.options.limits.max_input_bytes {
+                return Err(WebTaskError::Limit("retry input exceeds bounds".into()));
+            }
+            (request, input, size)
         };
         let configured = WebTaskRequest {
             schema_version: 1,
@@ -1524,12 +1670,16 @@ impl WebTaskBackend {
             options: request.options,
             authorization: WebTaskAuthorization::default(),
         };
-        let mut upload = self.begin_upload_configured(
-            &request.name,
-            Some(u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
-            configured,
-        )?;
-        upload.write_chunk(&bytes)?;
+        let mut upload = self.begin_upload_configured(&request.name, Some(size), configured)?;
+        upload.retry_of = Some(id.clone());
+        let mut buffer = [0u8; COPY_CHUNK];
+        loop {
+            let count = input.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            upload.write_chunk(&buffer[..count])?;
+        }
         upload.finish()
     }
 
@@ -1631,14 +1781,15 @@ impl WebTaskBackend {
                 "retention capacity exceeds the managed storage ceiling".into(),
             ));
         }
+        lock(&self.owner.shared.task_store)
+            .prune_web_receipts(now_ms.saturating_sub(30 * 86_400_000))?;
         let before = measured_live_managed_bytes(&self.owner.shared.root_handle)?;
         let age_ms = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
         let cutoff = now_ms.saturating_sub(age_ms);
         let mut cursor = None;
         let mut candidates = Vec::new();
-        let store = lock(&self.owner.shared.task_store);
         loop {
-            let page = store.list(100, cursor.as_ref())?;
+            let page = lock(&self.owner.shared.task_store).list(100, cursor.as_ref())?;
             if page.is_empty() {
                 break;
             }
@@ -1654,13 +1805,14 @@ impl WebTaskBackend {
             for record in
                 page.into_iter().filter(|record| is_terminal(record.status) && !record.pinned)
             {
-                let completed_at_ms = store.completed_at_ms(&record.id)?.ok_or_else(|| {
-                    WebTaskError::Io("terminal task is missing its completion timestamp".into())
-                })?;
+                let completed_at_ms = lock(&self.owner.shared.task_store)
+                    .completed_at_ms(&record.id)?
+                    .ok_or_else(|| {
+                        WebTaskError::Io("terminal task is missing its completion timestamp".into())
+                    })?;
                 candidates.push((completed_at_ms, record));
             }
         }
-        drop(store);
         candidates
             .sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.id.cmp(&right.1.id)));
         let mut summary = CleanupSummary::default();
@@ -1750,17 +1902,7 @@ impl WebTaskBackend {
             return Err(WebTaskError::Unsafe("artifact identity or size changed".into()));
         }
         let nonce = random_hex()?;
-        let mut disk = lock(&self.owner.shared.disk_bytes);
-        if disk
-            .used
-            .checked_add(disk.reserved)
-            .and_then(|total| total.checked_add(reference.byte_len))
-            .is_none_or(|total| total > MAX_DATA_BYTES)
-        {
-            return Err(WebTaskError::Limit(
-                "artifact snapshot exceeds global storage quota".into(),
-            ));
-        }
+        let mut reservation = QuotaReservation::acquire(&self.owner.shared, reference.byte_len)?;
         let directory = self
             .owner
             .shared
@@ -1827,11 +1969,7 @@ impl WebTaskBackend {
             .remove_empty_child_private(std::ffi::OsStr::new(&nonce))
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
         named_snapshot.disarm();
-        disk.reserved = disk
-            .reserved
-            .checked_add(reference.byte_len)
-            .ok_or_else(|| WebTaskError::Limit("snapshot accounting overflow".into()))?;
-        drop(disk);
+        reservation.amount = 0; // ArtifactSnapshot owns the reserved bytes until its final reader closes.
         Ok((
             ArtifactSnapshot {
                 file: snapshot,
@@ -2200,213 +2338,9 @@ pub struct Upload {
     request: WebTaskRequest,
     bytes: u64,
     committed: bool,
-}
-
-impl Upload {
-    /// Append one body chunk after cancellation and all quota checks.
-    pub fn write_chunk(&mut self, chunk: &[u8]) -> Result<(), WebTaskError> {
-        let amount = u64::try_from(chunk.len())
-            .map_err(|_| WebTaskError::Limit("chunk length overflow".into()))?;
-        let next = self
-            .bytes
-            .checked_add(amount)
-            .ok_or_else(|| WebTaskError::Limit("upload length overflow".into()))?;
-        if next > self.request.options.limits.max_input_bytes {
-            return Err(WebTaskError::Limit("file exceeds max_input_bytes".into()));
-        }
-        {
-            let mut global = lock(&self.backend.owner.shared.disk_bytes);
-            let next_global = global
-                .used
-                .checked_add(amount)
-                .and_then(|used| used.checked_add(global.reserved))
-                .ok_or_else(|| WebTaskError::Limit("global storage accounting overflow".into()))?;
-            if next_global > MAX_DATA_BYTES {
-                return Err(WebTaskError::Limit(
-                    "managed storage exceeds the global ceiling".into(),
-                ));
-            }
-            let file = self
-                .file
-                .as_mut()
-                .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?;
-            let mut remaining = chunk;
-            while !remaining.is_empty() {
-                let written = match file.write(remaining) {
-                    Ok(0) => return Err(WebTaskError::Io("file write made no progress".into())),
-                    Ok(written) => written,
-                    Err(error) => return Err(error.into()),
-                };
-                let written = u64::try_from(written)
-                    .map_err(|_| WebTaskError::Limit("upload write length overflow".into()))?;
-                global.used = global.used.checked_add(written).ok_or_else(|| {
-                    WebTaskError::Limit("global storage accounting overflow".into())
-                })?;
-                self.bytes = self.bytes.checked_add(written).ok_or_else(|| {
-                    WebTaskError::Limit("upload length accounting overflow".into())
-                })?;
-                remaining = &remaining[usize::try_from(written)
-                    .map_err(|_| WebTaskError::Limit("upload write length overflow".into()))?..];
-            }
-        }
-        debug_assert_eq!(self.bytes, next);
-        Ok(())
-    }
-
-    /// fsync input, bind fingerprints/token/task ID, and enqueue conversion.
-    #[allow(clippy::too_many_lines)]
-    pub fn finish(mut self) -> Result<TaskRecord, WebTaskError> {
-        let mut file = self
-            .file
-            .take()
-            .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?;
-        file.flush()?;
-        file.sync_all()?;
-        drop(file);
-        let directory = self
-            .directory
-            .as_ref()
-            .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?;
-        directory.sync().map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        validate_private_directory_handle(directory)?;
-        let payload = self
-            .directory
-            .as_ref()
-            .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?
-            .open_regular_private(std::ffi::OsStr::new("payload"))
-            .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-        validate_private_file(&payload)?;
-        let bytes = read_file_bounded(payload, self.request.options.limits.max_input_bytes)?;
-        let options = self.request.options.clone();
-        let hint = FormatHint {
-            format: self.request.format,
-            filename: Some(self.name.clone()),
-            ..FormatHint::default()
-        };
-        let (input_fingerprint, options_fingerprint) =
-            Engine::recoverable_fingerprints(&bytes, Some(&self.name), &hint, &options)
-                .map_err(|error| WebTaskError::Io(error.to_string()))?;
-        let ocr_enabled = options.ocr.policy != OcrPolicy::Off;
-        let preserve_layout = options.ai.layout_repair != AiMode::Off;
-        let persisted = PersistedRequest {
-            schema_version: 1,
-            workflow: self.request.workflow,
-            name: self.name.clone(),
-            hint,
-            batch_id: self.request.batch_id.clone(),
-            options,
-        };
-        let request_json = bounded_json(&persisted, 64 * 1024, "persisted request")?;
-        let _metadata_lease = DiskLease::acquire_interruptible(
-            &self.backend.owner.shared,
-            1024 * 1024,
-            &CancellationToken::new(),
-            Instant::now() + Duration::from_secs(1),
-            None,
-        )?;
-        let token = self
-            .backend
-            .owner
-            .shared
-            .recovery
-            .create_token()
-            .map_err(|error| WebTaskError::Io(error.to_string()))?;
-        let record = metadata_store_mutation(
-            &self.backend.owner.shared,
-            STORE_MUTATION_RESERVATION,
-            |store| {
-                Ok(store.create(NewTask {
-                    input: InputReference {
-                        schema_version: 1,
-                        input_fingerprint,
-                        options_fingerprint,
-                        byte_len: self.bytes,
-                        recovery_token: token.as_str().to_owned(),
-                    },
-                    configuration: ConfigurationSnapshot {
-                        schema_version: 1,
-                        output_format: into_markdown::OutputFormat::Markdown,
-                        ocr_enabled,
-                        preserve_layout,
-                    },
-                })?)
-            },
-        )?;
-        let finalized = (|| {
-            self.backend
-                .owner
-                .shared
-                .objects
-                .verify_private_namespace()
-                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            let task = self
-                .backend
-                .owner
-                .shared
-                .objects
-                .create_child_private(std::ffi::OsStr::new(record.id.as_str()))
-                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            write_private_handle(&task, "request.json", &request_json)?;
-            self.directory
-                .as_ref()
-                .ok_or_else(|| WebTaskError::Conflict("upload is already finished".into()))?
-                .rename_child_private_to_no_replace(
-                    std::ffi::OsStr::new("payload"),
-                    &task,
-                    std::ffi::OsStr::new("input"),
-                )
-                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            // Windows refuses to remove a directory while its pinned handle is
-            // live. The payload is already durably published, so release that
-            // handle before removing the now-empty incoming directory.
-            drop(self.directory.take());
-            self.backend
-                .owner
-                .shared
-                .incoming
-                .remove_empty_child_private(std::ffi::OsStr::new(&self.nonce))
-                .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
-            Ok::<_, WebTaskError>(())
-        })();
-        match finalized {
-            Ok(()) => {}
-            Err(error) => {
-                if terminal_transition(
-                    &self.backend.owner.shared,
-                    &record.id,
-                    TaskStatus::Interrupted,
-                    DiagnosticCode::RecoveryCheckpointMissing,
-                )
-                .is_err()
-                {
-                    stop_unhealthy(&self.backend.owner.shared);
-                }
-                return Err(error);
-            }
-        }
-        self.committed = true;
-        if let Err(error) = self.backend.enqueue(Job {
-            id: record.id.clone(),
-            token,
-            request: persisted,
-            cancellation: CancellationToken::new(),
-            admission_ticket: None,
-        }) {
-            if terminal_transition(
-                &self.backend.owner.shared,
-                &record.id,
-                TaskStatus::Interrupted,
-                DiagnosticCode::RecoveryCheckpointMissing,
-            )
-            .is_err()
-            {
-                stop_unhealthy(&self.backend.owner.shared);
-            }
-            return Err(error);
-        }
-        self.backend.owner.shared.events.publish_snapshot(&record);
-        Ok(record)
-    }
+    receipt_id: Option<String>,
+    retry_of: Option<TaskId>,
+    input_hash: Option<(Sha256, u64)>,
 }
 
 impl Drop for Upload {
@@ -2425,10 +2359,8 @@ impl Drop for Upload {
                 .shared
                 .incoming
                 .remove_empty_child_private(std::ffi::OsStr::new(&self.nonce));
-            let mut global = lock(&self.backend.owner.shared.disk_bytes);
             if removed_file.is_ok() && removed_directory.is_ok() {
-                global.used = global.used.saturating_sub(self.bytes);
-                self.backend.owner.shared.disk_changed.notify_all();
+                settle_disk_lease(&self.backend.owner.shared, 0);
             }
         }
     }
@@ -2943,6 +2875,7 @@ fn publish_result(
     result: &into_markdown::ConversionResult,
     cancellation: &CancellationToken,
 ) -> Result<Vec<ArtifactReference>, WebTaskError> {
+    let _timing = timing::Stage::new("publish", Some(id), None, 0);
     publish_result_named(shared, id, result, cancellation, "published")
 }
 
@@ -3085,7 +3018,7 @@ fn publish_result_named(
         }
         Ok::<_, WebTaskError>((entries, staged_bytes))
     })();
-    let (entries, staged_bytes) = match staged {
+    let (entries, _staged_bytes) = match staged {
         Ok(staged) => staged,
         Err(error) => {
             let cleanup = remove_owned_stage(&stage, &[]).and_then(|()| {
@@ -3114,7 +3047,7 @@ fn publish_result_named(
         return Err(error);
     }
     crash_hook("after-published-rename");
-    let _ = staged_bytes;
+    query::publish_previews(shared, id, result, &entries)?;
     Ok(entries)
 }
 
@@ -3742,6 +3675,7 @@ fn quarantine_invalid_published(shared: &Shared, id: &TaskId) -> Result<(), WebT
             .map_err(|error| WebTaskError::Unsafe(error.to_string()))?;
     }
     let mut disk = lock(&shared.disk_bytes);
+    disk.revision = disk.revision.wrapping_add(1);
     disk.used = measured_managed_bytes(&shared.root_handle)?;
     shared.disk_changed.notify_all();
     Ok(())
@@ -3841,6 +3775,7 @@ fn metadata_store_mutation<T>(
     // metadata writers single-file and prevents uploads or other reservations
     // from spending the physical headroom between preflight and commit.
     let mut quota = lock(&shared.disk_bytes);
+    quota.revision = quota.revision.wrapping_add(1);
     let measured_before = match measured_metadata_bytes(shared) {
         Ok(measured) => measured,
         Err(error) => {
@@ -3893,6 +3828,7 @@ fn measured_metadata_bytes(shared: &Shared) -> Result<u64, WebTaskError> {
 #[cfg(test)]
 fn reconcile_managed_usage(shared: &Shared) -> Result<(), WebTaskError> {
     let mut quota = lock(&shared.disk_bytes);
+    quota.revision = quota.revision.wrapping_add(1);
     let Ok(measured) = measured_managed_bytes(&shared.root_handle) else {
         quota.used = quota.used.saturating_add(STORE_METADATA_HEADROOM).min(MAX_GLOBAL_BYTES);
         shared.disk_changed.notify_all();
@@ -5175,10 +5111,14 @@ mod tests {
 
     #[path = "empty_result_tests.rs"]
     mod empty_result_tests;
+    #[path = "lifecycle_tests.rs"]
+    mod lifecycle_tests;
 
     #[test]
     fn durable_web_requests_use_content_identity_for_capability_assembly() {
         let request = PersistedRequest {
+            receipt_id: None,
+            retry_of: None,
             schema_version: 1,
             workflow: WebWorkflow::Conversion,
             name: "renamed.md".into(),
@@ -6257,6 +6197,7 @@ mod tests {
         }
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 0;
             disk.reserved = MAX_DATA_BYTES;
         }
@@ -6269,6 +6210,7 @@ mod tests {
         }
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = MAX_GLOBAL_BYTES;
             disk.reserved = 0;
             backend.owner.shared.disk_changed.notify_all();
@@ -6284,6 +6226,7 @@ mod tests {
         upload.write_chunk(b"x").unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = MAX_DATA_BYTES - 1;
             disk.reserved = 1;
         }
@@ -6305,6 +6248,7 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = MAX_DATA_BYTES - TASK_METADATA_RESERVATION;
             disk.reserved = 0;
         }
@@ -6326,6 +6270,7 @@ mod tests {
         assert!(waiter.join().unwrap().is_ok());
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = MAX_DATA_BYTES - TASK_METADATA_RESERVATION + 1;
             disk.reserved = 0;
         }
@@ -6341,6 +6286,7 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 0;
             disk.reserved = MAX_GLOBAL_BYTES;
         }
@@ -6381,6 +6327,7 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 0;
             disk.reserved = MAX_GLOBAL_BYTES;
         }
@@ -6419,6 +6366,7 @@ mod tests {
         assert!(matches!(first.join().unwrap(), Err(WebTaskError::Cancelled)));
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = 0;
         }
         backend.owner.shared.disk_changed.notify_all();
@@ -6426,6 +6374,7 @@ mod tests {
 
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = MAX_GLOBAL_BYTES;
         }
         let shutdown_shared = Arc::clone(&backend.owner.shared);
@@ -6468,6 +6417,7 @@ mod tests {
         let task = upload.finish().unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 0;
             disk.reserved = MAX_DATA_BYTES;
         }
@@ -6496,6 +6446,7 @@ mod tests {
         upload.write_chunk(b"blocked finish").unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = MAX_GLOBAL_BYTES - disk.used;
         }
         let started = Instant::now();
@@ -6504,6 +6455,7 @@ mod tests {
         assert!(backend.owner.shared.incoming.names_private().unwrap().is_empty());
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = 0;
             disk.used = measured_managed_bytes(&backend.owner.shared.root_handle).unwrap();
             assert!(disk.used <= baseline + STORE_METADATA_HEADROOM);
@@ -6521,6 +6473,7 @@ mod tests {
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 3 * 1024 * 1024 * 1024;
             disk.reserved = 0;
         }
@@ -6528,6 +6481,7 @@ mod tests {
         drop(lease);
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.used = 0;
         }
         let leases = (0..4)
@@ -6865,6 +6819,7 @@ mod tests {
         reconcile_managed_usage(&backend.owner.shared).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = MAX_DATA_BYTES - disk.used;
         }
 
@@ -6908,6 +6863,7 @@ mod tests {
         reconcile_managed_usage(&backend.owner.shared).unwrap();
         {
             let mut disk = lock(&backend.owner.shared.disk_bytes);
+            disk.revision = disk.revision.wrapping_add(1);
             disk.reserved = MAX_GLOBAL_BYTES - STORE_MUTATION_RESERVATION + 1 - disk.used;
         }
 

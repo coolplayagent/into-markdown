@@ -4,6 +4,7 @@ export type Locale = "zh-CN" | "en";
 
 const messages = {
   "zh-CN": {
+    taskActionFailed: "操作未完成，请重试。",
     appName: "into-markdown 控制台",
     skip: "跳到主要内容",
     status: "服务状态",
@@ -74,6 +75,7 @@ const messages = {
     speakerNames: "说话人名称", speakerNamesHint: "只更改显示名称，不会重新识别音频。", saveSpeakerNames: "保存名称", speakerLabelsLoadFailed: "无法读取说话人列表。", invalidSpeakerName: "名称需为 1–80 个字符，且不能包含控制字符。", speakerNamesSaved: "说话人名称已更新，逐字稿与下载产物已重新生成。", speakerNamesSaveFailed: "名称保存失败，产物可能已被其他页面更新，请刷新后重试。",
   },
   en: {
+    taskActionFailed: "The action did not complete. Please try again.",
     appName: "into-markdown console",
     skip: "Skip to main content",
     status: "Service status",

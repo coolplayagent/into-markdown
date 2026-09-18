@@ -6,6 +6,9 @@
 
 #![allow(clippy::missing_errors_doc)]
 
+mod record;
+mod web;
+
 use into_markdown_core::ConversionError;
 use into_markdown_engine::{RecoveryStore, RecoveryToken, TaskPhase};
 #[cfg(any(unix, windows))]
@@ -27,7 +30,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[cfg(any(unix, windows))]
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 #[cfg(any(unix, windows))]
 const DATABASE_FILE: &str = "tasks.sqlite3";
 #[cfg(any(unix, windows))]
@@ -737,92 +740,12 @@ impl TaskStore {
 
     /// Load one task and its bounded child rows.
     pub fn get(&self, id: &TaskId) -> Result<Option<TaskRecord>, TaskStoreError> {
-        let _operation = BusyOperation::enter(&self.busy)?;
-        self.preflight()?;
-        let base = self
-            .connection
-            .query_row(
-                "SELECT created_at_ms, updated_at_ms, status, progress, input_fingerprint, options_fingerprint, recovery_token, input_bytes, config_json, artifact_generation, pinned FROM tasks WHERE id=?1",
-                [id.as_str()],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, i64>(7)?,
-                        row.get::<_, String>(8)?,
-                        row.get::<_, i64>(9)?,
-                        row.get::<_, i64>(10)?,
-                    ))
-                },
-            )
-            .optional()
-            .map_err(|error| self.map_sqlite(error))?;
-        let Some((
-            created,
-            updated,
-            status,
-            progress,
-            input_fingerprint,
-            options_fingerprint,
-            recovery_token,
-            input_bytes,
-            configuration,
-            artifact_generation,
-            pinned,
-        )) = base
-        else {
-            return Ok(None);
-        };
-        if created < 0 || updated < created || !(0..=1_000_000).contains(&progress) {
-            return Err(TaskStoreError::Corrupt("task timestamps or progress are invalid".into()));
-        }
-        let status = TaskStatus::parse(&status)?;
-        if status == TaskStatus::Succeeded && progress != 1_000_000 {
-            return Err(TaskStoreError::Corrupt(
-                "succeeded task does not have complete progress".into(),
-            ));
-        }
-        if input_bytes < 0 {
-            return Err(TaskStoreError::Corrupt("task input byte length is invalid".into()));
-        }
-        let input = InputReference {
-            schema_version: 1,
-            input_fingerprint,
-            options_fingerprint,
-            recovery_token,
-            byte_len: u64::try_from(input_bytes)
-                .map_err(|_| TaskStoreError::Corrupt("task input byte length is invalid".into()))?,
-        };
-        validate_input(&input)?;
-        let configuration: ConfigurationSnapshot = decode_bounded(&configuration, "configuration")?;
-        validate_configuration(&configuration)?;
-        let diagnostics = self.load_diagnostics(id)?;
-        let artifacts = self.load_artifacts(id)?;
-        let artifact_generation = u64::try_from(artifact_generation)
-            .map_err(|_| TaskStoreError::Corrupt("artifact generation is invalid".into()))?;
-        Ok(Some(TaskRecord {
-            id: id.clone(),
-            created_at_ms: created,
-            updated_at_ms: updated,
-            status,
-            progress_millionths: u32::try_from(progress)
-                .map_err(|_| TaskStoreError::Corrupt("task progress is invalid".into()))?,
-            input,
-            configuration,
-            diagnostics,
-            artifacts,
-            artifact_generation,
-            pinned: match pinned {
-                0 => false,
-                1 => true,
-                _ => return Err(TaskStoreError::Corrupt("task pinned marker is invalid".into())),
-            },
-        }))
+        self.get_record(id, true)
+    }
+
+    /// Load task status without enumerating published artifacts.
+    pub fn get_summary(&self, id: &TaskId) -> Result<Option<TaskRecord>, TaskStoreError> {
+        self.get_record(id, false)
     }
 
     /// Replace the complete artifact set of a succeeded task with generation CAS.
@@ -1860,6 +1783,14 @@ fn migrate_recent_schema(connection: &rusqlite::Connection) -> Result<(), TaskSt
         transaction
             .execute_batch("DROP TRIGGER IF EXISTS artifacts_limit; PRAGMA user_version=6;")
             .map_err(map_sqlite_generic)?;
+        transaction.commit().map_err(map_sqlite_generic)?;
+    }
+    let current: i64 = connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(map_sqlite_generic)?;
+    if current == 6 {
+        let transaction = connection.unchecked_transaction().map_err(map_sqlite_generic)?;
+        transaction.execute_batch("CREATE TABLE web_tasks(task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,name TEXT NOT NULL,batch TEXT,workflow TEXT NOT NULL); CREATE INDEX web_tasks_batch ON web_tasks(batch,task_id); CREATE INDEX web_tasks_workflow ON web_tasks(workflow,task_id); CREATE TABLE web_receipts(id TEXT PRIMARY KEY, state TEXT NOT NULL, task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE, updated_at_ms INTEGER NOT NULL); CREATE INDEX web_receipts_expiry ON web_receipts(state,updated_at_ms); CREATE TABLE web_receipt_parts(receipt_id TEXT REFERENCES web_receipts(id) ON DELETE CASCADE, part INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(receipt_id,part)); CREATE TABLE web_previews(task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE, storage_key TEXT NOT NULL, source_sha TEXT NOT NULL, part INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY(task_id,storage_key,part)); PRAGMA user_version=7;").map_err(map_sqlite_generic)?;
         transaction.commit().map_err(map_sqlite_generic)?;
     }
     Ok(())

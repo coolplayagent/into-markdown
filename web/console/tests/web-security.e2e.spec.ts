@@ -40,6 +40,7 @@ test.describe("local Web security boundary", () => {
         buffer: Buffer.from(hostileMarkdown()),
       });
       await page.locator(".convert-button").click();
+      await page.locator(".current-task-link").click();
       await page.locator(".markdown-preview").waitFor({ state: "visible" });
 
       const preview = page.locator(".markdown-preview");

@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { memo, Fragment, type ReactNode } from "react";
 import { renderInline as renderSafeInline } from "./preview-inline";
 
 const MAX_TREE_DEPTH = 12;
@@ -6,7 +6,10 @@ const MAX_TREE_NODES = 1_000;
 const MAX_MARKDOWN_BLOCKS = 2_000;
 
 /** Markdown preview that never creates HTML, links, images, or resource-bearing DOM nodes. */
-export function SafeMarkdownPreview({ source }: { source: string }) {
+export const SafeMarkdownPreview = memo(function SafeMarkdownPreview({ source }: { source: string }) {
+  let cellsLeft = 4000;
+  const budget = { left: 8000, work: 4_000_000 };
+  const renderInline = (value: string) => renderSafeInline(stripOcrBoundaryMarkers(value), budget);
   const allLines = source.replaceAll("\r\n", "\n").split("\n");
   const lines = allLines.slice(0, MAX_MARKDOWN_BLOCKS);
   const output: ReactNode[] = [];
@@ -22,11 +25,12 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
     if (isSourceAnchor(line) || line.trim() === "<!-- -->") continue;
     const delimiter = lines[index + 1];
     if (line.includes("|") && delimiter && isTableDelimiter(delimiter)) {
-      const headers = tableCells(line);
+      const headers = tableCells(line).slice(0, 100);
       const rows: string[][] = [];
       index += 2;
-      while (index < lines.length && lines[index]!.includes("|") && lines[index]!.trim()) {
-        rows.push(tableCells(lines[index]!));
+      while (index < lines.length && lines[index]!.includes("|") && lines[index]!.trim() && cellsLeft >= headers.length) {
+        cellsLeft -= headers.length;
+        rows.push(tableCells(lines[index]!).slice(0, headers.length));
         index += 1;
       }
       index -= 1;
@@ -50,14 +54,10 @@ export function SafeMarkdownPreview({ source }: { source: string }) {
   if (code) output.push(<pre key="code-final"><code>{code.join("\n")}</code></pre>);
   if (lines.length < allLines.length) output.push(<p className="tree-limit" role="status" key="limit">… preview block limit reached</p>);
   return <div className="markdown-preview">{output}</div>;
-}
+});
 
 function isSourceAnchor(line: string): boolean {
   return /^<a id="[A-Za-z0-9._:-]{1,128}"><\/a>$/.test(line.trim());
-}
-
-function renderInline(source: string): ReactNode {
-  return renderSafeInline(stripOcrBoundaryMarkers(source));
 }
 
 function stripOcrBoundaryMarkers(source: string): string {

@@ -54,7 +54,7 @@ jobs:
       - name: Test shared Rust and release contracts once
         run: |
           cargo fmt --all -- --check
-          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr --lib -j2 -- \
+          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr -p into-markdown-task-store --lib -j2 -- \
             --skip recognition::tests::all_exif_orientations_flow_from_detection_to_raw_source_recognition
           cargo test --locked -p into-markdown-process-plugin --lib -j2
           python3 tools/platform-release/pr_fast_gate.py --target x86_64-unknown-linux-gnu
@@ -74,6 +74,13 @@ jobs:
           corepack pnpm install --frozen-lockfile
           node web/console/tests/typecheck.mjs
           node web/console/build.mjs "${{ runner.temp }}/web-dist" --verify web/console/dist
+          export NODE_OPTIONS=--max-old-space-size=512
+          node web/console/build-tests.mjs web/console/.test-bundle.mjs
+          for group in core preview history_actions history_cleanup workbench accessibility; do
+            INTO_MD_TEST_GROUP="$group" node --test web/console/.test-bundle.mjs
+          done
+          node web/console/build-tests.mjs web/console/.admin-test-bundle.mjs web/console/tests/admin-unit.ts
+          node --test web/console/.admin-test-bundle.mjs
 
   linux-arm64:
     name: Linux ARM64 Core
