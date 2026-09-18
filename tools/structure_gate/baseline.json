@@ -132,15 +132,11 @@
     },
     {
       "path": "apps/cli/src/ui.rs",
-      "lines": 2204,
+      "lines": 2176,
       "functions": [
         {
           "symbol": "download_artifact",
           "lines": 130
-        },
-        {
-          "symbol": "serve",
-          "lines": 113
         },
         {
           "symbol": "stage_plugin_package",
@@ -155,7 +151,7 @@
     },
     {
       "path": "apps/cli/src/web_tasks.rs",
-      "lines": 4442,
+      "lines": 4388,
       "functions": [
         {
           "symbol": "impl WebTaskBackend::artifact",
@@ -179,11 +175,11 @@
         },
         {
           "symbol": "run_job",
-          "lines": 203
+          "lines": 190
         },
         {
           "symbol": "run_job::<closure_expression>#2",
-          "lines": 131
+          "lines": 118
         }
       ],
       "allowances": [
@@ -2396,7 +2392,7 @@
       "functions": [
         {
           "symbol": "createApiClient",
-          "lines": 141
+          "lines": 137
         }
       ],
       "allowances": []
@@ -2429,7 +2425,7 @@
       "functions": [
         {
           "symbol": "WorkbenchPage",
-          "lines": 185
+          "lines": 183
         }
       ],
       "allowances": []

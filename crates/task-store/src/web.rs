@@ -2,6 +2,24 @@
 use super::*;
 
 impl TaskStore {
+    /// Logical database bytes, including committed pages still held in the WAL.
+    /// Callers reserve the uncheckpointed main-file growth before a write.
+    pub fn logical_database_bytes(&self) -> Result<u64, TaskStoreError> {
+        let _operation = BusyOperation::enter(&self.busy)?;
+        self.preflight()?;
+        let pages: u64 = self
+            .connection
+            .query_row("PRAGMA page_count", [], |row| row.get(0))
+            .map_err(|error| self.map_sqlite(error))?;
+        let page_size: u64 = self
+            .connection
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .map_err(|error| self.map_sqlite(error))?;
+        pages
+            .checked_mul(page_size)
+            .ok_or_else(|| TaskStoreError::Limit("database size overflow".into()))
+    }
+
     /// Maintain the rebuildable Web search projection from authenticated request metadata.
     pub fn index_web_task(
         &self,
