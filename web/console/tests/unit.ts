@@ -42,6 +42,7 @@ const testGroups = {
     "immediate cleanup requires irreversible confirmation and reports reclaimed capacity",
   ]),
   workbench: new Set([
+    "pasting stages browser files once and preserves text input paste",
     "workbench keeps the current batch and conversion controls in one route",
     "workbench keeps OCR neutral while the fast capability snapshot is pending",
     "workbench uploads unknown suffixes for content detection and explains terminal failures",
@@ -1266,7 +1267,7 @@ test("large converted task inventories remain readable through the real API clie
 });
 
 
-test("application upload queue bounds concurrency and lets a small file finish independently", async () => {
+test("application import queue admits one file at a time in selection order", async () => {
   installWindow();
   const pending = new Map<string, (task: TaskRecord) => void>();
   const started: string[] = [];
@@ -1275,12 +1276,12 @@ test("application upload queue bounds concurrency and lets a small file finish i
   try {
     runtime.setEntries(["large.pptx", "small.xlsx", "third.txt"].map(name => ({ key: name, file: new File([name], name) })));
     runtime.submit(runtime.entries.map(entry => entry.key), defaultWorkbenchOptions, "a".repeat(32));
-    assert.deepEqual(started, ["large.pptx", "small.xlsx"]);
+    assert.deepEqual(started, ["large.pptx"]);
+    pending.get("large.pptx")!(task("succeeded", "c".repeat(32)));
+    await waitFor(() => started.length === 2);
     pending.get("small.xlsx")!(task("succeeded", "b".repeat(32)));
     await waitFor(() => started.length === 3);
     assert.equal(runtime.entries[1]?.task?.status, "succeeded");
-    assert.equal(runtime.entries[0]?.task, undefined);
-    pending.get("large.pptx")!(task("succeeded", "c".repeat(32)));
     pending.get("third.txt")!(task("succeeded", "d".repeat(32)));
     await waitFor(() => !runtime.uploading);
   } finally { runtime.stop(); }
@@ -1303,7 +1304,7 @@ test("task runtime preserves terminal state against a late running response", ()
 });
 
 
-test("document and transcription submissions share the same two upload slots", async () => {
+test("document and transcription submissions share one import slot", async () => {
   installWindow(); const started: string[] = []; const releases: Array<() => void> = [];
   const hold = (name: string) => { started.push(name); return new Promise<TaskRecord>(resolve => releases.push(() => resolve(task("succeeded", String(started.length).repeat(32))))); };
   const runtime = new TaskRuntime({ ...availableApi, upload: file => hold(file.name), uploadMeeting: file => hold(file.name) });
@@ -1312,9 +1313,10 @@ test("document and transcription submissions share the same two upload slots", a
     runtime.setEntries(["one.txt", "two.txt"].map(name => ({ key: name, file: new File([name], name) })));
     runtime.submit(runtime.entries.map(entry => entry.key), defaultWorkbenchOptions, "b".repeat(32));
     const meeting = runtime.api.uploadMeeting(new File(["audio"], "audio.wav"), defaultMeetingOptions);
-    assert.deepEqual(started, ["one.txt", "two.txt"]);
-    releases[0]!(); await waitFor(() => started.length === 3);
-    releases[1]!(); releases[2]!(); await meeting;
+    assert.deepEqual(started, ["one.txt"]);
+    releases[0]!(); await waitFor(() => started.length === 2);
+    releases[1]!(); await waitFor(() => started.length === 3);
+    releases[2]!(); await meeting;
     await waitFor(() => !runtime.uploading);
   } finally { runtime.stop(); }
 });
@@ -1366,7 +1368,101 @@ test("cancelling a queued upload does not contact an uncreated receipt and can b
     runtime.cancelUpload("queued.txt"); assert.equal(cancelled, 0);
     assert.equal(runtime.entries[2]?.uploadState, "cancelled");
     runtime.retryUpload("queued.txt"); await waitFor(() => runtime.entries[2]?.uploadState === "waiting");
-    releases[0]!(); await waitFor(() => started.length === 3);
-    releases[1]!(); releases[2]!(); await waitFor(() => !runtime.uploading);
+    releases[0]!(); await waitFor(() => started.length === 2);
+    releases[1]!(); await waitFor(() => started.length === 3);
+    releases[2]!(); await waitFor(() => !runtime.uploading);
   } finally { runtime.stop(); }
+});
+
+
+test("local imports send selection identity without a browser file body", async () => {
+  installWindow(); const requests: Array<{ path: string; body: unknown; selection: string | null }> = [];
+  const record = task("succeeded");
+  const api = createApiClient(token, async (input, init) => {
+    const path = String(input); const headers = new Headers(init?.headers);
+    requests.push({ path, body: init?.body, selection: headers.get("X-Into-Md-Local-Selection") });
+    const receipt = { id: "b".repeat(32), name: "本地.xlsx", size: 123, state: init?.method === "POST" ? "waiting" : "accepted", taskId: init?.method === "POST" ? null : record.id, error: null };
+    return new Response(JSON.stringify(path.includes("/api/uploads/") ? receipt : record), { headers: { "Content-Type": "application/json" } });
+  });
+  const result = await api.importLocal!({ id: token, name: "本地.xlsx", size: 123 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, new AbortController().signal, "b".repeat(32));
+  assert.equal(result.id, record.id);
+  assert.equal(requests.find(request => request.selection)?.selection, token);
+  assert.ok(requests.every(request => request.body == null));
+});
+
+test("local and browser files share the serial import queue", async () => {
+  installWindow(); const started: string[] = []; let release!: (task: TaskRecord) => void;
+  const runtime = new TaskRuntime({ ...availableApi,
+    importLocal: file => { started.push(file.name); return new Promise(resolve => { release = resolve; }); },
+    upload: async file => { started.push(file.name); return task("succeeded", "c".repeat(32)); },
+  });
+  runtime.start();
+  try {
+    runtime.setEntries([{ key: "local", file: new File([], "local.xlsx"), localSelection: { id: token, name: "local.xlsx", size: 123 } }, { key: "browser", file: new File(["text"], "browser.txt") }]);
+    runtime.submit(["local", "browser"], defaultWorkbenchOptions, "b".repeat(32));
+    assert.deepEqual(started, ["local.xlsx"]);
+    release(task("succeeded")); await waitFor(() => !runtime.uploading);
+    assert.deepEqual(started, ["local.xlsx", "browser.txt"]);
+  } finally { runtime.stop(); }
+});
+
+test("pasting stages browser files once and preserves text input paste", async () => {
+  const window = installWindow(); window.history.replaceState(null, "", "/workbench");
+  let nativeReads = 0; let uploads = 0;
+  const api: ApiClient = { ...availableApi, async localAvailable() { return true; },
+    async selectLocal() { nativeReads++; return [{ id: token, name: "native.png", size: 12 }]; },
+    async upload() { uploads++; return task("succeeded"); },
+  };
+  const root = trackedRoot(window.document.getElementById("app")!); root.render(createElement(App, { api }));
+  await waitForText(window, "Paste images or files");
+  const zone = window.document.getElementById("upload-zone")!;
+  const paste = new window.Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: { files: [new File(["png"], "clipboard.png", { type: "image/png" })] } });
+  zone.dispatchEvent(paste); await waitForText(window, "clipboard.png");
+  assert.equal(nativeReads, 0); assert.equal(uploads, 0); assert.equal(paste.defaultPrevented, true);
+  const input = window.document.createElement("input"); zone.append(input);
+  const textPaste = new window.Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(textPaste, "clipboardData", { value: { files: [] } });
+  input.dispatchEvent(textPaste); assert.equal(textPaste.defaultPrevented, false); assert.equal(nativeReads, 0);
+  const nativePaste = new window.Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(nativePaste, "clipboardData", { value: { files: [] } });
+  zone.dispatchEvent(nativePaste); await waitForText(window, "native.png");
+  assert.equal(nativeReads, 1); assert.equal(uploads, 0);
+});
+
+test("busy local imports reconcile their receipt before a bounded retry", async () => {
+  installWindow(); let puts = 0; let creates = 0; let reconciles = 0;
+  const record = task("succeeded");
+  const api = createApiClient(token, async (input, init) => {
+    const path = String(input); const method = init?.method ?? "GET";
+    const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+    if (!path.includes("/api/uploads/")) return json(record);
+    if (method === "POST") creates++;
+    if (method === "GET") reconciles++;
+    if (method === "PUT" && ++puts === 1) return json({ code: "uploadBusy" }, 503);
+    return json({ id: "b".repeat(32), state: method === "PUT" ? "accepted" : "waiting", taskId: method === "PUT" ? record.id : null, error: null });
+  });
+  await api.importLocal!({ id: token, name: "source.txt", size: 1 }, defaultWorkbenchOptions, "c".repeat(32), () => {}, new AbortController().signal, "b".repeat(32));
+  assert.equal(creates, 1); assert.equal(puts, 2); assert.equal(reconciles, 1);
+});
+
+test("cancelling native selection releases the pending operation", async () => {
+  installWindow(); const controller = new AbortController(); let deleted = false;
+  const api = createApiClient(token, async (_input, init) => {
+    const value = init?.method === "POST" ? { id: token } : { state: "pending" };
+    if (init?.method === "DELETE") deleted = true;
+    else if (init?.method !== "POST") setTimeout(() => controller.abort(), 1);
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  });
+  await assert.rejects(api.selectLocal!("pick", controller.signal), { name: "AbortError" });
+  await waitFor(() => deleted);
+});
+
+test("cancelled local imports release their grants and require reselection", async () => {
+  installWindow(); let released = "";
+  const runtime = new TaskRuntime({ ...availableApi, async releaseLocal(id) { released = id; } });
+  runtime.setEntries([{ key: "local", file: new File([], "local.txt"), localSelection: { id: token, name: "local.txt", size: 1 } }]);
+  runtime.cancelUpload("local");
+  assert.equal(released, token); assert.equal(runtime.canRetryUpload("local"), false);
+  assert.equal(runtime.entries[0]?.uploadState, "cancelled"); runtime.stop();
 });

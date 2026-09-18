@@ -61,12 +61,11 @@ impl WebTaskBackend {
             WebWorkflow::Conversion => "conversion",
             WebWorkflow::MeetingTranscript => "meetingTranscript",
         };
-        lock(&self.owner.shared.task_store).index_web_task(
-            id,
-            &request.name,
-            request.batch_id.as_deref(),
-            workflow,
-        )?;
+        metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+            store
+                .index_web_task(id, &request.name, request.batch_id.as_deref(), workflow)
+                .map_err(Into::into)
+        })?;
         lock(&self.owner.shared.metadata).insert(
             id.clone(),
             Metadata {
@@ -108,6 +107,7 @@ impl WebTaskBackend {
     }
 
     pub(crate) fn summaries(&self, ids: &[TaskId]) -> Result<Vec<TaskSummary>, WebTaskError> {
+        self.ensure_available()?;
         if ids.len() > 100 {
             return Err(WebTaskError::Invalid("too many task IDs".into()));
         }

@@ -80,6 +80,11 @@ pub(super) async fn receive_upload_body(
         Ok(p) => p,
         Err(_) => return rejection(StatusCode::SERVICE_UNAVAILABLE, "uploadBusy"),
     };
+    if let Some(selection) =
+        single_ascii_header(request.headers(), HeaderName::from_static("x-into-md-local-selection"))
+    {
+        return local_sources::receive(state, id, selection.to_owned(), permit).await;
+    }
     let backend = state.tasks.clone();
     let (mut receipt, mut upload) =
         match tokio::task::spawn_blocking(move || backend.receive_upload(&id)).await {
@@ -291,6 +296,8 @@ fn prepare_received(
                 None,
                 Some(match error {
                     WebTaskError::Cancelled => "cancelled",
+                    WebTaskError::Unsafe(_) => "unsafeStorage",
+                    WebTaskError::Limit(_) => "resourceLimit",
                     _ => "uploadFailed",
                 }),
             );
@@ -428,4 +435,43 @@ pub(super) fn parse_task_list_query(value: Option<&str>) -> Result<TaskListQuery
         }
     }
     Ok(query)
+}
+
+pub(super) fn api_routes(state: &AppState) -> Router<AppState> {
+    Router::new()
+        .route("/status", post(status).fallback(api_method_not_allowed))
+        .route("/capabilities/status", get(capability_snapshot).fallback(api_method_not_allowed))
+        .route(
+            "/capabilities/{id}/verify",
+            post(start_capability_check).fallback(api_method_not_allowed),
+        )
+        .route(
+            "/capability-checks/{id}",
+            get(capability_check).delete(cancel_capability_check).fallback(api_method_not_allowed),
+        )
+        .route(
+            "/capabilities/{id}/install",
+            post(install_capability).fallback(api_method_not_allowed),
+        )
+        .merge(task_flow_routes())
+        .merge(local_sources::routes())
+        .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
+        .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
+        .route("/admin/plugin-package", post(stage_plugin_package).fallback(api_method_not_allowed))
+        .route(
+            "/tasks/{id}/speakers",
+            get(speaker_labels).post(relabel_speakers).fallback(api_method_not_allowed),
+        )
+        .route(
+            "/tasks/{id}/history",
+            axum::routing::delete(delete_task).fallback(api_method_not_allowed),
+        )
+        .route("/tasks/cleanup", post(cleanup_tasks).fallback(api_method_not_allowed))
+        .route("/tasks/{id}/events", get(task_events).fallback(api_method_not_allowed))
+        .route(
+            "/tasks/{id}/artifacts/{key}",
+            get(download_artifact).fallback(api_method_not_allowed),
+        )
+        .fallback(api_not_found)
+        .layer(middleware::from_fn_with_state(state.clone(), api_security))
 }

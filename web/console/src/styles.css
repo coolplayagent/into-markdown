@@ -450,3 +450,6 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .preview-list-item.list-depth-10 { margin-inline-start: 15rem; }
 .preview-list-item.list-depth-11 { margin-inline-start: 16.5rem; }
 .preview-list-item.list-depth-12 { margin-inline-start: 18rem; }
+
+.local-source-actions { flex-wrap: wrap; justify-content: flex-start; margin-top: .75rem; }
+.local-source-actions small { flex-basis: 100%; }

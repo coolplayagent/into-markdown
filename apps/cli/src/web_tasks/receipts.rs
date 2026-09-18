@@ -8,6 +8,8 @@ pub(crate) struct UploadReceipt {
     pub(crate) state: String,
     pub(crate) name: String,
     pub(crate) size: u64,
+    #[serde(default)]
+    pub(crate) local_copy: bool,
     pub(crate) task_id: Option<TaskId>,
     pub(crate) error: Option<String>,
     generation: String,
@@ -18,11 +20,15 @@ pub(crate) struct UploadReceipt {
 
 impl UploadReceipt {
     pub(crate) fn wire(&self) -> serde_json::Value {
-        serde_json::json!({"id":self.id,"state":self.state,"name":self.name,"size":self.size,"taskId":self.task_id,"error":self.error})
+        serde_json::json!({"id":self.id,"state":self.state,"name":self.name,"size":self.size,"localCopy":self.local_copy,"taskId":self.task_id,"error":self.error})
     }
 }
 
 impl WebTaskBackend {
+    pub(crate) fn ensure_available(&self) -> Result<(), WebTaskError> {
+        if lock(&self.owner.shared.queue).stopped { Err(WebTaskError::Unavailable) } else { Ok(()) }
+    }
+
     pub(crate) fn create_receipt(
         &self,
         id: &str,
@@ -30,6 +36,7 @@ impl WebTaskBackend {
         size: u64,
         request: WebTaskRequest,
     ) -> Result<UploadReceipt, WebTaskError> {
+        self.ensure_available()?;
         validate_key(id)?;
         validate_display_name(name)?;
         validate_web_task_request(&request)?;
@@ -41,6 +48,7 @@ impl WebTaskBackend {
             state: "waiting".into(),
             name: name.into(),
             size,
+            local_copy: false,
             task_id: None,
             error: None,
             generation: self.owner.shared.events.generation.clone(),
@@ -77,6 +85,11 @@ impl WebTaskBackend {
             lock(&self.owner.shared.task_store).web_receipt(id)?.ok_or(WebTaskError::NotFound)?;
         let mut receipt: UploadReceipt =
             serde_json::from_str(&json).map_err(|e| WebTaskError::Unsafe(e.to_string()))?;
+        if receipt.task_id.is_none()
+            && matches!(receipt.state.as_str(), "waiting" | "uploading" | "receiving")
+        {
+            self.ensure_available()?;
+        }
         if receipt.generation != self.owner.shared.events.generation
             && receipt.task_id.is_none()
             && matches!(receipt.state.as_str(), "waiting" | "uploading" | "receiving")
@@ -117,6 +130,7 @@ impl WebTaskBackend {
     }
 
     pub(crate) fn receive_upload(&self, id: &str) -> Result<(UploadReceipt, Upload), WebTaskError> {
+        self.ensure_available()?;
         let mut receipt = self.receipt(id)?;
         if receipt.state != "waiting" {
             return Err(WebTaskError::Conflict("upload body already received".into()));

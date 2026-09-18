@@ -1,3 +1,4 @@
+import type { LocalSelection } from "./local-sources";
 import type { ApiClient, ArtifactPreview, TaskEvent, TaskRecord, WorkbenchOptions, MeetingOptions } from "./api";
 import { ApiError } from "./api";
 
@@ -5,6 +6,8 @@ const terminal = new Set(["succeeded", "failed", "interrupted", "cancelled"]);
 export interface UploadEntry {
   key: string;
   file: File;
+  localSelection?: LocalSelection;
+  localGrantReleased?: boolean;
   originalSize?: number;
   task?: TaskRecord;
   stage?: string;
@@ -30,6 +33,7 @@ export class TaskRuntime {
   private meetingSubmissionId: string | undefined;
   private meetingRecovering = false;
   connectionError = false;
+  connectionErrorCode: string | undefined;
   private retryOptions = new Map<string, WorkbenchOptions>();
   readonly tasks = new Map<string, TaskRecord>();
   private listeners = new Set<Listener>();
@@ -132,7 +136,7 @@ export class TaskRuntime {
         try {
           const receipt = await this.source.receipt(entry.submissionId, controller.signal);
           if (receipt.taskId) { const task = await this.source.getTask(receipt.taskId, controller.signal); this.patch(entry.key, { task }); this.put(task); }
-          else if (receipt.state === "receiving") this.patch(entry.key, { uploadState: "receiving" });
+          else if (receipt.state === "receiving" || receipt.localCopy && ["waiting", "uploading"].includes(receipt.state)) this.patch(entry.key, { uploadState: "receiving" });
         } catch { if (controller.signal.aborted) return; }
       }
       let after: { updatedAtMs: number; id: string } | undefined;
@@ -169,7 +173,7 @@ export class TaskRuntime {
     this.queue.push(...keys.map(key => ({ key, options: frozen, batchId })));
     this.changed(); this.pump();
   }
-  canRetryUpload(key: string) { return this.retryOptions.has(key); }
+  canRetryUpload(key: string) { return this.retryOptions.has(key) && !this.entries.find(e => e.key === key)?.localGrantReleased && !["localSelectionExpired", "localSourceChanged", "localFileUnavailable"].includes(this.entries.find(e => e.key === key)?.error ?? ""); }
   retryUpload(key: string) {
     const entry = this.entries.find(e => e.key === key);
     const options = this.retryOptions.get(key);
@@ -192,13 +196,17 @@ export class TaskRuntime {
     this.queue = this.queue.filter(item => "meeting" in item || item.key !== key);
     this.controllers.get(key)?.abort();
     const entry = this.entries.find(e => e.key === key);
+    if (entry?.localSelection && !entry.task) {
+      this.patch(key, { localGrantReleased: true });
+      void this.source.releaseLocal?.(entry.localSelection.id).catch(() => this.patch(key, { error: "localFileUnavailable" }));
+    }
     if (entry?.submissionId && entry.uploadState !== "waiting") void this.source.cancelUpload?.(entry.submissionId).catch(error => {
       if (!(error instanceof ApiError && error.code === "notFound")) this.patch(key, { error: "unreachable" });
     });
     this.setEntries(items => items.map(e => e.key === key ? { ...e, uploadState: "cancelled" } : e));
   }
   private pump() {
-    while (this.active < 2 && this.queue.length && !this.stopped) {
+    while (this.active < 1 && this.queue.length && !this.stopped) {
       const job = this.queue.shift()!;
       if ("meeting" in job) { this.active += 1; job.meeting(); continue; }
       const entry = this.entries.find(e => e.key === job.key);
@@ -206,8 +214,10 @@ export class TaskRuntime {
       this.active += 1;
       const controller = new AbortController(); this.controllers.set(job.key, controller);
       this.patch(job.key, { uploadState: "uploading", uploaded: 0, startedAt: Date.now() });
-      const progress = (loaded: number) => this.patch(job.key, { uploaded: loaded, uploadState: loaded >= entry.file.size ? "receiving" : "uploading" });
-      const upload = this.source.uploadProgress
+      const progress = (loaded: number) => this.patch(job.key, { uploaded: loaded, uploadState: loaded >= (entry.originalSize ?? entry.file.size) ? "receiving" : "uploading" });
+      const upload = entry.localSelection && this.source.importLocal
+        ? this.source.importLocal(entry.localSelection, job.options, job.batchId, progress, controller.signal, entry.submissionId)
+        : this.source.uploadProgress
         ? this.source.uploadProgress(entry.file, job.options, job.batchId, progress, controller.signal, entry.submissionId)
         : this.source.upload(entry.file, job.options, job.batchId, controller.signal);
       void upload.then(task => {
@@ -267,8 +277,8 @@ export class TaskRuntime {
         }
       }
       this.failures = 0;
-      if (this.connectionError) { this.connectionError = false; this.changed(); }
-    } catch { if (!controller.signal.aborted) { this.failures += 1; this.connectionError = true; this.changed(); } }
+      if (this.connectionError) { this.connectionError = false; this.connectionErrorCode = undefined; this.changed(); }
+    } catch (error) { if (!controller.signal.aborted) { this.failures += 1; this.connectionError = true; this.connectionErrorCode = error instanceof ApiError ? error.code : undefined; this.changed(); } }
     finally {
       this.polling = false;
       if (!this.stopped && (this.meetingRecovering || this.observers.size || [...this.tasks.values()].some(task => !terminal.has(task.status)) || this.entries.some(entry => !entry.task && entry.uploadState === "receiving"))) this.timer = setTimeout(() => void this.poll(), this.failures ? Math.min(30000, 1000 * 2 ** this.failures) : document.hidden ? 5000 : 1000);

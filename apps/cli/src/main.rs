@@ -21,6 +21,12 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 
 fn main() {
+    if std::env::args_os().skip(1).collect::<Vec<_>>()
+        == [OsString::from("--internal-local-picker")]
+    {
+        ui::native_picker_main();
+        return;
+    }
     // Registration installs only a function pointer. `-h`, `version`, and all
     // non-PDF conversions remain free of runtime-cache filesystem activity.
     embedded_runtime::register_pdfium_resolver();

@@ -1,3 +1,4 @@
+import { localSourceClient, abortableDelay, type LocalSelection } from "./local-sources";
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const MAX_EVENT_BYTES = 64 * 1024;
 export const MAX_PREVIEW_BYTES = 256 * 1024;
@@ -42,7 +43,7 @@ export interface ArtifactReference {
 export interface TaskSummary extends TaskRecord { waitingReason?: "worker" | "disk"; generation: string; sequence: number; execution?: TaskEvent["execution"] }
 export type TaskDetail = TaskRecord;
 export type ResultPreview = ArtifactPreview;
-export interface UploadReceipt { id: string; state: string; taskId: string | null; error: string | null }
+export interface UploadReceipt { localCopy?: boolean; id: string; state: string; taskId: string | null; error: string | null }
 export interface ArtifactPreview { text: string; truncated: boolean; contentType: string }
 export interface ArtifactDownload { blob: Blob; filename: string }
 export interface TaskFailure { schemaVersion: 1; code: string; reasonCode?: string | null; stage: string; retryable: boolean }
@@ -398,6 +399,10 @@ export function meetingTaskRequest(file: File, options: MeetingOptions): unknown
 }
 
 export interface ApiClient {
+  localAvailable?(signal?: AbortSignal): Promise<boolean>;
+  selectLocal?(kind: "pick" | "paste", signal: AbortSignal): Promise<LocalSelection[]>;
+  releaseLocal?(id: string): Promise<void>;
+  importLocal?(file: LocalSelection, options: WorkbenchOptions, batchId: string, progress: (loaded: number) => void, signal: AbortSignal, submissionId?: string): Promise<TaskRecord>;
   status(signal?: AbortSignal): Promise<StatusResponse>; listTasks(filters?: TaskFilters, signal?: AbortSignal): Promise<TaskPage>;
   capabilitySnapshot(signal?: AbortSignal): Promise<CapabilitySnapshot>;
   startCapabilityCheck?(id: CapabilityAdmin["id"], signal?: AbortSignal): Promise<CapabilityCheck>;
@@ -431,6 +436,8 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
   const jsonRequest = jsonRequester(fetcher);
   const uploadWithReceipt = receiptUploader(session, auth, jsonRequest, (id, signal) => client.getTask(id, signal));
   const client: ApiClient = {
+    ...localSourceClient(jsonRequest, auth),
+    ...importMethods(uploadWithReceipt),
     async status(signal) { return parseStatus(await jsonRequest("/api/status", { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
     async capabilitySnapshot(signal) { return parseCapabilitySnapshot(await jsonRequest("/api/capabilities/status", { method: "GET", headers: auth(), ...(signal ? { signal } : {}) }, 65536)); },
     async startCapabilityCheck(id, signal) { return parseCapabilityCheck(await jsonRequest(`/api/capabilities/${id}/verify`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) }, 65536)); },
@@ -481,17 +488,13 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
     },
     async receipt(id, signal) { return parseReceipt(await jsonRequest(`/api/uploads/${id}`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
     async cancelUpload(id) { await jsonRequest(`/api/uploads/${id}`, { method: "DELETE", headers: auth() }); },
-    async uploadProgress(file, options, batchId, progress, signal, submissionId) {
-      return uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId);
-    },
+
     async getTask(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/detail`, { method: "GET", headers: auth(), ...(signal ? { signal } : {}) })); },
     async upload(file, options, batchId, signal) {
       const headers = auth(); headers["X-Into-Md-Filename-B64"] = base64UrlUtf8(file.name); headers["X-Into-Md-Request"] = base64UrlJson(taskRequest(options, batchId));
       return parseTask(await jsonRequest("/api/tasks", { method: "POST", headers, body: file, ...(signal ? { signal } : {}) }));
     },
-    async uploadMeeting(file, options, signal, submissionId) {
-      return uploadWithReceipt(file, meetingTaskRequest(file, options), () => {}, signal ?? new AbortController().signal, submissionId);
-    },
+
     async cancel(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}`, { method: "DELETE", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async retry(id, signal) { return parseTask(await jsonRequest(`/api/tasks/${id}/retry`, { method: "POST", headers: auth(), body: null, ...(signal ? { signal } : {}) })); },
     async setPinned(id, pinned, signal) { const headers = auth(); headers["Content-Type"] = "application/json"; return parseTask(await jsonRequest(`/api/tasks/${id}/pin`, { method: "POST", headers, body: JSON.stringify({ pinned }), ...(signal ? { signal } : {}) })); },
@@ -569,13 +572,15 @@ export function createApiClient(session: string, fetcher: typeof fetch = fetch):
 }
 
 function receiptUploader(session: string, auth: () => Record<string, string>, jsonRequest: (path: string, init: RequestInit, limit?: number) => Promise<unknown>, getTask: (id: string, signal: AbortSignal) => Promise<TaskRecord>) {
-  async function uploadWithReceipt(file: File, request: unknown, progress: (loaded: number) => void, signal: AbortSignal, submissionId = crypto.randomUUID().replaceAll("-", "")): Promise<TaskRecord> {
+  async function uploadWithReceipt(file: File | LocalSelection, request: unknown, progress: (loaded: number) => void, signal: AbortSignal, submissionId = crypto.randomUUID().replaceAll("-", ""), selectionId?: string): Promise<TaskRecord> {
     const path = `/api/uploads/${submissionId}`;
     const headers = { ...auth(), "X-Into-Md-Filename-B64": base64UrlUtf8(file.name), "X-Into-Md-Request": base64UrlJson(request), "X-Into-Md-Size": String(file.size) };
     let receipt = parseReceipt(await jsonRequest(path, { method: "POST", headers, signal }));
-    if (receipt.state === "waiting") {
+    for (let attempt = 0; receipt.state === "waiting"; attempt++) {
       try {
-        receipt = await new Promise<UploadReceipt>((resolve, reject) => {
+        receipt = selectionId
+          ? parseReceipt(await jsonRequest(path, { method: "PUT", headers: { ...auth(), "X-Into-Md-Local-Selection": selectionId }, signal }))
+          : await new Promise<UploadReceipt>((resolve, reject) => {
           if (signal.aborted) { reject(new DOMException("Aborted", "AbortError")); return; }
           const xhr = new XMLHttpRequest(); const abort = () => xhr.abort();
           xhr.open("PUT", path); xhr.timeout = 30 * 60 * 1000;
@@ -585,16 +590,23 @@ function receiptUploader(session: string, auth: () => Record<string, string>, js
           xhr.onerror = () => reject(new ApiError("unreachable")); xhr.ontimeout = () => reject(new ApiError("uploadTimeout"));
           xhr.onabort = () => reject(new DOMException("Aborted", "AbortError"));
           xhr.onloadend = () => signal.removeEventListener("abort", abort);
-          signal.addEventListener("abort", abort, { once: true }); xhr.send(file);
+          signal.addEventListener("abort", abort, { once: true }); xhr.send(file as File);
         });
       } catch (error) {
         if (signal.aborted) throw error;
         // Reconcile a lost response before permitting a user retry.
         receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
-        if (receipt.state === "waiting" || receipt.state === "uploading") throw error;
+        if (receipt.state === "waiting" && error instanceof ApiError && error.code === "uploadBusy" && attempt < 5) {
+          await abortableDelay(Math.min(8000, 500 * 2 ** attempt), signal); continue;
+        }
+        if (receipt.state === "waiting") throw error;
+      }
+      if (receipt.state === "waiting") {
+        // The server owns an asynchronous local copy; observe it instead of sending again.
+        break;
       }
     }
-    progress(file.size);
+    if (!selectionId) progress(file.size);
     while (!receipt.taskId) {
       if (["failed", "cancelled", "interrupted"].includes(receipt.state)) throw new ApiError(receipt.error ?? "uploadFailed");
       await new Promise<void>((resolve, reject) => {
@@ -604,6 +616,7 @@ function receiptUploader(session: string, auth: () => Record<string, string>, js
       });
       receipt = parseReceipt(await jsonRequest(path, { method: "GET", headers: auth(), signal }));
     }
+    if (selectionId) progress(file.size);
     return getTask(receipt.taskId, signal);
   }
   return uploadWithReceipt;
@@ -613,6 +626,7 @@ function parseReceipt(value: unknown): UploadReceipt {
   if (!isObject(value) || typeof value.id !== "string" || !/^[0-9a-f]{32}$/.test(value.id)
     || typeof value.state !== "string" || !["waiting", "uploading", "receiving", "accepted", "failed", "cancelled", "interrupted"].includes(value.state)
     || value.taskId !== null && (typeof value.taskId !== "string" || !/^[0-9a-f]{32}$/.test(value.taskId))
+    || value.localCopy !== undefined && typeof value.localCopy !== "boolean"
     || value.error !== null && (typeof value.error !== "string" || value.error.length > 128)) throw new ApiError("invalidResponse");
   return value as unknown as UploadReceipt;
 }
@@ -649,4 +663,16 @@ function parseSummaries(value: unknown): TaskSummary[] {
         const event = parseTaskEvent({ ...item, schemaVersion: 1, taskId: task.id, kind: "snapshot", terminal: ["succeeded", "failed", "interrupted", "cancelled"].includes(task.status), execution: item.execution ?? undefined });
         return { ...task, ...(item.waitingReason === "worker" || item.waitingReason === "disk" ? { waitingReason: item.waitingReason } : {}), generation: item.generation, sequence: Number(item.sequence), ...(event.execution ? { execution: event.execution } : {}) };
       });
+}
+
+function importMethods(uploadWithReceipt: ReturnType<typeof receiptUploader>): Pick<ApiClient, "importLocal" | "uploadProgress" | "uploadMeeting"> {
+  return {
+    importLocal: (file, options, batchId, progress, signal, submissionId) => uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId, file.id),
+    async uploadProgress(file, options, batchId, progress, signal, submissionId) {
+      return uploadWithReceipt(file, taskRequest(options, batchId), progress, signal, submissionId);
+    },
+    async uploadMeeting(file, options, signal, submissionId) {
+      return uploadWithReceipt(file, meetingTaskRequest(file, options), () => {}, signal ?? new AbortController().signal, submissionId);
+    },
+  };
 }

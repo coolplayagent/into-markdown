@@ -1,3 +1,4 @@
+import { LocalSourceControls, useLocalPicker } from "./local-source-picker";
 import { useObservedTaskRuntime } from "./task-provider";
 import type { UploadEntry } from "./task-runtime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -117,12 +118,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
   }, [entries, recentTasks]);
 
   const addFiles = (incoming: File[]) => {
-    const replacements = new Map(incoming.map(file => [entryKey(file), file]));
-    const base = entries.map(entry => ["reselect", "cancelled"].includes(entry.uploadState ?? "") && replacements.has(entry.key) ? { key: entry.key, file: replacements.get(entry.key)! } : entry);
-    const seen = new Set(base.map((entry) => entry.key));
-    // Core authenticates the format after upload, including renamed documents.
-    const unique = incoming.filter((file) => { const key = entryKey(file); if (seen.has(key)) return false; seen.add(key); return true; });
-    const combined = [...base, ...unique.map((file) => ({ key: entryKey(file), file }))];
+    const combined = mergeFiles(entries, incoming);
     setMessageScope("source");
     if (combined.some((entry) => options.maxInputMiB != null && entry.file.size > options.maxInputMiB * 1024 * 1024)) setMessage(t("fileTooLarge"));
     else {
@@ -131,6 +127,8 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
       setMessage("");
     }
   };
+
+  const localPicker = useLocalPicker(api, setEntries, addFiles, message => { setMessageScope("source"); setMessage(message); });
 
   const submit = async () => {
     const pending = entries.filter(entry => !entry.task && !entry.batchId);
@@ -154,7 +152,7 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
     setMessage("");
     for (const entry of pending) {
       try {
-        const task = await api.upload(entry.file, options, nextBatchId);
+        const task = await submitEntry(api, entry, options, nextBatchId);
         setEntries((current) => current.map((item) => item.key === entry.key ? { ...item, task, stage: task.status } : item));
         watch(entry.key, task);
       } catch (error) {
@@ -187,13 +185,14 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
 
   return <section className="workbench-route" aria-labelledby="workbench-title">
     <div className="page-heading compact-heading"><div><p className="eyebrow">DOCUMENT TO MARKDOWN</p><h1 id="workbench-title">{t("convertDocuments")}</h1></div></div>
-    {runtime?.connectionError && <p className="picker-feedback" role="status">{t("streamError")} <button type="button" className="text-button" onClick={runtime.wake}>{t("retry")}</button></p>}
+    {runtime?.connectionError && <p className="picker-feedback" role="status">{runtime.connectionErrorCode ? diagnosticLabel(runtime.connectionErrorCode, t) : t("streamError")} <button type="button" className="text-button" onClick={runtime.wake}>{t("retry")}</button></p>}
     <div className="task-workspace"><div className="conversion-layout">
-      <section className="card upload-card" aria-labelledby="upload-heading">
+      <section className="card upload-card" aria-labelledby="upload-heading" onPaste={localPicker.onPaste}>
         <div className="card-heading"><div><p className="section-kicker">{t("sourceFiles")}</p><h2 id="upload-heading">{t("addDocuments")}</h2></div>{entries.length > 0 && <span className="file-count">{entries.length}</span>}</div>
         <div className="drop-zone-shell"><div id="upload-zone" className={`drop-zone ${dragging ? "dragging" : ""}`} role="button" tabIndex={0} onClick={() => input.current?.click()} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); input.current?.click(); } }} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); }}><span className="upload-icon" aria-hidden="true"><UploadCloud size={28} /></span><strong>{t("dropFiles")}</strong></div><button className="secondary add-file-button" type="button" disabled={false} onClick={() => input.current?.click()}><Plus size={17} aria-hidden="true" />{t("chooseFiles")}</button></div>
         <input ref={input} className="visually-hidden" type="file" multiple aria-label={t("chooseFiles")} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
         <input ref={directory} className="visually-hidden" type="file" multiple aria-label={t("chooseFolder")} {...({ webkitdirectory: "" } as Record<string, string>)} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} />
+        <LocalSourceControls picker={localPicker} />
         <div className="picker-meta">
           <div className="picker-actions"><button className="text-button" type="button" disabled={false} onClick={() => directory.current?.click()}><FolderOpen size={16} aria-hidden="true" />{t("chooseFolder")}</button><span>{t("batchLimitSummary")}</span></div>
           {messageScope === "source" && message && <div className="picker-feedback" role="status" aria-live="polite"><CircleAlert size={16} aria-hidden="true" /><span>{message}</span></div>}
@@ -207,9 +206,9 @@ export function WorkbenchPage({ api, initialTaskId }: { api: ApiClient; initialT
               const percent = entry.task ? Math.round(entry.task.progressMillionths / 10_000) : 0;
               const failureCode = entry.error;
               const failed = Boolean(entry.error) || entry.task?.status === "failed" || entry.task?.status === "interrupted";
-              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${(entry.task ? taskFailureLabel(entry.task, t) : diagnosticLabel(failureCode ?? "conversionFailed", t))}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : entry.uploadState ? uploadLabel(entry, locale) : `${format.toUpperCase()} · ${bytesLabel(entry.originalSize ?? entry.file.size)}`}</small>{!entry.task && entry.uploadState === "uploading" && <progress max={entry.file.size || 1} value={entry.uploaded ?? 0} aria-label={entry.file.name} />}{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
+              const content = <><span className="file-type-icon"><FormatIcon size={20} aria-hidden="true" /></span><span className="selected-file-name"><strong>{entry.file.webkitRelativePath || entry.file.name}</strong><small className={failed ? "failure-reason" : undefined}>{failed ? `${t(entry.task?.status === "interrupted" ? "interrupted" : "failed")} · ${(entry.task ? taskFailureLabel(entry.task, t) : diagnosticLabel(failureCode ?? "conversionFailed", t))}` : entry.task ? `${t(entry.task.status)}${!TERMINAL.has(entry.task.status) && entry.stage ? ` · ${executionStageLabel(entry.stage, locale)}` : ""}` : entry.uploadState ? uploadLabel(entry, locale) : `${format.toUpperCase()} · ${bytesLabel(entry.originalSize ?? entry.file.size)}`}</small>{!entry.task && entry.uploadState === "uploading" && <progress max={(entry.originalSize ?? entry.file.size) || 1} value={entry.localSelection ? undefined : entry.uploaded ?? 0} aria-label={entry.file.name} />}{entry.task && !TERMINAL.has(entry.task.status) && <progress max="100" value={percent} aria-label={`${entry.file.name}: ${percent}%`} />}</span></>;
               if (entry.task && TERMINAL.has(entry.task.status)) return <li key={entry.key} className={entry.task.status}><button className="current-task-link" type="button" aria-label={`${failed ? t("failureDetails") : t("conversionResult")} ${entry.file.name}`} onClick={() => selectTask(entry.task!.id)}>{content}<span className="row-status" aria-hidden="true">{entry.task.status === "succeeded" ? <CheckCircle2 size={17} /> : <CircleAlert size={17} />}</span></button></li>;
-              return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{(entry.error || entry.uploadState === "cancelled") && runtime && <button className="text-button" type="button" onClick={() => runtime.canRetryUpload(entry.key) ? runtime.retryUpload(entry.key) : input.current?.click()}>{t("retry")}</button>}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : entry.batchId && !entry.error && ["waiting", "uploading", "receiving"].includes(entry.uploadState ?? "") ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => runtime?.cancelUpload(entry.key)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => { runtime?.cancelUpload(entry.key); setEntries((current) => current.filter((_, item) => item !== Math.max(0, visibleCount - 100) + index)); }}><X size={17} aria-hidden="true" /></button>}</li>;
+              return <li key={entry.key} className={entry.error ? "failed" : entry.task?.status ?? "selected"}>{content}{(entry.error || entry.uploadState === "cancelled") && runtime && <button className="text-button" type="button" onClick={() => runtime.canRetryUpload(entry.key) ? runtime.retryUpload(entry.key) : entry.localSelection ? void localPicker.select("pick") : input.current?.click()}>{t("retry")}</button>}{entry.task ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => void cancel(entry.task!)}><Square size={15} aria-hidden="true" /></button> : entry.batchId && !entry.error && ["waiting", "uploading", "receiving"].includes(entry.uploadState ?? "") ? <button className="icon-button" type="button" aria-label={`${t("cancel")} ${entry.file.name}`} onClick={() => runtime?.cancelUpload(entry.key)}><Square size={15} aria-hidden="true" /></button> : <button className="icon-button" type="button" aria-label={`${t("remove")} ${entry.file.name}`} onClick={() => { if (!runtime && entry.localSelection) void api.releaseLocal?.(entry.localSelection.id).catch(() => { setMessageScope("source"); setMessage(t("taskActionFailed")); }); runtime?.cancelUpload(entry.key); setEntries((current) => current.filter((_, item) => item !== Math.max(0, visibleCount - 100) + index)); }}><X size={17} aria-hidden="true" /></button>}</li>;
             })}</ul>{visibleCount > 100 && <button type="button" className="secondary" onClick={() => setVisibleCount(value => Math.max(100, value - 100))}>{locale === "zh-CN" ? "上一页任务" : "Previous tasks"}</button>}{entries.length > visibleCount && <button type="button" className="secondary" onClick={() => setVisibleCount(value => value + 100)}>{locale === "zh-CN" ? "下一页任务" : "Next tasks"}</button>}</div>
           </section>}
         </div>
@@ -233,7 +232,22 @@ function normalizeStatus(status: string): CapabilityAdmin["status"] {
 
 function uploadLabel(entry: UploadEntry, locale: string) {
   const zh = locale === "zh-CN";
-  const labels = { waiting: zh ? "等待上传" : "Waiting to upload", uploading: zh ? "上传中" : "Uploading", receiving: zh ? "服务端接收处理中" : "Preparing received file", cancelled: zh ? "已取消" : "Cancelled", reselect: zh ? "需要重新选择文件" : "Select the file again" };
+  const labels = { waiting: zh ? "等待导入" : "Waiting to import", uploading: zh ? "导入中" : "Importing", receiving: zh ? "服务端接收处理中" : "Preparing received file", cancelled: zh ? "已取消" : "Cancelled", reselect: zh ? "需要重新选择文件" : "Select the file again" };
   const label = labels[entry.uploadState ?? "waiting"];
-  return entry.uploadState === "uploading" ? `${label} · ${Math.min(100, Math.round((entry.uploaded ?? 0) / Math.max(1, entry.file.size) * 100))}%` : label;
+  return entry.uploadState === "uploading" && !entry.localSelection ? `${label} · ${Math.min(100, Math.round((entry.uploaded ?? 0) / Math.max(1, entry.file.size) * 100))}%` : label;
+}
+
+function mergeFiles(entries: BatchEntry[], incoming: File[]): BatchEntry[] {
+    const replacements = new Map(incoming.map(file => [entryKey(file), file]));
+    const base = entries.map(entry => ["reselect", "cancelled"].includes(entry.uploadState ?? "") && replacements.has(entry.key) ? { key: entry.key, file: replacements.get(entry.key)! } : entry);
+    const seen = new Set(base.map((entry) => entry.key));
+    // Core authenticates the format after upload, including renamed documents.
+    const unique = incoming.filter((file) => { const key = entryKey(file); if (seen.has(key)) return false; seen.add(key); return true; });
+    return [...base, ...unique.map((file) => ({ key: entryKey(file), file }))];
+}
+
+function submitEntry(api: ApiClient, entry: BatchEntry, options: WorkbenchOptions, batchId: string) {
+  return entry.localSelection && api.importLocal
+    ? api.importLocal(entry.localSelection, options, batchId, () => {}, new AbortController().signal)
+    : api.upload(entry.file, options, batchId);
 }

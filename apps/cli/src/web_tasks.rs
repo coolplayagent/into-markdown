@@ -1,6 +1,8 @@
 //! Durable upload, conversion queue, and artifact publication for the local Web service.
 
 mod limits;
+mod metadata;
+use metadata::metadata_store_mutation;
 mod query;
 mod receipts;
 pub(crate) use receipts::UploadReceipt;
@@ -39,7 +41,7 @@ const STORE_METADATA_HEADROOM: u64 = 4 * 1024 * 1024;
 const STORE_MUTATION_RESERVATION: u64 = 1024 * 1024;
 const MAX_NAME_BYTES: usize = 255;
 const MAX_QUEUE: usize = 100_000;
-const MAX_WORKERS: usize = 4;
+const MAX_WORKERS: usize = 1;
 const EVENT_REPLAY_CAPACITY: usize = 64;
 const EVENT_BROADCAST_CAPACITY: usize = 128;
 const MAX_ALLOWED_HOSTS: usize = 64;
@@ -60,6 +62,8 @@ thread_local! {
 /// Stable backend error categories exposed by the HTTP adapter.
 #[derive(Debug, thiserror::Error)]
 pub enum WebTaskError {
+    #[error("task queue is unavailable; restart the local service")]
+    Unavailable,
     #[error("unsafe managed storage: {0}")]
     Unsafe(String),
     #[error("resource limit exceeded: {0}")]
@@ -1590,9 +1594,9 @@ impl WebTaskBackend {
         }
 
         if let Err(error) = retention_failure_checkpoint(&self.owner.shared, 1).and_then(|()| {
-            lock(&self.owner.shared.task_store)
-                .delete_terminal(id, allow_pinned)
-                .map_err(Into::into)
+            metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+                store.delete_terminal(id, allow_pinned).map_err(Into::into)
+            })
         }) {
             self.owner
                 .shared
@@ -1781,8 +1785,9 @@ impl WebTaskBackend {
                 "retention capacity exceeds the managed storage ceiling".into(),
             ));
         }
-        lock(&self.owner.shared.task_store)
-            .prune_web_receipts(now_ms.saturating_sub(30 * 86_400_000))?;
+        metadata_store_mutation(&self.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+            store.prune_web_receipts(now_ms.saturating_sub(30 * 86_400_000)).map_err(Into::into)
+        })?;
         let before = measured_live_managed_bytes(&self.owner.shared.root_handle)?;
         let age_ms = i64::try_from(policy.max_age.as_millis()).unwrap_or(i64::MAX);
         let cutoff = now_ms.saturating_sub(age_ms);
@@ -2658,20 +2663,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             }
         })?;
         validate_web_result_delivery(&converted)?;
-        let current = lock(&shared.task_store).get(&job.id)?.ok_or(WebTaskError::NotFound)?;
-        if current.status == TaskStatus::Running {
-            let converted_record = lock(&shared.task_store).transition(
-                &job.id,
-                TaskTransition {
-                    expected: TaskStatus::Running,
-                    next: TaskStatus::Converted,
-                    progress_millionths: 900_000,
-                    diagnostics: Vec::new(),
-                    artifacts: Vec::new(),
-                },
-            )?;
-            shared.events.publish_snapshot(&converted_record);
-        }
+        metadata::mark_converted(shared, &job.id)?;
         if job.cancellation.is_cancelled() {
             return Err(WebTaskError::Cancelled);
         }
@@ -2849,7 +2841,9 @@ fn retry_dequeued_transition(shared: &Shared, id: &TaskId, transition: &TaskTran
             std::thread::yield_now();
             continue;
         }
-        if let Ok(record) = lock(&shared.task_store).transition(id, transition.clone()) {
+        if let Ok(record) = metadata_store_mutation(shared, STORE_MUTATION_RESERVATION, |store| {
+            Ok(store.transition(id, transition.clone())?)
+        }) {
             shared.events.publish_snapshot(&record);
             return true;
         }
@@ -2858,7 +2852,12 @@ fn retry_dequeued_transition(shared: &Shared, id: &TaskId, transition: &TaskTran
     false
 }
 
+#[track_caller]
 fn stop_unhealthy(shared: &Shared) {
+    eprintln!(
+        "web stage=queue code=queueUnavailable checkpoint={}",
+        std::panic::Location::caller().line()
+    );
     let mut queue = lock(&shared.queue);
     queue.stopped = true;
     for cancellation in queue.cancellations.values() {
@@ -3766,65 +3765,6 @@ fn terminal_transition(
     Ok(())
 }
 
-fn metadata_store_mutation<T>(
-    shared: &Shared,
-    reservation: u64,
-    mutation: impl FnOnce(&mut TaskStore) -> Result<T, WebTaskError>,
-) -> Result<T, WebTaskError> {
-    // Keep the quota lock across the bounded SQLite transaction. This makes
-    // metadata writers single-file and prevents uploads or other reservations
-    // from spending the physical headroom between preflight and commit.
-    let mut quota = lock(&shared.disk_bytes);
-    quota.revision = quota.revision.wrapping_add(1);
-    let measured_before = match measured_metadata_bytes(shared) {
-        Ok(measured) => measured,
-        Err(error) => {
-            drop(quota);
-            stop_unhealthy(shared);
-            return Err(error);
-        }
-    };
-    let Some(planned_data) = quota.used.checked_add(quota.reserved) else {
-        drop(quota);
-        stop_unhealthy(shared);
-        return Err(WebTaskError::Limit("global storage accounting overflow".into()));
-    };
-    let occupied = measured_before.max(planned_data);
-    if occupied.checked_add(reservation).is_none_or(|total| total > MAX_GLOBAL_BYTES) {
-        drop(quota);
-        stop_unhealthy(shared);
-        return Err(WebTaskError::Limit("durable task metadata reservation is unavailable".into()));
-    }
-    quota.used = measured_before;
-    let result = mutation(&mut lock(&shared.task_store));
-    let measured_after = match measured_metadata_bytes(shared) {
-        Ok(measured) => measured,
-        Err(error) => {
-            quota.used = quota.used.saturating_add(reservation).min(MAX_GLOBAL_BYTES);
-            drop(quota);
-            stop_unhealthy(shared);
-            return Err(WebTaskError::Unsafe(format!(
-                "cannot reconcile durable task metadata: {error}"
-            )));
-        }
-    };
-    let growth = measured_after.saturating_sub(measured_before);
-    quota.used = measured_after;
-    shared.disk_changed.notify_all();
-    if growth > reservation || measured_after > MAX_GLOBAL_BYTES {
-        drop(quota);
-        stop_unhealthy(shared);
-        return Err(WebTaskError::Unsafe(
-            "durable task metadata exceeded its physical reservation".into(),
-        ));
-    }
-    result
-}
-
-fn measured_metadata_bytes(shared: &Shared) -> Result<u64, WebTaskError> {
-    measured_live_managed_bytes(&shared.root_handle)
-}
-
 #[cfg(test)]
 fn reconcile_managed_usage(shared: &Shared) -> Result<(), WebTaskError> {
     let mut quota = lock(&shared.disk_bytes);
@@ -4068,6 +4008,7 @@ fn failure_from_error(error: &WebTaskError) -> WebTaskFailure {
             );
             (code.clone(), reason_code.clone(), stage.clone(), retryable)
         }
+        WebTaskError::Unavailable => ("queueUnavailable".into(), None, "storage".into(), false),
         WebTaskError::Limit(_) => ("resourceLimit".into(), None, "storage".into(), false),
         WebTaskError::Unsafe(_) => ("unsafeStorage".into(), None, "storage".into(), false),
         WebTaskError::Cancelled => ("cancelled".into(), None, "conversion".into(), true),
@@ -6837,6 +6778,54 @@ mod tests {
             measured_managed_bytes(&backend.owner.shared.root_handle).unwrap() <= MAX_GLOBAL_BYTES
         );
         assert!(lock(&backend.owner.shared.queue).stopped);
+    }
+
+    #[test]
+    fn metadata_growth_excludes_other_reserved_file_writes() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let mut upload = backend.begin_upload("overlap.txt", None).unwrap();
+        let amount = 8 * STORE_MUTATION_RESERVATION;
+        let mut reservation = QuotaReservation::acquire(&backend.owner.shared, amount).unwrap();
+        metadata_store_mutation(&backend.owner.shared, STORE_MUTATION_RESERVATION, |_store| {
+            upload.file.as_mut().unwrap().write_all(&vec![b'x'; amount as usize])?;
+            Ok(())
+        })
+        .unwrap();
+        reservation.commit(amount);
+        assert!(!lock(&backend.owner.shared.queue).stopped);
+        assert!(measured_managed_bytes(&backend.owner.shared.root_handle).unwrap() >= amount);
+    }
+
+    #[test]
+    fn metadata_reserves_checkpoint_growth_during_repeated_preview_publication() {
+        let temporary = tempfile::tempdir().unwrap();
+        let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
+        let mut upload = backend.begin_upload("checkpoint.txt", None).unwrap();
+        upload.write_chunk(b"checkpoint regression").unwrap();
+        let task = upload.finish().unwrap();
+        wait_terminal(&backend, &task.id);
+        let payload = "x".repeat(256 * 1024);
+        for index in 0..40 {
+            metadata_store_mutation(&backend.owner.shared, STORE_METADATA_HEADROOM, |store| {
+                store
+                    .write_web_preview(
+                        &task.id,
+                        &format!("{index:032x}"),
+                        &"a".repeat(64),
+                        &payload,
+                    )
+                    .map_err(Into::into)
+            })
+            .unwrap();
+            metadata_store_mutation(&backend.owner.shared, STORE_MUTATION_RESERVATION, |store| {
+                store
+                    .index_web_task(&task.id, "checkpoint.txt", None, "conversion")
+                    .map_err(Into::into)
+            })
+            .unwrap();
+        }
+        assert!(!lock(&backend.owner.shared.queue).stopped);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! Loopback-only Web entry point and its security boundary.
 
+mod local_sources;
 mod task_flow;
+pub(crate) use local_sources::native_picker_main;
 use task_flow::*;
 
 use crate::args::UiArgs;
@@ -88,6 +90,7 @@ struct AppState {
     admin_gate: Arc<Semaphore>,
     preview_gate: Arc<Semaphore>,
     upload_gate: Arc<Semaphore>,
+    local_sources: Arc<local_sources::LocalSources>,
     loaded: Arc<RwLock<crate::config::LoadedConfig>>,
     capabilities: CapabilityCache,
     capability_checks: Arc<Mutex<std::collections::BTreeMap<String, CapabilityCheckEntry>>>,
@@ -625,48 +628,16 @@ where
         admin_grants: Arc::new(Mutex::new(std::collections::HashMap::new())),
         admin_gate: Arc::new(Semaphore::new(1)),
         preview_gate: Arc::new(Semaphore::new(2)),
-        upload_gate: Arc::new(Semaphore::new(2)),
+        upload_gate: Arc::new(Semaphore::new(1)),
+        local_sources: Arc::new(local_sources::LocalSources::default()),
         loaded: Arc::new(RwLock::new(loaded)),
         capabilities,
         capability_checks: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
     };
     schedule_capability_refresh(&state);
     schedule_task_maintenance(&state);
-    let api = Router::new()
-        .route("/status", post(status).fallback(api_method_not_allowed))
-        .route("/capabilities/status", get(capability_snapshot).fallback(api_method_not_allowed))
-        .route(
-            "/capabilities/{id}/verify",
-            post(start_capability_check).fallback(api_method_not_allowed),
-        )
-        .route(
-            "/capability-checks/{id}",
-            get(capability_check).delete(cancel_capability_check).fallback(api_method_not_allowed),
-        )
-        .route(
-            "/capabilities/{id}/install",
-            post(install_capability).fallback(api_method_not_allowed),
-        )
-        .merge(task_flow_routes())
-        .route("/admin", get(admin_snapshot).post(admin_action).fallback(api_method_not_allowed))
-        .route("/admin/grant", post(admin_grant).fallback(api_method_not_allowed))
-        .route("/admin/plugin-package", post(stage_plugin_package).fallback(api_method_not_allowed))
-        .route(
-            "/tasks/{id}/speakers",
-            get(speaker_labels).post(relabel_speakers).fallback(api_method_not_allowed),
-        )
-        .route(
-            "/tasks/{id}/history",
-            axum::routing::delete(delete_task).fallback(api_method_not_allowed),
-        )
-        .route("/tasks/cleanup", post(cleanup_tasks).fallback(api_method_not_allowed))
-        .route("/tasks/{id}/events", get(task_events).fallback(api_method_not_allowed))
-        .route(
-            "/tasks/{id}/artifacts/{key}",
-            get(download_artifact).fallback(api_method_not_allowed),
-        )
-        .fallback(api_not_found)
-        .layer(middleware::from_fn_with_state(state.clone(), api_security));
+    local_sources::schedule(&state);
+    let api = api_routes(&state);
     let app = Router::new()
         .route("/", get(index))
         .route("/status", get(index))
@@ -2083,6 +2054,7 @@ fn content_disposition(reference: &into_markdown::ArtifactReference) -> String {
 #[allow(clippy::needless_pass_by_value)]
 fn web_task_rejection(error: WebTaskError) -> Response {
     let (status, code) = match error {
+        WebTaskError::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, "queueUnavailable"),
         WebTaskError::Unsafe(_) => (StatusCode::BAD_REQUEST, "unsafeStorage"),
         WebTaskError::Limit(_) => (StatusCode::PAYLOAD_TOO_LARGE, "resourceLimit"),
         WebTaskError::Cancelled => (StatusCode::CONFLICT, "cancelled"),

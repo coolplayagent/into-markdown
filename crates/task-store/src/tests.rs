@@ -1121,3 +1121,22 @@ fn abandoned_receipts_expire_in_bounded_pages_without_removing_active_transports
         2
     );
 }
+
+#[test]
+fn logical_database_size_includes_pages_waiting_for_checkpoint() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("store");
+    let store = TaskStore::open(&root, BusyControl::default()).unwrap();
+    store.connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA wal_autocheckpoint=0; CREATE TABLE checkpoint_probe(payload BLOB);").unwrap();
+    let transaction = store.connection.unchecked_transaction().unwrap();
+    for _ in 0..256 {
+        transaction.execute("INSERT INTO checkpoint_probe VALUES(zeroblob(8192))", []).unwrap();
+    }
+    transaction.commit().unwrap();
+    let physical = std::fs::metadata(root.join("tasks.sqlite3")).unwrap().len();
+    let logical = store.logical_database_bytes().unwrap();
+    assert!(logical > physical + 1024 * 1024);
+    store.connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    assert_eq!(store.logical_database_bytes().unwrap(), logical);
+    assert_eq!(std::fs::metadata(root.join("tasks.sqlite3")).unwrap().len(), logical);
+}
