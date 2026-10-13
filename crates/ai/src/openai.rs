@@ -2927,6 +2927,7 @@ mod tests {
                 cancellation: cancellation.clone(),
                 timeout: Some(Duration::from_secs(2)),
                 progress_listener: None,
+                resource_adaptation: Default::default(),
             },
             ResourceLimits::default(),
         );

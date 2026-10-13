@@ -237,8 +237,14 @@ impl PreparedTransaction {
 
     #[cfg(test)]
     pub(super) fn preserve_staged_files(&mut self) {
-        // A simulated process crash cannot keep in-process resource leases alive.
+        // Simulate termination of the transaction's sole lock owner. Another test
+        // thread can spawn a child that briefly inherits the open file description
+        // before exec, so dropping our file alone does not reliably release flock.
+        if let Some(lock) = &self.lock {
+            lock.unlock().expect("simulated process termination must release its lock");
+        }
 
+        // A simulated process crash cannot keep in-process resource leases alive.
         self.temporary_reservations.clear();
 
         self.backup_reservations.clear();

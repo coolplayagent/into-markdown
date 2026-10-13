@@ -136,7 +136,7 @@ class AcquireTests(unittest.TestCase):
                     with self.assertRaisesRegex(acquire.ReleaseError, diagnostic):
                         acquire.acquire(cache)
 
-    def test_authority_uses_local_small_models_and_repository_whisper(self) -> None:
+    def test_authority_uses_local_small_models_and_pinned_large_downloads(self) -> None:
         value = acquire.authority()
         downloads = {item["id"]: item for item in value["downloads"]}
         local_identities = {
@@ -144,7 +144,6 @@ class AcquireTests(unittest.TestCase):
             "ocr-recognizer",
             "ocr-dictionary",
             "silero-vad",
-            "3dspeaker",
         }
         for identity in local_identities:
             item = downloads[identity]
@@ -153,6 +152,19 @@ class AcquireTests(unittest.TestCase):
             )
             self.assertTrue(item["source_url"].startswith("https://"))
             self.assertNotIn("url", item)
+        speaker = downloads["3dspeaker"]
+        self.assertEqual(
+            speaker["url"],
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+            "speaker-recongition-models/"
+            "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+        )
+        self.assertEqual(speaker["bytes"], 39_593_761)
+        self.assertEqual(
+            speaker["sha256"],
+            "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+        )
+        self.assertNotIn("path", speaker)
         whisper = downloads["whisper-small"]
         self.assertEqual(
             whisper["url"],

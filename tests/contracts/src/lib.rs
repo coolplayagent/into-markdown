@@ -123,31 +123,62 @@ mod tests {
     }
 
     #[test]
-    fn default_engine_bom_probe_is_safe_but_truncation_remains_authoritative() {
+    fn strict_engine_bom_probe_rejects_truncated_and_disguised_input() {
         let engine = default_engine().unwrap();
-        let truncated = ConversionRequest::new(InputRef::bytes(
+        let mut truncated = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from([0xff, 0xfe, b'A']),
             Some("truncated.txt"),
         ));
+        truncated.options.error_policy = ErrorPolicy::Strict;
         assert_eq!(block_on(engine.convert(truncated)).unwrap_err().code(), ErrorCode::Malformed);
 
-        let disguised = ConversionRequest::new(InputRef::bytes(
+        let mut disguised = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from([0xff, 0xfe, 0, 0, 1, 0, 2, 0]),
             Some("disguised.txt"),
         ));
+        disguised.options.error_policy = ErrorPolicy::Strict;
         assert_eq!(block_on(engine.convert(disguised)).unwrap_err().code(), ErrorCode::NoConverter);
 
         let mut sparse_control = vec![0xef, 0xbb, 0xbf];
         sparse_control.extend(std::iter::repeat_n(b'A', 70 * 1024));
         sparse_control.push(0x01);
-        let sparse_control = ConversionRequest::new(InputRef::bytes(
+        let mut sparse_control = ConversionRequest::new(InputRef::bytes(
             Arc::<[u8]>::from(sparse_control),
             Some("sparse-control.txt"),
         ));
+        sparse_control.options.error_policy = ErrorPolicy::Strict;
         assert_eq!(
             block_on(engine.convert(sparse_control)).unwrap_err().code(),
             ErrorCode::NoConverter
         );
+    }
+
+    #[test]
+    fn default_engine_recovers_malformed_text_as_degraded_original_bytes() {
+        let engine = default_engine().unwrap();
+        let mut sparse_control = vec![0xef, 0xbb, 0xbf];
+        sparse_control.extend(std::iter::repeat_n(b'A', 70 * 1024));
+        sparse_control.push(0x01);
+        for bytes in [vec![0xff, 0xfe, b'A'], vec![0xff, 0xfe, 0, 0, 1, 0, 2, 0], sparse_control] {
+            let request = ConversionRequest::new(InputRef::bytes(
+                Arc::<[u8]>::from(bytes.clone()),
+                Some("damaged.txt"),
+            ));
+            assert_eq!(request.options.error_policy, ErrorPolicy::BestEffort);
+            let result = block_on(engine.convert(request)).unwrap();
+            assert_eq!(result.assets.len(), 1);
+            assert_eq!(result.assets[0].bytes, bytes);
+            assert_eq!(conversion_outcome(&result.diagnostics), ConversionOutcome::Degraded);
+            assert!(result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "conversion.recovery.originalFile"
+                    && diagnostic.severity == DiagnosticSeverity::Warning
+                    && diagnostic.locator.as_ref().is_some_and(|locator| {
+                        locator.byte_start == Some(0)
+                            && locator.byte_end == Some(bytes.len() as u64)
+                    })
+            }));
+            assert!(result.markdown.contains("Original source"));
+        }
     }
 
     #[derive(Default)]
@@ -467,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn only_not_applicable_falls_through_and_other_errors_keep_their_code() {
+    fn strict_probe_errors_and_encryption_remain_authoritative() {
         let no = converter("a.no", 100, Probe::No, false, false);
         let yes = converter("b.yes", 0, Probe::Match(1.0), false, false);
         let result =
@@ -477,9 +508,11 @@ mod tests {
 
         let probe_error = converter("a.error", 0, Probe::Error, false, false);
         let untouched = converter("b.untouched", 0, Probe::Match(1.0), false, false);
+        let mut strict = request();
+        strict.options.error_policy = ErrorPolicy::Strict;
         let error = block_on(
             engine(vec![probe_error, untouched.clone()], Arc::new(AtomicUsize::new(0)))
-                .convert(request()),
+                .convert(strict),
         )
         .unwrap_err();
         assert_eq!(error.code(), ErrorCode::Malformed);
@@ -498,6 +531,20 @@ mod tests {
             1,
             "fallback may be probed but never converted"
         );
+    }
+
+    #[test]
+    fn best_effort_probe_recovery_selects_a_valid_converter() {
+        let probe_error = converter("a.error", 0, Probe::Error, false, false);
+        let valid = converter("b.valid", 0, Probe::Match(1.0), false, false);
+        let result = block_on(
+            engine(vec![probe_error.clone(), valid.clone()], Arc::new(AtomicUsize::new(0)))
+                .convert(request()),
+        )
+        .unwrap();
+        assert_eq!(result.document.metadata.title.as_deref(), Some("b.valid"));
+        assert_eq!(probe_error.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(valid.calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

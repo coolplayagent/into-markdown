@@ -514,8 +514,9 @@ mod tests {
             (0..1000).map(|index| format!("{index},local row {index}\n")).collect::<String>()
         );
         std::fs::write(&csv, text).unwrap();
-        let xlsx =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/small/xlsx/normal.xlsx");
+        let xlsx = temporary.path().join("local-normal.xlsx");
+        std::fs::write(&xlsx, include_bytes!("../../../../fixtures/small/xlsx/normal.xlsx"))
+            .unwrap();
         let backend = WebTaskBackend::open(temporary.path().join("backend")).unwrap();
         let sources = Arc::new(LocalSources::default());
         let gate = Arc::new(Semaphore::new(1));

@@ -1,0 +1,116 @@
+schema_version: 1
+# The historical Git blob exceeded Qualitygate's maximum per-file capacity.
+# Bazel now reproduces this same path from the existing hash-pinned download.
+exclude:
+- third_party/runtime-assets/models/3dspeaker_eres2net_base.onnx
+languages:
+- c
+- cpp
+- python
+- rust
+- shell
+- typescript
+rulesets:
+- core
+rules:
+  line-ending:
+    enabled: true
+    required: true
+    severity: error
+    parameters: {}
+    source: null
+    depends_on: []
+checks:
+- id: rust-format
+  kind: command
+  argv: [cargo, fmt, --all, --, --check]
+  tools:
+  - {id: rustfmt, argv: [rustfmt, --version]}
+  timeout_seconds: 120
+  required: true
+  severity: error
+- id: bazel-build
+  kind: command
+  argv: [bazel, --batch, build, --lockfile_mode=error, --jobs=2, --local_resources=memory=4096, '//...']
+  tools:
+  - {id: bazel, argv: [bazel, --version]}
+  - {id: cmake, argv: [cmake, --version]}
+  timeout_seconds: 1800
+  required: true
+  severity: error
+- id: bazel-tests
+  kind: command
+  argv: [bazel, --batch, test, --lockfile_mode=error, --jobs=2, --local_resources=memory=4096, '//...']
+  tools:
+  - {id: bazel, argv: [bazel, --version]}
+  timeout_seconds: 1800
+  depends_on: [bazel-build]
+  required: true
+  severity: error
+- id: cargo-check
+  kind: command
+  argv: [cargo, check, --workspace, --locked, -j2]
+  tools:
+  - {id: cargo, argv: [cargo, --version]}
+  - {id: rustc, argv: [rustc, --version]}
+  timeout_seconds: 1800
+  required: true
+  severity: error
+- id: release-contracts
+  kind: command
+  argv:
+  - python3
+  - -m
+  - unittest
+  - tools.platform-release.test_release
+  - tools.platform-release.test_pr_fast_gate
+  - tools.pdf-resilience.test_arxiv
+  - tools.portable-release.test_assemble
+  - tools.portable-release.test_native_acceptance
+  - tools.portable-release.test_post_release_e2e
+  - tools.release_evidence_test
+  - tools.release_metadata_test
+  - tools.skill-release.test_skill_release
+  tools:
+  - {id: python, argv: [python3, --version]}
+  timeout_seconds: 180
+  required: true
+  severity: error
+- id: native-model-acquisition
+  kind: command
+  argv: [python3, -m, unittest, discover, -s, tools/macos-release, -p, acquire_test.py]
+  tools:
+  - {id: python, argv: [python3, --version]}
+  timeout_seconds: 120
+  required: true
+  severity: error
+- id: structure-tool-tests
+  kind: command
+  argv: [python3, -m, unittest, discover, -s, tools/structure_gate/tests, -v]
+  tools:
+  - {id: structure-parsers, argv: [python3, -c, 'import tree_sitter, tree_sitter_rust, tree_sitter_typescript; from importlib.metadata import version; print(" ".join(version(name) for name in ("tree-sitter", "tree-sitter-rust", "tree-sitter-typescript")))']}
+  timeout_seconds: 180
+  required: true
+  severity: error
+profiles: {}
+custom_rules: null
+verification_assets:
+- qualitygate.yaml
+- AGENTS.md
+- .bazelrc
+- .bazelversion
+- MODULE.bazel
+- MODULE.bazel.lock
+- Cargo.lock
+- rust-toolchain.toml
+- '**/BUILD.bazel'
+- '**/Cargo.toml'
+- .github/workflows/**
+- tools/structure_gate/**
+- tools/platform-release/authority.json
+- tools/macos-release/authority.json
+- third_party/licenses/**
+- third_party/runtime-assets/*.py
+- tools/**/*test*.py
+- fixtures/**
+- .agents/skills/into-markdown/**

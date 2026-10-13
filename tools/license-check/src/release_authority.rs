@@ -9,7 +9,7 @@ use std::path::Path;
 
 const AUTHORITY_PATH: &str = "third_party/licenses/release-material-authority.json";
 const REVIEWED_AUTHORITY_SHA256: &str =
-    "f01e19ed8a2d978f2c44cb5bd71dba8c9fceb6e070398ff1c019982a553e9ed7";
+    "b338adbdcf28ed443521a595689f2d2f334765a4d7dcb7354b89360a313b791d";
 const GENERATED_PATHS: [&str; 5] =
     ["NOTICE", "THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json", "core-catalog.json"];
 const PROFILE_PATHS: [&str; 12] = [

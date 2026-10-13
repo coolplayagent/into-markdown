@@ -114,6 +114,7 @@ use_repo(
 downloads = use_extension("//third_party/licenses:downloads.bzl", "downloads")
 use_repo(
     downloads,
+    "3dspeaker_eres2net_base_onnx_source",
     "onnxruntime_linux_arm64",
     "onnxruntime_linux_x86_64",
     "onnxruntime_macos_arm64",

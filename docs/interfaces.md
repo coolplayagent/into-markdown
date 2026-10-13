@@ -44,8 +44,11 @@ HTML 转换器同样复用文本 decoder、compact byte mapping 与 `ExecutionCo
 同时输出诊断。转换器不调用 `Services` 或 `SourceResolver`；relative URI 与已验证 base 的 join
 仅产生引用数据，不能作为远程获取授权。
 
-只有 `ProbeOutcome::NotApplicable` 允许注册表回退。探测成功后出现的错误是
-权威错误。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
+`strict` 策略下只有 `ProbeOutcome::NotApplicable` 允许注册表回退，探测或转换错误
+保留原错误码。默认 `best-effort` 可在可恢复的探测错误后选择有效转换器；原生解析无法
+完成且资产策略允许时，保留完整原件并产生 `conversion.recovery.originalFile` 警告与
+`Degraded` 结果，不能将原件恢复视为完整内容转换。加密、取消、超时及不可恢复错误仍然
+终止。实现不得执行 Office 宏，并且必须将内嵌路径与压缩包视为不可信输入。
 
 旧 Office converter 在 Core 内直接解析 CFB/OLE 与 DOC、PPT、XLS 的二进制记录，不经过
 `NestedConversionRequest`、外部 worker 或规范化 OOXML。CFB reader 和三个格式前端共用
