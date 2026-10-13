@@ -33,10 +33,17 @@ const PREVIEW_BYTES: usize = 256 * 1024;
 
 pub(super) fn bounded_preview(bytes: &[u8], content_type: &str) -> ResultPreview {
     let mut end = bytes.len().min(PREVIEW_BYTES);
-    while end > 0 && std::str::from_utf8(&bytes[..end]).is_err() {
-        end -= 1;
-        if bytes.len().min(PREVIEW_BYTES) - end > 3 {
-            break;
+    if end < bytes.len() {
+        let mut offset = 0;
+        while let Err(error) = std::str::from_utf8(&bytes[offset..end]) {
+            offset += error.valid_up_to();
+            match error.error_len() {
+                Some(length) => offset += length,
+                None => {
+                    end = offset;
+                    break;
+                }
+            }
         }
     }
     ResultPreview {
@@ -321,4 +328,42 @@ pub(super) fn publish_previews(
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_utf8_does_not_discard_valid_trailing_text() {
+        let preview = bounded_preview(b"prefix\xfftail", "text/markdown");
+        assert_eq!(preview.text, "prefix\u{fffd}tail");
+        assert!(!preview.truncated);
+    }
+
+    #[test]
+    fn complete_short_input_preserves_incomplete_utf8_as_replacement() {
+        let preview = bounded_preview(b"text\xe2\x82", "text/markdown");
+        assert_eq!(preview.text, "text\u{fffd}");
+        assert!(!preview.truncated);
+    }
+
+    #[test]
+    fn byte_limit_preserves_invalid_interior_and_omits_split_character() {
+        let mut bytes = vec![b'a'; PREVIEW_BYTES - 1];
+        bytes[0] = 0xff;
+        bytes.extend_from_slice("\u{1f600}tail".as_bytes());
+        let preview = bounded_preview(&bytes, "text/markdown");
+        assert_eq!(preview.text, format!("\u{fffd}{}", "a".repeat(PREVIEW_BYTES - 2)));
+        assert!(preview.truncated);
+    }
+
+    #[test]
+    fn byte_limit_omits_only_a_split_utf8_character() {
+        let mut bytes = vec![b'a'; PREVIEW_BYTES - 1];
+        bytes.extend_from_slice("\u{1f600}tail".as_bytes());
+        let preview = bounded_preview(&bytes, "text/markdown");
+        assert_eq!(preview.text, "a".repeat(PREVIEW_BYTES - 1));
+        assert!(preview.truncated);
+    }
 }
