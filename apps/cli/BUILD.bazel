@@ -38,7 +38,11 @@ rust_test(
         "//crates/provider-plugin:provider-plugin",
     ] + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
-    compile_data = ["//web/console:checked_assets"],
+    compile_data = [
+        "//web/console:checked_assets",
+        "//fixtures:small/pptx/normal.pptx",
+        "//fixtures:small/xlsx/normal.xlsx",
+    ],
 )
 
 # Named security gate for the complete loopback HTTP, storage, and embedded

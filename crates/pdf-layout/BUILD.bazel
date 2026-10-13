@@ -32,6 +32,7 @@ rust_test(
         "//crates/ocr:Cargo.toml",
         "//crates/pdf-layout:Cargo.toml",
         "//fixtures:manifest.json",
+        "//fixtures:pdf-layout-column-edge-geometry.json",
         "//fixtures:pdf-layout-quality-authority.json",
         "//models:ocr-merge-quality-authority.json",
         "//third_party/pdfium:manifest.json",

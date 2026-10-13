@@ -6,6 +6,9 @@ build --show_timestamps
 # executable. Keep the action environment explicit while preserving the
 # developer/CI toolchain path on every supported host.
 build --action_env=PATH
+# Bindgen may need the host SDK's resource headers when libclang is installed
+# separately from the compiler. The optional value belongs to the host, not Git.
+build --action_env=BINDGEN_EXTRA_CLANG_ARGS
 # Keep native macOS dependencies aligned with the packaged runtime authority in
 # tools/macos-release/authority.json. The variable is ignored by non-Apple
 # targets but prevents upstream CMake defaults from silently selecting 10.11.

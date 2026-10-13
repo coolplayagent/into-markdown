@@ -317,6 +317,44 @@ fn recovery_temporary_budget_includes_the_authenticated_stage_tree() {
     assert!(manager_artifacts(&root).is_empty());
 }
 
+#[cfg(unix)]
+#[test]
+fn simulated_crash_releases_a_lock_with_an_inherited_description() {
+    for use_hook in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let output = root.join("document.md");
+        fs::write(&output, b"old").unwrap();
+        let mut transaction =
+            prepare(&[Target { path: output.clone(), bytes: b"new" }], true, &context()).unwrap();
+        // A concurrent process spawn can temporarily inherit this same open file
+        // description before exec closes its CLOEXEC descriptors.
+        let inherited = transaction.lock.as_ref().unwrap().try_clone().unwrap();
+        assert!(try_recovery_lock_handle(&transaction.handles.directory).unwrap().is_none());
+
+        if use_hook {
+            let error = transaction
+                .commit_with_hook(|phase, _| {
+                    Ok(if phase == "targetInstalled" {
+                        HookDecision::SimulateCrash
+                    } else {
+                        HookDecision::Continue
+                    })
+                })
+                .unwrap_err();
+            assert_eq!(error.code(), "simulatedCrash");
+            drop(transaction);
+        } else {
+            transaction.abandon_for_test();
+        }
+
+        recover_pending(&root).unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"old");
+        assert!(manager_artifacts(&root).is_empty(), "simulated crash retained a lock: {use_hook}");
+        drop(inherited);
+    }
+}
+
 #[test]
 fn every_durable_phase_is_recoverable_by_a_new_manager() {
     let phases = [
@@ -372,7 +410,7 @@ fn every_durable_phase_is_recoverable_by_a_new_manager() {
             (b"old-one".to_vec(), b"old-two".to_vec())
         };
         assert_eq!(values, expected, "wrong recovered set after {phase}");
-        assert!(manager_directories(&root).is_empty());
+        assert!(manager_directories(&root).is_empty(), "transaction remained after {phase}");
     }
 }
 

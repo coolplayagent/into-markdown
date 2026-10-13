@@ -1,3 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+genrule(
+    name = "speaker_model",
+    srcs = ["@3dspeaker_eres2net_base_onnx_source//file"],
+    outs = ["models/3dspeaker_eres2net_base.onnx"],
+    cmd = "cp $(location @3dspeaker_eres2net_base_onnx_source//file) $@",
+    cmd_bat = "copy /Y $(location @3dspeaker_eres2net_base_onnx_source//file) $@ >NUL",
+)
+
 filegroup(
     name = "models",
     srcs = [
@@ -10,5 +20,15 @@ filegroup(
     visibility = [
         "//tools/macos-release:__pkg__",
         "//tools/platform-release:__pkg__",
+    ],
+)
+py_test(
+    name = "speaker_model_test",
+    srcs = ["speaker_model_test.py"],
+    data = [
+        ":models",
+        "//third_party/licenses:downloads.json",
+        "//tools/macos-release:authority.json",
+        "//tools/platform-release:authority.json",
     ],
 )

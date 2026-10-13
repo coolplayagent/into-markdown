@@ -53,7 +53,7 @@
       "scope": "release-assembly",
       "distributed": false,
       "targets": ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"82a98dc6bc49b4dbaef89a31b2be003d42d8538eeb880a48c2e66a185d3ad246","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"0642f06bdff8ca9648ad24eff26a4ecb7e9e17addb595c4b6e828fd6b6dd9e6d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -64,7 +64,7 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["aarch64-apple-darwin"],
-      "integrity": [{"algorithm":"SHA-256","digest":"c3ea9fef77a8c639d75dc8414e9d242d41f6f086286ed051dc7b922083d3797d","subject":"tools/macos-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"2cfaa6591716bc585432d835083d813847af417274a746eb04b53db0b54d6947","subject":"tools/macos-release/authority.json"}],
       "executables": []
     },
     {
@@ -75,7 +75,7 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"],
-      "integrity": [{"algorithm":"SHA-256","digest":"82a98dc6bc49b4dbaef89a31b2be003d42d8538eeb880a48c2e66a185d3ad246","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"0642f06bdff8ca9648ad24eff26a4ecb7e9e17addb595c4b6e828fd6b6dd9e6d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     },
     {
@@ -86,7 +86,7 @@
       "scope": "compile-sign-package",
       "distributed": false,
       "targets": ["x86_64-pc-windows-msvc"],
-      "integrity": [{"algorithm":"SHA-256","digest":"82a98dc6bc49b4dbaef89a31b2be003d42d8538eeb880a48c2e66a185d3ad246","subject":"tools/platform-release/authority.json"}],
+      "integrity": [{"algorithm":"SHA-256","digest":"0642f06bdff8ca9648ad24eff26a4ecb7e9e17addb595c4b6e828fd6b6dd9e6d","subject":"tools/platform-release/authority.json"}],
       "executables": []
     }
   ]

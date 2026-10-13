@@ -678,6 +678,7 @@ struct JsonShapeScanner<'a> {
 std::thread_local! {
     static JSON_SCAN_CANCEL_AT: std::cell::RefCell<Option<(usize, into_markdown_core::CancellationToken)>> = const { std::cell::RefCell::new(None) };
     static JSON_SCAN_CHECKPOINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static JSON_SCAN_WAIT_FOR_DEADLINE_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 fn preflight_mediawiki_json(
@@ -882,6 +883,12 @@ impl JsonShapeScanner<'_> {
                         token.cancel();
                     }
                 });
+                if JSON_SCAN_WAIT_FOR_DEADLINE_AT.get() == Some(count) {
+                    // Reach the parser checkpoint before expiring the real request clock.
+                    // A one-millisecond startup race cannot prove mid-parse enforcement.
+                    let remaining = self.context.remaining_time().expect("test request deadline");
+                    std::thread::sleep(remaining + std::time::Duration::from_millis(1));
+                }
             }
             self.context.checkpoint()?;
             self.next_checkpoint = self.offset.saturating_add(256);
@@ -2101,10 +2108,11 @@ mod tests {
         assert!(JSON_SCAN_CHECKPOINTS.get() >= 3);
 
         JSON_SCAN_CHECKPOINTS.set(0);
-        let long = format!("{{\"value\":\"{}\"}}", "x".repeat(8 * 1024 * 1024));
+        JSON_SCAN_WAIT_FOR_DEADLINE_AT.set(Some(3));
+        let long = format!("{{\"value\":\"{}\"}}", "x".repeat(4 * 1024));
         let deadline_context = ExecutionContext::new(
             ExecutionOptions {
-                timeout: Some(std::time::Duration::from_millis(1)),
+                timeout: Some(std::time::Duration::from_secs(1)),
                 ..ExecutionOptions::default()
             },
             ResourceLimits { max_memory_bytes: 128 * 1024 * 1024, ..ResourceLimits::default() },
@@ -2115,7 +2123,8 @@ mod tests {
             &deadline_context,
         )
         .unwrap_err();
+        JSON_SCAN_WAIT_FOR_DEADLINE_AT.set(None);
         assert_eq!(error.code(), ErrorCode::Timeout);
-        assert!(JSON_SCAN_CHECKPOINTS.get() > 1);
+        assert_eq!(JSON_SCAN_CHECKPOINTS.get(), 3);
     }
 }

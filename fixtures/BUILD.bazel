@@ -13,8 +13,11 @@ exports_files([
     "drawio_generate.py",
     "fixture_expected.py",
     "manifest.json",
+    "pdf-layout-column-edge-geometry.json",
     "pdf-layout-quality-authority.json",
     "semantic-layout-quality-authority.json",
+    "small/pptx/normal.pptx",
+    "small/xlsx/normal.xlsx",
 ])
 
 filegroup(

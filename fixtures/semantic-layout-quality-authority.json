@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixture_manifest_sha256": "5ebf7fac3367e41d95b7110cd96b9864c93d478855c2fb4a5e625b97427ec717",
+  "fixture_manifest_sha256": "10ba7cd1a5f76435439e4d7265a85db8626ed3d49a38d70276cd5d6cc8cb1d70",
   "authorities": [
     {
       "schemaVersion": 1,
@@ -2811,7 +2811,7 @@
             "references": [
               {
                 "kind": "link",
-                "target": "EPUB/chapter.xhtml#corpus"
+                "target": "#epub-spine-000001-heading"
               }
             ]
           },
@@ -2899,8 +2899,8 @@
         ],
         "assets": []
       },
-      "irSha256": "3e0b40409a161327f691e6d16d3bffab150ca2b1cad7d0ae86b1e6a5cd620197",
-      "gfmSha256": "5ab7b571b4e58865126f51f61f4d4df2bedfcd9b2b835212d4352f2910a842f6"
+      "irSha256": "c38227c0e9c4c756311b347f1bdff12a776b784b4c728a4b724c17b628f27840",
+      "gfmSha256": "74e9ddc3560a6afe197e4700ac52005057b39554b9fbf4c7df2cf63b864602c7"
     },
     {
       "schemaVersion": 1,

@@ -28,6 +28,38 @@ FFmpeg 获取、helper/provider 构建、最终 Core 链接、原生成品 E2E�
 
 快速门禁提供早期反馈，正式发布与本地专项验收分别记录实际构建、平台和运行证据。
 
+## 本地完整 Qualitygate
+
+`qualitygate.yaml` 把 Rust 格式、完整 Bazel 构建/测试、Cargo workspace 检查、
+发布与 CI 治理契约、模型获取测试和结构工具测试作为必需门禁。它只在本地执行，
+不增加 PR 的四个 job 或改变五分钟预算，也不会触发正式发布。
+快照中的 Bazel 使用 batch 模式和两个构建 job，命令结束后释放 JVM，避免每轮研究
+留下独立快照的后台构建服务；所有目标和测试仍完整执行。
+
+```sh
+python3 -m pip install --only-binary=:all: -r tools/structure_gate/requirements.txt
+qualitygate doctor --worktree --profile full --snapshot-max-file-mib 5 --probe-tools
+qualitygate check --worktree --profile full --snapshot-max-file-mib 5
+python3 -m tools.structure_gate check --base-ref <exact-PR-base-commit>
+```
+
+环境需要仓库固定 Rust/Bazel、Python、CMake、可用的本机 C/C++ 编译器及 libclang
+资源头文件；构建会按现有摘要固定的 authority 获取依赖。Bazel 执行真实 CLI 文档、
+Web、公共 API、插件边界和发布契约。标为手动的真实运行时矩阵及私有语料仍按本节
+对应命令另行验收，完整门禁不会声称在 Linux 上证明其它平台的真实运行时行为。
+
+当 libclang 与编译器分开安装时，先配置 `BINDGEN_EXTRA_CLANG_ARGS` 指向该主机
+已经验证的 SDK 头文件；`.bazelrc` 将该可选变量传入 bindgen 构建动作。Python 与
+CMake 可以安装到独立虚拟环境，把其 `bin` 目录加入调用门禁的 `PATH`。机器绝对
+路径、虚拟环境和下载缓存不提交；缺少工具、解析器或 SDK 会令门禁失败。
+
+Qualitygate 使用不包含 `.git` 的源码快照，故精确 PR-base 的结构 ratchet 继续由
+上面的本地命令和现有 Linux PR job 执行。结构工具回归仍纳入完整 Qualitygate。
+快照保留全部历史文档和 4.5 MB OCR 数据，单文件预算为 5 MiB。唯一排除是已迁出
+Git 的 39 MB 3D-Speaker 历史路径；Bazel 使用原有 URL/SHA-256 生成同名模型，
+`//third_party/runtime-assets:speaker_model_test` 校验真实模型字节和两份发布 authority
+一致性。排除不涵盖下载 authority、许可、构建规则或任何测试。
+
 ## 0.0.5 真实语料发布比较
 
 [0.0.5 全量报告](qa/evidence/release-0.0.5/README.md)冻结 `real-world-test-data` 的

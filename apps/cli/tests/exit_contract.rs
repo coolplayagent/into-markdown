@@ -79,6 +79,25 @@ fn run_with_stdin(arguments: &[&str], input: &[u8]) -> std::process::Output {
     child.wait_with_output().unwrap()
 }
 
+fn assert_original_source_recovery(output: std::process::Output, source: &[u8]) {
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let dto =
+        into_markdown::ResultDto::from_json(std::str::from_utf8(&output.stdout).unwrap()).unwrap();
+    let result: into_markdown::ConversionResult = dto.try_into().unwrap();
+    assert_eq!(result.outcome(), into_markdown::ConversionOutcome::Degraded);
+    assert_eq!(result.assets.len(), 1);
+    assert_eq!(result.assets[0].bytes, source);
+    assert!(result.assets[0].external_uri.is_none());
+    assert!(result.markdown.contains("Original source"));
+    assert!(result.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "conversion.recovery.originalFile"
+            && diagnostic.severity == into_markdown::DiagnosticSeverity::Warning
+            && diagnostic.locator.as_ref().is_some_and(|locator| {
+                locator.byte_start == Some(0) && locator.byte_end == Some(source.len() as u64)
+            })
+    }));
+}
+
 fn run_isolated_ocr_capability_verify() -> std::process::Output {
     let temporary = tempfile::tempdir().unwrap();
     let project = temporary.path().join("project");
@@ -590,7 +609,10 @@ fn real_cli_converts_rtf_file_stdin_json_and_bundle_without_active_services() {
 #[test]
 fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
     let missing_id = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"cell_type":"raw","metadata":{},"source":"x"}]}"#;
-    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], missing_id);
+    let output = run_with_stdin(
+        &["--no-config", "--error-policy", "strict", "--format", "ipynb", "-"],
+        missing_id,
+    );
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
 
@@ -607,7 +629,10 @@ fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("resourceLimit"));
 
     let inline_attachment = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"markdown","cell_type":"markdown","metadata":{},"source":"prefix ![x](attachment:a)","attachments":{"a":{"image/png":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}}}]}"#;
-    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], inline_attachment);
+    let output = run_with_stdin(
+        &["--no-config", "--error-policy", "strict", "--format", "ipynb", "-"],
+        inline_attachment,
+    );
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
 
@@ -623,9 +648,31 @@ fn real_cli_rejects_invalid_notebook_schema_and_aggregate_fields() {
 
     // This PNG has valid chunk lengths and CRCs, but its IDAT zlib header is corrupted.
     let corrupt_codec = br#"{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[{"id":"image","cell_type":"raw","metadata":{},"source":"x","attachments":{"bad.png":{"image/png":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVQA2mNk+A8AAQUBAWP5UNAAAAAASUVORK5CYII="}}}]}"#;
-    let output = run_with_stdin(&["--no-config", "--format", "ipynb", "-"], corrupt_codec);
+    let output = run_with_stdin(
+        &["--no-config", "--error-policy", "strict", "--format", "ipynb", "-"],
+        corrupt_codec,
+    );
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+
+    // Default best-effort preserves the complete notebook as an attachment;
+    // successful delivery must still expose a degraded semantic outcome.
+    for source in [missing_id.as_slice(), inline_attachment.as_slice(), corrupt_codec.as_slice()] {
+        let output = run_with_stdin(
+            &[
+                "--no-config",
+                "--format",
+                "ipynb",
+                "--emit",
+                "result-json",
+                "--asset-mode",
+                "embed",
+                "-",
+            ],
+            source,
+        );
+        assert_original_source_recovery(output, source);
+    }
 }
 
 #[test]
@@ -720,9 +767,15 @@ fn structured_text_is_never_consumed_by_txt_fallback() {
     boundary_junk.extend(std::iter::repeat_n('x', 1024 * 1024 - prefix.len() - suffix.len()));
     boundary_junk.push_str(suffix);
     boundary_junk.push_str(" trailing prose");
-    let output = run_with_stdin(&["--no-config", "-"], boundary_junk.as_bytes());
+    let output =
+        run_with_stdin(&["--no-config", "--error-policy", "strict", "-"], boundary_junk.as_bytes());
     assert_eq!(output.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&output.stderr).contains("malformed"));
+    let output = run_with_stdin(
+        &["--no-config", "--emit", "result-json", "--asset-mode", "embed", "-"],
+        boundary_junk.as_bytes(),
+    );
+    assert_original_source_recovery(output, boundary_junk.as_bytes());
 }
 
 #[test]
@@ -848,11 +901,18 @@ fn drawio_cli_file_stdin_batch_and_explicit_format_contract() {
     std::fs::write(&file, b"<ordinary/>").unwrap();
     let bad = isolated_command()
         .arg(&file)
-        .args(["--no-config", "--log-format", "json"])
+        .args(["--no-config", "--error-policy", "strict", "--log-format", "json"])
         .output()
         .unwrap();
-    assert!(!bad.status.success());
+    assert_eq!(bad.status.code(), Some(3));
     assert!(String::from_utf8_lossy(&bad.stderr).contains("malformed"));
+    assert!(bad.stdout.is_empty());
+    let recovered = isolated_command()
+        .arg(&file)
+        .args(["--no-config", "--emit", "result-json", "--asset-mode", "embed"])
+        .output()
+        .unwrap();
+    assert_original_source_recovery(recovered, b"<ordinary/>");
 }
 
 #[test]
