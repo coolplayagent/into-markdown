@@ -236,13 +236,40 @@ fn native_issue334_explicit_layout_budget_is_enforced() {
 #[ignore = "requires PDFIUM_LIBRARY pointing to the pinned current-target runtime"]
 fn native_issue334_link_clipping_accounts_for_nonzero_page_origin() {
     let bytes = links_pdf_on_page(&["90 190 150 350"], "100 200 200 400", false);
+    let expected = Rect { x: 0.0, y: 50.0, width: 50.0, height: 150.0 };
+    {
+        let context = ExecutionContext::new(Default::default(), Default::default());
+        let _guard = lock_pdf_conversion(&context).unwrap();
+        let path = PathBuf::from(std::env::var_os("PDFIUM_LIBRARY").unwrap());
+        let runtime = Pdfium::load_pinned(&path, Limits::default()).unwrap();
+        let document = runtime.open(Arc::from(bytes.clone()), None).unwrap();
+        let page = document.page(0).unwrap();
+        let text = page.text_page().unwrap();
+        let links = text.links().unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(normalize_rect(links[0].bounds, &page.info().unwrap()).unwrap(), expected);
+    }
     let output = convert(bytes, &ConversionOptions::default()).unwrap();
     let Block::Page { blocks, .. } = &output.document.blocks[0].block else { panic!("page") };
-    let link = blocks.iter().find(|node| node.id.0.contains("-link-")).unwrap();
-    assert_eq!(
-        link.provenance.locator.bounds,
-        Some(Rect { x: 0.0, y: 50.0, width: 50.0, height: 150.0 })
-    );
+    let content = blocks
+        .iter()
+        .find_map(|node| {
+            let Block::Paragraph(inlines) = &node.block else { return None };
+            inlines.iter().find_map(|inline| match inline {
+                Inline::Link { target, content } if target == "https://example.test/link-0" => {
+                    Some(content)
+                }
+                _ => None,
+            })
+        })
+        .expect("clipped annotation is attached to its covered source text");
+    assert!(!content.is_empty());
+    for inline in content {
+        let Inline::SourceText { provenance, .. } = inline else { panic!("source text") };
+        let r = provenance.locator.bounds.unwrap();
+        assert!((expected.x..=expected.x + expected.width).contains(&(r.x + r.width / 2.0)));
+        assert!((expected.y..=expected.y + expected.height).contains(&(r.y + r.height / 2.0)));
+    }
 }
 
 #[test]

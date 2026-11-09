@@ -119,15 +119,17 @@ impl PageLinks<'_> {
         self.blocks
             .try_reserve(1)
             .map_err(|_| resource("max_memory_bytes", "PDF link block allocation failed"))?;
+        let mut source = provenance(
+            self.number,
+            Some(normalize_rect(link.bounds, self.info)?),
+            None,
+            self.info,
+        )?;
+        source.locator.part = Some(into_markdown_pdf_layout::LINK_SOURCE_PART.into());
         self.blocks.push(BlockNode {
             id: NodeId(format!("pdf-page-{}-link-{index}", self.number)),
             block: Block::Paragraph(vec![inline]),
-            provenance: provenance(
-                self.number,
-                Some(normalize_rect(link.bounds, self.info)?),
-                None,
-                self.info,
-            )?,
+            provenance: source,
         });
         Ok(())
     }

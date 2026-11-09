@@ -31,13 +31,14 @@ pub(crate) fn page_content(
     Ok(content)
 }
 
-fn block_is_collectable(
+pub(crate) fn block_is_collectable(
     node: &BlockNode,
     page: u32,
     width: f32,
     height: f32,
 ) -> Result<bool, ConversionError> {
-    if node.provenance.locator.part.as_deref() == Some("pdf/ambiguous-footnote") {
+    if matches!(node.provenance.locator.part.as_deref(), Some("pdf/ambiguous-footnote" | "pdf/toc"))
+    {
         return Ok(false);
     }
     if matches!(node.block, Block::Footnote { .. })
@@ -58,6 +59,7 @@ fn block_is_collectable(
                 saw_source = true;
                 (provenance, false, true)
             }
+            Inline::Link { content, .. } if crate::links::source_link(content) => return Ok(()),
             Inline::Link { .. } | Inline::FootnoteReference(_) => {
                 valid = false;
                 return Ok(());
