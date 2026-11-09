@@ -1687,6 +1687,17 @@ mod tests {
     }
 
     #[test]
+    fn text_render_preserves_punctuation_paragraphs_and_explicit_breaks() {
+        let source = input("1.2、A-B、file_name 和 A | B!\n# 标题\n\n下一段".as_bytes());
+        let options = ConversionOptions::default();
+        let output = convert_text(&source, &options, &context()).unwrap();
+        let markdown =
+            into_markdown_render_markdown::render(&output.document, &output.assets, &options)
+                .unwrap();
+        assert_eq!(markdown, "1.2、A-B、file_name 和 A | B!  \n\\# 标题\n\n下一段\n");
+    }
+
+    #[test]
     fn utf8_bom_and_mixed_newlines_preserve_ranges() {
         let source = input(b"\xef\xbb\xbfhello\r\nworld\r\n\rnext\n\nlast");
         let output = convert_text(&source, &ConversionOptions::default(), &context()).unwrap();

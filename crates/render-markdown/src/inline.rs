@@ -2,9 +2,11 @@
 
 use super::{
     BTreeSet, ConversionError, Inline, InlineContext, InlineMark, escape_destination,
-    escape_html_attribute, escape_html_code, escape_html_text, escape_text, footnote_label,
-    normalize_lf, render_code_span, render_error, single_line, validate_link_target,
+    escape_html_attribute, escape_html_code, escape_html_text, footnote_label, normalize_lf,
+    render_code_span, render_error, validate_link_target,
 };
+
+use super::escaping::{escape_run, protect_heading};
 
 pub(super) fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
     match inline {
@@ -52,7 +54,7 @@ pub(super) fn render_inlines(
             Inline::Link { target, content } => {
                 validate_link_target(target)?;
                 output.push('[');
-                output.push_str(&render_inlines(content, context)?);
+                output.push_str(&render_inlines(content, context.label())?);
                 output.push_str("](<");
                 output.push_str(&escape_destination(target, context));
                 output.push_str(">)");
@@ -67,17 +69,27 @@ pub(super) fn render_inlines(
                 output.push_str(&footnote_label(label));
                 output.push(']');
             }
-            Inline::LineBreak => output.push_str(match context {
-                InlineContext::Normal => "  \n",
-                InlineContext::TableCell => "<br>",
-            }),
+            Inline::LineBreak => {
+                // Preserve edge/adjacent breaks that Markdown consumes as blank
+                // lines or the end of a paragraph/link label.
+                let html = context.table_cell
+                    || context.heading
+                    || context.link_label
+                    || output.is_empty()
+                    || inlines.get(index + 1).is_none_or(|next| matches!(next, Inline::LineBreak))
+                    || index
+                        .checked_sub(1)
+                        .and_then(|i| inlines.get(i))
+                        .is_some_and(|previous| matches!(previous, Inline::LineBreak));
+                output.push_str(if html { "<br>" } else { "  \n" });
+            }
             _ => {
                 return Err(render_error("document contains an unsupported future inline variant"));
             }
         }
         index += 1;
     }
-    Ok(output)
+    Ok(if context.heading && !context.link_label { protect_heading(output) } else { output })
 }
 
 // Native delimiters can border word characters freely. At punctuation edges we
@@ -101,10 +113,59 @@ fn render_marked_text(
     previous: Option<char>,
     next: Option<char>,
 ) -> String {
-    let value = single_line(value);
+    let value = normalize_lf(value);
+    // Close style delimiters at paragraph boundaries and reopen them afterwards.
+    let mut output = String::new();
+    let mut remaining = value.as_str();
+    let mut previous = previous;
+    while let Some((start, end)) = paragraph_boundary(remaining) {
+        output.push_str(&render_marked_segment(
+            &remaining[..start],
+            marks,
+            context,
+            previous,
+            None,
+        ));
+        let separator = &remaining[start..end];
+        if context.table_cell || context.heading || context.link_label {
+            output.push_str(&separator.replace('\n', "<br>"));
+        } else {
+            output.push_str(separator);
+        }
+        remaining = &remaining[end..];
+        previous = None;
+    }
+    output.push_str(&render_marked_segment(remaining, marks, context, previous, next));
+    output
+}
+
+fn paragraph_boundary(value: &str) -> Option<(usize, usize)> {
+    let mut start = None;
+    for (index, byte) in value.bytes().enumerate() {
+        match byte {
+            b'\n' => {
+                if let Some(start) = start {
+                    return Some((start, index + 1));
+                }
+                start = Some(index);
+            }
+            b' ' | b'\t' => {}
+            _ => start = None,
+        }
+    }
+    None
+}
+
+fn render_marked_segment(
+    value: &str,
+    marks: &[InlineMark],
+    context: InlineContext,
+    previous: Option<char>,
+    next: Option<char>,
+) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() || marks.is_empty() {
-        return escape_text(&value, context);
+        return escape_run(value, context, previous, next);
     }
     let leading = &value[..value.len() - value.trim_start().len()];
     let trailing = &value[value.trim_end().len()..];
@@ -116,7 +177,7 @@ fn render_marked_text(
         });
     let native = native_boundaries(trimmed, previous, next)
         && (!html_marks || (separating(previous) && separating(next)));
-    let text = escape_text(if native { trimmed } else { &value }, context);
+    let text = escape_run(if native { trimmed } else { value }, context, previous, next);
     let wrappers = [
         InlineMark::Subscript,
         InlineMark::Superscript,
@@ -143,7 +204,7 @@ fn render_marked_text(
     });
     let mut rendered = String::with_capacity(text.len() + 78 + leading.len() + trailing.len());
     if native {
-        rendered.push_str(leading);
+        rendered.push_str(&escape_run(leading, context, previous, trimmed.chars().next()));
     }
     for (open, _) in wrappers.iter().rev() {
         rendered.push_str(open);
@@ -153,19 +214,7 @@ fn render_marked_text(
         rendered.push_str(close);
     }
     if native {
-        rendered.push_str(trailing);
-    }
-    rendered
-}
-
-// Office paragraph indentation is text, while Markdown indentation can start code.
-pub(super) fn protect_paragraph_indent(mut rendered: String) -> String {
-    let leading = rendered.chars().take_while(|c| matches!(c, ' ' | '\t'));
-    let (count, tab) =
-        leading.fold((0_usize, false), |(count, tab), c| (count + 1, tab || c == '\t'));
-    if !rendered.trim().is_empty() && (tab || count >= 4) {
-        let entity = if rendered.starts_with('\t') { "&#9;" } else { "&#32;" };
-        rendered.replace_range(..1, entity);
+        rendered.push_str(&escape_run(trailing, context, trimmed.chars().next_back(), next));
     }
     rendered
 }
@@ -216,7 +265,7 @@ pub(super) fn render_html_inlines(inlines: &[Inline]) -> Result<String, Conversi
             }
             Inline::Code(value) | Inline::Formula(value) => {
                 output.push_str("<code>");
-                output.push_str(&escape_html_code(value, InlineContext::Normal));
+                output.push_str(&escape_html_code(value, InlineContext::NORMAL));
                 output.push_str("</code>");
             }
             Inline::Link { target, content } => {

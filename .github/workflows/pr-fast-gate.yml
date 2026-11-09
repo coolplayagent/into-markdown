@@ -54,7 +54,7 @@ jobs:
       - name: Test shared Rust and release contracts once
         run: |
           cargo fmt --all -- --check
-          cargo test --locked -p into-markdown-core -p into-markdown-layout-quality -p into-markdown-ocr -p into-markdown-task-store --lib -j2 -- \
+          cargo test --locked -p into-markdown-core -p into-markdown-render-markdown -p into-markdown-layout-quality -p into-markdown-ocr -p into-markdown-task-store --lib -j2 -- \
             --skip recognition::tests::all_exif_orientations_flow_from_detection_to_raw_source_recognition
           cargo test --locked -p into-markdown-process-plugin --lib -j2
           python3 tools/platform-release/pr_fast_gate.py --target x86_64-unknown-linux-gnu

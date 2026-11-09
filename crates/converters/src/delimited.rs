@@ -738,6 +738,30 @@ mod tests {
     }
 
     #[test]
+    fn multiline_cells_keep_breaks_and_literal_pipes_in_markdown() {
+        for (format, delimiter) in [(InputFormat::Csv, ','), (InputFormat::Tsv, '\t')] {
+            for newline in ["\n", "\r\n", "\r"] {
+                let source = format!(
+                    "标识{delimiter}内容{newline}A{delimiter}\"第一行|a{newline}第二行{newline}{newline}第三行\"{newline}"
+                );
+                let mut options = ConversionOptions::default();
+                options.delimited_text.header = TableHeaderMode::Always;
+                let output = convert(source.as_bytes(), format, &options);
+                let markdown = into_markdown_render_markdown::render(
+                    &output.document,
+                    &output.assets,
+                    &options,
+                )
+                .unwrap();
+                assert!(
+                    markdown.contains("| A | 第一行\\|a<br>第二行<br><br>第三行 |"),
+                    "{markdown}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rfc_quotes_crlf_empty_and_formula_are_literal() {
         let output = convert(
             b"name,note,formula,empty\r\nAlice,\"one\r\ntwo and \"\"quote\"\"\",=1+1,\r\n",

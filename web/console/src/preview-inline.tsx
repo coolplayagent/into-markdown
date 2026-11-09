@@ -75,6 +75,14 @@ function parse(source: string, depth: number, budget: Budget): ReactNode {
   const flush = () => { if (plain) { nodes.push(decodeText(plain)); plain = ""; } };
   for (let index = 0; index < source.length;) {
     if (budget.left <= 0 || budget.work <= 0) { plain += source.slice(index); break; }
+    if (source[index] === "\n" || (source[index] === "\\" && source[index + 1] === "\n")) {
+      const hard = source[index] === "\\" || / {2,}$/.test(plain);
+      if (hard) {
+        plain = plain.replace(/ {2,}$/, "");
+        flush(); nodes.push(createElement("br", { key: index })); budget.left -= 1;
+      } else plain += " ";
+      budget.work -= 1; index += source[index] === "\\" ? 2 : 1; continue;
+    }
     if (source[index] === "\\" && /[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]/.test(source[index + 1] ?? "")) {
       plain += source[index + 1]; index += 2; continue;
     }
@@ -95,6 +103,7 @@ function parse(source: string, depth: number, budget: Budget): ReactNode {
     if (end < 0) { plain += marker; index += marker.length; continue; }
     flush(); budget.left -= 1;
     let body = source.slice(index + marker.length, end);
+    if (code) body = body.replaceAll("\n", " ");
     if (code) {
       if (body.startsWith(" ") && body.endsWith(" ") && body.trim()) body = body.slice(1, -1);
       nodes.push(createElement("code", { key: index }, body));

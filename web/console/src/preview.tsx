@@ -1,5 +1,6 @@
 import { memo, Fragment, type ReactNode } from "react";
 import { renderInline as renderSafeInline } from "./preview-inline";
+import { collectParagraph, tableCells, isTableDelimiter } from "./preview-blocks";
 
 const MAX_TREE_DEPTH = 12;
 const MAX_TREE_NODES = 1_000;
@@ -10,7 +11,7 @@ export const SafeMarkdownPreview = memo(function SafeMarkdownPreview({ source }:
   let cellsLeft = 4000;
   const budget = { left: 8000, work: 4_000_000 };
   const renderInline = (value: string) => renderSafeInline(stripOcrBoundaryMarkers(value), budget);
-  const allLines = source.replaceAll("\r\n", "\n").split("\n");
+  const allLines = source.replace(/\r\n?/g, "\n").split("\n");
   const lines = allLines.slice(0, MAX_MARKDOWN_BLOCKS);
   const output: ReactNode[] = [];
   let code: string[] | null = null;
@@ -43,12 +44,18 @@ export const SafeMarkdownPreview = memo(function SafeMarkdownPreview({ source }:
       const level = heading[1]!.length;
       output.push(<div className={`preview-heading h${level}`} role="heading" aria-level={level} key={index}>{renderInline(heading[2]!)}</div>);
     } else if (/^\s*[-*+]\s+/.test(line)) {
-      output.push(<div className={`preview-list-item list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">•</span><span>{renderInline(line.replace(/^\s*[-*+]\s+/, ""))}</span></div>);
+      const paragraph = collectParagraph(lines, index, line.replace(/^\s*[-*+]\s+/, ""), true);
+      index = paragraph.end;
+      output.push(<div className={`preview-list-item list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">•</span><span>{renderInline(paragraph.text)}</span></div>);
     } else if (/^\s*\d{1,4}[.)]\s+/.test(line)) {
       const ordered = /^\s*(\d{1,4})[.)]\s+(.*)$/.exec(line)!;
-      output.push(<div className={`preview-list-item ordered list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">{ordered[1]}.</span><span>{renderInline(ordered[2]!)}</span></div>);
+      const paragraph = collectParagraph(lines, index, ordered[2]!, true);
+      index = paragraph.end;
+      output.push(<div className={`preview-list-item ordered list-depth-${listDepth}`} key={index}><span className="preview-list-marker" aria-hidden="true">{ordered[1]}.</span><span>{renderInline(paragraph.text)}</span></div>);
     } else if (line.trim()) {
-      output.push(<p key={index}>{renderInline(line)}</p>);
+      const paragraph = collectParagraph(lines, index, line);
+      index = paragraph.end;
+      output.push(<p key={index}>{renderInline(paragraph.text)}</p>);
     }
   }
   if (code) output.push(<pre key="code-final"><code>{code.join("\n")}</code></pre>);
@@ -68,16 +75,6 @@ function stripOcrBoundaryMarkers(source: string): string {
     .trim();
 }
 
-
-function tableCells(line: string): string[] {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim().replaceAll("\\|", "|"));
-}
-
-function isTableDelimiter(line: string): boolean {
-  const cells = tableCells(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
-}
 
 export function JsonTree({ value }: { value: unknown }) {
   let nodes = 0;
