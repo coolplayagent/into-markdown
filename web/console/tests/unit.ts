@@ -29,6 +29,7 @@ const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 
 const testGroups = {
   preview: new Set([
+    "Markdown paragraphs distinguish soft breaks, hard breaks, and block boundaries",
     "Markdown preview never creates executable or resource-loading DOM",
     "Markdown native styles preserve nested text, escapes, and inert resources",
     "result dialog provides reading and source views with a closed details drawer",
@@ -463,6 +464,26 @@ test("Markdown native styles preserve nested text, escapes, and inert resources"
   assert.ok(window.document.body.textContent.includes("& 中文*plain*"));
   assert.equal(window.document.querySelectorAll(".markdown-preview br").length, 1);
   assert.equal(window.document.querySelector("img,a,script,iframe"), null);
+});
+
+test("Markdown paragraphs distinguish soft breaks, hard breaks, and block boundaries", async () => {
+  const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
+  const source = "1.2、A-B、file_name 和 A | B!\r\n**first\rsecond**  \nthird\\\nfourth\n\nnext paragraph\n# Heading\n- first\n    continuation  \n    last\n- second\n\n| A | B |\n| --- | --- |\n| item | one<br>two |\n\n```\ncode\nlines\n```\n\n\\# literal\n\\- literal";
+  root.render(createElement(SafeMarkdownPreview, { source }));
+  await waitFor(() => window.document.querySelectorAll(".markdown-preview p").length === 3);
+  const paragraphs = [...window.document.querySelectorAll(".markdown-preview p")];
+  assert.ok(paragraphs[0]!.textContent.startsWith("1.2、A-B、file_name 和 A | B! first second"));
+  assert.equal(paragraphs[0]!.querySelector("strong")?.textContent, "first second");
+  assert.equal(paragraphs[0]!.querySelectorAll("br").length, 2);
+  assert.equal(paragraphs[1]!.textContent, "next paragraph");
+  assert.equal(paragraphs[2]!.textContent, "# literal - literal");
+  assert.equal(window.document.querySelectorAll(".preview-heading").length, 1);
+  const items = [...window.document.querySelectorAll(".preview-list-item")];
+  assert.equal(items.length, 2);
+  assert.ok(items[0]!.textContent.includes("first continuation"));
+  assert.equal(items[0]!.querySelectorAll("br").length, 1);
+  assert.equal(window.document.querySelectorAll("td br").length, 1);
+  assert.equal(window.document.querySelector("pre code")?.textContent, "code\nlines");
 });
 
 test("Markdown preview never creates executable or resource-loading DOM", async () => {

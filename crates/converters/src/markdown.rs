@@ -1468,6 +1468,26 @@ mod tests {
     }
 
     #[test]
+    fn text_break_semantics_survive_render_and_reparse() {
+        let source = "1.2、A-B、file_name 和 A | B!\nsoft\n\nhard  \nnext\n\n**bold\ncontinued**\n\n- item\n  continuation\n";
+        let first = convert(source.as_bytes()).unwrap();
+        let options = ConversionOptions::default();
+        let rendered =
+            into_markdown_render_markdown::render(&first.document, &first.assets, &options)
+                .unwrap();
+        assert_eq!(rendered, source.replace("  continuation", "    continuation"));
+        let first_events = Parser::new_ext(source, Options::ENABLE_TABLES).collect::<Vec<_>>();
+        let events = Parser::new_ext(&rendered, Options::ENABLE_TABLES).collect::<Vec<_>>();
+        assert_eq!(first_events, events);
+        let second = convert(rendered.as_bytes()).unwrap();
+        assert_eq!(
+            into_markdown_render_markdown::render(&second.document, &second.assets, &options)
+                .unwrap(),
+            rendered
+        );
+    }
+
+    #[test]
     fn parses_gfm_structures_into_ir() {
         let source = b"# Heading\n\nA **bold** [link](https://example.com).\n\n- [x] done\n- [ ] todo\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```rust\nfn main() {}\n```\n\nnote[^n]\n\n[^n]: foot\n";
         let output = convert(source).unwrap();

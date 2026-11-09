@@ -28,7 +28,7 @@ impl RenderPlan<'_> {
         depth: usize,
     ) -> Result<u64, ConversionError> {
         let source = u64::try_from(value.len()).map_err(|_| render_plan_overflow())?;
-        let newlines = value.bytes().filter(|byte| *byte == b'\n').count() as u64;
+        let newlines = value.bytes().filter(|byte| matches!(*byte, b'\n' | b'\r')).count() as u64;
         let fence = super::longest_run(value, '`').saturating_add(1).max(3) as u64;
         let info = language.map_or(0, str::len) as u64;
         let output = source
@@ -58,8 +58,9 @@ impl RenderPlan<'_> {
 
     pub(super) fn text(&mut self, value: &str, depth: usize) -> Result<u64, ConversionError> {
         let source = u64::try_from(value.len()).map_err(|_| render_plan_overflow())?;
-        let newlines = u64::try_from(value.bytes().filter(|byte| *byte == b'\n').count())
-            .map_err(|_| render_plan_overflow())?;
+        let newlines =
+            u64::try_from(value.bytes().filter(|byte| matches!(*byte, b'\n' | b'\r')).count())
+                .map_err(|_| render_plan_overflow())?;
         self.text_size(source, newlines, depth)
     }
     pub(super) fn text_size(
@@ -68,10 +69,10 @@ impl RenderPlan<'_> {
         newlines: u64,
         depth: usize,
     ) -> Result<u64, ConversionError> {
-        // `normalize_lf` owns two successive replace results; `single_line`
-        // owns one more. `escape_text` expands each input byte by at most
-        // five bytes (`&amp;`) and marked text can wrap all six supported
-        // marks with at most 13 bytes each.
+        // LF normalization and joined text runs own source-sized buffers.
+        // Escaping uses at most five bytes per byte; paragraph/heading protection
+        // adds at most one entity or escape per line. Each blank-line boundary
+        // closes and reopens all six marks (at most 13 bytes per mark).
         self.add(source)?;
         self.add(source)?;
         self.add(source)?;
@@ -79,11 +80,12 @@ impl RenderPlan<'_> {
         self.add(source)?;
         self.add(source)?;
         let output = source
-            .checked_mul(5)
-            .and_then(|value| value.checked_add(6 * 13))
+            .checked_mul(6)
+            .and_then(|value| value.checked_add((newlines / 2 + 1).checked_mul(6 * 13)?))
             .ok_or_else(render_plan_overflow)?;
         let mut rendered = output;
-        self.add(rendered)?;
+        // Escaped segment, marked segment, joined runs and protected paragraph.
+        self.add(rendered.checked_mul(4).ok_or_else(render_plan_overflow)?)?;
         // At each typed block ancestor the child string remains alive while
         // indentation replacement, formatting, the Vec<String> slot, and
         // the container join allocate their own result. This recurrence
@@ -128,9 +130,12 @@ pub(super) fn plan_inlines(
                     break;
                 }
                 bytes = bytes.checked_add(text.len() as u64).ok_or_else(render_plan_overflow)?;
-                newlines = newlines
-                    .checked_add(text.bytes().filter(|b| *b == b'\n').count() as u64)
-                    .ok_or_else(render_plan_overflow)?;
+                newlines =
+                    newlines
+                        .checked_add(
+                            text.bytes().filter(|b| matches!(*b, b'\n' | b'\r')).count() as u64
+                        )
+                        .ok_or_else(render_plan_overflow)?;
                 index += 1;
                 if index.is_multiple_of(1024) {
                     plan.context.checkpoint()?;

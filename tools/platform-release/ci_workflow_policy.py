@@ -15,7 +15,7 @@ FAST_JOBS = {
     "linux-x86-64": ("Linux x86_64, shared tests, and Web", "ubuntu-24.04"),
     "linux-arm64": ("Linux ARM64 Core", "ubuntu-24.04-arm"),
     "windows-x86-64": ("Windows x86_64 Core", "windows-2025"),
-    "macos-arm64": ("macOS ARM64 Core", "macos-14"),
+    "macos-arm64": ("macOS ARM64 Core", "macos-15"),
 }
 
 

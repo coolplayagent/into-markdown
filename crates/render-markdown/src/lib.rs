@@ -4,14 +4,16 @@
 //! assets remains the caller's responsibility.
 
 mod asset_validation;
+mod escaping;
 mod fixed_alloc;
+use escaping::{escape_text, protect_heading, protect_paragraph};
 mod inline;
 mod list;
 
 mod render_plan;
 use render_plan::{RenderPlan, plan_inlines};
 
-use inline::{protect_paragraph_indent, render_html_inlines, render_inlines};
+use inline::{render_html_inlines, render_inlines};
 
 use base64::Engine as _;
 use into_markdown_core::{
@@ -844,14 +846,27 @@ struct RenderContext<'a> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum InlineContext {
-    Normal,
-    TableCell,
+struct InlineContext {
+    table_cell: bool,
+    heading: bool,
+    link_label: bool,
+}
+
+impl InlineContext {
+    const NORMAL: Self = Self { table_cell: false, heading: false, link_label: false };
+    const TABLE_CELL: Self = Self { table_cell: true, ..Self::NORMAL };
+
+    const fn heading(self) -> Self {
+        Self { heading: true, ..self }
+    }
+    const fn label(self) -> Self {
+        Self { link_label: true, ..self }
+    }
 }
 
 impl RenderContext<'_> {
     fn render_blocks(&self, nodes: &[BlockNode]) -> Result<String, ConversionError> {
-        self.render_blocks_in(nodes, InlineContext::Normal)
+        self.render_blocks_in(nodes, InlineContext::NORMAL)
     }
 
     fn render_blocks_in(
@@ -902,9 +917,8 @@ impl RenderContext<'_> {
         inline_context: InlineContext,
     ) -> Result<String, ConversionError> {
         match &node.block {
-            Block::Paragraph(content) => {
-                render_inlines(content, inline_context).map(protect_paragraph_indent)
-            }
+            Block::Paragraph(content) => render_inlines(content, inline_context)
+                .map(|text| protect_paragraph(text, inline_context)),
             Block::Heading { level, content } => {
                 let prefix = epub_heading_anchor(node)
                     .map(|id| format!("<a id=\"{id}\"></a>\n\n"))
@@ -912,7 +926,7 @@ impl RenderContext<'_> {
                 Ok(format!(
                     "{prefix}{} {}",
                     "#".repeat(usize::from(*level)),
-                    render_inlines(content, inline_context)?
+                    render_inlines(content, inline_context.heading())?
                 ))
             }
             Block::List { kind, start, items } => {
@@ -953,7 +967,7 @@ impl RenderContext<'_> {
                     write!(
                         heading,
                         ": {}",
-                        escape_text(&single_line(title), InlineContext::Normal)
+                        protect_heading(escape_text(&single_line(title), InlineContext::NORMAL))
                     )
                     .map_err(|_| render_error("failed to render slide title"))?;
                 }
@@ -963,7 +977,10 @@ impl RenderContext<'_> {
             Block::Sheet { name, blocks } => {
                 let body = self.render_blocks_in(blocks, inline_context)?;
                 Ok(with_body(
-                    format!("## Sheet: {}", escape_text(&single_line(name), InlineContext::Normal)),
+                    format!(
+                        "## Sheet: {}",
+                        protect_heading(escape_text(&single_line(name), InlineContext::NORMAL))
+                    ),
                     &body,
                 ))
             }
@@ -975,7 +992,7 @@ impl RenderContext<'_> {
                     write!(
                         line,
                         " **{}:**",
-                        escape_text(&single_line(&speaker), InlineContext::Normal)
+                        escape_text(&single_line(&speaker), InlineContext::NORMAL)
                     )
                     .map_err(|_| render_error("failed to render speaker label"))?;
                 }
@@ -984,7 +1001,7 @@ impl RenderContext<'_> {
                     line.push(' ');
                     line.push_str(&rendered_content);
                 }
-                Ok(line)
+                Ok(protect_paragraph(line, inline_context))
             }
             Block::Rule => Ok("---".into()),
             _ => Err(render_error("document contains an unsupported future block variant")),
@@ -1144,17 +1161,17 @@ impl RenderContext<'_> {
                 }
                 Block::Code { text, .. } => {
                     output.push_str("<pre><code>");
-                    output.push_str(&escape_html_code(text, InlineContext::Normal));
+                    output.push_str(&escape_html_code(text, InlineContext::NORMAL));
                     output.push_str("</code></pre>");
                 }
                 Block::Formula(value) => {
                     output.push_str("<code>");
-                    output.push_str(&escape_html_code(value, InlineContext::Normal));
+                    output.push_str(&escape_html_code(value, InlineContext::NORMAL));
                     output.push_str("</code>");
                 }
                 _ => {
                     let rendered = self
-                        .render_blocks_in(std::slice::from_ref(node), InlineContext::TableCell)?;
+                        .render_blocks_in(std::slice::from_ref(node), InlineContext::TABLE_CELL)?;
                     temporary = temporary
                         .checked_add(
                             u64::try_from(rendered.capacity())
@@ -1228,7 +1245,7 @@ impl RenderContext<'_> {
     }
 
     fn render_cell(&self, cell: &Cell) -> Result<(String, u64), ConversionError> {
-        let rendered = self.render_blocks_in(&cell.blocks, InlineContext::TableCell)?;
+        let rendered = self.render_blocks_in(&cell.blocks, InlineContext::TABLE_CELL)?;
         let normalized = normalize_lf(&rendered);
         let paragraphs = normalized.replace("\n\n", "<br><br>");
         let flattened = paragraphs.replace('\n', "<br>");
@@ -1283,7 +1300,7 @@ impl RenderContext<'_> {
     ) -> Result<String, ConversionError> {
         let alt = escape_image_alt(&single_line(alt.unwrap_or_default()));
         if self.options.output.asset_mode == AssetMode::Omit {
-            return Ok(alt);
+            return Ok(protect_paragraph(alt, InlineContext::NORMAL));
         }
         let reference = self
             .plan
@@ -1316,7 +1333,7 @@ impl RenderContext<'_> {
                 escape_generated_destination(&target)
             } else {
                 validate_link_target(&target)?;
-                escape_destination(&target, InlineContext::Normal)
+                escape_destination(&target, InlineContext::NORMAL)
             };
         let prefix = if asset.media_type.starts_with("image/") { "!" } else { "" };
         let alt = if prefix.is_empty() && alt.trim().is_empty() { "Original image" } else { &alt };
@@ -1354,7 +1371,7 @@ fn render_code_span(value: &str, context: InlineContext) -> String {
     if value.is_empty() || value.chars().all(char::is_whitespace) {
         return format!("<code>{}</code>", escape_html_code(&value, context));
     }
-    if context == InlineContext::TableCell {
+    if context.table_cell {
         value = value.replace('|', "\\|");
     }
     let fence = "`".repeat(longest_run(&value, '`').saturating_add(1).max(1));
@@ -1443,41 +1460,8 @@ fn footnote_label(value: &str) -> String {
     output
 }
 
-fn escape_text(value: &str, _: InlineContext) -> String {
-    let mut output = String::with_capacity(value.len());
-    for character in value.chars() {
-        if character == '&' {
-            output.push_str("&amp;");
-            continue;
-        }
-        if matches!(
-            character,
-            '\\' | '`'
-                | '*'
-                | '_'
-                | '{'
-                | '}'
-                | '['
-                | ']'
-                | '<'
-                | '>'
-                | '#'
-                | '+'
-                | '-'
-                | '.'
-                | '!'
-                | '|'
-                | '~'
-        ) {
-            output.push('\\');
-        }
-        output.push(character);
-    }
-    output
-}
-
 fn escape_image_alt(value: &str) -> String {
-    escape_text(value, InlineContext::Normal).replace('"', "&quot;")
+    escape_text(value, InlineContext::NORMAL).replace('"', "&quot;")
 }
 
 fn escape_destination(value: &str, context: InlineContext) -> String {
@@ -1485,7 +1469,7 @@ fn escape_destination(value: &str, context: InlineContext) -> String {
     encode_bytes(&value, |byte| {
         !byte.is_ascii_control()
             && !matches!(byte, b' ' | b'<' | b'>' | b'\\')
-            && (context != InlineContext::TableCell || byte != b'|')
+            && (!context.table_cell || byte != b'|')
     })
 }
 
@@ -1858,6 +1842,7 @@ fn validate_planned_references<'a>(
 #[cfg(test)]
 mod tests {
     mod readability;
+    mod text_semantics;
     use super::*;
     use into_markdown_core::{
         AssetId, CellRef, DocumentMetadata, NodeId, OcrEvidence, OcrEvidenceStage, OcrEvidenceStep,
@@ -2001,7 +1986,7 @@ mod tests {
         let doc = document(vec![node("h", Block::Heading { level: 3, content })]);
         assert_eq!(
             output(&doc),
-            "### ***<u>a\\*\\[x\\] b</u>***```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$  \n~~tail~~\n"
+            "### ***<u>a\\*\\[x\\]<br>b</u>***```  a``b  ```[link\\]](<https://e.invalid/a%20b%3Ex>)$``x`y``$<br>~~tail~~\n"
         );
     }
 
@@ -2452,7 +2437,7 @@ mod tests {
         ]);
         assert_eq!(
             output(&doc),
-            "````math\nx```y\nz\n````\n\n[^fn-6e205d0d0a]\n\n[^fn-6e205d0d0a]: foot\n\n<a id=\"pdf-page-2\"></a>\n\n## Page 2\n\npage\n\n## Slide 3: A \\# title\n\n## Sheet: Data \\| 2026\n\nsheet\n\n`01:01:01.002 – 01:01:02.003` **A\\*B:** hello\n\n---\n"
+            "````math\nx```y\nz\n````\n\n[^fn-6e205d0d0a]\n\n[^fn-6e205d0d0a]: foot\n\n<a id=\"pdf-page-2\"></a>\n\n## Page 2\n\npage\n\n## Slide 3: A # title\n\n## Sheet: Data | 2026\n\nsheet\n\n`01:01:01.002 – 01:01:02.003` **A\\*B:** hello\n\n---\n"
         );
     }
 

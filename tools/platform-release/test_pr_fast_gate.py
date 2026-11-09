@@ -95,6 +95,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         for old, new in (("name: PR fast gate", "name: Other"),
                          ("name: Linux ARM64 Core", "name: Renamed"),
                          ("runs-on: ubuntu-24.04-arm", "runs-on: ubuntu-24.04"),
+                         ("runs-on: macos-15", "runs-on: macos-14"),
                          ("timeout-minutes: 5", "timeout-minutes: 30"),
                          ("  pull_request:", "  push:"),
                          ("  pull_request:", "  pull_request:\n    paths: ['docs/**']")):
