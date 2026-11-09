@@ -12,6 +12,9 @@ mod page_lifetime;
 #[path = "resilience_tests.rs"]
 mod resilience;
 
+#[path = "link_directory_tests.rs"]
+mod link_directory;
+
 #[test]
 fn shared_page_ceiling_reaches_runtime_loading_for_both_policies() {
     let nonce = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
@@ -894,18 +897,7 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                 else {
                     panic!("page")
                 };
-                let provenance = first_blocks
-                    .iter()
-                    .find_map(|node| {
-                        let Block::Paragraph(inlines) = &node.block else { return None };
-                        inlines.iter().find_map(|inline| match inline {
-                            Inline::SourceText { value, provenance, .. } if value == "R" => {
-                                Some(provenance)
-                            }
-                            _ => None,
-                        })
-                    })
-                    .expect("native source character after any preceding link annotation");
+                let provenance = link_directory::native_character(first_blocks, "R");
                 let first_character_bounds = provenance.locator.bounds.unwrap();
                 let raw_character = PdfRect {
                     left: first_character_bounds.x,
@@ -920,22 +912,7 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                         .find(|block| matches!(block.block, Block::Image { .. }))
                         .unwrap();
                     assert_eq!(image.provenance.locator.bounds, Some(image_bounds[index]));
-                    let provenance = blocks
-                        .iter()
-                        .find_map(|node| match &node.block {
-                            Block::Paragraph(inlines) | Block::Heading { content: inlines, .. } => {
-                                inlines.iter().find_map(|inline| match inline {
-                                    Inline::SourceText { provenance, value, .. }
-                                        if value == "R" =>
-                                    {
-                                        Some(provenance)
-                                    }
-                                    _ => None,
-                                })
-                            }
-                            _ => None,
-                        })
-                        .expect("rotated native source character");
+                    let provenance = link_directory::native_character(blocks, "R");
                     let character = provenance.locator.bounds.unwrap();
                     let info = PageInfo {
                         width_points: page.provenance.locator.page_width.unwrap(),
@@ -954,28 +931,11 @@ fn native_production_converter_is_serialized_and_emits_unified_ir() {
                             "coordinate round-trip: {actual} vs {expected}"
                         );
                     }
-                    let mut found_external = false;
-                    let mut found_internal = false;
-                    for block in blocks {
-                        let Block::Paragraph(inlines) = &block.block else { continue };
-                        let Some(Inline::Link { target, .. }) = inlines.first() else {
-                            continue;
-                        };
-                        if target == "https://example.test/rotated" {
-                            assert_eq!(
-                                block.provenance.locator.bounds,
-                                Some(external_bounds[index])
-                            );
-                            found_external = true;
-                        } else if target == "#pdf-page-2" {
-                            assert_eq!(
-                                block.provenance.locator.bounds,
-                                Some(internal_bounds[index])
-                            );
-                            found_internal = true;
-                        }
-                    }
-                    assert!(found_external && found_internal);
+                    link_directory::assert_rotated_links(
+                        blocks,
+                        external_bounds[index],
+                        internal_bounds[index],
+                    );
                 }
             }));
         }

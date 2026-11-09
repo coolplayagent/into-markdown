@@ -1,9 +1,10 @@
 use crate::budget::LayoutBudget;
 use crate::collect;
+use crate::links::Links;
 use crate::model::RebuiltBlock;
 use crate::{
     LayoutConfig, dedup, footnotes, gutters, lines, malformed, memory, reading_order, semantics,
-    tables,
+    tables, toc,
 };
 use into_markdown_core::{BlockNode, ConversionError, Provenance, Rect};
 
@@ -29,9 +30,13 @@ pub(crate) fn reconstruct_page(
         .filter(|value| value.is_finite() && *value > 0.0)
         .ok_or_else(|| malformed("pdfLayoutMissingPageHeight"))?;
     footnotes::namespace_existing(&mut blocks, page, budget)?;
+    let mut links = Links::extract(page, width, height, &mut blocks, budget)?;
     let content = collect::page_content(page, width, height, blocks, budget)?;
     if content.atoms.is_empty() {
-        return Ok(content.passthrough);
+        let mut retained = content.passthrough;
+        links.associate(&[], budget)?;
+        links.restore_unmatched(&mut retained, budget)?;
+        return Ok(retained);
     }
     // Page-render OCR and embedded-image OCR can describe the same pixels with
     // different line segmentation. Remove overlapping OCR atoms before line
@@ -41,23 +46,43 @@ pub(crate) fn reconstruct_page(
     let clustered = lines::cluster(atoms, budget)?;
     let deduplicated = dedup::suppress(clustered, budget)?;
     let median_font = semantics::font_baseline(&deduplicated, budget)?;
+    links.associate(&deduplicated, budget)?;
+    let (mut directories, remaining) =
+        toc::recover(deduplicated, &links, page, (width, height), budget)?;
     // Lock locally corroborated two-dimensional grids before interpreting
     // repeated page-wide gaps as flowing columns. Weak grids remain text and
     // are eligible for column splitting.
     let (mut table_blocks, remaining) =
-        tables::recover(deduplicated, path_bounds, page, width, height, config, budget)?;
+        tables::recover(remaining, path_bounds, page, width, height, config, budget)?;
     check_unresolved_numeric_grid(&remaining, path_bounds, table_blocks.is_empty(), budget)?;
     let split = gutters::split(remaining, width, budget)?;
     let line_height = reading_order::line_height(&split, budget)?;
     let ordered = reading_order::lines(split, width, height, budget)?;
     let mut rebuilt = semantics::blocks(page, ordered, width, height, median_font, budget)?;
-    footnotes::resolve_collisions(&mut rebuilt, &content.passthrough, budget)?;
     rebuilt
-        .try_reserve_exact(table_blocks.len() + content.passthrough.len())
+        .try_reserve_exact(table_blocks.len() + directories.len())
         .map_err(|_| memory("layout rebuilt page"))?;
     rebuilt.append(&mut table_blocks);
-    crate::ids::avoid_retained_collisions(&mut rebuilt, &content.passthrough, budget)?;
-    for (index, node) in content.passthrough.into_iter().enumerate() {
+    rebuilt.append(&mut directories);
+    finish_blocks(rebuilt, content.passthrough, links, (width, height), line_height, budget)
+}
+
+fn finish_blocks(
+    mut rebuilt: Vec<RebuiltBlock>,
+    mut retained: Vec<BlockNode>,
+    mut links: Links,
+    dimensions: (f32, f32),
+    line_height: Option<f32>,
+    budget: &mut LayoutBudget<'_>,
+) -> Result<Vec<BlockNode>, ConversionError> {
+    for block in &mut rebuilt {
+        links.attach(std::slice::from_mut(&mut block.node), budget)?;
+    }
+    links.restore_unmatched(&mut retained, budget)?;
+    footnotes::resolve_collisions(&mut rebuilt, &retained, budget)?;
+    crate::ids::avoid_retained_collisions(&mut rebuilt, &retained, budget)?;
+    rebuilt.try_reserve_exact(retained.len()).map_err(|_| memory("layout retained blocks"))?;
+    for (index, node) in retained.into_iter().enumerate() {
         rebuilt.push(RebuiltBlock {
             bounds: node.provenance.locator.bounds,
             orientation: 0,
@@ -65,7 +90,7 @@ pub(crate) fn reconstruct_page(
             node,
         });
     }
-    let ordered = reading_order::blocks(rebuilt, width, height, line_height, budget)?;
+    let ordered = reading_order::blocks(rebuilt, dimensions.0, dimensions.1, line_height, budget)?;
     let mut output = Vec::new();
     output.try_reserve_exact(ordered.len()).map_err(|_| memory("layout output page"))?;
     output.extend(ordered.into_iter().map(|block| block.node));

@@ -2,6 +2,67 @@ use super::*;
 use into_markdown_core::{Inline, OcrPolicy};
 
 #[test]
+fn nested_directory_links_survive_overlapping_page_ocr() {
+    use into_markdown_core::{ListItem, ListKind};
+    let labels = ["1 Introduction ... 1", "1.1 Details ... ii"];
+    let rows = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let bounds =
+                Rect { x: 20.0, y: 20.0 + index as f32 * 30.0, width: 200.0, height: 16.0 };
+            BlockNode {
+                id: NodeId(format!("toc-row-{index}")),
+                block: Block::Paragraph(vec![Inline::Link {
+                    target: "#pdf-page-15".into(),
+                    content: label
+                        .chars()
+                        .map(|c| Inline::SourceText {
+                            value: c.to_string(),
+                            marks: vec![],
+                            provenance: Box::new(native_provenance(Some(bounds))),
+                        })
+                        .collect(),
+                }]),
+                provenance: native_provenance(Some(bounds)),
+            }
+        })
+        .collect::<Vec<_>>();
+    let wrap = |id: &str, blocks: Vec<BlockNode>| BlockNode {
+        id: NodeId(id.into()),
+        block: Block::List {
+            kind: ListKind::Bullet,
+            start: 1,
+            items: vec![ListItem { checked: None, marker_label: None, blocks }],
+        },
+        provenance: native_provenance(None),
+    };
+    let mut document = page_document(Vec::new());
+    let Block::Page { blocks, .. } = &mut document.blocks[0].block else { panic!("page") };
+    blocks.push(wrap("toc", vec![rows[0].clone(), wrap("toc-child", vec![rows[1].clone()])]));
+    let detection = detection(&[
+        (polygon(20.0, 20.0, 200.0, 16.0), 0.99),
+        (polygon(20.0, 50.0, 200.0, 16.0), 0.99),
+    ]);
+    let recognition = recognition(&[(0, labels[0], 0.99), (1, labels[1], 0.99)]);
+    let context = context();
+    let output = merge_document(
+        document.clone(),
+        &[input(&detection, &recognition)],
+        &MergeConfig { policy: OcrPolicy::Always, ..Default::default() },
+        &context,
+    )
+    .unwrap();
+    assert_eq!(output.document, document);
+    assert_eq!(
+        output.diagnostics.iter().filter(|d| d.code == "ocr.nativeDuplicateSuppressed").count(),
+        2
+    );
+    drop(output);
+    assert_eq!(context.reserved_memory_bytes(), 0);
+}
+
+#[test]
 fn nfc_and_whitespace_equivalent_native_text_is_not_duplicated() {
     let bounds = Rect { x: 20.0, y: 20.0, width: 100.0, height: 16.0 };
     let native = "Cafe\u{301}"

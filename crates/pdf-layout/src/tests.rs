@@ -4,6 +4,7 @@ use super::*;
 
 mod arxiv_regressions;
 mod detached_scripts;
+mod links_and_toc;
 mod mixed_rows_glyphs;
 mod native_baselines;
 mod relayout_ids;

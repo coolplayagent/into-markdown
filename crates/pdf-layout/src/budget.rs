@@ -33,6 +33,8 @@ pub(crate) struct LayoutBudget<'a> {
     lines: usize,
     max_atoms: usize,
     max_lines: usize,
+    output_nodes: usize,
+    output_inlines: usize,
 }
 
 impl<'a> LayoutBudget<'a> {
@@ -103,6 +105,8 @@ impl<'a> LayoutBudget<'a> {
             lines: 0,
             max_atoms: config.limits.max_atoms,
             max_lines: config.limits.max_lines,
+            output_nodes: counts.nodes,
+            output_inlines: counts.inlines,
         })
     }
 
@@ -155,6 +159,63 @@ impl<'a> LayoutBudget<'a> {
         self.context.checkpoint()
     }
 
+    pub(crate) fn reserve<T>(&mut self, count: usize) -> Result<Vec<T>, ConversionError> {
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| memory("layout evidence capacity"))?;
+        self.reservation.grow(bytes)?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(count).map_err(|_| memory("layout evidence allocation"))?;
+        if values.capacity() > count {
+            return Err(memory("layout evidence capacity exceeded its plan"));
+        }
+        Ok(values)
+    }
+
+    pub(crate) fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), ConversionError> {
+        self.checkpoint_item()?;
+        if values.len() == values.capacity() {
+            let capacity = values
+                .capacity()
+                .checked_mul(2)
+                .map(|n| n.max(4))
+                .ok_or_else(|| memory("layout evidence growth"))?;
+            let mut replacement = self.reserve(capacity)?;
+            replacement.append(values);
+            *values = replacement;
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    pub(crate) fn copy_string(&mut self, value: &str) -> Result<String, ConversionError> {
+        self.checkpoint_bytes(value.len())?;
+        self.reservation.grow(u64::try_from(value.len()).map_err(|_| memory("link target"))?)?;
+        let mut copy = String::new();
+        copy.try_reserve_exact(value.len()).map_err(|_| memory("link target allocation"))?;
+        copy.push_str(value);
+        Ok(copy)
+    }
+
+    pub(crate) fn generated_node(&mut self) -> Result<(), ConversionError> {
+        self.output_nodes = add(self.output_nodes, 1, "generated node count")?;
+        if self.output_nodes > into_markdown_core::MAX_DOCUMENT_NODES {
+            return Err(limit("documentNodes", "PDF reconstruction node budget exceeded"));
+        }
+        // Fixed-size IDs, provider/part strings and allocator overhead for a
+        // generated directory or restored-link node. Vectors are charged separately.
+        self.reservation.grow(512)
+    }
+
+    pub(crate) fn generated_link(&mut self) -> Result<(), ConversionError> {
+        self.output_inlines = add(self.output_inlines, 1, "generated inline count")?;
+        if self.output_inlines > into_markdown_core::MAX_DOCUMENT_INLINES {
+            return Err(limit("documentInlines", "PDF link wrapper budget exceeded"));
+        }
+        self.checkpoint_item()
+    }
+
     pub(crate) fn checkpoint_bytes(&mut self, bytes: usize) -> Result<(), ConversionError> {
         self.bytes_since_checkpoint = add(self.bytes_since_checkpoint, bytes, "checkpoint bytes")?;
         while self.bytes_since_checkpoint >= CHECKPOINT_BYTES {
@@ -180,6 +241,7 @@ struct Counts {
     nodes: usize,
     atoms: usize,
     text_bytes: usize,
+    inlines: usize,
 }
 
 fn count_node<'a>(
@@ -224,6 +286,7 @@ fn count_inlines(inlines: &[Inline], counts: &mut Counts) -> Result<(), Conversi
     stack.push(inlines);
     while let Some(inlines) = stack.pop() {
         for inline in inlines {
+            counts.inlines = add(counts.inlines, 1, "inline count")?;
             match inline {
                 Inline::SourceText { value, .. } | Inline::OcrText { value, .. } => {
                     counts.atoms = add(counts.atoms, 1, "atom count")?;

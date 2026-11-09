@@ -15,6 +15,7 @@ mod geometry;
 mod gutters;
 mod ids;
 mod lines;
+mod links;
 mod materialize;
 mod model;
 mod ordering;
@@ -22,6 +23,7 @@ mod reading_order;
 mod running_matter;
 mod semantics;
 mod tables;
+mod toc;
 
 #[cfg(test)]
 mod quality_authority_tests;
@@ -35,6 +37,9 @@ use into_markdown_core::{
 
 /// Stable provider attached to blocks reconstructed from PDF geometry.
 pub const LAYOUT_PROVIDER: &str = "builtin.pdf.layout";
+
+/// Provenance part used for a spatial PDF link awaiting source-text association.
+pub const LINK_SOURCE_PART: &str = "pdf/link";
 
 /// Hard local limits for one PDF-layout operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
