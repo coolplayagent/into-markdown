@@ -21,6 +21,9 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
 `into-md formats --json` 实时发现后逐项校验。
 
+XLSX 和 XLSM 在临时目录不可写时，会按工作表中实际存在的单元格数量为中间结果预留内存。
+超过请求的内存上限时，转换会报告资源限制。在只读沙箱中，工作簿可以从文件或标准输入读取，结果写入标准输出。
+
 ## Drawio
 
 `drawio` 接受 `.drawio`、根元素为 `mxfile` / `mxGraphModel` 的 XML，以及显式

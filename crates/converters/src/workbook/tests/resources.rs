@@ -1,9 +1,38 @@
-use super::support::{context, image_xlsx, limited_context, stale_dimension_xlsb};
+use super::support::{
+    context, convert, convert_with_credit, image_xlsx, limited_context, stale_dimension_xlsb,
+};
 use crate::workbook::calamine_adapter::convert_xlsb;
 use crate::workbook::orchestrator::convert_workbook;
 use crate::workbook::preflight::preflight_package;
 use base64::Engine as _;
 use into_markdown_core::{ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext};
+
+#[test]
+fn spreadsheetml_without_writable_scratch_preserves_workbook_content() {
+    let options = ConversionOptions::default();
+    // A regular file as the parent deterministically prevents scratch creation on every OS.
+    let unavailable = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let root = ExecutionContext::new_with_temporary_directory(
+        into_markdown_core::ExecutionOptions::default(),
+        options.limits.clone(),
+        unavailable,
+    );
+    for bytes in [
+        &include_bytes!("../../../../../fixtures/small/xlsx/normal.xlsx")[..],
+        &include_bytes!("../../../../../fixtures/small/xlsm/normal.xlsm")[..],
+    ] {
+        let expected = convert(bytes, &options).unwrap();
+        let actual = convert_with_credit(bytes, &options, &root).unwrap();
+        assert_eq!(actual.document.blocks, expected.document.blocks);
+        assert_eq!(actual.diagnostics, expected.diagnostics);
+        assert_eq!(actual.assets, expected.assets);
+        assert_eq!(
+            actual.document.metadata.properties["spreadsheet.native.stagingTemporaryHighWater"],
+            "0"
+        );
+        assert_eq!(root.reserved_temporary_bytes(), 0);
+    }
+}
 
 #[test]
 fn cancellation_after_large_xlsb_preflight_stops_at_calamine_boundary() {

@@ -153,15 +153,17 @@ fn stage_sheets(
         let entry = archive.by_name(&part).map_err(|error| {
             malformed(Some(&part), format!("worksheet part is missing: {error}"))
         })?;
-        let mut writer = StagingWriter::new(context)?;
+        let mut writer = StagingWriter::new(context, layout.populated_cells)?;
         let data_layout = read_cells_into(
             BufReader::with_capacity(64 * 1024, entry),
             &part,
             options,
             context,
-            &mut |cell| writer.push(&cell, context),
+            &mut |cell| writer.push(cell, context),
         )?;
-        if data_layout.physical_cells != layout.physical_cells {
+        if data_layout.physical_cells != layout.physical_cells
+            || data_layout.populated_cells != layout.populated_cells
+        {
             return Err(malformed(
                 Some(&part),
                 "worksheet data pass disagrees with the layout pass",
