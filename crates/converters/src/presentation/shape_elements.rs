@@ -1,4 +1,5 @@
 use super::error::{limit, malformed};
+use super::images::PresentationImage;
 use super::model::{GroupTransform, Package, Relationships, RichStyle, Shape, ShapeRecovery};
 use super::relationships::{relationship_by_id, require_content_type, resolve_target};
 use super::schema::{
@@ -9,7 +10,6 @@ use super::schema::{
 use super::xml_base::{
     attr, local, optional_attr_ns, optional_xml_bool, required_attr, required_attr_ns, signed_attr,
 };
-use crate::docx::supported_image;
 use into_markdown_core::{
     ConversionError, ConversionOptions, ErrorPolicy, ExecutionContext, InlineMark, ListKind,
     MAX_DOCUMENT_INLINES,
@@ -589,7 +589,7 @@ pub(super) fn validate_shape_relationships(
             let content_type = package.content_types.content_type(&target).ok_or_else(|| {
                 malformed(Some("[Content_Types].xml"), format!("image {target} lacks content type"))
             })?;
-            if let Err(error) = supported_image(&target, content_type)
+            if let Err(error) = PresentationImage::from_part(&target, content_type)
                 && !(options.error_policy == ErrorPolicy::BestEffort
                     && matches!(
                         &error,

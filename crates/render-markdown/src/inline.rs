@@ -17,8 +17,14 @@ pub(super) fn text_parts(inline: &Inline) -> Option<(&str, &[InlineMark])> {
     }
 }
 
-pub(super) fn same_marks(left: &[InlineMark], right: &[InlineMark]) -> bool {
-    left.len() == right.len() && left.iter().all(|mark| right.contains(mark))
+pub(super) fn same_marks(
+    left: &[InlineMark],
+    right: &[InlineMark],
+    inherited: Option<InlineMark>,
+) -> bool {
+    let visible = |mark: &&InlineMark| Some(**mark) != inherited;
+    left.iter().filter(visible).count() == right.iter().filter(visible).count()
+        && left.iter().filter(visible).all(|mark| right.contains(mark))
 }
 
 pub(super) fn render_inlines(
@@ -32,7 +38,7 @@ pub(super) fn render_inlines(
             let mut value = value.to_owned();
             index += 1;
             while let Some((next, next_marks)) = inlines.get(index).and_then(text_parts) {
-                if !same_marks(marks, next_marks) {
+                if !next.is_empty() && !same_marks(marks, next_marks, context.inherited_mark) {
                     break;
                 }
                 value.push_str(next);
@@ -164,15 +170,17 @@ fn render_marked_segment(
     next: Option<char>,
 ) -> String {
     let trimmed = value.trim();
-    if trimmed.is_empty() || marks.is_empty() {
+    let marks = marks.iter().copied().filter(|mark| Some(*mark) != context.inherited_mark);
+    if trimmed.is_empty() || marks.clone().next().is_none() {
         return escape_run(value, context, previous, next);
     }
     let leading = &value[..value.len() - value.trim_start().len()];
     let trailing = &value[value.trim_end().len()..];
     let previous = leading.chars().next_back().or(previous);
     let next = trailing.chars().next().or(next);
-    let html_marks = (marks.contains(&InlineMark::Strikethrough) && marks.len() > 1)
-        || marks.iter().any(|mark| {
+    let has = |wanted| marks.clone().any(|mark| mark == wanted);
+    let html_marks = (has(InlineMark::Strikethrough) && marks.clone().count() > 1)
+        || marks.clone().any(|mark| {
             matches!(mark, InlineMark::Underline | InlineMark::Superscript | InlineMark::Subscript)
         });
     let native = native_boundaries(trimmed, previous, next)
@@ -187,7 +195,7 @@ fn render_marked_segment(
         InlineMark::Strikethrough,
     ]
     .map(|mark| {
-        if !marks.contains(&mark) {
+        if !has(mark) {
             return ("", "");
         }
         match (mark, native) {

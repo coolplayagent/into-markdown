@@ -13,12 +13,12 @@ pub(super) fn escape_run(
     next: Option<char>,
 ) -> String {
     let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars().peekable();
+    let mut characters = value.char_indices().peekable();
     let mut previous = previous;
-    while let Some(character) = characters.next() {
-        let following = characters.peek().copied().or(next);
+    while let Some((offset, character)) = characters.next() {
+        let following = characters.peek().map(|(_, value)| *value).or(next);
         match character {
-            '&' => output.push_str("&amp;"),
+            '&' if starts_entity(&value[offset + 1..]) => output.push_str("&amp;"),
             '\n' if context.table_cell || context.heading => output.push_str("<br>"),
             // A text newline carries soft-break semantics, including source whitespace.
             ' ' if following == Some('\n') && previous == Some(' ') => {
@@ -39,6 +39,14 @@ pub(super) fn escape_run(
         previous = Some(character);
     }
     output
+}
+
+// CommonMark consumes semicolon-terminated named and numeric references. Check
+// their bounded spelling so an ordinary ampersand remains readable in source.
+fn starts_entity(tail: &str) -> bool {
+    let name = tail.strip_prefix('#').unwrap_or(tail).as_bytes();
+    let length = name.iter().take(32).take_while(|b| b.is_ascii_alphanumeric()).count();
+    length != 0 && name.get(length) == Some(&b';')
 }
 
 /// Protect complete serialized lines so fragmented runs share block context.

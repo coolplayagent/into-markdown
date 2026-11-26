@@ -1,5 +1,79 @@
 use super::*;
 
+#[test]
+fn markdown_prose_keeps_bare_ampersands_and_protects_literal_entities() {
+    let text = "R&D & QA; &amp; &#38; &#x26; &copy;";
+    let markdown = output(&document(vec![paragraph("p", text)]));
+    assert!(markdown.starts_with("R&D & QA; "));
+    let parsed: String = Parser::new(&markdown)
+        .filter_map(|event| match event {
+            Event::Text(value) => Some(value.into_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(parsed, text);
+}
+
+#[test]
+fn markdown_header_cells_apply_bold_once_and_preserve_other_marks() {
+    let row = TableRow {
+        cells: vec![
+            ("a", vec![marked("Heading", &[InlineMark::Bold])]),
+            (
+                "b",
+                vec![
+                    marked("Other", &[InlineMark::Bold]),
+                    Inline::LineBreak,
+                    marked("detail", &[]),
+                ],
+            ),
+            ("c", vec![marked("Nested", &[InlineMark::Bold, InlineMark::Italic])]),
+        ]
+        .into_iter()
+        .map(|(id, inlines)| Cell {
+            header: true,
+            row_span: 1,
+            column_span: 1,
+            blocks: vec![node(id, Block::Paragraph(inlines))],
+        })
+        .collect(),
+    };
+    let markdown = output(&document(vec![node(
+        "table",
+        Block::Table { rows: vec![row], alignments: vec![] },
+    )]));
+    assert!(markdown.starts_with("| **Heading** | "), "{markdown}");
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, Parser::new_ext(&markdown, Options::ENABLE_TABLES));
+    assert_eq!(html.matches("<strong>").count(), 3, "{html}");
+    assert!(html.contains("<em>Nested</em>"), "{html}");
+    assert!(html.contains("Other<br>detail"), "{html}");
+}
+
+#[test]
+fn entity_text_split_across_inherited_header_marks_stays_literal() {
+    let row = TableRow {
+        cells: vec![Cell {
+            header: true,
+            row_span: 1,
+            column_span: 1,
+            blocks: vec![node(
+                "p",
+                Block::Paragraph(vec![
+                    marked("&co", &[]),
+                    marked("", &[InlineMark::Italic]),
+                    marked("py;", &[InlineMark::Bold]),
+                ]),
+            )],
+        }],
+    };
+    let markdown =
+        output(&document(vec![node("t", Block::Table { rows: vec![row], alignments: vec![] })]));
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, Parser::new_ext(&markdown, Options::ENABLE_TABLES));
+    assert!(html.contains("<strong>&amp;copy;</strong>"), "{html}");
+}
+
 fn marked(value: &str, marks: &[InlineMark]) -> Inline {
     Inline::Text { value: value.into(), marks: marks.to_vec() }
 }

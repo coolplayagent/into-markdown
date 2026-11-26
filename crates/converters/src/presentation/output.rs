@@ -2,13 +2,12 @@ use super::allocation::try_clone_string;
 use super::budget::{ASSET_INDEX_ENTRY_CHARGE, MAX_ASSET_DIGEST_CANDIDATES};
 use super::charts_notes::parse_chart_text;
 use super::error::{limit, malformed};
-use super::images::{asset_digest, find_duplicate_asset};
+use super::images::{PresentationImage, asset_digest, find_duplicate_asset};
 use super::model::{Package, ParseState, Relationships, Shape, TextParagraph};
 use super::relationships::{relationship_by_id, require_content_type, resolve_target};
 use super::schema::{CHART_REL, IMAGE_REL};
 use super::shape_elements::shape_block_count;
 use super::tables::table_block;
-use crate::docx::{supported_image, validate_image_bytes};
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic,
     DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, ListItem, ListKind, Rect,
@@ -65,7 +64,7 @@ pub(super) fn shapes_to_blocks(
             let content_type = package.content_types.content_type(&target).ok_or_else(|| {
                 malformed(Some("[Content_Types].xml"), format!("image {target} lacks content type"))
             })?;
-            let image = match supported_image(&target, content_type) {
+            let image = match PresentationImage::from_part(&target, content_type) {
                 Ok(image) => image,
                 Err(error)
                     if options.error_policy == ErrorPolicy::BestEffort
@@ -92,7 +91,7 @@ pub(super) fn shapes_to_blocks(
             } else {
                 let validation = {
                     let bytes = package.load(&target, options, context)?;
-                    validate_image_bytes(image, bytes, &target, options, context)
+                    image.validate(bytes, &target, options, context)
                 };
                 if let Err(error) = validation {
                     if options.error_policy == ErrorPolicy::BestEffort

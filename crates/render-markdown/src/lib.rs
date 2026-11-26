@@ -4,6 +4,7 @@
 //! assets remains the caller's responsibility.
 
 mod asset_validation;
+use asset_validation::{media_type_extension, normalize_media_type};
 mod escaping;
 mod fixed_alloc;
 use escaping::{escape_text, protect_heading, protect_paragraph};
@@ -850,10 +851,12 @@ struct InlineContext {
     table_cell: bool,
     heading: bool,
     link_label: bool,
+    inherited_mark: Option<InlineMark>,
 }
 
 impl InlineContext {
-    const NORMAL: Self = Self { table_cell: false, heading: false, link_label: false };
+    const NORMAL: Self =
+        Self { table_cell: false, heading: false, link_label: false, inherited_mark: None };
     const TABLE_CELL: Self = Self { table_cell: true, ..Self::NORMAL };
 
     const fn heading(self) -> Self {
@@ -1245,7 +1248,12 @@ impl RenderContext<'_> {
     }
 
     fn render_cell(&self, cell: &Cell) -> Result<(String, u64), ConversionError> {
-        let rendered = self.render_blocks_in(&cell.blocks, InlineContext::TABLE_CELL)?;
+        // The header wrapper applies bold to the entire flattened cell, including link labels.
+        let context = InlineContext {
+            inherited_mark: cell.header.then_some(InlineMark::Bold),
+            ..InlineContext::TABLE_CELL
+        };
+        let rendered = self.render_blocks_in(&cell.blocks, context)?;
         let normalized = normalize_lf(&rendered);
         let paragraphs = normalized.replace("\n\n", "<br><br>");
         let flattened = paragraphs.replace('\n', "<br>");
@@ -1335,7 +1343,9 @@ impl RenderContext<'_> {
                 validate_link_target(&target)?;
                 escape_destination(&target, InlineContext::NORMAL)
             };
-        let prefix = if asset.media_type.starts_with("image/") { "!" } else { "" };
+        let inline_image = asset.media_type.starts_with("image/")
+            && !matches!(asset.media_type.as_str(), "image/emf" | "image/x-emf");
+        let prefix = if inline_image { "!" } else { "" };
         let alt = if prefix.is_empty() && alt.trim().is_empty() { "Original image" } else { &alt };
         let fragment = if asset.media_type == "application/pdf" && !destination.contains('#') {
             page.map(|page| format!("#page={page}")).unwrap_or_default()
@@ -1553,82 +1563,6 @@ fn indent_all(value: &str, spaces: usize) -> String {
 
 fn with_body(heading: String, body: &str) -> String {
     if body.is_empty() { heading } else { format!("{heading}\n\n{body}") }
-}
-
-fn valid_media_type(value: &str) -> bool {
-    let Some((kind, subtype)) = value.split_once('/') else {
-        return false;
-    };
-    !kind.is_empty()
-        && !subtype.is_empty()
-        && !subtype.contains('/')
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric()
-                || matches!(
-                    byte,
-                    b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-' | b'/'
-                )
-        })
-}
-
-fn normalize_media_type(value: &str) -> Result<String, ConversionError> {
-    if !valid_media_type(value) {
-        return Err(asset_plan_error(
-            "invalidAssetMediaType",
-            format!("invalid asset media type {value}"),
-        ));
-    }
-    Ok(value.to_ascii_lowercase())
-}
-
-fn media_type_extension(media_type: &str) -> Option<String> {
-    let extension = match media_type {
-        "image/jpeg" => "jpg",
-        "image/png" => "png",
-        "image/tiff" => "tiff",
-        "image/bmp" => "bmp",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/svg+xml" => "svg",
-        "image/avif" => "avif",
-        "application/pdf" => "pdf",
-        "application/x-openoffice-gdimetafile" => "svm",
-        "text/plain" => "txt",
-        "text/csv" => "csv",
-        "application/json" => "json",
-        "application/zip" => "zip",
-        "application/msword" => "doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
-        "application/vnd.ms-powerpoint" => "ppt",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
-        "application/vnd.ms-excel" => "xls",
-        "application/vnd.ms-excel.sheet.binary.macroenabled.12" => "xlsb",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
-        "application/vnd.oasis.opendocument.text" => "odt",
-        "application/vnd.oasis.opendocument.spreadsheet" => "ods",
-        "application/vnd.oasis.opendocument.presentation" => "odp",
-        "application/rtf" | "text/rtf" => "rtf",
-        "application/epub+zip" => "epub",
-        "text/markdown" => "md",
-        "text/html" => "html",
-        "text/tab-separated-values" => "tsv",
-        "application/xml" | "text/xml" => "xml",
-        "application/vnd.jgraph.mxfile" => "drawio",
-        "application/x-ipynb+json" => "ipynb",
-        "application/vnd.rar" => "rar",
-        "application/vnd.ms-outlook" => "msg",
-        "audio/wav" | "audio/x-wav" => "wav",
-        "audio/flac" => "flac",
-        "audio/mpeg" => "mp3",
-        "audio/mp4" => "m4a",
-        "audio/ogg" => "ogg",
-        "video/mp4" => "mp4",
-        "video/quicktime" => "mov",
-        "video/x-matroska" => "mkv",
-        "video/webm" => "webm",
-        _ => return None,
-    };
-    Some(extension.into())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
