@@ -67,6 +67,8 @@ mod document;
 mod io;
 mod json;
 mod plan;
+mod replay;
+pub(crate) use replay::ReplaySpool;
 mod sink;
 
 use io::{IndentingWriter, copy_reader, copy_spool};
@@ -84,11 +86,11 @@ pub(crate) struct StructuredSpool {
     context: ExecutionContext,
     plan: RepresentationPlan,
     capabilities: ArtifactSinkCapabilities,
-    ir: Option<TemporaryFile>,
-    markdown: Option<TemporaryFile>,
+    ir: Option<ReplaySpool>,
+    markdown: Option<ReplaySpool>,
     markdown_json: Option<JsonStringSpool>,
-    diagnostics: Option<TemporaryFile>,
-    provenance: Option<TemporaryFile>,
+    diagnostics: Option<ReplaySpool>,
+    provenance: Option<ReplaySpool>,
     asset_records: Vec<AssetRecord>,
     payload_records: Vec<PayloadRecord>,
     payload_by_filename: HashMap<String, usize>,
@@ -107,21 +109,19 @@ impl StructuredSpool {
         asset_mode: AssetModeArg,
     ) -> Result<Self, CliError> {
         let plan = RepresentationPlan::new(emit, asset_mode);
-        let ir = plan
-            .semantic_ir()
-            .then(|| context.temporary_file("into-md-ir").map_err(CliError::from))
-            .transpose()?;
+        let ir =
+            plan.semantic_ir().then(|| ReplaySpool::new(&context, "into-md-ir")).transpose()?;
         let diagnostics = plan
             .inventories()
-            .then(|| context.temporary_file("into-md-diagnostics").map_err(CliError::from))
+            .then(|| ReplaySpool::new(&context, "into-md-diagnostics"))
             .transpose()?;
         let provenance = plan
             .inventories()
-            .then(|| context.temporary_file("into-md-provenance").map_err(CliError::from))
+            .then(|| ReplaySpool::new(&context, "into-md-provenance"))
             .transpose()?;
         let markdown = plan
             .raw_markdown()
-            .then(|| context.temporary_file("into-md-markdown").map_err(CliError::from))
+            .then(|| ReplaySpool::new(&context, "into-md-markdown"))
             .transpose()?;
         let markdown_json = plan
             .escaped_markdown()
@@ -225,16 +225,14 @@ impl StructuredSpool {
         if let Some(markdown_json) = self.markdown_json.as_mut() {
             markdown_json.finish()?;
         }
-        for spool in [
-            self.ir.as_mut(),
-            self.markdown.as_mut(),
-            self.diagnostics.as_mut(),
-            self.provenance.as_mut(),
-        ]
-        .into_iter()
-        .flatten()
+        if let Some(markdown) = self.markdown.as_mut() {
+            markdown.sync_all()?;
+        }
+        for spool in [self.ir.as_mut(), self.diagnostics.as_mut(), self.provenance.as_mut()]
+            .into_iter()
+            .flatten()
         {
-            spool.sync_all().map_err(CliError::from)?;
+            spool.sync_all()?;
         }
         for payload in &mut self.payload_records {
             payload.file.sync_all().map_err(CliError::from)?;
@@ -259,20 +257,16 @@ impl StructuredSpool {
         self.validate_representations()?;
         self.serialization_calls = self.serialization_calls.saturating_add(1);
         match emit {
-            EmitKind::Markdown => copy_spool(
-                &self.context,
-                self.markdown
-                    .as_ref()
-                    .ok_or_else(|| CliError::internal("raw Markdown representation is absent"))?,
-                destination,
-            ),
-            EmitKind::IrJson => copy_spool(
-                &self.context,
-                self.ir
-                    .as_ref()
-                    .ok_or_else(|| CliError::internal("document IR representation is absent"))?,
-                destination,
-            ),
+            EmitKind::Markdown => self
+                .markdown
+                .as_ref()
+                .ok_or_else(|| CliError::internal("raw Markdown representation is absent"))?
+                .copy_to(&self.context, destination),
+            EmitKind::IrJson => self
+                .ir
+                .as_ref()
+                .ok_or_else(|| CliError::internal("document IR representation is absent"))?
+                .copy_to(&self.context, destination),
             EmitKind::ResultJson => self.write_result_json(destination),
             EmitKind::Bundle => self.write_bundle(destination),
         }

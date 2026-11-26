@@ -1,7 +1,7 @@
-use super::{CliError, ExecutionContext, TemporaryFile};
+use super::{CliError, ExecutionContext, ReplaySpool};
 
 pub(super) struct JsonStringSpool {
-    pub(super) file: TemporaryFile,
+    pub(super) file: ReplaySpool,
     carry: [u8; 3],
     carry_len: usize,
     finished: bool,
@@ -9,7 +9,7 @@ pub(super) struct JsonStringSpool {
 
 impl JsonStringSpool {
     pub(super) fn new(context: &ExecutionContext, prefix: &str) -> Result<Self, CliError> {
-        let mut file = context.temporary_file(prefix).map_err(CliError::from)?;
+        let mut file = ReplaySpool::new(context, prefix)?;
         file.write_all_checked(b"\"").map_err(CliError::from)?;
         Ok(Self { file, carry: [0; 3], carry_len: 0, finished: false })
     }
@@ -73,7 +73,7 @@ impl JsonStringSpool {
     }
 }
 
-fn write_json_string_bytes(file: &mut TemporaryFile, bytes: &[u8]) -> Result<(), CliError> {
+fn write_json_string_bytes(file: &mut ReplaySpool, bytes: &[u8]) -> Result<(), CliError> {
     let mut start = 0;
     for (index, byte) in bytes.iter().copied().enumerate() {
         let escaped: Option<&[u8]> = match byte {

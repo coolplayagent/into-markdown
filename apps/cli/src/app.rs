@@ -3774,16 +3774,13 @@ fn append_core_runtime_checks(checks: &mut Vec<DoctorCheck>, loaded: &LoadedConf
             });
             continue;
         };
-        let available = verify_core_runtime(runtime.component, loaded, cwd);
-        checks.push(DoctorCheck {
-            id: capability.id.into(),
-            status: if available { "ok" } else { "missing" }.into(),
-            detail: if available {
-                format!("{} runtime passed its local authority verification", runtime.component)
-            } else {
-                runtime.install_hint.into()
-            },
-        });
+        checks.push(core_runtime_check(
+            capability.id,
+            runtime.component,
+            runtime.install_hint,
+            loaded,
+            cwd,
+        ));
     }
 }
 
@@ -3806,16 +3803,13 @@ fn append_fast_runtime_checks(
             continue;
         };
         if runtime.component == "pdfium" {
-            let available = verify_core_runtime(runtime.component, loaded, cwd);
-            checks.push(DoctorCheck {
-                id: capability.id.into(),
-                status: if available { "ok" } else { "missing" }.into(),
-                detail: if available {
-                    "pdfium runtime passed its local authority verification".into()
-                } else {
-                    runtime.install_hint.into()
-                },
-            });
+            checks.push(core_runtime_check(
+                capability.id,
+                runtime.component,
+                runtime.install_hint,
+                loaded,
+                cwd,
+            ));
             continue;
         }
         let capability_id = match runtime.component {
@@ -3893,15 +3887,29 @@ fn doctor_plugin_fast_check(id: &str, loaded: &LoadedConfig, cwd: &Path) -> (&'s
     }
 }
 
-fn verify_core_runtime(component: &str, loaded: &LoadedConfig, cwd: &Path) -> bool {
-    match component {
+fn core_runtime_check(
+    id: &str,
+    component: &str,
+    install_hint: &str,
+    loaded: &LoadedConfig,
+    cwd: &Path,
+) -> DoctorCheck {
+    let verification = match component {
         "pdfium" => into_markdown::default_pdfium_runtime_path()
-            .is_some_and(|path| into_markdown::verify_pdfium_runtime(&path).is_ok()),
-        "official.ocr.ppocrv6" => crate::services::verify_ocr_runtime(loaded, cwd).is_ok(),
-        "official.media.whisper" => crate::services::verify_asr_runtime(loaded, cwd).is_ok(),
-        "speaker-diarization" => crate::services::verify_diarization_runtime(loaded, cwd).is_ok(),
-        _ => false,
-    }
+            .map(|path| into_markdown::verify_pdfium_runtime(&path)),
+        "official.ocr.ppocrv6" => Some(crate::services::verify_ocr_runtime(loaded, cwd)),
+        "official.media.whisper" => Some(crate::services::verify_asr_runtime(loaded, cwd)),
+        "speaker-diarization" => Some(crate::services::verify_diarization_runtime(loaded, cwd)),
+        _ => None,
+    };
+    let (status, detail) = match verification {
+        Some(Ok(())) => {
+            ("ok", format!("{component} runtime passed its local authority verification"))
+        }
+        Some(Err(error)) if component == "pdfium" => ("error", error.to_string()),
+        _ => ("missing", install_hint.to_owned()),
+    };
+    DoctorCheck { id: id.into(), status: status.into(), detail }
 }
 
 fn supported_platform_status() -> (&'static str, String) {
@@ -4732,10 +4740,7 @@ fn process_stdout(
     (|| -> Result<BatchItemReport, CliError> {
         crate::result_policy::validate_for_emit(&summary, policy.emit, policy.asset_mode)?;
         spool.finish()?;
-        let mut encoded =
-            policy.output_context.temporary_file("into-md-stdout").map_err(CliError::from)?;
-        spool.serialize(policy.emit, &mut encoded)?;
-        encoded.sync_all().map_err(CliError::from)?;
+        let encoded = spool.take_stdout_primary()?;
         let staged_assets = if let Some(assets_dir) = asset_output.external_directory {
             spool
                 .has_payloads()

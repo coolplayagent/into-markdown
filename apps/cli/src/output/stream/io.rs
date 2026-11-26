@@ -36,7 +36,7 @@ impl<W: Write> Write for IndentingWriter<W> {
     }
 }
 
-pub(super) fn copy_spool<W: Write>(
+pub(super) fn copy_spool<W: Write + ?Sized>(
     context: &ExecutionContext,
     spool: &TemporaryFile,
     destination: &mut W,
@@ -46,7 +46,7 @@ pub(super) fn copy_spool<W: Write>(
     copy_reader(context, &mut reader, destination)
 }
 
-pub(super) fn copy_reader<R: Read, W: Write>(
+pub(super) fn copy_reader<R: Read, W: Write + ?Sized>(
     context: &ExecutionContext,
     reader: &mut R,
     destination: &mut W,
