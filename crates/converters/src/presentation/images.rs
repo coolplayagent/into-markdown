@@ -29,71 +29,22 @@ impl PresentationImage {
         }
     }
 
-    pub(super) fn validate(
+    pub(super) fn validate_and_read_text(
         self,
         bytes: &[u8],
         part: &str,
         options: &ConversionOptions,
         context: &ExecutionContext,
-    ) -> Result<(), ConversionError> {
+        package: &mut super::model::Package<'_>,
+    ) -> Result<String, ConversionError> {
         match self {
-            Self::Raster(image) => validate_image_bytes(image, bytes, part, options, context),
-            Self::Emf => validate_emf_records(bytes, part, context),
+            Self::Raster(image) => {
+                validate_image_bytes(image, bytes, part, options, context)?;
+                Ok(String::new())
+            }
+            Self::Emf => super::emf::source_text(bytes, part, context, package),
         }
     }
-}
-
-// Inspect MS-EMF record framing only. The original is a downloadable attachment;
-// drawing commands and any embedded comments are never interpreted.
-fn validate_emf_records(
-    bytes: &[u8],
-    part: &str,
-    context: &ExecutionContext,
-) -> Result<(), ConversionError> {
-    let invalid = || malformed(Some(part), "invalid EMF record framing");
-    let word = |data: &[u8], offset: usize| -> Result<u32, ConversionError> {
-        let value = data
-            .get(offset..offset + 4)
-            .and_then(|value| value.try_into().ok())
-            .ok_or_else(invalid)?;
-        Ok(u32::from_le_bytes(value))
-    };
-    if bytes.get(40..44) != Some(b" EMF")
-        || word(bytes, 0)? != 1
-        || word(bytes, 4)? < 88
-        || word(bytes, 44)? != 0x10000
-        || usize::try_from(word(bytes, 48)?).ok() != Some(bytes.len())
-    {
-        return Err(invalid());
-    }
-    let declared_count = word(bytes, 52)?;
-    let mut remaining = bytes;
-    let mut count = 0_u32;
-    while !remaining.is_empty() {
-        if count.is_multiple_of(256) {
-            context.checkpoint()?;
-        }
-        let kind = word(remaining, 0)?;
-        let length = usize::try_from(word(remaining, 4)?).map_err(|_| invalid())?;
-        if length < 8 || !length.is_multiple_of(4) || (kind == 1 && count != 0) {
-            return Err(invalid());
-        }
-        let (record, rest) = remaining.split_at_checked(length).ok_or_else(invalid)?;
-        count += 1;
-        if kind == 14 {
-            return if rest.is_empty()
-                && count == declared_count
-                && length >= 20
-                && usize::try_from(word(record, length - 4)?).ok() == Some(length)
-            {
-                Ok(())
-            } else {
-                Err(invalid())
-            };
-        }
-        remaining = rest;
-    }
-    Err(invalid())
 }
 
 pub(super) fn asset_digest(

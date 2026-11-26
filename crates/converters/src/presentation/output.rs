@@ -86,20 +86,21 @@ pub(super) fn shapes_to_blocks(
                 }
                 Err(error) => return Err(error),
             };
-            let asset_id = if let Some(id) = state.assets_by_part.get(&target) {
-                try_clone_string(id, "asset part identifier")?
-            } else {
-                let validation = {
-                    let bytes = package.load(&target, options, context)?;
-                    image.validate(bytes, &target, options, context)
-                };
-                if let Err(error) = validation {
-                    if options.error_policy == ErrorPolicy::BestEffort
-                        && recoverable_media_error(&error)
+            if !state.assets_by_part.contains_key(&target) {
+                package.load(&target, options, context)?;
+                let loaded = package
+                    .take_loaded(&target)
+                    .ok_or_else(|| malformed(Some(&target), "image part is missing"))?;
+                let bytes = loaded.bytes;
+                let caption = match image
+                    .validate_and_read_text(&bytes, &target, options, context, package)
+                {
+                    Ok(text) => text,
+                    Err(error)
+                        if options.error_policy == ErrorPolicy::BestEffort
+                            && recoverable_media_error(&error) =>
                     {
-                        let loaded = package
-                            .take_loaded(&target)
-                            .ok_or_else(|| malformed(Some(&target), "image part is missing"))?;
+                        drop(bytes);
                         package.shrink_memory(loaded.charge)?;
                         push_omitted_image(
                             &mut result,
@@ -115,12 +116,8 @@ pub(super) fn shapes_to_blocks(
                         )?;
                         continue;
                     }
-                    return Err(error);
-                }
-                let loaded = package
-                    .take_loaded(&target)
-                    .ok_or_else(|| malformed(Some(&target), "image part is missing"))?;
-                let bytes = loaded.bytes;
+                    Err(error) => return Err(error),
+                };
                 let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
                 if size > options.limits.max_asset_bytes {
                     return Err(limit("max_asset_bytes", format!("asset {target}")));
@@ -178,17 +175,7 @@ pub(super) fn shapes_to_blocks(
                     let filename = Path::new(&target)
                         .file_name()
                         .and_then(|value| value.to_str())
-                        .map(|value| {
-                            let mut owned = String::new();
-                            owned.try_reserve_exact(value.len()).map_err(|error| {
-                                limit(
-                                    "max_memory_bytes",
-                                    format!("cannot reserve asset filename: {error}"),
-                                )
-                            })?;
-                            owned.push_str(value);
-                            Ok::<String, ConversionError>(owned)
-                        })
+                        .map(|value| try_clone_string(value, "asset filename"))
                         .transpose()?;
                     state.assets.push(Asset {
                         id: AssetId(try_clone_string(&id, "asset identifier")?),
@@ -198,48 +185,54 @@ pub(super) fn shapes_to_blocks(
                         external_uri: None,
                     });
                     let asset_index = state.assets.len() - 1;
-                    if let Some(candidates) = state.assets_by_digest.get_mut(&digest) {
-                        candidates.try_reserve(1).map_err(|error| {
-                            limit(
-                                "max_memory_bytes",
-                                format!("cannot reserve asset digest candidate: {error}"),
-                            )
-                        })?;
-                        candidates.push(asset_index);
-                    } else {
+                    if !state.assets_by_digest.contains_key(&digest) {
                         state.assets_by_digest.try_reserve(1).map_err(|error| {
                             limit(
                                 "max_memory_bytes",
                                 format!("cannot reserve asset digest index: {error}"),
                             )
                         })?;
-                        let mut candidates = Vec::new();
-                        candidates.try_reserve_exact(1).map_err(|error| {
-                            limit(
-                                "max_memory_bytes",
-                                format!("cannot reserve asset digest candidate: {error}"),
-                            )
-                        })?;
-                        candidates.push(asset_index);
-                        state.assets_by_digest.insert(digest, candidates);
                     }
+                    let candidates = state.assets_by_digest.entry(digest).or_default();
+                    candidates.try_reserve(1).map_err(|error| {
+                        limit(
+                            "max_memory_bytes",
+                            format!("cannot reserve asset digest candidate: {error}"),
+                        )
+                    })?;
+                    candidates.push(asset_index);
                     id
                 };
                 package.grow_memory(ASSET_INDEX_ENTRY_CHARGE)?;
                 state.assets_by_part.try_reserve(1).map_err(|error| {
                     limit("max_memory_bytes", format!("cannot reserve asset part index: {error}"))
                 })?;
-                state.assets_by_part.insert(target, try_clone_string(&id, "asset part index")?);
-                id
-            };
+                state
+                    .assets_by_part
+                    .insert(try_clone_string(&target, "asset part path")?, (id, caption));
+            }
+            let (picture, caption) = image_blocks(state, package, &target, alt)?;
             result.push(state.node(
-                Block::Image { asset: AssetId(asset_id), alt },
+                picture,
                 part,
                 slide,
                 bounds,
                 Some(z_order),
                 Some(&languages),
             )?);
+            if let Some(caption) = caption {
+                result
+                    .try_reserve(1)
+                    .map_err(|error| limit("max_memory_bytes", error.to_string()))?;
+                result.push(state.node(
+                    caption,
+                    &target,
+                    slide,
+                    bounds,
+                    Some(z_order),
+                    Some(&languages),
+                )?);
+            }
         }
         if let Some(id) = shape.chart {
             let relationship = relationship_by_id(relationships, &id).ok_or_else(|| {
@@ -320,6 +313,27 @@ pub(super) fn shapes_to_blocks(
         }
     }
     Ok(result)
+}
+
+fn image_blocks(
+    state: &mut ParseState,
+    package: &mut Package<'_>,
+    target: &str,
+    alt: Option<String>,
+) -> Result<(Block, Option<Block>), ConversionError> {
+    let (id, caption) = state
+        .assets_by_part
+        .get(target)
+        .ok_or_else(|| malformed(Some(target), "image part index is missing"))?;
+    let picture =
+        Block::Image { asset: AssetId(try_clone_string(id, "asset part identifier")?), alt };
+    if caption.is_empty() {
+        return Ok((picture, None));
+    }
+    package.grow_memory(caption.len() as u64)?;
+    let value = try_clone_string(caption, "EMF source text")?;
+    state.add_inlines(1)?;
+    Ok((picture, Some(Block::Paragraph(vec![Inline::Text { value, marks: Vec::new() }]))))
 }
 
 fn recoverable_media_error(error: &ConversionError) -> bool {

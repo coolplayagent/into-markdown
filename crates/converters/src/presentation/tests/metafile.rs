@@ -82,3 +82,56 @@ fn malformed_or_mislabeled_emf_uses_existing_media_recovery_policy() {
         );
     }
 }
+
+fn wide_record(options: u32, units: &[u16]) -> Vec<u8> {
+    let length = (76 + units.len() * 2).next_multiple_of(4);
+    let mut bytes = vec![0; length];
+    for (offset, word) in [
+        (0, 84_u32),
+        (4, length as u32),
+        (24, 1),
+        (44, units.len() as u32),
+        (48, 76),
+        (52, options),
+    ] {
+        bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    for (output, unit) in bytes[76..].chunks_exact_mut(2).zip(units) {
+        output.copy_from_slice(&unit.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn emf_unicode_text_uses_slide_provenance_and_leaves_glyphs_and_invalid_runs_in_the_asset() {
+    let caption = "Source 字 \u{1F30D}";
+    let mut short = wide_record(4, &[0x21]);
+    short[48..52].copy_from_slice(&72_u32.to_le_bytes());
+    let records = [
+        wide_record(4, &caption.encode_utf16().collect::<Vec<_>>()),
+        wide_record(0x10, &"hidden glyphs".encode_utf16().collect::<Vec<_>>()),
+        wide_record(4, &[0xD800, 0x0061]),
+        short,
+        wide_record(4, &"Second line".encode_utf16().collect::<Vec<_>>()),
+    ];
+    let mut bytes = emf_bytes();
+    bytes.splice(88..88, records.iter().flatten().copied());
+    let total = bytes.len() as u32;
+    bytes[48..52].copy_from_slice(&total.to_le_bytes());
+    bytes[52..56].copy_from_slice(&(3 + records.len() as u32).to_le_bytes());
+    let parsed = convert_strict(&emf_deck(&bytes, "image/emf")).unwrap();
+    assert_eq!(parsed.assets[0].bytes, bytes);
+    let result = render(&parsed.document, &parsed.assets, &ConversionOptions::default()).unwrap();
+    assert!(result.contains(caption));
+    assert!(result.contains("Second line"));
+    assert!(!result.contains("hidden glyphs") && !result.contains('\u{FFFD}'));
+    let into_markdown_core::Block::Slide { blocks, .. } = &parsed.document.blocks[0].block else {
+        panic!()
+    };
+    assert!(blocks.iter().any(|n| {
+        let s = &n.provenance.locator;
+        s.slide == Some(1)
+            && s.part.as_deref() == Some("ppt/media/figure.emf")
+            && s.bounds.is_some()
+    }));
+}

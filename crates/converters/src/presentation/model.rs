@@ -249,7 +249,7 @@ pub(super) struct ParseState {
     // These indexes are lookup-only and never iterated into output, so randomized hash order
     // cannot affect determinism. `try_reserve` precedes every new key and avoids the quadratic
     // shifting cost of sorted vectors for presentations containing many unique images.
-    pub(super) assets_by_part: HashMap<String, String>,
+    pub(super) assets_by_part: HashMap<String, (String, String)>,
     pub(super) assets_by_digest: HashMap<[u8; 32], Vec<usize>>,
     pub(super) nodes: usize,
     pub(super) inlines: usize,
