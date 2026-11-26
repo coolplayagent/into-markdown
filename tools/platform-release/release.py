@@ -338,6 +338,19 @@ def stage_ggml_runtime(
     return staged
 
 
+def build_ocr_wasm(output: pathlib.Path, environment: dict[str, str]) -> pathlib.Path:
+    target = "wasm32-unknown-unknown"
+    cargo_home = environment.get("CARGO_HOME") or str(pathlib.Path.home() / ".cargo")
+    flags = ["-C", "target-feature=+simd128", "--remap-path-prefix", f"{cargo_home}=/cargo",
+             "--remap-path-prefix", f"{ROOT}=/source"]
+    guest_env = dict(environment, CARGO_ENCODED_RUSTFLAGS="\x1f".join(flags),
+                     CARGO_TARGET_DIR=str(output.resolve()))
+    guest_env.pop("RUSTFLAGS", None)
+    run(["cargo", "build", "--release", "--locked", "--target", target,
+         "--manifest-path", "tools/ocr-wasm/Cargo.toml"], cwd=ROOT, env=guest_env)
+    return (output / target / "release/into_md_ocr_wasm.wasm").resolve()
+
+
 def build_embedded_core(
     target: str,
     output: pathlib.Path,
@@ -353,7 +366,9 @@ def build_embedded_core(
             "INTO_MD_EMBEDDED_OCR_ROOT": str(ocr_root.resolve()),
         }
     )
-    if target != "x86_64-pc-windows-msvc":
+    if target == "x86_64-pc-windows-msvc":
+        environment["INTO_MD_EMBEDDED_OCR_WASM"] = str(build_ocr_wasm(output, environment))
+    else:
         environment["INTO_MD_EMBEDDED_PDFIUM_ROOT"] = str(pdfium_root.resolve())
     # Keep every Cargo/CMake invocation in the release authority on the same
     # portable CPU policy, including clean rebuilds.

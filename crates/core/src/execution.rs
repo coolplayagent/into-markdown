@@ -210,15 +210,17 @@ struct MemoryCredit {
 
 struct MemoryBacking {
     shared: Arc<ExecutionShared>,
+    parent_credit: Option<Arc<MemoryCredit>>,
     bytes: AtomicU64,
 }
 
 impl Drop for MemoryBacking {
     fn drop(&mut self) {
-        self.shared
-            .resources
-            .memory_bytes
-            .fetch_sub(self.bytes.load(Ordering::Acquire), Ordering::AcqRel);
+        let counter = self
+            .parent_credit
+            .as_ref()
+            .map_or(self.shared.resources.memory_bytes.as_ref(), |parent| &parent.bytes);
+        counter.fetch_sub(self.bytes.load(Ordering::Acquire), Ordering::AcqRel);
     }
 }
 
@@ -677,84 +679,6 @@ impl ExecutionContext {
         &self.shared.limits
     }
 
-    /// Whether this context already spends from an enclosing preflight credit.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn has_memory_credit(&self) -> bool {
-        self.memory_credit.is_some()
-    }
-
-    /// Borrow a same-context memory reservation as an SPI credit while
-    /// cancellation, deadline, progress, and temporary storage remain
-    /// request-scoped. The derived context cannot outlive or detach from the
-    /// authentic reservation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable internal error when the reservation is not a memory
-    /// charge from this exact context.
-    ///
-    /// The mutable borrow prevents one parent permit from backing concurrent
-    /// credits and statically prevents dropping the permit before its child:
-    ///
-    /// ```compile_fail
-    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
-    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-    /// let mut permit = context.reserve_memory(1).unwrap();
-    /// let first = context.with_memory_credit(&mut permit).unwrap();
-    /// let second = context.with_memory_credit(&mut permit).unwrap();
-    /// let _ = (first, second);
-    /// ```
-    ///
-    /// ```compile_fail
-    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
-    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-    /// let mut permit = context.reserve_memory(1).unwrap();
-    /// let credit = context.with_memory_credit(&mut permit).unwrap();
-    /// drop(permit);
-    /// let _ = credit.reserve_memory(1);
-    /// ```
-    ///
-    /// ```compile_fail
-    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
-    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
-    /// let forged = context.with_memory_credit(u64::MAX).unwrap();
-    /// # let _ = forged;
-    /// ```
-    #[doc(hidden)]
-    pub fn with_memory_credit<'a>(
-        &self,
-        reservation: &'a mut ResourceReservation,
-    ) -> Result<PreflightMemoryCredit<'a>, ConversionError> {
-        if !reservation.belongs_to_memory_context(self) {
-            return Err(ConversionError::Internal {
-                detail: "preflight credit requires an authentic same-context memory reservation"
-                    .into(),
-            });
-        }
-        let backing = reservation.global_memory_backing.as_ref().ok_or_else(|| {
-            ConversionError::Internal {
-                detail: "preflight credit requires a globally charged memory reservation".into(),
-            }
-        })?;
-        if reservation.active_memory_credit.as_ref().and_then(Weak::upgrade).is_some() {
-            return Err(ConversionError::Internal {
-                detail: "preflight reservation already backs a live memory credit".into(),
-            });
-        }
-        let memory_credit =
-            Arc::new(MemoryCredit { backing: Arc::clone(backing), bytes: AtomicU64::new(0) });
-        reservation.active_memory_credit = Some(Arc::downgrade(&memory_credit));
-        Ok(PreflightMemoryCredit {
-            context: Self {
-                shared: Arc::clone(&self.shared),
-                memory_credit: Some(memory_credit),
-                ignore_request_controls: self.ignore_request_controls,
-            },
-            _reservation: reservation,
-        })
-    }
-
     /// Reserve request-scoped temporary storage until the returned guard is dropped.
     ///
     /// This is intended for same-filesystem staging directories whose atomic
@@ -878,20 +802,21 @@ impl ExecutionContext {
             ),
         };
         checked_charge(counter, peak, bytes, limit, name)?;
-        let global_memory_backing =
-            if matches!(kind, ResourceKind::Memory) && self.memory_credit.is_none() {
-                Some(Arc::new(MemoryBacking {
-                    shared: Arc::clone(&self.shared),
-                    bytes: AtomicU64::new(bytes),
-                }))
-            } else {
-                None
-            };
+        let memory_backing = if matches!(kind, ResourceKind::Memory) && self.memory_credit.is_none()
+        {
+            Some(Arc::new(MemoryBacking {
+                shared: Arc::clone(&self.shared),
+                parent_credit: None,
+                bytes: AtomicU64::new(bytes),
+            }))
+        } else {
+            None
+        };
         Ok(ResourceReservation {
             context: self.clone_with_memory_account(),
             kind,
             bytes,
-            global_memory_backing,
+            memory_backing,
             active_memory_credit: None,
         })
     }
@@ -994,7 +919,7 @@ pub struct ResourceReservation {
     context: ExecutionContext,
     kind: ResourceKind,
     bytes: u64,
-    global_memory_backing: Option<Arc<MemoryBacking>>,
+    memory_backing: Option<Arc<MemoryBacking>>,
     active_memory_credit: Option<Weak<MemoryCredit>>,
 }
 
@@ -1034,7 +959,7 @@ impl ResourceReservation {
         };
         checked_charge(counter, peak, bytes, limit, name)?;
         self.bytes = next;
-        if let Some(backing) = &self.global_memory_backing {
+        if let Some(backing) = &self.memory_backing {
             backing.bytes.fetch_add(bytes, Ordering::AcqRel);
         }
         Ok(())
@@ -1055,7 +980,7 @@ impl ResourceReservation {
             detail: "resource reservation underflowed".into(),
         })?;
         self.bytes = next;
-        if let Some(backing) = &self.global_memory_backing {
+        if let Some(backing) = &self.memory_backing {
             backing.bytes.fetch_sub(bytes, Ordering::AcqRel);
         }
         let counter = match self.kind {
@@ -1097,8 +1022,8 @@ impl ResourceReservation {
 
 impl Drop for ResourceReservation {
     fn drop(&mut self) {
-        if self.global_memory_backing.is_some() {
-            // The backing owns the global charge. A derived credit also holds
+        if self.memory_backing.is_some() {
+            // The backing owns the charge to the parent account. A derived credit also holds
             // the backing, so dropping this guard cannot release the request
             // budget until every detached child reservation is gone.
             return;
@@ -2246,6 +2171,31 @@ mod tests {
         assert!(credit.reserve_memory(1).is_err());
         drop(child);
         assert_eq!(credit.available_memory_bytes(), 1);
+    }
+
+    #[test]
+    fn nested_credit_retains_outer_charge_and_enforces_its_own_limit() {
+        let context = ExecutionContext::new(
+            ExecutionOptions::default(),
+            ResourceLimits { max_memory_bytes: 32, ..ResourceLimits::default() },
+        );
+        let mut parent = context.reserve_memory(24).unwrap();
+        let last = {
+            let outer = context.with_memory_credit(&mut parent).unwrap();
+            let mut child = outer.reserve_memory(10).unwrap();
+            let held = {
+                let inner = outer.with_memory_credit(&mut child).unwrap();
+                assert!(inner.reserve_memory(11).is_err());
+                inner.reserve_memory(6).unwrap()
+            };
+            drop(child);
+            assert_eq!(outer.available_memory_bytes(), 14);
+            held
+        };
+        drop(parent);
+        assert_eq!(context.available_memory_bytes(), 8);
+        drop(last);
+        assert_eq!(context.available_memory_bytes(), 32);
     }
 
     #[test]

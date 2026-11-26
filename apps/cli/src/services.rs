@@ -375,7 +375,7 @@ pub(crate) fn verify_ocr_runtime(loaded: &LoadedConfig, cwd: &Path) -> Result<()
         crate::embedded_runtime::verify_embedded_ocr_runtime(&loaded.options)?;
     }
     let context = ExecutionContext::new(ExecutionOptions::default(), loaded.options.limits.clone());
-    assemble_ocr(loaded, &context, cwd).map(drop)
+    assemble_ocr(loaded, &context, cwd, None).map(drop)
 }
 
 /// Verify construction of the effective transcription route without issuing a
@@ -692,6 +692,7 @@ fn assemble_ocr(
     loaded: &LoadedConfig,
     context: &ExecutionContext,
     cwd: &Path,
+    source_context: Option<&ExecutionContext>,
 ) -> Result<Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
     let default_mode = if loaded.options.ai.vision_ocr == AiMode::Off {
         AiMode::Only
@@ -718,7 +719,7 @@ fn assemble_ocr(
                     && plugin_id == "official.ocr.ppocrv6"
                     && capability_id == "ocr" =>
             {
-                crate::embedded_runtime::embedded_ocr_engine(&loaded.options)
+                crate::embedded_runtime::embedded_ocr_engine(&loaded.options, source_context)
             }
             CapabilitySourceRef::Plugin { plugin_id, capability_id } => {
                 let configured = single_plugin_route(plugin_id, capability_id);

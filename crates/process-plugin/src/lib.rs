@@ -66,6 +66,9 @@ pub struct WindowsSandboxAuthority {
     pub storage_root: PathBuf,
 }
 
+#[cfg(windows)]
+pub use sandbox::windows::windows_process_has_restricting_sids;
+
 /// Provision the deterministic, zero-capability `AppContainer` used by an installed plugin.
 ///
 /// # Errors

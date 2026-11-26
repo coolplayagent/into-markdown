@@ -1626,6 +1626,7 @@ version = "0.0.9"
 dependencies = [
  "axum",
  "base64",
+ "bytemuck",
  "cap-std",
  "clap",
  "clap_complete",
@@ -1637,6 +1638,7 @@ dependencies = [
  "globset",
  "into-markdown",
  "into-markdown-http-transport",
+ "into-markdown-ocr",
  "into-markdown-plugin-manager",
  "into-markdown-plugin-wasi",
  "into-markdown-process-plugin",
@@ -1655,6 +1657,7 @@ dependencies = [
  "tokio",
  "toml",
  "url",
+ "wasmtime",
  "winapi-util",
  "zip 2.4.2",
 ]

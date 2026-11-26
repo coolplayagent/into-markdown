@@ -28,8 +28,13 @@ const DETECTOR_INFERENCE_SIDE: usize = 1536;
 /// Installed, offline PP-OCRv6 image pipeline.
 pub struct PpOcrImageEngine {
     runtime: Arc<dyn TensorRuntime>,
-    manager: Arc<ModelManager>,
+    models: ImageModels,
     limits: ResourceLimits,
+}
+
+enum ImageModels {
+    Installed(Arc<ModelManager>),
+    Embedded { dictionary: Vec<u8>, worker_budget: u64, working_bytes: u64, planned_bytes: u64 },
 }
 
 impl PpOcrImageEngine {
@@ -70,7 +75,35 @@ impl PpOcrImageEngine {
         manager
             .verify_with_context(crate::detector_model::PIPELINE_ID, context)
             .map_err(map_manager_error)?;
-        Ok(Self { runtime, manager, limits })
+        Ok(Self { runtime, models: ImageModels::Installed(manager), limits })
+    }
+
+    /// Use authenticated in-memory models and dictionary with a bounded tensor worker.
+    /// The dictionary is also verified against the recognizer's independent model authority.
+    pub fn from_embedded(
+        runtime: Arc<dyn TensorRuntime>,
+        dictionary: Vec<u8>,
+        worker_budget: u64,
+        resident_bytes: u64,
+        source_owns_resident: bool,
+        limits: ResourceLimits,
+    ) -> Result<Self, ConversionError> {
+        validate_engine_limits(&limits)?;
+        if resident_bytes >= worker_budget || worker_budget > limits.max_memory_bytes {
+            return Err(resource("max_memory_bytes", "invalid embedded OCR worker budget"));
+        }
+        let working_bytes = worker_budget - resident_bytes;
+        let planned_bytes = if source_owns_resident { working_bytes } else { worker_budget };
+        Ok(Self {
+            runtime,
+            models: ImageModels::Embedded {
+                dictionary,
+                worker_budget,
+                working_bytes,
+                planned_bytes,
+            },
+            limits,
+        })
     }
 
     async fn execute(
@@ -78,10 +111,37 @@ impl PpOcrImageEngine {
         request: OcrRequest<'_>,
         context: &ExecutionContext,
     ) -> Result<BoundOcrResult, ConversionError> {
+        if let ImageModels::Embedded { working_bytes, .. } = &self.models {
+            let mut memory = context.reserve_memory(*working_bytes)?;
+            let bounded = context.with_memory_credit(&mut memory)?;
+            return self.execute_image(request, &bounded).await;
+        }
+        self.execute_image(request, context).await
+    }
+
+    fn plan(
+        &self,
+        limits: &ResourceLimits,
+        context: &ExecutionContext,
+    ) -> Result<OcrOutputPlan, ConversionError> {
+        let plan = output_plan(limits, context.available_memory_bytes())?;
+        match &self.models {
+            ImageModels::Installed(_) => Ok(plan),
+            ImageModels::Embedded { planned_bytes, .. } => OcrOutputPlan::try_new_with_working(
+                plan.max_retained_bytes(),
+                *planned_bytes,
+                plan.max_regions(),
+                plan.max_text_bytes(),
+            ),
+        }
+    }
+
+    async fn execute_image(
+        &self,
+        request: OcrRequest<'_>,
+        context: &ExecutionContext,
+    ) -> Result<BoundOcrResult, ConversionError> {
         context.checkpoint()?;
-        self.manager
-            .verify_with_context(crate::detector_model::PIPELINE_ID, context)
-            .map_err(map_manager_error)?;
         let limits = effective_limits(&self.limits, context.resource_limits());
         let max_source_pixels = source_pixel_limit(&limits)?;
         let max_regions =
@@ -99,19 +159,28 @@ impl PpOcrImageEngine {
                 ..DetectionConfig::default()
             },
         )?;
-        let recognizer = PpOcrTextRecognizer::from_installed(
-            Arc::clone(&self.runtime),
-            &self.manager,
-            RecognitionConfig {
-                max_regions,
-                max_decoded_bytes: usize::try_from(limits.max_field_bytes.min(MAX_TEXT_BYTES))
-                    .map_err(|_| {
-                        resource("max_field_bytes", "OCR text bound is not representable")
-                    })?,
-                ..RecognitionConfig::default()
-            },
-            context,
-        )?;
+        let config = RecognitionConfig {
+            max_regions,
+            max_decoded_bytes: usize::try_from(limits.max_field_bytes.min(MAX_TEXT_BYTES))
+                .map_err(|_| resource("max_field_bytes", "OCR text bound is not representable"))?,
+            ..RecognitionConfig::default()
+        };
+        let recognizer = match &self.models {
+            ImageModels::Installed(manager) => {
+                manager
+                    .verify_with_context(crate::detector_model::PIPELINE_ID, context)
+                    .map_err(map_manager_error)?;
+                PpOcrTextRecognizer::from_installed(
+                    Arc::clone(&self.runtime),
+                    manager,
+                    config,
+                    context,
+                )?
+            }
+            ImageModels::Embedded { dictionary, .. } => {
+                PpOcrTextRecognizer::new(Arc::clone(&self.runtime), dictionary, config, context)?
+            }
+        };
         let (pixels, _memory) = decode_normalized_png(request, &limits, context)?;
         let image = PixelView {
             width: pixels.width() as usize,
@@ -121,6 +190,9 @@ impl PpOcrImageEngine {
             orientation: ImageOrientation::Normal,
             bytes: pixels.as_raw(),
         };
+        if let ImageModels::Embedded { worker_budget, .. } = &self.models {
+            context.record_ocr_request(*worker_budget);
+        }
         let detected = detector.detect_page(1, image, context).await?;
         let language = language_hint(request.languages)?;
         let recognition_result = recognizer
@@ -128,6 +200,9 @@ impl PpOcrImageEngine {
             .await
             .map_err(|error| match error {
                 ConversionError::ResourceLimit { limit: "max_memory_bytes", detail } => {
+                    if matches!(self.models, ImageModels::Embedded { .. }) {
+                        context.record_ocr_memory_refusal();
+                    }
                     ConversionError::ResourceLimit { limit: "ocrRecognitionMemory", detail }
                 }
                 error => error,
@@ -139,7 +214,7 @@ impl PpOcrImageEngine {
             pixels.height(),
             0,
         )?;
-        bind_result(&detected, recognition_result.result(), identity, context)
+        bind_result(&detected, recognition_result.result(), identity, &self.models, context)
     }
 }
 
@@ -167,7 +242,7 @@ impl OcrEngine for PpOcrImageEngine {
         context.checkpoint()?;
         let limits = effective_limits(&self.limits, &options.limits);
         validate_png_header(request, &limits)?;
-        output_plan(&limits, context.available_memory_bytes())
+        self.plan(&limits, context)
     }
 
     fn planned_normalized_png_output(
@@ -189,7 +264,7 @@ impl OcrEngine for PpOcrImageEngine {
         if decoded > limits.max_decompressed_bytes {
             return Err(resource("max_decompressed_bytes", "OCR PNG dimensions exceed limits"));
         }
-        output_plan(&limits, context.available_memory_bytes())
+        self.plan(&limits, context)
     }
 
     fn recognize_bound<'a>(
@@ -275,6 +350,7 @@ fn bind_result(
     detected: &crate::PageDetection,
     recognized: &crate::RecognitionResult,
     identity: OcrInputIdentity,
+    models: &ImageModels,
     context: &ExecutionContext,
 ) -> Result<BoundOcrResult, ConversionError> {
     if recognized.provider.as_ref() != RECOGNIZER_PROVIDER
@@ -307,18 +383,24 @@ fn bind_result(
         });
         confidences.push(detection.confidence);
     }
+    let (detector_provider, recognizer_provider) = match models {
+        ImageModels::Installed(_) => (DETECTOR_PROVIDER, RECOGNIZER_PROVIDER),
+        ImageModels::Embedded { .. } => {
+            ("builtin.ocr.ppocrv6-wasm-detector", "builtin.ocr.ppocrv6-wasm-recognizer")
+        }
+    };
     BoundOcrResult::try_new_for_input(
-        OcrResult { regions, provider: RECOGNIZER_PROVIDER.into() },
+        OcrResult { regions, provider: recognizer_provider.into() },
         confidences,
         vec![
             OcrEvidenceStep {
                 stage: OcrEvidenceStage::Detection,
-                provider: DETECTOR_PROVIDER.into(),
+                provider: detector_provider.into(),
                 model: Some(crate::detector_model::DETECTOR_MODEL_ID.into()),
             },
             OcrEvidenceStep {
                 stage: OcrEvidenceStage::Recognition,
-                provider: RECOGNIZER_PROVIDER.into(),
+                provider: recognizer_provider.into(),
                 model: Some(crate::recognizer_model::RECOGNIZER_MODEL_ID.into()),
             },
         ],
@@ -426,6 +508,28 @@ mod tests {
         bytes.extend_from_slice(&[8, 2, 0, 0, 0]);
         bytes.extend_from_slice(&[0; 4]);
         bytes
+    }
+
+    #[test]
+    fn wasm_plan_only_charges_the_bounded_image_worker() {
+        let options = ConversionOptions {
+            limits: ResourceLimits { max_memory_bytes: 32 << 30, ..ResourceLimits::default() },
+            ..ConversionOptions::default()
+        };
+        let context = ExecutionContext::new(Default::default(), options.limits.clone());
+        let worker_budget = 1 << 30;
+        let engine = PpOcrImageEngine::from_embedded(
+            Arc::new(crate::PlaceholderTensorRuntime),
+            Vec::new(),
+            worker_budget,
+            0,
+            true,
+            options.limits.clone(),
+        )
+        .unwrap();
+        let plan = engine.planned_normalized_png_output(1920, 1080, &options, &context).unwrap();
+        assert_eq!(plan.max_working_bytes(), worker_budget);
+        assert!(plan.max_retained_bytes() + plan.max_working_bytes() < 2 << 30);
     }
 
     #[test]

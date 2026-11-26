@@ -9,7 +9,7 @@ use std::path::Path;
 
 const AUTHORITY_PATH: &str = "third_party/licenses/release-material-authority.json";
 const REVIEWED_AUTHORITY_SHA256: &str =
-    "b338adbdcf28ed443521a595689f2d2f334765a4d7dcb7354b89360a313b791d";
+    "6dccff14a977c5d7c681adc11860d65bc6db36a83761f44e4157ccd48911f519";
 const GENERATED_PATHS: [&str; 5] =
     ["NOTICE", "THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json", "core-catalog.json"];
 const PROFILE_PATHS: [&str; 12] = [
@@ -26,17 +26,20 @@ const PROFILE_PATHS: [&str; 12] = [
     "tools/license-check/fixtures/release-request-x86_64-pc-windows-msvc.json",
     "tools/license-check/fixtures/release-request-x86_64-unknown-linux-gnu.json",
 ];
-const RENDERER_PATHS: [&str; 6] = [
+const RENDERER_PATHS: [&str; 8] = [
     "tools/license-check/src/release.rs",
     "tools/license-check/src/materials.rs",
     "tools/license-check/src/sbom.rs",
     "tools/deterministic_zip.py",
     "tools/macos-release/release.py",
     "tools/platform-release/release.py",
+    "tools/portable-release/assemble.py",
+    "tools/portable-release/ocr_guest.py",
 ];
-const LICENSE_PATHS: [(&str, &str); 2] = [
+const LICENSE_PATHS: [(&str, &str); 3] = [
     ("third_party/whisper-rs-0.16.0/LICENSE", "Unlicense"),
     ("third_party/whisper-rs-0.16.0/sys/whisper.cpp/LICENSE", "MIT"),
+    ("third_party/licenses/ocr-wasm-NOTICES.txt", "MIT AND Unicode-3.0"),
 ];
 
 pub(crate) fn profile_paths() -> &'static [&'static str] {

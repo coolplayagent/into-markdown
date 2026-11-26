@@ -30,6 +30,7 @@ py_library(
     data = [
         "authority.json",
         "//:Cargo.toml",
+        "//tools:ocr_wasm_sources",
         "//third_party/runtime-assets:models",
     ],
     imports = ["."],

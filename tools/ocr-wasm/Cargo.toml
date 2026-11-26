@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "into-md-ocr-wasm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rten = { version = "=0.28.0", default-features = false, features = ["onnx_format"] }
+rten-tensor = "=0.28.0"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = true

@@ -664,13 +664,19 @@ class PlatformReleaseTests(unittest.TestCase):
                 result,
                 root / "build/release/into-md.exe",
             )
-            self.assertEqual(len(commands), 1)
-            self.assertIn("into-markdown-cli", commands[0])
-            self.assertIn("into-md", commands[0])
-            feature = commands[0].index("--features")
-            self.assertEqual(commands[0][feature + 1], "embedded-runtime")
-            self.assertEqual(environments[0]["GGML_NATIVE"], "OFF")
-            self.assertIn("target-cpu=x86-64", environments[0]["RUSTFLAGS"])
+            guest, cli = commands
+            self.assertIn("tools/ocr-wasm/Cargo.toml", guest)
+            self.assertIn("--locked", guest)
+            self.assertEqual(guest[guest.index("--target") + 1], "wasm32-unknown-unknown")
+            self.assertIn("+simd128", environments[0]["CARGO_ENCODED_RUSTFLAGS"])
+            self.assertIn("--remap-path-prefix", environments[0]["CARGO_ENCODED_RUSTFLAGS"])
+            self.assertEqual(pathlib.Path(environments[1]["INTO_MD_EMBEDDED_OCR_WASM"]),
+                             (root / "build/wasm32-unknown-unknown/release/into_md_ocr_wasm.wasm").resolve())
+            self.assertIn("into-markdown-cli", cli)
+            self.assertIn("into-md", cli)
+            self.assertEqual(cli[cli.index("--features") + 1], "embedded-runtime")
+            self.assertEqual(environments[1]["GGML_NATIVE"], "OFF")
+            self.assertIn("target-cpu=x86-64", environments[1]["RUSTFLAGS"])
 
     def test_release_build_prefetches_complete_locked_cargo_closure(self) -> None:
         source = (ROOT / "tools/platform-release/release.py").read_text(

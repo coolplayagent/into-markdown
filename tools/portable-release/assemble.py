@@ -38,6 +38,7 @@ from core_archive import (  # noqa: E402
     write_core_material_authority,
     windows_pdfium_authority,
 )
+from ocr_guest import add_guest_declarations  # noqa: E402
 
 PLATFORM_RELEASE = ROOT / "tools/platform-release/release.py"
 MACOS_RELEASE = ROOT / "tools/macos-release/release.py"
@@ -232,6 +233,8 @@ def build_platform(arguments: argparse.Namespace) -> None:
     core_evidence.mkdir(parents=True, exist_ok=True)
     release.write_release_inputs(core_evidence, projection, target)
     release.write_core_license_materials(core_evidence, cache, target, config)
+    if target == "x86_64-pc-windows-msvc":
+        add_guest_declarations(core_evidence, build_root / "wasm32-unknown-unknown/release/into_md_ocr_wasm.wasm")
     materials = stage_core_archive_materials(
         cache / "pdfium",
         core_evidence,

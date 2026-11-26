@@ -1,5 +1,8 @@
 //! Lazily materialized native runtimes embedded in the final `into-md` executable.
 
+#[cfg(all(windows, feature = "embedded-runtime"))]
+mod wasm_ocr;
+
 use fd_lock::RwLock;
 use sha2::{Digest as _, Sha256};
 use std::collections::BTreeSet;
@@ -110,6 +113,7 @@ pub(super) fn resolve_pdfium_library() -> Result<PathBuf, into_markdown::Convers
 
 pub(super) fn embedded_ocr_engine(
     options: &into_markdown::ConversionOptions,
+    _source_context: Option<&into_markdown::ExecutionContext>,
 ) -> Result<std::sync::Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
     if !EMBEDDED_RUNTIME_ENABLED {
         return Err(runtime_error("embedded OCR is unavailable in this development build".into()));
@@ -117,6 +121,15 @@ pub(super) fn embedded_ocr_engine(
     Ok(std::sync::Arc::new(LazyEmbeddedOcr {
         options: options.clone(),
         engine: std::sync::Mutex::new(None),
+        #[cfg(all(windows, feature = "embedded-runtime"))]
+        isolation: if requires_wasm_ocr()? {
+            match _source_context {
+                Some(source) => OcrIsolation::WasmSource(source.clone()),
+                None => OcrIsolation::WasmCall,
+            }
+        } else {
+            OcrIsolation::Native
+        },
     }))
 }
 
@@ -129,23 +142,86 @@ pub(super) fn embedded_ocr_engine(
 pub(super) fn verify_embedded_ocr_runtime(
     options: &into_markdown::ConversionOptions,
 ) -> Result<(), into_markdown::ConversionError> {
-    build_embedded_ocr_engine(options).map(drop)
+    let context = into_markdown::ExecutionContext::new(
+        into_markdown::ExecutionOptions::default(),
+        options.limits.clone(),
+    );
+    #[cfg(all(windows, feature = "embedded-runtime"))]
+    if requires_wasm_ocr()? {
+        return wasm_ocr::engine(options, &context, false).map(drop);
+    }
+    build_embedded_ocr_engine(options, &context).map(drop)
+}
+
+#[cfg(all(windows, feature = "embedded-runtime"))]
+fn requires_wasm_ocr() -> Result<bool, into_markdown::ConversionError> {
+    into_markdown_process_plugin::windows_process_has_restricting_sids()
+        .map_err(|error| runtime_error(format!("query OCR process token: {error}")))
+}
+
+#[cfg(all(windows, feature = "embedded-runtime"))]
+enum OcrIsolation {
+    Native,
+    WasmSource(into_markdown::ExecutionContext),
+    WasmCall,
 }
 
 struct LazyEmbeddedOcr {
     options: into_markdown::ConversionOptions,
     engine: std::sync::Mutex<Option<std::sync::Arc<dyn into_markdown::OcrEngine>>>,
+    // A source-scoped service can retain compiled code across pages. Shared services
+    // create an engine for the active call so its budget follows that request.
+    #[cfg(all(windows, feature = "embedded-runtime"))]
+    isolation: OcrIsolation,
 }
 
 impl LazyEmbeddedOcr {
+    #[cfg(all(windows, feature = "embedded-runtime"))]
+    fn wasm_for_call(
+        &self,
+        context: &into_markdown::ExecutionContext,
+        planning: bool,
+    ) -> Result<std::sync::Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
+        if planning {
+            wasm_ocr::planner(&self.options)
+        } else {
+            wasm_ocr::engine(&self.options, context, false)
+        }
+    }
+
     fn get(
         &self,
+        context: &into_markdown::ExecutionContext,
+        _planning: bool,
     ) -> Result<std::sync::Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
+        context.checkpoint()?;
+        #[cfg(all(windows, feature = "embedded-runtime"))]
+        if matches!(self.isolation, OcrIsolation::WasmCall) {
+            return self.wasm_for_call(context, _planning);
+        }
         let mut slot = self.engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(engine) = slot.as_ref() {
             return Ok(std::sync::Arc::clone(engine));
         }
-        let engine = build_embedded_ocr_engine(&self.options)?;
+        #[cfg(all(windows, feature = "embedded-runtime"))]
+        let engine = if let OcrIsolation::WasmSource(source) = &self.isolation {
+            match wasm_ocr::reserve_setup(&self.options, source) {
+                Ok(memory) => wasm_ocr::load(&self.options, source, memory, true)?,
+                Err(into_markdown::ConversionError::ResourceLimit { .. })
+                    if context.has_memory_credit() =>
+                {
+                    // Some converters reserve the entire source allowance up front. Their
+                    // credit can own this call's runtime, and must be free when the call ends.
+                    drop(slot);
+                    return self.wasm_for_call(context, _planning);
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            build_embedded_ocr_engine(&self.options, context)?
+        };
+        #[cfg(not(all(windows, feature = "embedded-runtime")))]
+        let engine = build_embedded_ocr_engine(&self.options, context)?;
         *slot = Some(std::sync::Arc::clone(&engine));
         Ok(engine)
     }
@@ -162,7 +238,7 @@ impl into_markdown::OcrEngine for LazyEmbeddedOcr {
         options: &into_markdown::ConversionOptions,
         context: &into_markdown::ExecutionContext,
     ) -> Result<into_markdown::OcrOutputPlan, into_markdown::ConversionError> {
-        self.get()?.planned_bound_output(request, options, context)
+        self.get(context, true)?.planned_bound_output(request, options, context)
     }
 
     fn planned_normalized_png_output(
@@ -172,7 +248,7 @@ impl into_markdown::OcrEngine for LazyEmbeddedOcr {
         options: &into_markdown::ConversionOptions,
         context: &into_markdown::ExecutionContext,
     ) -> Result<into_markdown::OcrOutputPlan, into_markdown::ConversionError> {
-        self.get()?.planned_normalized_png_output(width, height, options, context)
+        self.get(context, true)?.planned_normalized_png_output(width, height, options, context)
     }
 
     fn recognize<'a>(
@@ -183,7 +259,7 @@ impl into_markdown::OcrEngine for LazyEmbeddedOcr {
         'a,
         Result<into_markdown::OcrResult, into_markdown::ConversionError>,
     > {
-        Box::pin(async move { self.get()?.recognize(request, context).await })
+        Box::pin(async move { self.get(context, false)?.recognize(request, context).await })
     }
 
     fn recognize_bound<'a>(
@@ -194,13 +270,15 @@ impl into_markdown::OcrEngine for LazyEmbeddedOcr {
         'a,
         Result<into_markdown::OcrRecognition, into_markdown::ConversionError>,
     > {
-        Box::pin(async move { self.get()?.recognize_bound(request, context).await })
+        Box::pin(async move { self.get(context, false)?.recognize_bound(request, context).await })
     }
 }
 
 fn build_embedded_ocr_engine(
     options: &into_markdown::ConversionOptions,
+    context: &into_markdown::ExecutionContext,
 ) -> Result<std::sync::Arc<dyn into_markdown::OcrEngine>, into_markdown::ConversionError> {
+    context.checkpoint()?;
     let root = materialize(ocr_payload()).map_err(runtime_error)?;
     let descriptor = read_verified_file(&root.join("provider.json"), MAX_CATALOG_BYTES * 512)
         .map_err(runtime_error)?;
