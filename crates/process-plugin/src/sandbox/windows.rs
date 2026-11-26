@@ -1,4 +1,5 @@
 pub(crate) mod directory_acl;
+pub(crate) mod process_token;
 
 use crate::{PluginError, PluginErrorCode, RuntimePolicy, ValidatedPlugin};
 use sha2::Digest as _;
@@ -68,17 +69,6 @@ impl Drop for StoragePath {
     }
 }
 const INHERITED_ACE_FLAG: u8 = 0x10;
-
-/// Determine whether Windows performs the additional restricted-token access check.
-///
-/// # Errors
-///
-/// Returns an error when the current process token cannot be queried.
-pub fn windows_process_has_restricting_sids() -> Result<bool, PluginError> {
-    let user = CurrentUser::open()?;
-    // SAFETY: the owned current-process token remains open with TOKEN_QUERY.
-    Ok(unsafe { windows_sys::Win32::Security::IsTokenRestricted(user.token.as_raw_handle()) } != 0)
-}
 
 pub(crate) fn provision(
     scope_plugin_identity: &str,

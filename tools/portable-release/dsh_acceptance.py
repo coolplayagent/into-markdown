@@ -96,8 +96,9 @@ class Acceptance:
             self.failures.append(label)
             print(f"FAIL {label}: {exc}", flush=True)
 
-    def run(self, args, *, mode="workspace-write", status=0, stdin=b"", timeout=180, environment=None):
-        command = [str(self.binary), *map(str, args)]
+    def run(self, args, *, mode="workspace-write", status=0, stdin=b"", timeout=180,
+            environment=None, binary=None):
+        command = [str(binary or self.binary), *map(str, args)]
         env = os.environ.copy()
         if environment:
             env.update(environment)
@@ -223,6 +224,17 @@ class Acceptance:
                 environment={"LOCALAPPDATA": str(cache)}))
             verify_result(result, json.loads(report.read_bytes()), golden["ground_truth_nfc"], ValueError)
         require(cache.read_bytes() == b"regular file", "conversion modified the cache sentinel")
+
+        # Executables installed in the workspace inherit its low integrity label.
+        # A direct launch can have low integrity without having restricting SIDs.
+        installed = self.work / "into-md.exe"
+        shutil.copyfile(self.binary, installed)
+        for mode in (None, "workspace-write"):
+            result = json.loads(self.run([src, "--ocr", "always", "--error-policy", "strict",
+                "--no-config", "--emit", "result-json", "--asset-mode", "omit"],
+                binary=installed, mode=mode))
+            require(golden["ground_truth_nfc"] in recognized_text(result["document"]),
+                    "workspace-installed executable lost OCR text")
 
     def languages(self):
         manifest = json.loads((ROOT / "fixtures/manifest.json").read_bytes())

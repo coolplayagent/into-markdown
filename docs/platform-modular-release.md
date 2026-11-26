@@ -68,7 +68,8 @@ signed 却缺少对应凭据时必须失败。两种模式都保留内部 `.imp`
 Windows 的 OCR 与语音进程使用稳定的零 capability AppContainer 身份。插件管理器只给当前已
 验证、不可变的 runtime 快照授予读取和执行 ACL，并由 kill-on-close Job Object 持有整个进程树。
 
-Windows 便携 Core 在受限令牌下使用内置的 WebAssembly OCR。它读取随程序发布、按摘要校验的
+Windows 便携 Core 在进程带有限制 SID 或完整性级别低于中级时使用内置的 WebAssembly OCR。
+安装在 dsh 工作区里的 EXE 可能继承低完整性标签，直接启动也会使用此后端。它读取随程序发布、按摘要校验的
 PP-OCRv6 检测与识别模型，使用 RTen 执行同一组模型，在结果中记录实际使用的推理运行时。
 模块没有宿主导入，推理受请求内存、超时和取消限制。正式构建通过锁定的
 `tools/ocr-wasm/Cargo.toml` 生成 `wasm32-unknown-unknown` 模块。

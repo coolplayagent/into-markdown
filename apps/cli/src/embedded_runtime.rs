@@ -155,7 +155,7 @@ pub(super) fn verify_embedded_ocr_runtime(
 
 #[cfg(all(windows, feature = "embedded-runtime"))]
 fn requires_wasm_ocr() -> Result<bool, into_markdown::ConversionError> {
-    into_markdown_process_plugin::windows_process_has_restricting_sids()
+    into_markdown_process_plugin::windows_process_is_restricted_or_low_integrity()
         .map_err(|error| runtime_error(format!("query OCR process token: {error}")))
 }
 

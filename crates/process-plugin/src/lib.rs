@@ -67,7 +67,7 @@ pub struct WindowsSandboxAuthority {
 }
 
 #[cfg(windows)]
-pub use sandbox::windows::windows_process_has_restricting_sids;
+pub use sandbox::windows::process_token::windows_process_is_restricted_or_low_integrity;
 
 /// Provision the deterministic, zero-capability `AppContainer` used by an installed plugin.
 ///
