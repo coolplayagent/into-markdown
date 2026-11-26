@@ -42,7 +42,13 @@ impl StructuredSpool {
             .as_deref()
             .and_then(|filename| self.payload_by_filename.get(filename).copied());
         let file = if existing_payload.is_none() && storage_filename.is_some() {
-            Some(self.context.temporary_file("into-md-asset").map_err(CliError::from)?)
+            Some(if self.plan.external_assets {
+                ReplaySpool::File(
+                    self.context.temporary_file("into-md-asset").map_err(CliError::from)?,
+                )
+            } else {
+                ReplaySpool::new(&self.context, "into-md-asset")?
+            })
         } else {
             None
         };

@@ -284,9 +284,12 @@ locator 且保留原图、正文或占位的最小内容单元可在 best-effort
 - CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
   stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
   FIFO、设备、符号链接和 Windows reparse point 均拒绝。
-- 流式 CLI 产物在渲染后把资产 payload 写入请求临时文件并清除长期 RAM 副本；文件写入受
-  `max_temporary_bytes`、RAII 删除和最终事务约束。best-effort 只能省略无法暂存的 payload，
-  必须保留引用与就近诊断；最终提交失败仍终止并回滚整个输出事务。
+- CLI 通常把资产暂存到请求级临时文件，释放转换器持有的内存。暂存文件遵守
+  `max_temporary_bytes` 并在请求结束时清理。无法创建临时文件时，转换器可保留已计入
+  请求内存额度的资产，向单个标准输出制品重放。内嵌资产的 Markdown/JSON 和包含资产的
+  ZIP bundle 都受 `max_memory_bytes` 限制。完成转换和序列化后才发布标准输出。
+  `--asset-mode extract` 的独立输出文件仍需可写的暂存目录和目标目录。写入目标失败时，
+  输出事务中止并回滚。best-effort 按临时空间额度省略资产时会保留引用和就近诊断。
 - 单项或累计资产额度拒绝只在已经认证资产边界后恢复：安全外部 URI 保持引用，纯 payload
   资产把对应图片节点改成带 alt 的可见占位并释放租约。总额度按资产顺序保留已接纳 payload，
   其后遗漏数量进入固定容量诊断；strict 不执行该转换。

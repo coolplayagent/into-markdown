@@ -32,6 +32,7 @@ struct SpoolState {
     external_only: u64,
     dual: u64,
     disabled: bool,
+    first_file: Option<TemporaryFile>,
 }
 
 pub(crate) fn spool_assets(
@@ -45,13 +46,22 @@ pub(crate) fn spool_assets(
             detail: "asset payloads were spooled twice".into(),
         });
     }
+    let mut state = SpoolState::default();
+    if persist_payloads && rendered.output.assets.iter().any(|asset| !asset.bytes.is_empty()) {
+        match context.temporary_file("into-md-engine-asset") {
+            Ok(file) => state.first_file = Some(file),
+            // The converter already owns and accounts for these payloads.
+            // emit() can replay them directly while their leases remain held.
+            Err(ConversionError::Io { .. }) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
     rendered.output.diagnostics.try_reserve(rendered.output.assets.len()).map_err(|error| {
         ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
             detail: format!("cannot reserve asset-spool diagnostics: {error}"),
         }
     })?;
-    let mut state = SpoolState::default();
     state.items.try_reserve_exact(rendered.output.assets.len()).map_err(|error| {
         ConversionError::ResourceLimit {
             limit: "max_memory_bytes",
@@ -115,7 +125,7 @@ fn spool_asset(
     } else if state.disabled {
         true
     } else {
-        match write_temporary_payload(asset, context) {
+        match write_temporary_payload(asset, state.first_file.take(), context) {
             Ok(temporary) => {
                 file = Some(temporary);
                 false
@@ -156,9 +166,13 @@ fn spool_asset(
 
 fn write_temporary_payload(
     asset: &Asset,
+    first_file: Option<TemporaryFile>,
     context: &ExecutionContext,
 ) -> Result<TemporaryFile, ConversionError> {
-    let mut temporary = context.temporary_file("into-md-engine-asset")?;
+    let mut temporary = match first_file {
+        Some(file) => file,
+        None => context.temporary_file("into-md-engine-asset")?,
+    };
     for chunk in asset.bytes.chunks(EMIT_CHUNK_BYTES) {
         temporary.write_all_checked(chunk)?;
     }
@@ -458,6 +472,28 @@ mod tests {
         drop(rendered);
         assert_eq!(context.reserved_memory_bytes(), 0);
         assert_eq!(context.reserved_temporary_bytes(), 0);
+    }
+
+    #[test]
+    fn unavailable_temporary_storage_replays_the_charged_converter_payloads() {
+        let root = tempfile::tempdir().unwrap();
+        let context = ExecutionContext::new_with_temporary_directory(
+            ExecutionOptions::default(),
+            ResourceLimits::default(),
+            root.path().join("missing"),
+        );
+        let bytes = vec![0x5a; 128 * 1024];
+        let mut rendered = artifacts(&context, bytes.clone());
+        let held = context.reserved_memory_bytes();
+        spool_assets(&mut rendered, &ConversionOptions::default(), true, &context).unwrap();
+        assert_eq!(context.reserved_memory_bytes(), held);
+        assert_eq!(context.reserved_temporary_bytes(), 0);
+        assert!(rendered.asset_spool.is_none());
+        let mut sink = BytesSink { bytes: vec![], digest: None };
+        emit_assets(&rendered.output.assets, &mut sink, &context).unwrap();
+        assert_eq!(sink.bytes, bytes);
+        drop(rendered);
+        assert_eq!(context.reserved_memory_bytes(), 0);
     }
 
     #[test]

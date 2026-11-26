@@ -148,9 +148,7 @@ impl StructuredSpool {
             archive
                 .start_file(format!("assets/{}", payload.filename), files)
                 .map_err(|error| map_zip_error(error, "create bundle asset"))?;
-            let mut reader = payload.file.as_file().map_err(CliError::from)?.try_clone()?;
-            reader.seek(SeekFrom::Start(0))?;
-            copy_reader(&self.context, &mut reader.take(payload.size), &mut archive)?;
+            payload.file.copy_to(&self.context, &mut archive)?;
         }
         archive.finish().map_err(|error| map_zip_error(error, "finish bundle"))?;
         Ok(())

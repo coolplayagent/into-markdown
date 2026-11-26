@@ -105,7 +105,7 @@ fn duplicate_assets_share_one_payload_spool() {
     .unwrap();
     assert_eq!(spool.payload_records.len(), 1);
     assert_eq!(spool.asset_records.len(), 2);
-    assert_eq!(spool.payload_records[0].file.as_file().unwrap().metadata().unwrap().len(), 5);
+    assert_eq!(spool.payload_records[0].file.len().unwrap(), 5);
     assert!(context.reserved_temporary_bytes() < 16 * 1024);
 }
 
@@ -121,16 +121,19 @@ fn stdout_artifacts_replay_identically_without_temporary_storage() {
         Default::default(),
         temporary.path().join("missing"),
     );
-    let result =
-        ConversionResult::new(Default::default(), "test text\n".into(), vec![], vec![], vec![]);
+    let result = fixture();
     for emit in [EmitKind::Markdown, EmitKind::IrJson, EmitKind::ResultJson, EmitKind::Bundle] {
         let mut disk =
-            StructuredSpool::from_result(&result, context(), emit, AssetModeArg::Omit).unwrap();
+            StructuredSpool::from_result(&result, context(), emit, AssetModeArg::Embed).unwrap();
         let mut expected = std::io::Cursor::new(Vec::new());
         disk.serialize(emit, &mut expected).unwrap();
-        let mut spool =
-            StructuredSpool::from_result(&result, memory_context.clone(), emit, AssetModeArg::Omit)
-                .unwrap();
+        let mut spool = StructuredSpool::from_result(
+            &result,
+            memory_context.clone(),
+            emit,
+            AssetModeArg::Embed,
+        )
+        .unwrap();
         let artifact = spool.take_stdout_primary().unwrap();
         assert!(memory_context.reserved_memory_bytes() > 0);
         let mut actual = Vec::new();
@@ -166,11 +169,7 @@ fn represented_temporary_bytes(spool: &StructuredSpool) -> u64 {
         + spool.markdown_json.as_ref().map_or(0, |json| spool_len(Some(&json.file)))
         + spool_len(spool.diagnostics.as_ref())
         + spool_len(spool.provenance.as_ref())
-        + spool
-            .payload_records
-            .iter()
-            .map(|payload| payload.file.as_file().unwrap().metadata().unwrap().len())
-            .sum::<u64>()
+        + spool.payload_records.iter().map(|payload| payload.file.len().unwrap()).sum::<u64>()
 }
 
 #[test]

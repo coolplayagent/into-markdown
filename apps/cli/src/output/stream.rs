@@ -1,4 +1,4 @@
-//! File-backed structured artifact staging.
+//! Accounted staging for completed structured artifacts.
 //!
 //! The immutable plan selects only the representations required by the
 //! requested wire artifact and asset mode.
@@ -36,7 +36,7 @@ struct AssetRecord {
 struct PayloadRecord {
     filename: String,
     media_type: String,
-    file: TemporaryFile,
+    file: ReplaySpool,
     size: u64,
     sha256: [u8; 32],
 }
@@ -46,7 +46,7 @@ struct ActiveAsset {
     expected: u64,
     written: u64,
     existing_payload: Option<usize>,
-    file: Option<TemporaryFile>,
+    file: Option<ReplaySpool>,
     hash: Sha256,
     announced_sha256: Option<[u8; 32]>,
 }
@@ -71,7 +71,7 @@ mod replay;
 pub(crate) use replay::ReplaySpool;
 mod sink;
 
-use io::{IndentingWriter, copy_reader, copy_spool};
+use io::{IndentingWriter, copy_spool};
 use json::JsonStringSpool;
 use plan::RepresentationPlan;
 
@@ -235,7 +235,7 @@ impl StructuredSpool {
             spool.sync_all()?;
         }
         for payload in &mut self.payload_records {
-            payload.file.sync_all().map_err(CliError::from)?;
+            payload.file.sync_all()?;
         }
         self.finished = true;
         Ok(())
@@ -276,11 +276,12 @@ impl StructuredSpool {
         self.payload_records
             .iter()
             .map(|payload| {
-                payload
-                    .file
-                    .as_file()
-                    .map(|file| (payload.filename.as_str(), file))
-                    .map_err(CliError::from)
+                let ReplaySpool::File(file) = &payload.file else {
+                    return Err(CliError::internal(
+                        "external asset requires a file-backed payload",
+                    ));
+                };
+                Ok((payload.filename.as_str(), file.as_file().map_err(CliError::from)?))
             })
             .collect()
     }
