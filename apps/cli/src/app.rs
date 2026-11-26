@@ -39,6 +39,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 mod plugin_execution;
+mod plugin_recovery;
+pub(crate) use plugin_recovery::recover_plugins_before_config_load;
+use plugin_recovery::{
+    acquire_cli_plugin_lock, existing_global_plugin_manager, global_plugin_store_scope,
+};
 mod resource_usage;
 
 // Self-contained OCR and speech capability packages intentionally
@@ -264,52 +269,6 @@ pub fn run(arguments: Vec<OsString>, mut context: RunContext<'_>) -> Result<(), 
         Some(command) => run_command(command, &cli.global, loaded, catalog, json_log, &mut context),
     };
     result.map_err(|error| error.with_rendering(language, json_log))
-}
-
-pub(crate) fn recover_plugins_before_config_load(
-    cwd: &Path,
-    no_config: bool,
-) -> Result<(), CliError> {
-    if no_config {
-        return Ok(());
-    }
-    let (global_anchor, global_relative) = global_plugin_store_scope()?;
-    let mut global_manager = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
-        .map_err(plugin_manager_error)?;
-    let _cli_lock = acquire_cli_plugin_lock(global_manager.root())?;
-    let execution = plugin_lifecycle_execution_context();
-    // Acquiring either scope lock first performs its config-journal recovery.
-    // The pending joint journal identifies which exact scope must then be
-    // reconciled; `cwd` remains relevant for project identity validation.
-    if config::scope_has_pending_transaction(crate::args::Scope::Global, cwd)? {
-        drop(config::lock_scope(crate::args::Scope::Global, cwd)?);
-    }
-    if config::scope_has_pending_transaction(crate::args::Scope::Project, cwd)? {
-        drop(config::lock_scope(crate::args::Scope::Project, cwd)?);
-    }
-    recover_pending_cli_plugin_transaction(
-        &global_anchor,
-        &global_relative,
-        &mut global_manager,
-        &execution,
-    )?;
-    let (project_anchor, project_relative) = project_plugin_store_scope(cwd)?;
-    let project_manager = PluginManager::open_existing_scoped(
-        &project_anchor,
-        &project_relative,
-        global_manager.trusted_signers(),
-    )
-    .map_err(plugin_manager_error)?;
-    if let Some(project_manager) = project_manager {
-        recover_pending_cli_plugin_transaction_at(
-            project_manager.root(),
-            &global_anchor,
-            &global_relative,
-            &mut global_manager,
-            &execution,
-        )?;
-    }
-    Ok(())
 }
 
 fn run_command(
@@ -2457,35 +2416,6 @@ impl Drop for CliPluginLock {
     }
 }
 
-fn acquire_cli_plugin_lock(root: &Path) -> Result<CliPluginLock, CliError> {
-    let path = root.join(PLUGIN_CLI_LOCK);
-    let file =
-        OpenOptions::new().create(true).truncate(false).read(true).write(true).open(&path)?;
-    let metadata = fs::symlink_metadata(&path)?;
-    #[cfg(windows)]
-    let linked = {
-        use std::os::windows::fs::MetadataExt as _;
-        metadata.file_attributes() & 0x400 != 0
-    };
-    #[cfg(not(windows))]
-    let linked = metadata.file_type().is_symlink();
-    if !metadata.is_file() || linked {
-        return Err(CliError::new(
-            ExitClass::Policy,
-            "pluginTransactionAuthority",
-            "plugin transaction lock identity rejected",
-        ));
-    }
-    file.try_lock().map_err(|_| {
-        CliError::new(
-            ExitClass::Policy,
-            "pluginTransactionConflict",
-            "another plugin transaction is active",
-        )
-    })?;
-    Ok(CliPluginLock(file))
-}
-
 fn recover_cli_transaction_files(root: &Path) -> Result<(), CliError> {
     let journal = root.join(PLUGIN_CLI_TRANSACTION);
     let next = root.join(PLUGIN_CLI_TRANSACTION_NEXT);
@@ -2965,9 +2895,7 @@ pub(crate) fn verify_admin_effective_plugin_with_execution(
     configured: &PluginConfig,
     execution: &into_markdown::ExecutionContext,
 ) -> Result<into_markdown_plugin_manager::InstalledPlugin, CliError> {
-    let (global_anchor, global_relative) = global_plugin_store_scope()?;
-    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
-        .map_err(plugin_manager_error)?;
+    let global = existing_global_plugin_manager()?;
     let authority = scoped_plugin_authority(scope, cwd, &global)?;
     let installed = authority.manager.verify(id, execution).map_err(plugin_manager_error)?;
     verify_plugin_pin(&authority.manager, configured, &installed)?;
@@ -2990,9 +2918,7 @@ pub(crate) fn inspect_admin_effective_plugin(
         into_markdown::ExecutionOptions::default(),
         into_markdown::ResourceLimits::default(),
     );
-    let (global_anchor, global_relative) = global_plugin_store_scope()?;
-    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
-        .map_err(plugin_manager_error)?;
+    let global = existing_global_plugin_manager()?;
     let authority = scoped_plugin_authority(scope, cwd, &global)?;
     let installed =
         authority.manager.inspect_installed_record(id, &execution).map_err(plugin_manager_error)?;
@@ -3018,9 +2944,7 @@ fn inspect_admin_effective_plugin_status_from_loaded(
         into_markdown::ResourceLimits::default(),
     );
     let scope = admin_effective_plugin_scope(loaded, cwd, id)?;
-    let (global_anchor, global_relative) = global_plugin_store_scope()?;
-    let global = PluginManager::open_persisted_scoped(&global_anchor, &global_relative)
-        .map_err(plugin_manager_error)?;
+    let global = existing_global_plugin_manager()?;
     let authority = scoped_plugin_authority(scope, cwd, &global)?;
     let (installed, status_token) =
         authority.manager.inspect_installed_status(id, &execution).map_err(plugin_manager_error)?;
@@ -3167,50 +3091,6 @@ pub(crate) fn prepare_admin_effective_process_plugin_from_loaded(
     Ok(prepared.with_policy(policy))
 }
 
-fn global_plugin_store_scope() -> Result<(PathBuf, PathBuf), CliError> {
-    #[cfg(test)]
-    {
-        let anchor = TEST_USER_DATA_ANCHOR
-            .with(|slot| slot.borrow().clone())
-            .ok_or_else(|| CliError::internal("test user-data anchor was not injected"))?;
-        create_private_user_data_directory(&anchor)?;
-        let anchor = canonical_private_user_data_directory(&anchor)?;
-        let product = anchor.join("into-markdown");
-        prepare_user_data_anchor(&product)?;
-        Ok((fs::canonicalize(product)?, PathBuf::from("plugins")))
-    }
-    #[cfg(not(test))]
-    {
-        if let Some(configured) = std::env::var_os("INTO_MARKDOWN_USER_DATA_HOME") {
-            let anchor = PathBuf::from(configured);
-            if !anchor.is_absolute() || !anchor.is_dir() {
-                return Err(CliError::config(
-                    "INTO_MARKDOWN_USER_DATA_HOME must name an existing absolute directory",
-                ));
-            }
-            let anchor = canonical_private_user_data_directory(&anchor)?;
-            let product = anchor.join("into-markdown");
-            prepare_user_data_anchor(&product)?;
-            return Ok((fs::canonicalize(product)?, PathBuf::from("plugins")));
-        }
-        let config = config::global_config_path()?;
-        let directory =
-            config.parent().ok_or_else(|| CliError::config("global scope unavailable"))?;
-        ensure_private_user_data_path(directory)?;
-        if fs::symlink_metadata(directory)?.file_type().is_symlink() {
-            return Err(CliError::config("global config parent link rejected"));
-        }
-        let parent_identity = project_directory_identity(directory)?;
-        let directory = fs::canonicalize(directory)?;
-        if project_directory_identity(&directory)? != parent_identity {
-            return Err(CliError::config("global config parent identity changed"));
-        }
-        let product = directory.join("plugin-data");
-        prepare_user_data_anchor(&product)?;
-        Ok((fs::canonicalize(product)?, PathBuf::from("plugins")))
-    }
-}
-
 pub(crate) fn prepare_user_data_anchor(path: &Path) -> Result<(), CliError> {
     if !path.exists() {
         create_private_user_data_directory(path)?;
@@ -3332,6 +3212,11 @@ struct ProjectScopeAuthority {
 
 impl ProjectScopeAuthority {
     fn resolve(cwd: &Path) -> Result<Self, CliError> {
+        let (anchor, _) = global_plugin_store_scope()?;
+        Self::under_anchor(cwd, anchor)
+    }
+
+    fn under_anchor(cwd: &Path, anchor: PathBuf) -> Result<Self, CliError> {
         let project = config::project_scope_root(cwd)?;
         let (volume, file) = project_directory_identity(&project)?;
         let mut authority = b"into-markdown/project-plugin-scope/v1\0".to_vec();
@@ -3350,14 +3235,12 @@ impl ProjectScopeAuthority {
             }
         }
         let key = format!("{:x}", Sha256::digest(authority));
-        let (anchor, global_relative) = global_plugin_store_scope()?;
-        let product = global_relative.parent().unwrap_or_else(|| Path::new(""));
         Ok(Self {
             root: project,
             volume,
             file,
             anchor,
-            store_relative: product.join("project-plugins").join(key),
+            store_relative: Path::new("project-plugins").join(key),
         })
     }
 
