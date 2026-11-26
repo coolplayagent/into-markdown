@@ -292,8 +292,9 @@ locator 且保留原图、正文或占位的最小内容单元可在 best-effort
   管理器 lease，绑定父目录 dev/inode、root 身份和事务内受签名标记；既有目标身份另绑定
   dev/inode，缺失目标保守互斥整个父目录。相关写出通过已认证父目录 handle 读取 lease，
   不扫描祖先或不相关目录；恢复后有界重做完整预检，超限返回 `recoveryLimit`。Unix 变更只使用
-  已认证目录 handle 上的相对 `*at` 操作；Windows 输出事务稳定返回
-  `componentUnavailable`。journal generation 的每次转换都在继续文件变更前
+  已认证目录 handle 上的相对 `*at` 操作；Windows 以受保护 DACL 校验事务目录与成员。在 dsh 工作区写入模式下，
+  创建目录时仅从父目录可继承的授权中选择当前受限令牌持有的工作区 SID，保留其写入与删除自身的权限，
+  排除删除子项的权限。恢复时要求当前受限令牌持有同一工作区 SID，并再次核对输出根的授权、所有者及成员的精确权限。journal generation 的每次转换都在继续文件变更前
   持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与
   备份并返回 `rollbackFailed`，不会递归删除目录或触碰相似名称路径。
 - bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理

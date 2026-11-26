@@ -385,6 +385,8 @@ pub(super) fn load_journal_handle(
     nonce: &str,
     context: &ExecutionContext,
 ) -> Result<LoadedJournal, CliError> {
+    #[cfg(windows)]
+    directory.verify_private_namespace()?;
     context.checkpoint().map_err(CliError::from)?;
     let mut probes = Vec::with_capacity(2);
     for name in ["journal-a.json", "journal-b.json"] {
@@ -541,6 +543,8 @@ where
     }) else {
         return Ok(None);
     };
+    #[cfg(windows)]
+    directory.verify_journal_file(name, &file)?;
     let file_bytes = match file.metadata() {
         Ok(metadata) => metadata.len(),
         Err(_) => return Ok(None),

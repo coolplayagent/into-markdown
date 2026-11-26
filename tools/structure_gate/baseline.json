@@ -2038,7 +2038,7 @@
     },
     {
       "path": "crates/process-plugin/src/lib.rs",
-      "lines": 1363,
+      "lines": 1357,
       "functions": [
         {
           "symbol": "copy_runtime_tree",
@@ -2081,7 +2081,7 @@
     },
     {
       "path": "crates/process-plugin/src/sandbox/windows.rs",
-      "lines": 1347,
+      "lines": 1342,
       "functions": [],
       "allowances": []
     },

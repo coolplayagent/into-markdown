@@ -18,6 +18,8 @@ pub(in crate::transaction) fn replay_journal_records(
     let Some(file) = directory.open_regular_optional(OsStr::new(JOURNAL_LOG_NAME))? else {
         return Ok(());
     };
+    #[cfg(windows)]
+    directory.verify_journal_file(OsStr::new(JOURNAL_LOG_NAME), &file)?;
     let file_bytes = file.metadata()?.len();
     if file_bytes > MAX_JOURNAL_BYTES {
         return Err(recovery_error("journal log exceeds its byte limit"));

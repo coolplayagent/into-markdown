@@ -1,3 +1,5 @@
+use std::os::windows::io::{AsHandle, BorrowedHandle};
+
 use super::{
     CliError, Component, DIRECTORY_ENTRY_TEMPORARY_BYTES, Digest, ExecutionContext, ExitClass,
     FILE_ENTRY_TEMPORARY_BYTES, File, FileIdentity, OpenOptions, OsStr, OsString, Path, PathBuf,
@@ -7,6 +9,7 @@ use super::{
 
 #[cfg(windows)]
 pub(crate) struct SafeDir {
+    output_root: Option<std::sync::Arc<Path>>,
     pub(in crate::transaction) directory: cap_std::fs::Dir,
     pub(in crate::transaction) path: PathBuf,
     pub(in crate::transaction) identity: FileIdentity,
@@ -17,6 +20,26 @@ impl SafeDir {
     const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const BACKUP_SEMANTICS: u32 = 0x0200_0000;
     const REPARSE_ATTRIBUTE: u64 = 0x0000_0400;
+
+    pub(in crate::transaction) fn for_output_root(mut self, root: &Path) -> Self {
+        self.output_root = Some(root.into());
+        self
+    }
+
+    fn verify_private(
+        &self,
+        path: &Path,
+        handle: BorrowedHandle<'_>,
+        directory: bool,
+    ) -> Result<(), into_markdown_process_plugin::PluginError> {
+        if let Some(root) = self.output_root.as_deref() {
+            into_markdown_process_plugin::verify_windows_output_member(root, handle, directory)
+        } else if directory {
+            into_markdown_process_plugin::verify_windows_plugin_store_path(path)
+        } else {
+            into_markdown_process_plugin::verify_windows_plugin_store_child(path)
+        }
+    }
 
     fn from_file(path: PathBuf, file: File) -> Result<Self, CliError> {
         let metadata = file.metadata()?;
@@ -30,7 +53,12 @@ impl SafeDir {
             second: information.file_index(),
             size: 0,
         };
-        Ok(Self { directory: cap_std::fs::Dir::from_std_file(file), path, identity })
+        Ok(Self {
+            output_root: None,
+            directory: cap_std::fs::Dir::from_std_file(file),
+            path,
+            identity,
+        })
     }
 
     fn open_direct(path: &Path) -> Result<Self, CliError> {
@@ -103,7 +131,9 @@ impl SafeDir {
             .share_mode(0x1 | 0x2 | 0x4)
             .custom_flags(Self::BACKUP_SEMANTICS | Self::OPEN_REPARSE_POINT);
         let file = self.directory.open_with(name, &options)?.into_std();
-        Self::from_file(self.path.join(name), file)
+        let mut child = Self::from_file(self.path.join(name), file)?;
+        child.output_root.clone_from(&self.output_root);
+        Ok(child)
     }
 
     pub(crate) fn open_child_optional(&self, name: &OsStr) -> Result<Option<Self>, CliError> {
@@ -224,14 +254,12 @@ impl SafeDir {
     }
 
     pub(crate) fn verify_private_namespace(&self) -> Result<(), CliError> {
-        into_markdown_process_plugin::verify_windows_plugin_store_path(&self.path).map_err(
-            |error| {
-                recovery_error(format!(
-                    "private transaction directory rejected ({}): {error}",
-                    self.path.display()
-                ))
-            },
-        )?;
+        self.verify_private(&self.path, self.directory.as_handle(), true).map_err(|error| {
+            recovery_error(format!(
+                "private transaction directory rejected ({}): {error}",
+                self.path.display()
+            ))
+        })?;
         self.verify_namespace()
     }
 
@@ -272,27 +300,34 @@ impl SafeDir {
     pub(crate) fn create_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
         self.verify_private_namespace()?;
         let file = self.create_regular(name)?;
-        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
-            .map_err(|error| {
-                recovery_error(format!(
-                    "private transaction member rejected ({}): {error}",
-                    self.path.join(name).display()
-                ))
-            })?;
+        self.verify_private(&self.path.join(name), file.as_handle(), false).map_err(|error| {
+            recovery_error(format!(
+                "private transaction member rejected ({}): {error}",
+                self.path.join(name).display()
+            ))
+        })?;
         Ok(file)
     }
 
     pub(crate) fn open_regular_private(&self, name: &OsStr) -> Result<File, CliError> {
         self.verify_private_namespace()?;
         let file = self.open_regular(name)?;
-        into_markdown_process_plugin::verify_windows_plugin_store_child(&self.path.join(name))
-            .map_err(|error| {
-                recovery_error(format!(
-                    "private transaction member rejected ({}): {error}",
-                    self.path.join(name).display()
-                ))
-            })?;
+        self.verify_private(&self.path.join(name), file.as_handle(), false).map_err(|error| {
+            recovery_error(format!(
+                "private transaction member rejected ({}): {error}",
+                self.path.join(name).display()
+            ))
+        })?;
         Ok(file)
+    }
+
+    pub(in crate::transaction) fn verify_journal_file(
+        &self,
+        name: &OsStr,
+        file: &File,
+    ) -> Result<(), CliError> {
+        self.verify_private(&self.path.join(name), file.as_handle(), false)
+            .map_err(|error| recovery_error(format!("private journal member rejected: {error}")))
     }
 
     pub(crate) fn names(&self) -> Result<Vec<OsString>, CliError> {
@@ -344,8 +379,13 @@ impl SafeDir {
     pub(crate) fn create_child_private(&self, name: &OsStr) -> Result<Self, CliError> {
         validate_single_name(name)?;
         self.verify_private_namespace()?;
-        into_markdown_process_plugin::create_windows_plugin_store_directory(&self.path.join(name))
-            .map_err(|error| recovery_error(error.to_string()))?;
+        let path = self.path.join(name);
+        if self.output_root.is_some() {
+            into_markdown_process_plugin::create_windows_output_directory(&path)
+        } else {
+            into_markdown_process_plugin::create_windows_plugin_store_directory(&path)
+        }
+        .map_err(|error| recovery_error(error.to_string()))?;
         self.sync()?;
         self.open_child_private(name)
     }

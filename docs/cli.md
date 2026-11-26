@@ -134,8 +134,11 @@ into-md <INPUT...>
   本身失败则返回 `rollbackFailed` 并保留 journal/备份，`overwrite` 不产生新旧混合
   集合。stdout 的外部资源使用同一事务，先 stage，stdout 成功或 EPIPE 后提交；非
   EPIPE 失败不落资源，但已经写出的 stdout 字节无法撤回。跨文件系统、符号链接、
-  非 regular file 提前拒绝。安全输出事务当前在 Unix 可用；Windows 返回稳定
-  `componentUnavailable`，但路径规划与 bundle 编码仍可使用。
+  非 regular file 提前拒绝。Windows 工作区写入沙箱可直接使用 `-o`、`--output-dir` 和 `--report`。
+  输出事务目录 `.into-md-output-transactions-01` 位于输出目标的共同父目录下。
+  如果之前失败的运行留下无法加锁的私有目录，`transactionRegistryLock` 会给出锁路径和系统错误。
+  可指定新的输出目录和报告路径。复用原位置时，请先关闭活动转换，仅在确认该事务目录为空后由目录所有者移除；
+  含有 journal 或备份的目录应保留以供恢复。
 - CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
   规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
   目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定

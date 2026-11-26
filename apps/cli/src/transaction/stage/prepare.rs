@@ -551,6 +551,8 @@ fn initialize_static_transaction(
             ));
         }
     };
+    #[cfg(windows)]
+    let registry_handle = registry_handle.for_output_root(root);
     if registry_handle.identity != registry_epoch_handle.identity {
         return Err(cleanup_empty_initial(
             recovery_error("transaction registry changed during initial publication"),

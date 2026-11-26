@@ -1,3 +1,5 @@
+pub(crate) mod directory_acl;
+
 use crate::{PluginError, PluginErrorCode, RuntimePolicy, ValidatedPlugin};
 use sha2::Digest as _;
 use std::fs::File;
@@ -20,17 +22,15 @@ use windows_sys::Win32::Security::Isolation::{
 };
 use windows_sys::Win32::Security::{
     ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, EqualSid, FreeSid, GetAce,
-    GetSecurityDescriptorControl, GetTokenInformation, InitializeSecurityDescriptor,
-    IsWellKnownSid, OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID,
-    SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
-    SUB_CONTAINERS_AND_OBJECTS_INHERIT, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-    SetSecurityDescriptorOwner, TOKEN_APPCONTAINER_INFORMATION, TOKEN_OWNER, TOKEN_QUERY,
-    TOKEN_USER, TokenAppContainerSid, TokenIsAppContainer, TokenOwner, TokenUser,
-    WinBuiltinAdministratorsSid, WinLocalSystemSid,
+    GetSecurityDescriptorControl, GetTokenInformation, IsWellKnownSid, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
+    SECURITY_CAPABILITIES, SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_APPCONTAINER_INFORMATION,
+    TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER, TokenAppContainerSid, TokenIsAppContainer, TokenOwner,
+    TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, FILE_ALL_ACCESS, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
-    MOVEFILE_WRITE_THROUGH, MoveFileExW, VOLUME_NAME_DOS,
+    FILE_ALL_ACCESS, FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, MOVEFILE_WRITE_THROUGH,
+    MoveFileExW, VOLUME_NAME_DOS,
 };
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -297,60 +297,6 @@ fn grant_runtime_path(path: &Path, app_sid: PSID, directory: bool) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn create_private_directory(path: &Path) -> Result<(), PluginError> {
-    let wide = wide_path(path)?;
-    let current_user = CurrentUser::open()?;
-    let access = EXPLICIT_ACCESS_W {
-        grfAccessPermissions: FILE_ALL_ACCESS,
-        grfAccessMode: SET_ACCESS,
-        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-        Trustee: TRUSTEE_W {
-            pMultipleTrustee: std::ptr::null_mut(),
-            MultipleTrusteeOperation: 0,
-            TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_USER,
-            ptstrName: current_user.sid().cast(),
-        },
-    };
-    let mut acl = std::ptr::null_mut();
-    // SAFETY: access and token-backed SID remain live and acl is writable.
-    if unsafe { SetEntriesInAclW(1, &raw const access, std::ptr::null(), &raw mut acl) } != 0
-        || acl.is_null()
-    {
-        return Err(unavailable("private directory DACL construction failed"));
-    }
-    let mut descriptor = windows_sys::Win32::Security::SECURITY_DESCRIPTOR::default();
-    // SAFETY: descriptor is writable and acl is a valid absolute ACL.
-    let initialized = unsafe {
-        InitializeSecurityDescriptor((&raw mut descriptor).cast(), 1) != 0
-            && SetSecurityDescriptorOwner((&raw mut descriptor).cast(), current_user.sid(), 0) != 0
-            && SetSecurityDescriptorDacl((&raw mut descriptor).cast(), 1, acl, 0) != 0
-            && SetSecurityDescriptorControl(
-                (&raw mut descriptor).cast(),
-                SE_DACL_PROTECTED,
-                SE_DACL_PROTECTED,
-            ) != 0
-    };
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(size_of::<SECURITY_ATTRIBUTES>()).unwrap_or(u32::MAX),
-        lpSecurityDescriptor: (&raw mut descriptor).cast(),
-        bInheritHandle: 0,
-    };
-    // SAFETY: wide path, security descriptor, DACL, and attributes all remain live.
-    let created =
-        initialized && unsafe { CreateDirectoryW(wide.as_ptr(), &raw const attributes) } != 0;
-    // SAFETY: SetEntriesInAclW returned LocalAlloc-owned storage.
-    unsafe { LocalFree(acl.cast()) };
-    if !created {
-        return Err(unavailable("private directory creation failed"));
-    }
-    if let Err(error) = verify_private_path(path) {
-        let _ = std::fs::remove_dir(path);
-        return Err(error);
-    }
-    Ok(())
-}
-
 pub(crate) fn rename_sibling_no_replace(
     directory: &File,
     source: &std::ffi::OsStr,
@@ -584,30 +530,78 @@ fn verify_acl_with_masks(
     require_protected: bool,
     allow_os_administrators: bool,
 ) -> Result<(), PluginError> {
+    verify_object_acl(
+        AclSource::Path(path),
+        allowed,
+        masks,
+        require_protected,
+        allow_os_administrators,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum AclSource<'a> {
+    Path(&'a Path),
+    Handle(std::os::windows::io::BorrowedHandle<'a>, bool),
+}
+
+fn verify_object_acl(
+    source: AclSource<'_>,
+    allowed: &[PSID],
+    masks: &[u32],
+    require_protected: bool,
+    allow_os_administrators: bool,
+) -> Result<(), PluginError> {
     if allowed.is_empty() || allowed.len() != masks.len() {
         return Err(unavailable("plugin DACL authority is invalid"));
     }
     let user = allowed[0];
     let current_identity = CurrentUser::open()?;
-    let is_directory = std::fs::metadata(path)
-        .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
-        .is_dir();
     let mut owner = std::ptr::null_mut();
     let mut dacl = std::ptr::null_mut();
     let mut descriptor = std::ptr::null_mut();
-    let mut path = wide_path(path)?;
-    // SAFETY: all output pointers are writable and the terminated path remains live.
-    let result = unsafe {
-        GetNamedSecurityInfoW(
-            path.as_mut_ptr(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
-            &raw mut owner,
-            std::ptr::null_mut(),
-            &raw mut dacl,
-            std::ptr::null_mut(),
-            &raw mut descriptor,
-        )
+    let info = OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let (result, is_directory) = match source {
+        AclSource::Path(path) => {
+            let directory = std::fs::metadata(path)
+                .map_err(|_| unavailable("plugin ACL metadata unavailable"))?
+                .is_dir();
+            let path = wide_path(path)?;
+            // SAFETY: path is terminated and the descriptor output pointers are writable.
+            (
+                unsafe {
+                    GetNamedSecurityInfoW(
+                        path.as_ptr(),
+                        SE_FILE_OBJECT,
+                        info,
+                        &raw mut owner,
+                        std::ptr::null_mut(),
+                        &raw mut dacl,
+                        std::ptr::null_mut(),
+                        &raw mut descriptor,
+                    )
+                },
+                directory,
+            )
+        }
+        AclSource::Handle(handle, directory) => {
+            // SAFETY: the caller retains the pinned handle through the query.
+            (
+                unsafe {
+                    windows_sys::Win32::Security::Authorization::GetSecurityInfo(
+                        handle.as_raw_handle(),
+                        SE_FILE_OBJECT,
+                        info,
+                        &raw mut owner,
+                        std::ptr::null_mut(),
+                        &raw mut dacl,
+                        std::ptr::null_mut(),
+                        &raw mut descriptor,
+                    )
+                },
+                directory,
+            )
+        }
     };
     if result != 0 || descriptor.is_null() || dacl.is_null() {
         if !descriptor.is_null() {
@@ -739,7 +733,7 @@ const fn valid_ace_inheritance(
 }
 
 struct CurrentUser {
-    _token: OwnedHandle,
+    token: OwnedHandle,
     storage: Vec<usize>,
     owner_storage: Vec<usize>,
 }
@@ -755,7 +749,7 @@ impl CurrentUser {
         let token = unsafe { OwnedHandle::from_raw_handle(token) };
         let storage = token_information(&token, TokenUser, "current user identity")?;
         let owner_storage = token_information(&token, TokenOwner, "current token owner")?;
-        Ok(Self { _token: token, storage, owner_storage })
+        Ok(Self { token, storage, owner_storage })
     }
 
     fn sid(&self) -> PSID {
