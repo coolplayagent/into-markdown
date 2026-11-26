@@ -205,7 +205,12 @@ class Acceptance:
             actual = (self.work / "sandbox-formats" / name).read_bytes()
             require(actual and actual == (self.work / "host-formats" / name).read_bytes(),
                     f"host/sandbox outputs differ for {src.name}")
-        print(f"  {len(paths)} fixture outputs match", flush=True)
+            read_only = self.run([src, "--asset-mode", "omit", "--ocr", "off"], mode="read-only")
+            require(read_only == actual, f"read-only stdout differs for {src.name}")
+            piped = self.run(["-", "--extension", src.suffix[1:], "--asset-mode", "omit", "--ocr", "off"],
+                             mode="read-only", stdin=src.read_bytes())
+            require(piped == actual, f"read-only stdin differs for {src.name}")
+        print(f"  {len(paths)} fixture outputs match in both dsh modes", flush=True)
 
     def ocr(self):
         manifest = json.loads((ROOT / "fixtures/manifest.json").read_bytes())
@@ -235,6 +240,22 @@ class Acceptance:
                 binary=installed, mode=mode))
             require(golden["ground_truth_nfc"] in recognized_text(result["document"]),
                     "workspace-installed executable lost OCR text")
+
+    def extracted_assets(self):
+        installed = self.work / "into-md.exe"
+        source = self.work / "image.ipynb"
+        original = (ROOT / "fixtures/small/ocr/ocr-english-clear-1.png").read_bytes()
+        for emit in ("markdown", "ir-json", "result-json"):
+            destination = self.work / ("extracted-" + emit)
+            destination.mkdir()
+            report = destination / "report.json"
+            primary = destination / "output"
+            self.run([source, "--ocr", "off", "--emit", emit, "--asset-mode", "extract",
+                      "-o", primary, "--report", report], binary=installed, mode=None)
+            require(primary.stat().st_size and json.loads(report.read_bytes())["succeeded"] == 1,
+                    f"workspace-installed {emit} or report was not published")
+            require([p.read_bytes() for p in destination.rglob("*.png")] == [original],
+                    f"workspace-installed {emit} lost its PNG")
 
     def languages(self):
         manifest = json.loads((ROOT / "fixtures/manifest.json").read_bytes())
@@ -327,6 +348,7 @@ def main():
     suite.check("read-only PDF and asset-bearing stdout", suite.read_only)
     suite.check("local format corpus", suite.formats)
     suite.check("first and repeated real OCR", suite.ocr)
+    suite.check("workspace-installed file outputs, reports and extracted assets", suite.extracted_assets)
     suite.check("English, simplified/traditional Chinese and mixed OCR", suite.languages)
     if args.compare_pptx:
         suite.check("image-rich presentation", lambda: suite.presentation(args.compare_pptx, args.max_ocr_edits))
