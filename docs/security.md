@@ -134,6 +134,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   formula 和 merge 调用前后执行 checkpoint。因此取消/timeout 的最坏延迟是一段已经由前置
   扫描和资源上限约束的同步调用，而不是整本 workbook；高敌意部署仍应在具备 OS 内存与
   时间硬限制的隔离进程运行。
+- Windows 沙箱禁止创建 PDFium 临时快照时，加载器可在本地磁盘上逐级锁定安装目录，
+  以禁止写入和删除的句柄重新核对 DLL 的全部字节，并持有目录句柄直至系统完成映射。
+  DLL 的目录搜索限定为 System32。整个过程可以在只读模式下执行。
 - PDFium 仅从认证路径加载 authority 中精确 hash/size/ABI 的当前平台制品。Windows CLI 的默认路径
   由已经规范化的可执行文件位置推导；先认证可执行文件同级 portable 候选，仅在其不存在时认证
   `bin` 上一级的安装布局候选。显式 `PDFIUM_LIBRARY`、
