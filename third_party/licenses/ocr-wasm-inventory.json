@@ -3,7 +3,7 @@
   "inactive": [
     "hermit-abi@0.5.3"
   ],
-  "manifest_sha256": "bc53a2c8708c0124e45727b2b8750a45a073710ed9407f2c4b42d45c89e4b589",
+  "manifest_sha256": "c98677d65ba014624bda38cd3c3e79021ef0839bd4117a8b0ee2307fc4970fcd",
   "lock_sha256": "677526164452df4817900dd68b8fc45d4d72696e894ffb152c2a07597a07e129",
   "notices_sha256": "99aff8a96c54e5e9c395595bcb3aa2cb671675209d4e7745459b5c02705d5061",
   "packages": [

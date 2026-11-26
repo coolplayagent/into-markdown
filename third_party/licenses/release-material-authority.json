@@ -38,8 +38,8 @@
     },
     {
       "path": "tools/portable-release/ocr_guest.py",
-      "bytes": 5647,
-      "sha256": "e6946046c4e424930e54392205402c8d16d4335462b0115ac70ca71c0657a365"
+      "bytes": 5620,
+      "sha256": "66c1a99f941743726b0a65be46d6d391d2aa1a5ccd307a559000c8563d5f729f"
     }
   ],
   "licenses": [

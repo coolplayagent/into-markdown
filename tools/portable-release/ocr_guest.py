@@ -9,33 +9,31 @@ import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 INVENTORY = "third_party/licenses/ocr-wasm-inventory.json"
-INVENTORY_SHA256 = "af9115b5451b6310e530f774850e725655c306317b07a0378ccc5710f53eabb3"
+INVENTORY_SHA256 = "49346210d813f94a010af7f4479ee9e6957cb76c2a73f074954663b2e9392e66"
 NOTICES = "third_party/licenses/ocr-wasm-NOTICES.txt"
 GUEST = "tools/ocr-wasm"
 SPDX_GUEST = "SPDXRef-Embedded-OCR-Wasm"
 
 
-def digest(path: pathlib.Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def reviewed_text(path: pathlib.Path, expected: str) -> str:
+    """Authenticate repository UTF-8 source with Git's LF line endings."""
+    text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    if "\r" in text or hashlib.sha256(text.encode("utf-8")).hexdigest() != expected:
+        raise ValueError(f"Windows OCR guest declaration differs from {path.name}")
+    return text
 
 
-def reviewed_inputs() -> tuple[dict, dict]:
-    inventory_path = ROOT / INVENTORY
-    if digest(inventory_path) != INVENTORY_SHA256:
-        raise ValueError("Windows OCR dependency inventory differs from its reviewed bytes")
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    manifest = ROOT / GUEST / "Cargo.toml"
-    lock = ROOT / GUEST / "Cargo.lock"
-    for path, key in ((manifest, "manifest_sha256"), (lock, "lock_sha256"),
-                      (ROOT / NOTICES, "notices_sha256")):
-        if digest(path) != inventory[key]:
-            raise ValueError(f"Windows OCR guest declaration differs from {path.name}")
-    locked = {p["name"]: p for p in tomllib.loads(lock.read_text(encoding="utf-8"))["package"]}
+def reviewed_inputs() -> tuple[dict, dict, str]:
+    inventory = json.loads(reviewed_text(ROOT / INVENTORY, INVENTORY_SHA256))
+    manifest = reviewed_text(ROOT / GUEST / "Cargo.toml", inventory["manifest_sha256"])
+    lock = reviewed_text(ROOT / GUEST / "Cargo.lock", inventory["lock_sha256"])
+    notices = reviewed_text(ROOT / NOTICES, inventory["notices_sha256"])
+    locked = {p["name"]: p for p in tomllib.loads(lock)["package"]}
     for p in inventory["packages"]:
         crate = locked[p["name"]]
         if (crate["version"], crate["checksum"]) != (p["version"], p["sha256"]):
             raise ValueError(f"unreviewed Windows OCR guest crate {p['name']}")
-    return inventory, tomllib.loads(manifest.read_text(encoding="utf-8"))["package"]
+    return inventory, tomllib.loads(manifest)["package"], notices
 
 
 def integrity(checksum: str, subject: str, target: str) -> dict:
@@ -58,7 +56,7 @@ def spdx_package(source: dict, spdx_id: str, declared: str, copyright_text: str)
 
 def add_guest_declarations(directory: pathlib.Path, guest: pathlib.Path) -> None:
     """Extend freshly generated portable Core declarations before archive hashing."""
-    inventory, project = reviewed_inputs()
+    inventory, project, notices = reviewed_inputs()
     sources_path = directory / "SOURCES.json"
     sbom_path = directory / "SBOM.spdx.json"
     sources = json.loads(sources_path.read_text(encoding="utf-8"))
@@ -68,7 +66,7 @@ def add_guest_declarations(directory: pathlib.Path, guest: pathlib.Path) -> None
     if any(p["SPDXID"] == SPDX_GUEST for p in sbom["packages"]):
         raise ValueError("Windows OCR guest declarations already exist")
     source = f"https://github.com/coolplayagent/into-markdown/tree/{sources['source_revision']}/{GUEST}"
-    guest_checksum = digest(guest)
+    guest_checksum = hashlib.sha256(guest.read_bytes()).hexdigest()
     components = [{
         "id": project["name"], "version": project["version"], "kind": "embedded-wasm",
         "scope": "runtime", "distributed": True, "source": source, "license": project["license"],
@@ -107,4 +105,4 @@ def add_guest_declarations(directory: pathlib.Path, guest: pathlib.Path) -> None
                         encoding="utf-8", newline="\n")
     with (directory / "THIRD_PARTY_NOTICES.md").open("a", encoding="utf-8", newline="\n") as output:
         output.write("\n## Embedded Windows OCR guest\n\n")
-        output.write((ROOT / NOTICES).read_text(encoding="utf-8"))
+        output.write(notices)

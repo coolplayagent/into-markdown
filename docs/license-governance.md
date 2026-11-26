@@ -32,7 +32,9 @@ The following files are projections or evidence and must agree with the componen
   `wasm32-unknown-unknown`. Its `tools/ocr-wasm/Cargo.lock` is independent of
   the host workspace. `third_party/licenses/ocr-wasm-inventory.json` pins
   the guest manifest, lock, source archive checksums, crate licenses and
-  upstream notice sources. The portable assembler adds the compiled module's
+  upstream notice sources. Hash the repository inventory, manifest, lock and notice text
+  as UTF-8 with LF line endings. Hash the downloaded crates and compiled WebAssembly
+  module byte for byte. The portable assembler adds the compiled module's
   SHA-256, target dependencies and host build dependencies to the Windows
   SBOM and source manifest before authenticating the archive. It includes
   the complete upstream notices in the archive's `THIRD_PARTY_NOTICES.md`.

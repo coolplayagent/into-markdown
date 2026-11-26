@@ -8,6 +8,7 @@ import json
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("ocr_guest", pathlib.Path(__file__).with_name("ocr_guest.py"))
 assert SPEC and SPEC.loader
@@ -16,11 +17,34 @@ SPEC.loader.exec_module(ocr_guest)
 
 
 class GuestDeclarations(unittest.TestCase):
+    def test_reviewed_sources_accept_lf_and_crlf_and_reject_content_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            inputs = [ocr_guest.INVENTORY, ocr_guest.NOTICES,
+                      f"{ocr_guest.GUEST}/Cargo.toml", f"{ocr_guest.GUEST}/Cargo.lock"]
+            originals = {name: (ocr_guest.ROOT / name).read_bytes().replace(b"\r\n", b"\n")
+                         for name in inputs}
+            with mock.patch.object(ocr_guest, "ROOT", root):
+                for newline in (b"\n", b"\r\n"):
+                    for name, value in originals.items():
+                        path = root / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(value.replace(b"\n", newline))
+                    with self.subTest(newline=newline):
+                        self.assertEqual(ocr_guest.reviewed_inputs()[1]["name"], "into-md-ocr-wasm")
+                for name, value in originals.items():
+                    path = root / name
+                    for invalid in (value + b" ", value.replace(b"\n", b"\r", 1), value + b"\xff"):
+                        path.write_bytes(invalid)
+                        with self.subTest(name=name), self.assertRaises(ValueError):
+                            ocr_guest.reviewed_inputs()
+                    path.write_bytes(value)
+
     def test_windows_guest_joins_core_declarations(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             guest = directory / "guest.wasm"
-            guest.write_bytes(b"\0asm\x01\0\0\0")
+            guest.write_bytes(b"\0asm\x01\0\0\0\x00\x05\x01x\r\n\xff")
             (directory / "THIRD_PARTY_NOTICES.md").write_text("Core notices\n", encoding="utf8")
             (directory / "SBOM.spdx.json").write_text(json.dumps({
                 "packages": [{"SPDXID": "SPDXRef-Package-Root"}], "relationships": []

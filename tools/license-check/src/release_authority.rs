@@ -1,15 +1,15 @@
 //! Package-external authority for generated declarations and release materials.
 
+use crate::cargo_runtime::canonical_text_fingerprint;
 use crate::schema::{GeneratedFile, ReleaseInputs};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 const AUTHORITY_PATH: &str = "third_party/licenses/release-material-authority.json";
 const REVIEWED_AUTHORITY_SHA256: &str =
-    "6dccff14a977c5d7c681adc11860d65bc6db36a83761f44e4157ccd48911f519";
+    "b8a7849868588acdefb95d329a20d8aa6c4bd6beecfa962f500a32d682495487";
 const GENERATED_PATHS: [&str; 5] =
     ["NOTICE", "THIRD_PARTY_NOTICES.md", "SBOM.spdx.json", "SOURCES.json", "core-catalog.json"];
 const PROFILE_PATHS: [&str; 12] = [
@@ -149,7 +149,9 @@ fn load(repository: &Path, errors: &mut Vec<String>) -> Option<ReleaseMaterialAu
             return None;
         }
     };
-    if sha256(&bytes) != REVIEWED_AUTHORITY_SHA256 {
+    if !canonical_text_fingerprint(&bytes)
+        .is_ok_and(|(_, digest)| digest == REVIEWED_AUTHORITY_SHA256)
+    {
         errors.push("release material authority bytes are not reviewed".to_owned());
         return None;
     }
@@ -235,7 +237,9 @@ fn validate_files(
     }
     for file in files {
         let bytes = fs::read(repository.join(&file.path)).unwrap_or_default();
-        if bytes.len() as u64 != file.bytes || sha256(&bytes) != file.sha256 {
+        if !canonical_text_fingerprint(&bytes)
+            .is_ok_and(|(size, digest)| size == file.bytes && digest == file.sha256)
+        {
             errors.push(format!("release material {kind} authority drifted for {}", file.path));
         }
     }
@@ -254,8 +258,4 @@ fn generated_files(inputs: &ReleaseInputs) -> [&GeneratedFile; 5] {
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
         && value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
 }
