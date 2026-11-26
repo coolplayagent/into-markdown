@@ -31,7 +31,7 @@
     },
     {
       "path": "apps/cli/src/app.rs",
-      "lines": 5085,
+      "lines": 4989,
       "functions": [
         {
           "symbol": "recover_pending_cli_plugin_transaction_at",
@@ -1190,7 +1190,7 @@
       "functions": [
         {
           "symbol": "shapes_to_blocks",
-          "lines": 299
+          "lines": 292
         }
       ],
       "allowances": [
@@ -1682,7 +1682,7 @@
     },
     {
       "path": "crates/core/src/execution.rs",
-      "lines": 1172,
+      "lines": 1137,
       "functions": [],
       "allowances": []
     },
@@ -1983,24 +1983,16 @@
     },
     {
       "path": "crates/pdfium/src/native.rs",
-      "lines": 1725,
+      "lines": 1570,
       "functions": [
         {
           "symbol": "impl Backend for Native::characters",
-          "lines": 116
-        },
-        {
-          "symbol": "validated_snapshot_with_hook",
           "lines": 116
         }
       ],
       "allowances": [
         {
           "key": "item|impl Backend for Native::characters|too_many_lines",
-          "count": 1
-        },
-        {
-          "key": "item|validated_snapshot_with_hook|too_many_lines",
           "count": 1
         }
       ]
@@ -2038,7 +2030,7 @@
     },
     {
       "path": "crates/process-plugin/src/lib.rs",
-      "lines": 1357,
+      "lines": 1359,
       "functions": [
         {
           "symbol": "copy_runtime_tree",
@@ -2081,7 +2073,7 @@
     },
     {
       "path": "crates/process-plugin/src/sandbox/windows.rs",
-      "lines": 1342,
+      "lines": 1346,
       "functions": [],
       "allowances": []
     },
@@ -2103,7 +2095,7 @@
     },
     {
       "path": "crates/render-markdown/src/lib.rs",
-      "lines": 1675,
+      "lines": 1611,
       "functions": [
         {
           "symbol": "plan_assets",
