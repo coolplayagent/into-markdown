@@ -41,27 +41,20 @@ pub fn prepare(
     overwrite: bool,
     context: &ExecutionContext,
 ) -> Result<PreparedTransaction, CliError> {
-    for recovered in 0..=MAX_RECOVERY_RETRIES {
-        context.checkpoint().map_err(CliError::from)?;
-        match prepare_with_hook(targets, overwrite, context, |_, _| Ok(HookDecision::Continue)) {
-            Err(error) if error.code() == "transactionRecoveredRetry" => {
-                if recovered == MAX_RECOVERY_RETRIES {
-                    return Err(CliError::new(
-                        ExitClass::Io,
-                        "recoveryLimit",
-                        "output transaction recovery retry limit exceeded",
-                    ));
-                }
-            }
-            result => return result,
-        }
-    }
-    unreachable!("bounded recovery loop always returns")
+    prepare_sources(targets, overwrite, context)
 }
 
 /// Recover manager-owned transactions, then stage seekable files in bounded chunks.
 pub fn prepare_files(
     targets: &[FileTarget<'_>],
+    overwrite: bool,
+    context: &ExecutionContext,
+) -> Result<PreparedTransaction, CliError> {
+    prepare_sources(targets, overwrite, context)
+}
+
+fn prepare_sources<T: TransactionSource>(
+    targets: &[T],
     overwrite: bool,
     context: &ExecutionContext,
 ) -> Result<PreparedTransaction, CliError> {
@@ -98,24 +91,15 @@ pub fn prepare_file_and_bytes(
         path: &target.path,
         content: MixedContent::Bytes(target.bytes),
     }));
-    for recovered in 0..=MAX_RECOVERY_RETRIES {
-        context.checkpoint().map_err(CliError::from)?;
-        match prepare_sources_with_hook(&sources, overwrite, context, |_, _| {
-            Ok(HookDecision::Continue)
-        }) {
-            Err(error) if error.code() == "transactionRecoveredRetry" => {
-                if recovered == MAX_RECOVERY_RETRIES {
-                    return Err(CliError::new(
-                        ExitClass::Io,
-                        "recoveryLimit",
-                        "output transaction recovery retry limit exceeded",
-                    ));
-                }
-            }
-            result => return result,
-        }
-    }
-    unreachable!("bounded recovery loop always returns")
+    prepare_mixed(&sources, overwrite, context)
+}
+
+pub(crate) fn prepare_mixed(
+    targets: &[MixedTarget<'_>],
+    overwrite: bool,
+    context: &ExecutionContext,
+) -> Result<PreparedTransaction, CliError> {
+    prepare_sources(targets, overwrite, context)
 }
 
 /// Create and authenticate target parents, then recover any interrupted
@@ -158,6 +142,7 @@ pub fn recover_for_paths(paths: &[PathBuf], context: &ExecutionContext) -> Resul
     unreachable!("bounded recovery loop always returns")
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_with_hook(
     targets: &[Target<'_>],
     overwrite: bool,

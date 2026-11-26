@@ -4,7 +4,7 @@ use super::assets::plan_spooled_asset_writes;
 use super::stream::StructuredSpool;
 use crate::args::{AssetModeArg, ConflictPolicy};
 use crate::error::{CliError, ExitClass};
-use crate::transaction::{self, FileTarget, Target};
+use crate::transaction::{self, MixedContent, MixedTarget, Target};
 use into_markdown::ExecutionContext;
 #[cfg(test)]
 use std::fs;
@@ -19,7 +19,7 @@ pub(crate) struct WriteOutcome {
     pub(crate) renamed: bool,
 }
 
-/// Atomically commit a file-backed primary artifact and file-backed companion assets.
+/// Atomically commit the encoded primary file and retained companion assets.
 pub(crate) fn write_spooled_output_set_file(
     primary: &Path,
     primary_file: &std::fs::File,
@@ -34,10 +34,13 @@ pub(crate) fn write_spooled_output_set_file(
         .map(|directory| plan_spooled_asset_writes(spool, directory, mode, conflict, context))
         .transpose()?
         .unwrap_or_default();
-    let mut files = Vec::with_capacity(planned_assets.len() + 1);
-    files.push(FileTarget { path: primary.clone(), file: primary_file });
-    files.extend(planned_assets.into_iter().map(|(path, file)| FileTarget { path, file }));
-    transaction::prepare_files(&files, conflict == ConflictPolicy::Overwrite, context)?.commit()?;
+    let mut targets = Vec::with_capacity(planned_assets.len() + 1);
+    targets.push(MixedTarget { path: &primary, content: MixedContent::File(primary_file) });
+    targets.extend(
+        planned_assets.iter().map(|(path, content)| MixedTarget { path, content: *content }),
+    );
+    transaction::prepare_mixed(&targets, conflict == ConflictPolicy::Overwrite, context)?
+        .commit()?;
     Ok(WriteOutcome { path: primary, renamed: false })
 }
 

@@ -85,14 +85,14 @@ impl TransactionSource for FileTarget<'_> {
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::transaction) enum MixedContent<'a> {
+pub(crate) enum MixedContent<'a> {
     Bytes(&'a [u8]),
     File(&'a File),
 }
 
-pub(in crate::transaction) struct MixedTarget<'a> {
-    pub(in crate::transaction) path: &'a Path,
-    pub(in crate::transaction) content: MixedContent<'a>,
+pub(crate) struct MixedTarget<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) content: MixedContent<'a>,
 }
 
 impl TransactionSource for MixedTarget<'_> {

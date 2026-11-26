@@ -1,10 +1,11 @@
-//! Bounded typed reports written directly to the existing file-backed transaction.
+//! Bounded typed report serialization and atomic publication.
 
 use super::commit::WriteOutcome;
+use super::stream::ReplaySpool;
 use crate::error::{CliError, ExitClass};
-use crate::transaction::{self, FileTarget, PreparedTransaction};
+use crate::transaction::{self, MixedTarget, PreparedTransaction};
 use into_markdown::{
-    BatchReportDto, ConversionError, DtoErrorCode, DtoJsonStyle, ExecutionContext, TemporaryFile,
+    BatchReportDto, ConversionError, DtoErrorCode, DtoJsonStyle, ExecutionContext,
 };
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -26,10 +27,8 @@ fn prepare_report(
     context: &ExecutionContext,
 ) -> Result<PreparedTransaction, CliError> {
     let _buffer_memory = context.reserve_memory(BUFFER_BYTES as u64).map_err(CliError::from)?;
-    let mut stage = ReportFile {
-        file: context.temporary_file("into-md-report").map_err(CliError::from)?,
-        error: None,
-    };
+    let mut stage =
+        ReportStage { spool: ReplaySpool::new(context, "into-md-report")?, error: None };
     let result = {
         let mut buffered = BufWriter::with_capacity(BUFFER_BYTES, &mut stage);
         let result = report
@@ -52,26 +51,23 @@ fn prepare_report(
         return Err(error.into());
     }
     result?;
-    stage.file.sync_all().map_err(CliError::from)?;
+    stage.spool.sync_all()?;
     transaction::recover_for_paths(&[path.to_path_buf()], context)?;
-    transaction::prepare_files(
-        &[FileTarget {
-            path: path.to_path_buf(),
-            file: stage.file.as_file().map_err(CliError::from)?,
-        }],
+    transaction::prepare_mixed(
+        &[MixedTarget { path, content: stage.spool.transaction_content()? }],
         true,
         context,
     )
 }
 
-struct ReportFile {
-    file: TemporaryFile,
+struct ReportStage {
+    spool: ReplaySpool,
     error: Option<ConversionError>,
 }
 
-impl Write for ReportFile {
+impl Write for ReportStage {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if let Err(error) = self.file.write_all_checked(bytes) {
+        if let Err(error) = self.spool.write_all_checked(bytes) {
             self.error = Some(error);
             return Err(io::Error::other("batch report stage write failed"));
         }

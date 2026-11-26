@@ -23,43 +23,36 @@ pub(super) struct RepresentationPlan {
     markdown: MarkdownRepresentation,
     semantic: SemanticRepresentation,
     pub(super) assets: bool,
-    pub(super) external_assets: bool,
 }
 
 impl RepresentationPlan {
     pub(super) const fn new(emit: EmitKind, asset_mode: AssetModeArg) -> Self {
         let assets = matches!(emit, EmitKind::ResultJson | EmitKind::Bundle)
             || matches!(asset_mode, AssetModeArg::Extract);
-        let external_assets =
-            !matches!(emit, EmitKind::Bundle) && matches!(asset_mode, AssetModeArg::Extract);
         match emit {
             EmitKind::Markdown => Self {
                 emit,
                 markdown: MarkdownRepresentation::Raw,
                 semantic: SemanticRepresentation::None,
                 assets,
-                external_assets,
             },
             EmitKind::IrJson => Self {
                 emit,
                 markdown: MarkdownRepresentation::None,
                 semantic: SemanticRepresentation::Ir,
                 assets,
-                external_assets,
             },
             EmitKind::ResultJson => Self {
                 emit,
                 markdown: MarkdownRepresentation::Escaped,
                 semantic: SemanticRepresentation::IrWithInventories,
                 assets,
-                external_assets,
             },
             EmitKind::Bundle => Self {
                 emit,
                 markdown: MarkdownRepresentation::Raw,
                 semantic: SemanticRepresentation::IrWithInventories,
                 assets,
-                external_assets,
             },
         }
     }

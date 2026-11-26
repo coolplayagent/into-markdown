@@ -11,7 +11,10 @@ pub(crate) enum ReplaySpool {
 }
 
 impl ReplaySpool {
-    pub(super) fn new(context: &ExecutionContext, prefix: &str) -> Result<Self, CliError> {
+    pub(in crate::output) fn new(
+        context: &ExecutionContext,
+        prefix: &str,
+    ) -> Result<Self, CliError> {
         match context.temporary_file(prefix) {
             Ok(file) => Ok(Self::File(file)),
             Err(ConversionError::Io { .. }) => Ok(Self::Memory {
@@ -23,7 +26,10 @@ impl ReplaySpool {
         }
     }
 
-    pub(super) fn write_all_checked(&mut self, chunk: &[u8]) -> Result<(), ConversionError> {
+    pub(in crate::output) fn write_all_checked(
+        &mut self,
+        chunk: &[u8],
+    ) -> Result<(), ConversionError> {
         match self {
             Self::File(file) => file.write_all_checked(chunk),
             Self::Memory { data, memory, context } => {
@@ -70,11 +76,21 @@ impl ReplaySpool {
         }
     }
 
-    pub(super) fn sync_all(&mut self) -> Result<(), CliError> {
+    pub(in crate::output) fn sync_all(&mut self) -> Result<(), CliError> {
         if let Self::File(file) = self {
             file.sync_all().map_err(CliError::from)?;
         }
         Ok(())
+    }
+
+    pub(in crate::output) fn transaction_content(
+        &self,
+    ) -> Result<crate::transaction::MixedContent<'_>, CliError> {
+        use crate::transaction::MixedContent;
+        match self {
+            Self::File(file) => Ok(MixedContent::File(file.as_file()?)),
+            Self::Memory { data, .. } => Ok(MixedContent::Bytes(data.get_ref())),
+        }
     }
 
     pub(crate) fn copy_to<W: Write + ?Sized>(

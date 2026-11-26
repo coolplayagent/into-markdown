@@ -4,7 +4,7 @@ use crate::args::{AssetModeArg, ConflictPolicy};
 use crate::error::{CliError, ExitClass};
 #[cfg(test)]
 use crate::transaction::Target;
-use crate::transaction::{self, FileTarget, PreparedTransaction};
+use crate::transaction::{self, MixedContent, MixedTarget, PreparedTransaction};
 use into_markdown::ExecutionContext;
 #[cfg(test)]
 use into_markdown::{ConversionOptions, ConversionResult, plan_assets};
@@ -62,7 +62,7 @@ pub(crate) fn stage_assets(
     })
 }
 
-/// Preflight and stage file-backed asset payloads without materializing them in memory.
+/// Stage retained payloads under one transaction before publishing stdout.
 pub(crate) fn stage_spooled_assets(
     spool: &StructuredSpool,
     directory: &Path,
@@ -74,12 +74,12 @@ pub(crate) fn stage_spooled_assets(
     if planned.is_empty() {
         return Ok(StagedAssets { transaction: None, targets: vec![] });
     }
-    let files = planned
+    let targets = planned
         .iter()
-        .map(|(path, file)| FileTarget { path: path.clone(), file })
+        .map(|(path, content)| MixedTarget { path, content: *content })
         .collect::<Vec<_>>();
     let transaction =
-        transaction::prepare_files(&files, conflict == ConflictPolicy::Overwrite, context)?;
+        transaction::prepare_mixed(&targets, conflict == ConflictPolicy::Overwrite, context)?;
     Ok(StagedAssets {
         transaction: Some(transaction),
         targets: planned.into_iter().map(|(path, _)| path).collect(),
@@ -92,14 +92,14 @@ pub(super) fn plan_spooled_asset_writes<'a>(
     mode: AssetModeArg,
     conflict: ConflictPolicy,
     context: &ExecutionContext,
-) -> Result<Vec<(PathBuf, &'a std::fs::File)>, CliError> {
+) -> Result<Vec<(PathBuf, MixedContent<'a>)>, CliError> {
     if mode != AssetModeArg::Extract {
         return Ok(Vec::new());
     }
     let planned = spool
         .external_payloads()?
         .into_iter()
-        .map(|(filename, file)| (directory.join(filename), file))
+        .map(|(filename, content)| (directory.join(filename), content))
         .collect::<Vec<_>>();
     let paths = planned.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
     transaction::recover_for_paths(&paths, context)?;

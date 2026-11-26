@@ -272,17 +272,12 @@ impl StructuredSpool {
         }
     }
 
-    pub(crate) fn external_payloads(&self) -> Result<Vec<(&str, &std::fs::File)>, CliError> {
+    pub(crate) fn external_payloads(
+        &self,
+    ) -> Result<Vec<(&str, crate::transaction::MixedContent<'_>)>, CliError> {
         self.payload_records
             .iter()
-            .map(|payload| {
-                let ReplaySpool::File(file) = &payload.file else {
-                    return Err(CliError::internal(
-                        "external asset requires a file-backed payload",
-                    ));
-                };
-                Ok((payload.filename.as_str(), file.as_file().map_err(CliError::from)?))
-            })
+            .map(|payload| Ok((payload.filename.as_str(), payload.file.transaction_content()?)))
             .collect()
     }
 

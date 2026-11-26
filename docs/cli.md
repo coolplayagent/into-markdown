@@ -285,8 +285,9 @@ markdown-postprocess
   达到后保留已接纳 payload 并截断后续 payload。`strict` 在第一个同类错误处失败。
 - 源文件读取失败、加密、越界访问、共享内存无法容纳固定诊断或
   最终渲染、provider 崩溃/协议错误、取消、超时以及输出提交 I/O 保持终止。CLI 流式产物
-  在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM；
-  临时空间不足时 best-effort 保留引用并省略后续 payload，strict 失败。
+  在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM。
+  临时目录不可写时，CLI 可以在 `max_memory_bytes` 内保留资产和报告，并将其提交到指定的可写输出目录。
+  使用文件暂存达到 `max_temporary_bytes` 时，best-effort 保留引用并省略后续 payload，strict 失败。
 - `--zip-charset` 只在 ZIP 缺少有效 Unicode Path extra field 和 UTF-8 标志时生效；支持
   `encoding_rs` 标签（包括 GB18030 与 Shift-JIS），未指定时使用 CP437。
 - `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回
