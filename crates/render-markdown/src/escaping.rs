@@ -55,7 +55,9 @@ pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> Str
         return rendered;
     }
     let mut output = String::with_capacity(rendered.len());
-    for (index, line) in rendered.split('\n').enumerate() {
+    let mut paragraph_start = true;
+    let mut lines = rendered.split('\n').enumerate().peekable();
+    while let Some((index, line)) = lines.next() {
         if index > 0 {
             output.push('\n');
         }
@@ -64,6 +66,16 @@ pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> Str
         if !trimmed.is_empty() && (line[..indent].contains('\t') || indent >= 4) {
             output.push_str(if line.starts_with('\t') { "&#9;" } else { "&#32;" });
             output.push_str(&line[1..]);
+        } else if paragraph_start
+            && standalone_inline_tag(trimmed.trim_end_matches([' ', '\t']))
+            && lines.peek().is_some_and(|(_, next)| !next.trim_matches([' ', '\t']).is_empty())
+        {
+            // An inline tag alone on the first line starts a CommonMark HTML block.
+            // A silent comment keeps following marks, escapes and soft breaks in the paragraph.
+            let end = line.trim_end_matches([' ', '\t']).len();
+            output.push_str(&line[..end]);
+            output.push_str("<!---->");
+            output.push_str(&line[end..]);
         } else if let Some(position) = block_marker(trimmed) {
             output.push_str(&line[..indent + position]);
             output.push('\\');
@@ -71,8 +83,19 @@ pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> Str
         } else {
             output.push_str(line);
         }
+        paragraph_start = trimmed.is_empty();
     }
     output
+}
+
+fn standalone_inline_tag(line: &str) -> bool {
+    let Some(name) = line.strip_prefix('<').and_then(|name| name.strip_suffix('>')) else {
+        return false;
+    };
+    matches!(
+        name.trim_start_matches('/'),
+        "br" | "code" | "del" | "em" | "strong" | "sub" | "sup" | "u"
+    )
 }
 
 fn block_marker(line: &str) -> Option<usize> {

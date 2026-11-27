@@ -159,8 +159,10 @@ pub(super) fn plan_inlines(
                     .ok_or_else(render_plan_overflow)?
             }
             Inline::LineBreak => {
-                plan.add(4)?;
-                4
+                // A paragraph-initial <br> may also need a CommonMark HTML-block guard.
+                let bytes = "<br><!---->".len() as u64;
+                plan.add(bytes)?;
+                bytes
             }
             _ => {
                 return Err(ConversionError::Internal {

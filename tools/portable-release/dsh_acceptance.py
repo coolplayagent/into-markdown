@@ -308,7 +308,8 @@ class Acceptance:
                     and stats["imagesCompleted"] == stats["imagesAttempted"]
                     and stats["imagesFailed"] == 0 and usage["ocr"]["recognizedChars"] > 0,
                     f"{label} OCR: {stats}, recognizedChars={usage['ocr']['recognizedChars']}")
-            require(not re.search(r"<strong>\*\*[^<]*?\*\*</strong>", body),
+            strong_spans = re.findall(r"<strong>(.*?)</strong>", body, re.DOTALL)
+            require(not any(span.startswith("**") and span.endswith("**") for span in strong_spans),
                     f"{label} contains redundant bold markup")
             refs = {unquote(ref) for ref in re.findall(r"\]\(<([^>]+)>\)", body)
                     if unquote(ref).startswith("deck_assets/")}

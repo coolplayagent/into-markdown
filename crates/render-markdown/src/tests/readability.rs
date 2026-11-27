@@ -74,6 +74,34 @@ fn entity_text_split_across_inherited_header_marks_stays_literal() {
     assert!(html.contains("<strong>&amp;copy;</strong>"), "{html}");
 }
 
+#[test]
+fn merged_html_header_keeps_nested_marks_and_escapes_source_text_once() {
+    let rows = vec![TableRow {
+        cells: vec![Cell {
+            header: true,
+            column_span: 2,
+            row_span: 1,
+            blocks: vec![node(
+                "p",
+                Block::Paragraph(vec![
+                    marked("<R&D>", &[InlineMark::Bold, InlineMark::Italic]),
+                    marked(" ** literal", &[]),
+                ]),
+            )],
+        }],
+    }];
+    let markdown =
+        output(&xlsx_document(vec![node("t", Block::Table { rows, alignments: vec![] })]));
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, Parser::new_ext(&markdown, Options::ENABLE_TABLES));
+    assert!(
+        html.contains(
+            "<th colspan=\"2\"><strong><em>&lt;R&amp;D&gt;</em></strong> ** literal</th>"
+        ),
+        "{html}"
+    );
+}
+
 fn marked(value: &str, marks: &[InlineMark]) -> Inline {
     Inline::Text { value: value.into(), marks: marks.to_vec() }
 }
@@ -204,6 +232,53 @@ fn adjacent_equal_marks_merge_and_different_marks_keep_their_extent() {
         .flat_map(|(s, mark)| s.chars().map(move |c| (c, mark)))
         .collect::<Vec<_>>();
     assert_eq!(semantic_text(&html), expected, "{markdown:?}");
+}
+
+#[test]
+fn an_initial_line_break_does_not_turn_later_marks_into_literal_text() {
+    for indent in ["", "    ", "\t"] {
+        let doc = document(vec![node(
+            "p",
+            Block::Paragraph(vec![
+                Inline::LineBreak,
+                marked(&format!("\n{indent}"), &[]),
+                marked("bold", &[InlineMark::Bold]),
+                marked("!", &[]),
+                Inline::LineBreak,
+                marked("end", &[]),
+            ]),
+        )]);
+        let markdown = output(&doc);
+        let events = Parser::new(&markdown).collect::<Vec<_>>();
+        assert_eq!(events.iter().filter(|e| matches!(e, Event::SoftBreak)).count(), 1);
+        assert_eq!(events.iter().filter(|e| matches!(e, Event::HardBreak)).count(), 1);
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(&mut html, events.into_iter());
+        assert!(html.contains(&format!("\n{indent}<strong>bold</strong>!")), "{html:?}");
+        assert_eq!(html.matches("<br>").count(), 1, "{html}");
+    }
+}
+
+#[test]
+fn standalone_style_tag_preserves_nested_marks_and_literal_stars_after_a_blank_line() {
+    let runs: &[(&str, &[InlineMark])] = &[
+        ("before\n\n", &[]),
+        ("\n!word!", &[InlineMark::Underline]),
+        ("suffix ", &[]),
+        ("nested", &[InlineMark::Bold, InlineMark::Italic]),
+        (" literal **", &[]),
+    ];
+    let inlines = runs.iter().map(|(text, marks)| marked(text, marks)).collect();
+    let markdown = output(&document(vec![node("p", Block::Paragraph(inlines))]));
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, Parser::new(&markdown));
+    let expected = runs
+        .iter()
+        .flat_map(|(text, marks)| {
+            text.chars().filter(|character| !character.is_whitespace()).map(|ch| (ch, mask(marks)))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(semantic_text(&html), expected, "{markdown:?} => {html:?}");
 }
 
 #[test]
