@@ -134,6 +134,9 @@ sandbox：部署方仍应使用平台 sandbox/container 加固，FFmpeg 的最�
   formula 和 merge 调用前后执行 checkpoint。因此取消/timeout 的最坏延迟是一段已经由前置
   扫描和资源上限约束的同步调用，而不是整本 workbook；高敌意部署仍应在具备 OS 内存与
   时间硬限制的隔离进程运行。
+- Windows 沙箱禁止创建 PDFium 临时快照时，加载器可在本地磁盘上逐级锁定安装目录，
+  以禁止写入和删除的句柄重新核对 DLL 的全部字节，并持有目录句柄直至系统完成映射。
+  DLL 的目录搜索限定为 System32。整个过程可以在只读模式下执行。
 - PDFium 仅从认证路径加载 authority 中精确 hash/size/ABI 的当前平台制品。Windows CLI 的默认路径
   由已经规范化的可执行文件位置推导；先认证可执行文件同级 portable 候选，仅在其不存在时认证
   `bin` 上一级的安装布局候选。显式 `PDFIUM_LIBRARY`、
@@ -281,9 +284,12 @@ locator 且保留原图、正文或占位的最小内容单元可在 best-effort
 - CLI 在变更目标前完成路径、冲突、同文件系统与符号链接检查，并把主产物及资源完整
   stage 和 fsync。覆盖目标由 no-follow handle 确认为 regular file 并复核身份；目录、
   FIFO、设备、符号链接和 Windows reparse point 均拒绝。
-- 流式 CLI 产物在渲染后把资产 payload 写入请求临时文件并清除长期 RAM 副本；文件写入受
-  `max_temporary_bytes`、RAII 删除和最终事务约束。best-effort 只能省略无法暂存的 payload，
-  必须保留引用与就近诊断；最终提交失败仍终止并回滚整个输出事务。
+- CLI 通常把资产暂存到请求级临时文件，释放转换器持有的内存。暂存文件遵守
+  `max_temporary_bytes` 并在请求结束时清理。无法创建临时文件时，转换器可保留已计入
+  请求内存额度的资产，向单个标准输出制品重放。内嵌资产的 Markdown/JSON 和包含资产的
+  ZIP bundle 都受 `max_memory_bytes` 限制。完成转换和序列化后才发布标准输出。
+  `--asset-mode extract` 的独立输出文件仍需可写的暂存目录和目标目录。写入目标失败时，
+  输出事务中止并回滚。best-effort 按临时空间额度省略资产时会保留引用和就近诊断。
 - 单项或累计资产额度拒绝只在已经认证资产边界后恢复：安全外部 URI 保持引用，纯 payload
   资产把对应图片节点改成带 alt 的可见占位并释放租约。总额度按资产顺序保留已接纳 payload，
   其后遗漏数量进入固定容量诊断；strict 不执行该转换。
@@ -292,8 +298,9 @@ locator 且保留原图、正文或占位的最小内容单元可在 best-effort
   管理器 lease，绑定父目录 dev/inode、root 身份和事务内受签名标记；既有目标身份另绑定
   dev/inode，缺失目标保守互斥整个父目录。相关写出通过已认证父目录 handle 读取 lease，
   不扫描祖先或不相关目录；恢复后有界重做完整预检，超限返回 `recoveryLimit`。Unix 变更只使用
-  已认证目录 handle 上的相对 `*at` 操作；Windows 输出事务稳定返回
-  `componentUnavailable`。journal generation 的每次转换都在继续文件变更前
+  已认证目录 handle 上的相对 `*at` 操作；Windows 以受保护 DACL 校验事务目录与成员。在 dsh 工作区写入模式下，
+  创建目录时仅从父目录可继承的授权中选择当前受限令牌持有的工作区 SID，保留其写入与删除自身的权限，
+  排除删除子项的权限。恢复时要求当前受限令牌持有同一工作区 SID，并再次核对输出根的授权、所有者及成员的精确权限。journal generation 的每次转换都在继续文件变更前
   持久化；未提交事务恢复旧集合，已提交事务验证完整新集合。恢复失败保留 journal 与
   备份并返回 `rollbackFailed`，不会递归删除目录或触碰相似名称路径。
 - bundle manifest schema 2 的 `sourceAssetIds` 为每个 Document 资源 ID 提供唯一物理

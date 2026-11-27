@@ -63,6 +63,42 @@ fn report_stage_preserves_bytes_and_rolls_back_commit_io_failure() {
 }
 
 #[test]
+fn report_uses_the_writable_destination_when_scratch_is_unavailable() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().canonicalize().unwrap();
+    let scratch = root.join("unavailable-scratch");
+    fs::write(&scratch, b"unchanged").unwrap();
+    let destination = root.join("report.json");
+    fs::write(&destination, b"previous").unwrap();
+    let report = report(vec![]);
+    let limited = ExecutionContext::new_with_temporary_directory(
+        ExecutionOptions::default(),
+        ResourceLimits { max_memory_bytes: BUFFER_BYTES as u64, ..ResourceLimits::default() },
+        scratch.clone(),
+    );
+    let error = write_report(&destination, &report, &limited).unwrap_err();
+    assert_eq!(error.code(), "resourceLimit");
+    assert!(error.message().contains("max_memory_bytes"));
+    assert_eq!(fs::read(&destination).unwrap(), b"previous");
+    assert_eq!(limited.reserved_memory_bytes(), 0);
+    assert_eq!(limited.reserved_temporary_bytes(), 0);
+    let execution = ExecutionContext::new_with_temporary_directory(
+        ExecutionOptions::default(),
+        ResourceLimits::default(),
+        scratch.clone(),
+    );
+    write_report(&destination, &report, &execution).unwrap();
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        (report.to_pretty_json().unwrap() + "\n").as_bytes()
+    );
+    assert_eq!(fs::read(&scratch).unwrap(), b"unchanged");
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+    assert_eq!(execution.reserved_memory_bytes(), 0);
+    assert_eq!(execution.reserved_temporary_bytes(), 0);
+}
+
+#[test]
 fn report_temporary_budget_failure_preserves_existing_destination() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().canonicalize().unwrap();

@@ -121,12 +121,12 @@ pub(super) fn plan_inlines(
     while let Some(value) = values.get(index) {
         plan.unit()?;
         if let Some((_, marks)) = inline::text_parts(value) {
-            // Match render_inlines' contiguous equal-mark run, without
-            // allocating the joined string during admission planning.
+            // Count source mark boundaries conservatively. Rendering can also
+            // coalesce marks inherited from a table header.
             let mut bytes = 0_u64;
             let mut newlines = 0_u64;
             while let Some((text, next_marks)) = values.get(index).and_then(inline::text_parts) {
-                if !inline::same_marks(marks, next_marks) {
+                if !text.is_empty() && !inline::same_marks(marks, next_marks, None) {
                     break;
                 }
                 bytes = bytes.checked_add(text.len() as u64).ok_or_else(render_plan_overflow)?;
@@ -159,8 +159,10 @@ pub(super) fn plan_inlines(
                     .ok_or_else(render_plan_overflow)?
             }
             Inline::LineBreak => {
-                plan.add(4)?;
-                4
+                // A paragraph-initial <br> may also need a CommonMark HTML-block guard.
+                let bytes = "<br><!---->".len() as u64;
+                plan.add(bytes)?;
+                bytes
             }
             _ => {
                 return Err(ConversionError::Internal {

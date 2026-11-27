@@ -201,7 +201,7 @@ pub(super) struct Shape {
 
 #[derive(Default)]
 pub(super) struct PresentationCell {
-    pub(super) inlines: Vec<Inline>,
+    pub(super) paragraphs: Vec<TextParagraph>,
     pub(super) row_span: u32,
     pub(super) column_span: u32,
     pub(super) horizontal_continuation: bool,
@@ -249,7 +249,7 @@ pub(super) struct ParseState {
     // These indexes are lookup-only and never iterated into output, so randomized hash order
     // cannot affect determinism. `try_reserve` precedes every new key and avoids the quadratic
     // shifting cost of sorted vectors for presentations containing many unique images.
-    pub(super) assets_by_part: HashMap<String, String>,
+    pub(super) assets_by_part: HashMap<String, (String, String)>,
     pub(super) assets_by_digest: HashMap<[u8; 32], Vec<usize>>,
     pub(super) nodes: usize,
     pub(super) inlines: usize,

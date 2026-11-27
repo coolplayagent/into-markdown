@@ -5,6 +5,11 @@ package(default_visibility = ["//visibility:public"])
 
 exports_files(["BUILD.bazel", "Cargo.toml"])
 
+WINDOWS_OCR_DEPS = select({
+    "@platforms//os:windows": ["//crates/ocr"],
+    "//conditions:default": [],
+})
+
 rust_binary(
     name = "into-md",
     srcs = glob(["src/**/*.rs"]),
@@ -17,7 +22,7 @@ rust_binary(
         "//crates/plugin-wasi:plugin_wasi",
         "//crates/process-plugin:process_plugin",
         "//crates/provider-plugin:provider-plugin",
-    ] + all_crate_deps(normal = True),
+    ] + WINDOWS_OCR_DEPS + all_crate_deps(normal = True),
     compile_data = ["//web/console:checked_assets"],
 )
 
@@ -36,7 +41,7 @@ rust_test(
         "//crates/plugin-wasi:plugin_wasi",
         "//crates/process-plugin:process_plugin",
         "//crates/provider-plugin:provider-plugin",
-    ] + all_crate_deps(normal = True, normal_dev = True),
+    ] + WINDOWS_OCR_DEPS + all_crate_deps(normal = True, normal_dev = True),
     proc_macro_deps = all_crate_deps(proc_macro = True, proc_macro_dev = True),
     compile_data = [
         "//web/console:checked_assets",

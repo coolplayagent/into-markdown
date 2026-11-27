@@ -1,11 +1,10 @@
 //! Accounted stdout publication and companion-asset finalization.
 
 use super::assets::StagedAssets;
+use super::stream::ReplaySpool;
 use crate::error::CliError;
-use into_markdown::{ExecutionContext, TemporaryFile};
-use std::io::{Read, Seek, Write};
-
-const COPY_BUFFER_BYTES: usize = 64 * 1024;
+use into_markdown::ExecutionContext;
+use std::io::Write;
 
 /// Copy one fully serialized primary artifact to stdout.
 ///
@@ -13,12 +12,12 @@ const COPY_BUFFER_BYTES: usize = 64 * 1024;
 /// serialization already succeeded, so staged companion assets are committed.
 /// Cancellation and every other I/O failure abort the companions.
 pub(crate) fn publish(
-    primary: &TemporaryFile,
+    primary: &ReplaySpool,
     stdout: &mut dyn Write,
     staged_assets: Option<StagedAssets>,
     context: &ExecutionContext,
 ) -> Result<(), CliError> {
-    let result = copy_primary(primary, stdout, context);
+    let result = primary.copy_to(context, stdout);
     match result {
         Ok(()) => commit_assets(staged_assets),
         Err(error) if error.is_broken_pipe() => {
@@ -29,27 +28,6 @@ pub(crate) fn publish(
             abort_assets(staged_assets, &error)?;
             Err(error)
         }
-    }
-}
-
-fn copy_primary(
-    primary: &TemporaryFile,
-    stdout: &mut dyn Write,
-    context: &ExecutionContext,
-) -> Result<(), CliError> {
-    let _memory = context
-        .reserve_memory(u64::try_from(COPY_BUFFER_BYTES).unwrap_or(u64::MAX))
-        .map_err(CliError::from)?;
-    let mut buffer = vec![0_u8; COPY_BUFFER_BYTES].into_boxed_slice();
-    let mut reader = primary.as_file().map_err(CliError::from)?.try_clone()?;
-    reader.rewind()?;
-    loop {
-        context.checkpoint().map_err(CliError::from)?;
-        let read = reader.read(&mut buffer)?;
-        if read == 0 {
-            return Ok(());
-        }
-        stdout.write_all(&buffer[..read])?;
     }
 }
 

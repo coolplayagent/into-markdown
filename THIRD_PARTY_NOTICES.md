@@ -13,6 +13,14 @@ by `AND` applies; in particular, `unicode-ident` is concluded as
 each package's copyright and license text; the registry source for every
 package is fixed by `Cargo.lock`.
 
+Windows portable Core embeds an OCR WebAssembly guest using RTen 0.28.0
+(Copyright (c) 2026 RTen project contributors). The guest uses the MIT option
+for its dual-licensed dependencies. Unicode data in `unicode-ident` also
+carries Unicode-3.0. The full upstream terms and copyright notices are in
+`third_party/licenses/ocr-wasm-NOTICES.txt`. The independent guest dependency
+inventory records exact source revisions and checksums in
+`third_party/licenses/ocr-wasm-inventory.json`.
+
 The deterministic Simplified/Traditional transcript character mappings use
 OpenCC `TSCharacters.txt` and `STCharacters.txt` at commit
 `4f90418b9ed73a91023897095c762e5fdaadc016`, retained under

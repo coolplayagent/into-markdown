@@ -66,6 +66,9 @@ pub struct WindowsSandboxAuthority {
     pub storage_root: PathBuf,
 }
 
+#[cfg(windows)]
+pub use sandbox::windows::process_token::windows_process_is_restricted_or_low_integrity;
+
 /// Provision the deterministic, zero-capability `AppContainer` used by an installed plugin.
 ///
 /// # Errors
@@ -116,35 +119,12 @@ pub fn verify_windows_sandbox_path(
     sandbox::windows::verify_authorized_path(authority, path)
 }
 
-/// Atomically create one directory with a current-user-only protected DACL.
-///
-/// # Errors
-///
-/// Returns an error when creation or the exact owner/DACL verification fails.
 #[cfg(windows)]
-pub fn create_windows_plugin_store_directory(path: &Path) -> Result<(), PluginError> {
-    sandbox::windows::create_private_directory(path)
-}
-
-/// Verify a plugin-store path remains owned and writable only by the current user.
-///
-/// # Errors
-///
-/// Returns an error when the path identity, owner, or DACL is not exact.
-#[cfg(windows)]
-pub fn verify_windows_plugin_store_path(path: &Path) -> Result<(), PluginError> {
-    sandbox::windows::verify_private_path(path)
-}
-
-/// Verify a child inherited only the private plugin-store DACL.
-///
-/// # Errors
-///
-/// Returns an error when the child is a link or has unexpected ACL authority.
-#[cfg(windows)]
-pub fn verify_windows_plugin_store_child(path: &Path) -> Result<(), PluginError> {
-    sandbox::windows::verify_private_child(path)
-}
+pub use sandbox::windows::directory_acl::{
+    create_windows_output_directory, create_windows_plugin_store_directory,
+    verify_windows_output_member, verify_windows_plugin_store_child,
+    verify_windows_plugin_store_path,
+};
 
 /// Verify an existing Windows user-data parent is owned by the current user
 /// and grants mutation authority only to that user, SYSTEM, or Administrators.

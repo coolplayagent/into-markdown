@@ -120,17 +120,17 @@ impl StructuredSpool {
         archive
             .start_file("diagnostics.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, diagnostics, &mut archive)?;
+        diagnostics.copy_to(&self.context, &mut archive)?;
         archive
             .start_file("document.ir.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
         let mut buffered = super::super::json::ChunkWriter::new(&mut archive)?;
-        copy_spool(&self.context, ir, &mut buffered)?;
+        ir.copy_to(&self.context, &mut buffered)?;
         buffered.finish()?;
         archive
             .start_file("document.md", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, markdown, &mut archive)?;
+        markdown.copy_to(&self.context, &mut archive)?;
         archive
             .start_file("manifest.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
@@ -139,7 +139,7 @@ impl StructuredSpool {
         archive
             .start_file("provenance.json", files)
             .map_err(|error| map_zip_error(error, "create bundle entry"))?;
-        copy_spool(&self.context, provenance, &mut archive)?;
+        provenance.copy_to(&self.context, &mut archive)?;
         archive
             .add_directory("assets/", directory)
             .map_err(|error| map_zip_error(error, "create bundle assets directory"))?;
@@ -148,9 +148,7 @@ impl StructuredSpool {
             archive
                 .start_file(format!("assets/{}", payload.filename), files)
                 .map_err(|error| map_zip_error(error, "create bundle asset"))?;
-            let mut reader = payload.file.as_file().map_err(CliError::from)?.try_clone()?;
-            reader.seek(SeekFrom::Start(0))?;
-            copy_reader(&self.context, &mut reader.take(payload.size), &mut archive)?;
+            payload.file.copy_to(&self.context, &mut archive)?;
         }
         archive.finish().map_err(|error| map_zip_error(error, "finish bundle"))?;
         Ok(())

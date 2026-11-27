@@ -7,6 +7,12 @@ exports_files([
     "release_timing.py",
 ])
 
+filegroup(
+    name = "ocr_wasm_sources",
+    srcs = ["ocr-wasm/Cargo.toml", "ocr-wasm/Cargo.lock", "ocr-wasm/src/lib.rs"],
+    visibility = ["//tools:__subpackages__"],
+)
+
 py_library(
     name = "release_asset",
     srcs = ["release_asset.py"],

@@ -4,6 +4,7 @@ mod allocation;
 mod budget;
 mod charts_notes;
 mod content_types;
+mod emf;
 mod error;
 mod geometry;
 mod images;

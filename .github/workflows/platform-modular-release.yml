@@ -113,7 +113,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.97.1
-          targets: ${{ matrix.target }}
+          targets: ${{ runner.os == 'Windows' && format('{0},wasm32-unknown-unknown', matrix.target) || matrix.target }}
       - uses: actions/cache/restore@v4
         id: cargo-cache
         with:

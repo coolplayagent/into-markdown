@@ -90,6 +90,7 @@ function parse(source: string, depth: number, budget: Budget): ReactNode {
       flush(); nodes.push(createElement("br", { key: index })); budget.left -= 1; index += 4; continue;
     }
     budget.work -= 1;
+    if (source.startsWith("<!---->", index)) { index += "<!---->".length; continue; }
     const rest = source.slice(index);
     const html = /^<(strong|em|del|u|sub|sup|code)>/.exec(rest);
     const code = /^`+/.exec(rest);

@@ -125,6 +125,7 @@ pub use stage::{
     FileTarget, StreamingFileTransaction, Target, prepare, prepare_file_and_bytes, prepare_files,
     recover_for_paths,
 };
+pub(crate) use stage::{MixedContent, MixedTarget, prepare_mixed};
 
 #[cfg(unix)]
 pub(crate) use config::atomic_replace_config;

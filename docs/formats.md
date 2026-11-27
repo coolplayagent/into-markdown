@@ -21,6 +21,9 @@ ASR、AI Provider 与插件本身是能力来源，不会以 `planned` 冒充格
 每种当前可用格式的可执行 dry-run 示例见[命令与格式示例](cli-examples.md)，并由 CI 从
 `into-md formats --json` 实时发现后逐项校验。
 
+XLSX 和 XLSM 在临时目录不可写时，会按工作表中实际存在的单元格数量为中间结果预留内存。
+超过请求的内存上限时，转换会报告资源限制。在只读沙箱中，工作簿可以从文件或标准输入读取，结果写入标准输出。
+
 ## Drawio
 
 `drawio` 接受 `.drawio`、根元素为 `mxfile` / `mxGraphModel` 的 XML，以及显式
@@ -244,7 +247,11 @@ EMF/WMF 只产生安全降级诊断。object、objdata、filetbl、datastore、f
 ## PresentationML
 
 PPTX、PPTM、PPSX、PPSM 与 POTX 共用严格的离线 OPC/PresentationML 转换器。幻灯片标题、
-文本框、富文本、列表、表格、PNG/JPEG、图表缓存文字与 speaker notes 进入统一 Document IR；
+文本框、富文本、列表、表格、PNG/JPEG、图表缓存文字与 speaker notes 进入统一 Document IR。
+文本框和表格单元格中的 `a:p` 保留源段落和列表边界。`a:br` 保留为段落内的显式换行，包括段末的换行。
+EMF 图片通过扩展名、内容类型和记录边界校验后保留原始字节，Markdown 提供原图链接。
+有效的 `EMR_EXTTEXTOUTW` 记录以原始 Unicode 文字呈现在链接旁，保留对应幻灯片和图形位置。
+使用字体字形编号的记录保存在原图中。
 每张幻灯片使用 `Slide` 边界，内容节点 provenance 保存原始 part、幻灯片号以及合成
 layout/master/group 变换后的最终显示 bounds。任意角度旋转按 shape 中心计算轴对齐显示区域；
 互不重叠的区域按最终几何恢复阅读顺序；AABB 只作候选筛选，凸四边形 SAT 确认真实面积

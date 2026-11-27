@@ -88,7 +88,7 @@ fn split_utf8_and_controls_use_the_same_json_string_wire() {
     }
     spool.finish().unwrap();
     let mut encoded = Vec::new();
-    copy_spool(&context, &spool.file, &mut encoded).unwrap();
+    spool.file.copy_to(&context, &mut encoded).unwrap();
     assert_eq!(encoded, serde_json::to_vec("a\n\"😀\t").unwrap());
 }
 
@@ -105,12 +105,62 @@ fn duplicate_assets_share_one_payload_spool() {
     .unwrap();
     assert_eq!(spool.payload_records.len(), 1);
     assert_eq!(spool.asset_records.len(), 2);
-    assert_eq!(spool.payload_records[0].file.as_file().unwrap().metadata().unwrap().len(), 5);
+    assert_eq!(spool.payload_records[0].file.len().unwrap(), 5);
     assert!(context.reserved_temporary_bytes() < 16 * 1024);
 }
 
-fn spool_len(spool: Option<&TemporaryFile>) -> u64 {
-    spool.map_or(0, |file| file.as_file().unwrap().metadata().unwrap().len())
+fn spool_len(spool: Option<&ReplaySpool>) -> u64 {
+    spool.map_or(0, |file| file.len().unwrap())
+}
+
+#[test]
+fn stdout_artifacts_replay_identically_without_temporary_storage() {
+    let temporary = tempfile::tempdir().unwrap();
+    let memory_context = ExecutionContext::new_with_temporary_directory(
+        Default::default(),
+        Default::default(),
+        temporary.path().join("missing"),
+    );
+    let result = fixture();
+    for emit in [EmitKind::Markdown, EmitKind::IrJson, EmitKind::ResultJson, EmitKind::Bundle] {
+        let mut disk =
+            StructuredSpool::from_result(&result, context(), emit, AssetModeArg::Embed).unwrap();
+        let mut expected = std::io::Cursor::new(Vec::new());
+        disk.serialize(emit, &mut expected).unwrap();
+        let mut spool = StructuredSpool::from_result(
+            &result,
+            memory_context.clone(),
+            emit,
+            AssetModeArg::Embed,
+        )
+        .unwrap();
+        let artifact = spool.take_stdout_primary().unwrap();
+        assert!(memory_context.reserved_memory_bytes() > 0);
+        let mut actual = Vec::new();
+        artifact.copy_to(&memory_context, &mut actual).unwrap();
+        assert_eq!(actual, expected.into_inner(), "{emit:?}");
+        drop((artifact, spool));
+        assert_eq!(memory_context.reserved_memory_bytes(), 0);
+    }
+}
+
+#[test]
+fn memory_spool_observes_the_request_limit_before_writing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let context = ExecutionContext::new_with_temporary_directory(
+        Default::default(),
+        into_markdown::ResourceLimits { max_memory_bytes: 8, ..Default::default() },
+        temporary.path().join("missing"),
+    );
+    let mut spool = ReplaySpool::new(&context, "test").unwrap();
+    spool.write_all_checked(b"1234").unwrap();
+    let error = spool.write_all_checked(b"56789").unwrap_err();
+    assert!(matches!(error, ConversionError::ResourceLimit { limit: "max_memory_bytes", .. }));
+    let mut actual = Vec::new();
+    spool.copy_to(&context, &mut actual).unwrap();
+    assert_eq!(actual, b"1234");
+    drop(spool);
+    assert_eq!(context.reserved_memory_bytes(), 0);
 }
 
 fn represented_temporary_bytes(spool: &StructuredSpool) -> u64 {
@@ -119,11 +169,7 @@ fn represented_temporary_bytes(spool: &StructuredSpool) -> u64 {
         + spool.markdown_json.as_ref().map_or(0, |json| spool_len(Some(&json.file)))
         + spool_len(spool.diagnostics.as_ref())
         + spool_len(spool.provenance.as_ref())
-        + spool
-            .payload_records
-            .iter()
-            .map(|payload| payload.file.as_file().unwrap().metadata().unwrap().len())
-            .sum::<u64>()
+        + spool.payload_records.iter().map(|payload| payload.file.len().unwrap()).sum::<u64>()
 }
 
 #[test]

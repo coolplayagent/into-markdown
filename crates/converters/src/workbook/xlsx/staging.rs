@@ -1,6 +1,6 @@
 use crate::workbook::error::{limit, malformed};
 use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
-use into_markdown_core::{ConversionError, ExecutionContext, TemporaryFile};
+use into_markdown_core::{ConversionError, ExecutionContext, ResourceReservation, TemporaryFile};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 
@@ -18,45 +18,91 @@ pub(super) struct StagingTelemetry {
 }
 
 pub(super) struct StagedCells {
-    file: TemporaryFile,
+    storage: CellStorage,
     count: u64,
     telemetry: Arc<Mutex<StagingTelemetry>>,
 }
 
 pub(super) struct StagingWriter {
-    file: TemporaryFile,
+    storage: CellStorage,
     batch: Vec<u8>,
     count: u64,
     telemetry: StagingTelemetry,
 }
 
 pub(super) struct StagedReader {
-    _owner: TemporaryFile,
-    reader: BufReader<std::fs::File>,
+    source: CellSource,
     remaining: u64,
     telemetry: Arc<Mutex<StagingTelemetry>>,
 }
 
+enum CellStorage {
+    File(TemporaryFile),
+    Memory { cells: Vec<CellToken>, reservation: ResourceReservation },
+}
+
+enum CellSource {
+    File { reader: BufReader<std::fs::File>, _owner: TemporaryFile },
+    Memory { cells: std::vec::IntoIter<CellToken>, _reservation: ResourceReservation },
+}
+
 impl StagingWriter {
-    pub(super) fn new(context: &ExecutionContext) -> Result<Self, ConversionError> {
-        Ok(Self {
-            file: context.temporary_file("into-md-xlsx-cells")?,
-            batch: Vec::with_capacity(WRITE_BATCH_BYTES),
-            count: 0,
-            telemetry: StagingTelemetry::default(),
-        })
+    pub(super) fn new(
+        context: &ExecutionContext,
+        populated_cells: u64,
+    ) -> Result<Self, ConversionError> {
+        let (storage, batch) = match context.temporary_file("into-md-xlsx-cells") {
+            Ok(file) => (CellStorage::File(file), Vec::with_capacity(WRITE_BATCH_BYTES)),
+            Err(ConversionError::Io { .. }) => {
+                let count = usize::try_from(populated_cells).map_err(|_| {
+                    limit("max_memory_bytes", "worksheet cell count does not fit in memory")
+                })?;
+                let bytes = populated_cells
+                    .checked_mul(size_of::<CellToken>() as u64)
+                    .ok_or_else(|| limit("max_memory_bytes", "worksheet staging size overflow"))?;
+                let mut reservation = context.reserve_memory(bytes)?;
+                let mut cells = Vec::new();
+                cells.try_reserve_exact(count).map_err(|_| {
+                    limit("max_memory_bytes", "cannot reserve resident worksheet cells")
+                })?;
+                reservation.grow(((cells.capacity() - count) * size_of::<CellToken>()) as u64)?;
+                (CellStorage::Memory { cells, reservation }, Vec::new())
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(Self { storage, batch, count: 0, telemetry: StagingTelemetry::default() })
     }
 
     pub(super) fn push(
         &mut self,
-        cell: &CellToken,
+        cell: CellToken,
         context: &ExecutionContext,
     ) -> Result<(), ConversionError> {
-        encode_cell(cell, &mut self.batch)?;
-        self.count = self.count.saturating_add(1);
-        if self.batch.len() >= WRITE_BATCH_BYTES {
-            flush_batch(&mut self.file, &mut self.batch, &mut self.telemetry, context)?;
+        match &mut self.storage {
+            CellStorage::File(file) => {
+                encode_cell(&cell, &mut self.batch)?;
+                if self.batch.len() >= WRITE_BATCH_BYTES {
+                    flush_batch(file, &mut self.batch, &mut self.telemetry, context)?;
+                }
+            }
+            CellStorage::Memory { cells, reservation } => {
+                if cells.len() == cells.capacity() {
+                    return Err(malformed(
+                        None,
+                        "worksheet data exceeds the staged cell allocation",
+                    ));
+                }
+                let value_bytes = match &cell.value {
+                    CellValueToken::Raw(value) => value.capacity(),
+                    CellValueToken::Shared(_) => 0,
+                };
+                reservation.grow(
+                    (value_bytes + cell.formula.capacity() + cell.cell_type.capacity()) as u64,
+                )?;
+                cells.push(cell);
+            }
         }
+        self.count = self.count.saturating_add(1);
         Ok(())
     }
 
@@ -64,12 +110,14 @@ impl StagingWriter {
         mut self,
         context: &ExecutionContext,
     ) -> Result<StagedCells, ConversionError> {
-        flush_batch(&mut self.file, &mut self.batch, &mut self.telemetry, context)?;
-        self.file.flush()?;
-        self.telemetry.flushes = self.telemetry.flushes.saturating_add(1);
+        if let CellStorage::File(file) = &mut self.storage {
+            flush_batch(file, &mut self.batch, &mut self.telemetry, context)?;
+            file.flush()?;
+            self.telemetry.flushes = self.telemetry.flushes.saturating_add(1);
+        }
         self.telemetry.data_passes = self.telemetry.data_passes.saturating_add(1);
         Ok(StagedCells {
-            file: self.file,
+            storage: self.storage,
             count: self.count,
             telemetry: Arc::new(Mutex::new(self.telemetry)),
         })
@@ -81,10 +129,10 @@ pub(super) fn stage(
     cells: &[CellToken],
     context: &ExecutionContext,
 ) -> Result<StagedCells, ConversionError> {
-    let mut writer = StagingWriter::new(context)?;
+    let mut writer = StagingWriter::new(context, cells.len() as u64)?;
     for cell in cells {
         context.checkpoint()?;
-        writer.push(cell, context)?;
+        writer.push(cell.clone(), context)?;
     }
     writer.finish(context)
 }
@@ -94,45 +142,39 @@ impl StagedCells {
         Arc::clone(&self.telemetry)
     }
 
-    pub(super) fn into_reader(mut self) -> Result<StagedReader, ConversionError> {
-        self.file.seek(SeekFrom::Start(0)).map_err(ConversionError::from)?;
-        self.telemetry
-            .lock()
-            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
-            .seeks += 1;
-        let reader = self.file.as_file()?.try_clone().map_err(ConversionError::from)?;
-        Ok(StagedReader {
-            _owner: self.file,
-            reader: BufReader::new(reader),
-            remaining: self.count,
-            telemetry: self.telemetry,
-        })
+    pub(super) fn into_reader(self) -> Result<StagedReader, ConversionError> {
+        let source = match self.storage {
+            CellStorage::File(mut file) => {
+                file.seek(SeekFrom::Start(0))?;
+                self.telemetry
+                    .lock()
+                    .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
+                    .seeks += 1;
+                let reader = BufReader::new(file.as_file()?.try_clone()?);
+                CellSource::File { reader, _owner: file }
+            }
+            CellStorage::Memory { cells, reservation } => {
+                CellSource::Memory { cells: cells.into_iter(), _reservation: reservation }
+            }
+        };
+        Ok(StagedReader { source, remaining: self.count, telemetry: self.telemetry })
     }
 
     #[cfg(test)]
     pub(super) fn read_all(
-        mut self,
+        self,
         context: &ExecutionContext,
     ) -> Result<(Vec<CellToken>, StagingTelemetry), ConversionError> {
-        self.file.seek(SeekFrom::Start(0)).map_err(ConversionError::from)?;
-        self.telemetry
-            .lock()
-            .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
-            .seeks += 1;
+        let mut reader = self.into_reader()?;
         let mut output = Vec::new();
         output
-            .try_reserve_exact(usize::try_from(self.count).unwrap_or(usize::MAX))
+            .try_reserve_exact(usize::try_from(reader.remaining).unwrap_or(usize::MAX))
             .map_err(|_| limit("max_memory_bytes", "cannot reserve staged worksheet cells"))?;
-        let mut reader = self.file.as_file()?;
-        for _ in 0..self.count {
+        while let Some(cell) = reader.next()? {
             context.checkpoint()?;
-            output.push(decode_cell(&mut reader)?);
-            self.telemetry
-                .lock()
-                .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?
-                .reads += 1;
+            output.push(cell);
         }
-        let telemetry = *self
+        let telemetry = *reader
             .telemetry
             .lock()
             .map_err(|_| malformed(None, "staging telemetry lock is poisoned"))?;
@@ -145,7 +187,12 @@ impl StagedReader {
         if self.remaining == 0 {
             return Ok(None);
         }
-        let cell = decode_cell(&mut self.reader)?;
+        let cell = match &mut self.source {
+            CellSource::File { reader, .. } => decode_cell(reader)?,
+            CellSource::Memory { cells, .. } => {
+                cells.next().ok_or_else(|| malformed(None, "staged worksheet ended early"))?
+            }
+        };
         self.remaining -= 1;
         self.telemetry
             .lock()
@@ -252,9 +299,48 @@ fn read_string(reader: &mut impl Read) -> Result<String, ConversionError> {
 
 #[cfg(test)]
 mod tests {
-    use super::stage;
+    use super::{StagingWriter, stage};
     use crate::workbook::xlsx::sheet_index::{CellToken, CellValueToken};
-    use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
+    use into_markdown_core::{ConversionError, ExecutionContext, ExecutionOptions, ResourceLimits};
+
+    #[test]
+    fn resident_staging_owns_its_budget_through_readback_and_releases_it_on_error() {
+        let token = || CellToken {
+            coordinate: (1, 1),
+            value: CellValueToken::Raw(String::with_capacity(200)),
+            formula: "SUM(A1)".into(),
+            cell_type: "n".into(),
+            style_index: None,
+        };
+        let required = (size_of::<CellToken>() + 200 + "SUM(A1)".len() + 1) as u64;
+        let unavailable = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        for budget in [required, required - 1] {
+            let context = ExecutionContext::new_with_temporary_directory(
+                ExecutionOptions::default(),
+                ResourceLimits { max_memory_bytes: budget, ..Default::default() },
+                unavailable.clone(),
+            );
+            let mut writer = StagingWriter::new(&context, 1).unwrap();
+            let result = writer.push(token(), &context);
+            if budget == required {
+                result.unwrap();
+                let staged = writer.finish(&context).unwrap();
+                assert_eq!(context.reserved_memory_bytes(), required);
+                let mut reader = staged.into_reader().unwrap();
+                assert_eq!(reader.next().unwrap(), Some(token()));
+                assert_eq!(context.reserved_memory_bytes(), required);
+                assert_eq!(reader.next().unwrap(), None);
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversionError::ResourceLimit { limit: "max_memory_bytes", .. })
+                ));
+                drop(writer);
+            }
+            assert_eq!(context.reserved_memory_bytes(), 0);
+            assert_eq!(context.reserved_temporary_bytes(), 0);
+        }
+    }
 
     #[test]
     fn batches_writes_and_releases_temporary_budget() {

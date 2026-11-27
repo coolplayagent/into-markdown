@@ -576,7 +576,7 @@ fn xml_references_are_exact_and_mc_choice_never_leaks() {
     let output =
         convert(&rewrite_part(&original, "ppt/slides/slide1.xml", slide.as_bytes())).unwrap();
     let markdown = render(&output.document, &output.assets, &ConversionOptions::default()).unwrap();
-    assert!(markdown.contains("A&amp;BC"));
+    assert!(markdown.contains("A&BC"));
     assert!(!markdown.contains("LEAK"));
     let Block::Slide { blocks, .. } = &output.document.blocks[0].block else { panic!() };
     assert_eq!(blocks.len(), 1);

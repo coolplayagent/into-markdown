@@ -75,6 +75,7 @@ fn broken_pipe_commits_fully_staged_assets_and_releases_copy_memory() {
     primary.write_all_checked(b"complete primary").unwrap();
     let mut stdout = FailingWriter { kind: std::io::ErrorKind::BrokenPipe, remaining: 1 };
 
+    let primary = ReplaySpool::File(primary);
     let error = publish(&primary, &mut stdout, Some(staged), &context).unwrap_err();
 
     assert!(error.is_broken_pipe());
@@ -99,6 +100,7 @@ fn non_pipe_failure_aborts_assets_and_releases_copy_memory() {
     primary.write_all_checked(b"complete primary").unwrap();
     let mut stdout = FailingWriter { kind: std::io::ErrorKind::StorageFull, remaining: 1 };
 
+    let primary = ReplaySpool::File(primary);
     let error = publish(&primary, &mut stdout, Some(staged), &context).unwrap_err();
 
     assert_eq!(error.code(), "io");
@@ -128,6 +130,7 @@ fn cancellation_before_stdout_copy_aborts_assets() {
     primary.write_all_checked(b"complete primary").unwrap();
     cancellation.cancel();
 
+    let primary = ReplaySpool::File(primary);
     let error = publish(&primary, &mut Vec::new(), Some(staged), &context).unwrap_err();
 
     assert_eq!(error.code(), "cancelled");

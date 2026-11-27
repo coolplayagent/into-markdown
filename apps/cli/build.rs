@@ -9,6 +9,7 @@ use zip::write::SimpleFileOptions;
 
 const PDFIUM_ENV: &str = "INTO_MD_EMBEDDED_PDFIUM_ROOT";
 const OCR_ENV: &str = "INTO_MD_EMBEDDED_OCR_ROOT";
+const OCR_WASM_ENV: &str = "INTO_MD_EMBEDDED_OCR_WASM";
 
 #[derive(Clone)]
 struct InputFile {
@@ -22,6 +23,7 @@ struct InputFile {
 fn main() {
     println!("cargo:rerun-if-env-changed={PDFIUM_ENV}");
     println!("cargo:rerun-if-env-changed={OCR_ENV}");
+    println!("cargo:rerun-if-env-changed={OCR_WASM_ENV}");
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let generated = out.join("embedded_runtime_payloads.rs");
     if env::var_os("CARGO_FEATURE_EMBEDDED_RUNTIME").is_none() {
@@ -45,6 +47,7 @@ fn main() {
     validate_ocr(&ocr_files);
     let ocr_zip = out.join("embedded-ocr.zip");
     let ocr_sha = write_archive(&ocr_zip, &ocr_files);
+    let wasm_source = if target_os == "windows" { embed_ocr_wasm(&out) } else { String::new() };
     let (pdfium_archive, pdfium_sha, pdfium_files) = if target_os == "windows" {
         ("&[]".to_owned(), String::new(), String::new())
     } else {
@@ -66,11 +69,30 @@ fn main() {
          pub(super) static PDFIUM_FILES: &[EmbeddedFile] = &[{pdfium_files}];\n\
          pub(super) static OCR_ARCHIVE: &[u8] = include_bytes!({ocr_zip:?});\n\
          pub(super) const OCR_ARCHIVE_SHA256: &str = {ocr_sha:?};\n\
-         pub(super) static OCR_FILES: &[EmbeddedFile] = &[{ocr_files}];\n",
+         pub(super) static OCR_FILES: &[EmbeddedFile] = &[{ocr_files}];\n{wasm_source}",
         ocr_zip = ocr_zip.display().to_string(),
         ocr_files = render_files(&ocr_files),
     );
     fs::write(generated, source).expect("write embedded-runtime constants");
+}
+
+fn embed_ocr_wasm(out: &Path) -> String {
+    let source = PathBuf::from(env::var_os(OCR_WASM_ENV).unwrap_or_else(|| {
+        panic!("Windows embedded-runtime requires {OCR_WASM_ENV} to name the compiled OCR module")
+    }));
+    println!("cargo:rerun-if-changed={}", source.display());
+    let metadata = fs::symlink_metadata(&source).expect("inspect OCR WebAssembly module");
+    assert!(metadata.is_file() && metadata.len() <= 32 * 1024 * 1024, "invalid OCR module file");
+    let bytes = fs::read(&source).expect("read OCR WebAssembly module");
+    assert!(bytes.starts_with(b"\0asm\x01\0\0\0"), "expected a WebAssembly core module");
+    let destination = out.join("embedded-ocr.wasm");
+    fs::write(&destination, &bytes).expect("stage OCR WebAssembly module");
+    format!(
+        "pub(super) static OCR_WASM_MODULE: &[u8] = include_bytes!({path:?});\n\
+         pub(super) const OCR_WASM_SHA256: &str = \"{digest:x}\";\n",
+        path = destination.display().to_string(),
+        digest = Sha256::digest(&bytes),
+    )
 }
 
 fn required_root(name: &str) -> PathBuf {

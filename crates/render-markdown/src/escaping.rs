@@ -13,12 +13,12 @@ pub(super) fn escape_run(
     next: Option<char>,
 ) -> String {
     let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars().peekable();
+    let mut characters = value.char_indices().peekable();
     let mut previous = previous;
-    while let Some(character) = characters.next() {
-        let following = characters.peek().copied().or(next);
+    while let Some((offset, character)) = characters.next() {
+        let following = characters.peek().map(|(_, value)| *value).or(next);
         match character {
-            '&' => output.push_str("&amp;"),
+            '&' if starts_entity(&value[offset + 1..]) => output.push_str("&amp;"),
             '\n' if context.table_cell || context.heading => output.push_str("<br>"),
             // A text newline carries soft-break semantics, including source whitespace.
             ' ' if following == Some('\n') && previous == Some(' ') => {
@@ -41,13 +41,23 @@ pub(super) fn escape_run(
     output
 }
 
+// CommonMark consumes semicolon-terminated named and numeric references. Check
+// their bounded spelling so an ordinary ampersand remains readable in source.
+fn starts_entity(tail: &str) -> bool {
+    let name = tail.strip_prefix('#').unwrap_or(tail).as_bytes();
+    let length = name.iter().take(32).take_while(|b| b.is_ascii_alphanumeric()).count();
+    length != 0 && name.get(length) == Some(&b';')
+}
+
 /// Protect complete serialized lines so fragmented runs share block context.
 pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> String {
     if context.table_cell {
         return rendered;
     }
     let mut output = String::with_capacity(rendered.len());
-    for (index, line) in rendered.split('\n').enumerate() {
+    let mut paragraph_start = true;
+    let mut lines = rendered.split('\n').enumerate().peekable();
+    while let Some((index, line)) = lines.next() {
         if index > 0 {
             output.push('\n');
         }
@@ -56,6 +66,16 @@ pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> Str
         if !trimmed.is_empty() && (line[..indent].contains('\t') || indent >= 4) {
             output.push_str(if line.starts_with('\t') { "&#9;" } else { "&#32;" });
             output.push_str(&line[1..]);
+        } else if paragraph_start
+            && standalone_inline_tag(trimmed.trim_end_matches([' ', '\t']))
+            && lines.peek().is_some_and(|(_, next)| !next.trim_matches([' ', '\t']).is_empty())
+        {
+            // An inline tag alone on the first line starts a CommonMark HTML block.
+            // A silent comment keeps following marks, escapes and soft breaks in the paragraph.
+            let end = line.trim_end_matches([' ', '\t']).len();
+            output.push_str(&line[..end]);
+            output.push_str("<!---->");
+            output.push_str(&line[end..]);
         } else if let Some(position) = block_marker(trimmed) {
             output.push_str(&line[..indent + position]);
             output.push('\\');
@@ -63,8 +83,19 @@ pub(super) fn protect_paragraph(rendered: String, context: InlineContext) -> Str
         } else {
             output.push_str(line);
         }
+        paragraph_start = trimmed.is_empty();
     }
     output
+}
+
+fn standalone_inline_tag(line: &str) -> bool {
+    let Some(name) = line.strip_prefix('<').and_then(|name| name.strip_suffix('>')) else {
+        return false;
+    };
+    matches!(
+        name.trim_start_matches('/'),
+        "br" | "code" | "del" | "em" | "strong" | "sub" | "sup" | "u"
+    )
 }
 
 fn block_marker(line: &str) -> Option<usize> {

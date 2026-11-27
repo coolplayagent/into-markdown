@@ -284,6 +284,8 @@ pub(super) fn remove_initial_transaction_with_external_lock(
 
 #[cfg(any(unix, windows))]
 pub(super) fn try_recovery_lock_handle(directory: &SafeDir) -> Result<Option<File>, CliError> {
+    #[cfg(windows)]
+    directory.verify_private_namespace()?;
     #[cfg(unix)]
     let lock = directory.open_regular(OsStr::new("transaction.lock"))?;
     #[cfg(windows)]
@@ -304,7 +306,10 @@ pub(super) fn try_recovery_lock_handle(directory: &SafeDir) -> Result<Option<Fil
                     .path
                     .parent()
                     .ok_or_else(|| recovery_error("transaction registry path is invalid"))?;
-                let registry = SafeDir::open_absolute(registry_path)?;
+                let root = registry_path
+                    .parent()
+                    .ok_or_else(|| recovery_error("transaction root is missing"))?;
+                let registry = SafeDir::open_absolute(registry_path)?.for_output_root(root);
                 registry.open_regular_private(&OsString::from(format!(
                     "{EXTERNAL_LOCK_PREFIX}{nonce}"
                 )))?
@@ -474,7 +479,7 @@ fn lock_registry_epoch_inner(
     create: bool,
     mut before_lock: impl FnMut(&SafeDir),
 ) -> Result<Option<RegistryEpochGuard>, CliError> {
-    for _ in 0..MAX_REGISTRY_EPOCH_RETRIES {
+    for attempt in 1..=MAX_REGISTRY_EPOCH_RETRIES {
         let observed_root = SafeDir::open_absolute(&root.path)?;
         if observed_root.identity != root.identity {
             return Err(recovery_error("transaction root identity changed before registry lock"));
@@ -482,7 +487,20 @@ fn lock_registry_epoch_inner(
         let Some(observed_registry) = transaction_registry(&observed_root, create)? else {
             return Ok(None);
         };
-        let Ok(lock) = open_or_create_registry_lock(&observed_registry) else { continue };
+        let lock = match open_or_create_registry_lock(&observed_registry) {
+            Ok(lock) => lock,
+            Err(error) if attempt == MAX_REGISTRY_EPOCH_RETRIES => {
+                return Err(CliError::new(
+                    ExitClass::Io,
+                    "transactionRegistryLock",
+                    format!(
+                        "cannot open output registry lock {}: {error}",
+                        observed_registry.path.join(REGISTRY_LOCK_NAME).display()
+                    ),
+                ));
+            }
+            Err(_) => continue,
+        };
         let observed_lock_identity = file_identity(&lock)?;
         before_lock(&observed_registry);
         lock.lock().map_err(|error| {
@@ -654,13 +672,14 @@ pub(super) fn transaction_registry(
 ) -> Result<Option<SafeDir>, CliError> {
     match root.open_child_optional(OsStr::new(REGISTRY_NAME))? {
         Some(directory) => {
+            let directory = directory.for_output_root(&root.path);
             directory.verify_private_namespace()?;
             Ok(Some(directory))
         }
         None if !create => Ok(None),
         None => {
             root.verify_namespace()?;
-            let creation = into_markdown_process_plugin::create_windows_plugin_store_directory(
+            let creation = into_markdown_process_plugin::create_windows_output_directory(
                 &root.path.join(REGISTRY_NAME),
             )
             .map_err(|error| {
@@ -676,11 +695,13 @@ pub(super) fn transaction_registry(
                     else {
                         return Err(error);
                     };
+                    let directory = directory.for_output_root(&root.path);
                     directory.verify_private_namespace()?;
                     return Ok(Some(directory));
                 }
             }
             let directory = root.open_child(OsStr::new(REGISTRY_NAME))?;
+            let directory = directory.for_output_root(&root.path);
             directory.verify_private_namespace()?;
             Ok(Some(directory))
         }

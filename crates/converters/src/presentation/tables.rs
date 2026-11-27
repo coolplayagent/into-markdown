@@ -1,5 +1,6 @@
 use super::error::limit;
 use super::model::{ParseState, PresentationCell};
+use super::text::ParagraphSource;
 use into_markdown_core::{
     Block, Cell, ConversionError, ConversionOptions, MAX_TABLE_COLUMNS, Rect, TableAlignment,
     TableRow,
@@ -45,29 +46,25 @@ pub(super) fn table_block(
         limit("max_memory_bytes", format!("cannot reserve table rows: {error}"))
     })?;
     let mut occupancy = vec![0_u32; width];
+    let source = ParagraphSource { part, slide, bounds, z_order, languages };
     for (row_index, row) in rows.into_iter().enumerate() {
         let mut cells = Vec::new();
         cells.try_reserve(row.len()).map_err(|error| {
             limit("max_memory_bytes", format!("cannot reserve table cells: {error}"))
         })?;
-        for cell in row {
+        for mut cell in row {
             if cell.horizontal_continuation || cell.vertical_continuation {
                 continue;
             }
-            state.add_inlines(cell.inlines.len())?;
-            let paragraph = state.node(
-                Block::Paragraph(cell.inlines),
-                part,
-                slide,
-                bounds,
-                Some(z_order),
-                Some(languages),
-            )?;
             let mut blocks = Vec::new();
-            blocks.try_reserve_exact(1).map_err(|error| {
-                limit("max_memory_bytes", format!("cannot reserve table cell block: {error}"))
+            blocks.try_reserve_exact(cell.paragraphs.len().max(1)).map_err(|error| {
+                limit("max_memory_bytes", format!("cannot reserve table cell blocks: {error}"))
             })?;
-            blocks.push(paragraph);
+            if cell.paragraphs.is_empty() {
+                blocks.push(source.node(state, Block::Paragraph(Vec::new()))?);
+            } else {
+                source.append_blocks(&mut cell.paragraphs, false, &mut blocks, state)?;
+            }
             cells.push(Cell {
                 row_span: cell.row_span,
                 column_span: cell.column_span,
@@ -85,14 +82,7 @@ pub(super) fn table_block(
             return Err(limit("max_table_columns", "merged table row exceeds its logical width"));
         }
         for _ in emitted_columns..width {
-            let paragraph = state.node(
-                Block::Paragraph(Vec::new()),
-                part,
-                slide,
-                bounds,
-                Some(z_order),
-                Some(languages),
-            )?;
+            let paragraph = source.node(state, Block::Paragraph(Vec::new()))?;
             cells.try_reserve(1).map_err(|error| {
                 limit("max_memory_bytes", format!("cannot reserve normalized table cell: {error}"))
             })?;

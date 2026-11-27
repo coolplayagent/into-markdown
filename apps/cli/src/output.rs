@@ -523,12 +523,25 @@ mod tests {
 
     #[test]
     fn spooled_primary_and_assets_publish_as_one_atomic_file_set() {
+        verify_spooled_output_set(false);
+        verify_spooled_output_set(true);
+    }
+
+    fn verify_spooled_output_set(without_scratch: bool) {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();
         let assets = root.join("assets");
         fs::create_dir(&assets).unwrap();
         let primary = root.join("document.md");
-        let context = output_context();
+        let context = if without_scratch {
+            ExecutionContext::new_with_temporary_directory(
+                Default::default(),
+                Default::default(),
+                root.join("missing"),
+            )
+        } else {
+            output_context()
+        };
         let result = empty_result();
         let mut spool = StructuredSpool::from_result(
             &result,

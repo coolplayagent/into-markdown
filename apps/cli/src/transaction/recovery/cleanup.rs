@@ -144,6 +144,8 @@ pub(super) fn validate_recovery_layout(
     validate_journal(root, directory, journal)?;
     #[cfg(any(unix, windows))]
     let directory_handle = SafeDir::open_absolute(directory)?;
+    #[cfg(windows)]
+    let directory_handle = directory_handle.for_output_root(root);
     #[cfg(any(unix, windows))]
     let root_handle = SafeDir::open_absolute(root)?;
     #[cfg(any(unix, windows))]

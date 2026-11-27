@@ -29,6 +29,7 @@ const activeTimers = new Set<ReturnType<typeof setTimeout>>();
 
 const testGroups = {
   preview: new Set([
+    "Markdown preview hides the empty HTML comment while preserving literal examples",
     "Markdown paragraphs distinguish soft breaks, hard breaks, and block boundaries",
     "Markdown preview never creates executable or resource-loading DOM",
     "Markdown native styles preserve nested text, escapes, and inert resources",
@@ -484,6 +485,21 @@ test("Markdown paragraphs distinguish soft breaks, hard breaks, and block bounda
   assert.equal(items[0]!.querySelectorAll("br").length, 1);
   assert.equal(window.document.querySelectorAll("td br").length, 1);
   assert.equal(window.document.querySelector("pre code")?.textContent, "code\nlines");
+});
+
+test("Markdown preview hides the empty HTML comment while preserving literal examples", async () => {
+  const window = installWindow(); const root = trackedRoot(window.document.getElementById("app")!);
+  const source = "<br><!---->\n**bold**!\n\n<u><!---->  \n!styled!</u> suffix\n\n\\<!----> and `<!---->`";
+  root.render(createElement(SafeMarkdownPreview, { source }));
+  await waitFor(() => window.document.querySelectorAll(".markdown-preview p").length === 3);
+  const [first, second, third] = Array.from(window.document.querySelectorAll(".markdown-preview p"));
+  assert.equal(first!.textContent, " bold!");
+  assert.equal(first!.querySelector("strong")?.textContent, "bold");
+  assert.equal(first!.querySelectorAll("br").length, 1);
+  assert.equal(second!.textContent, "!styled! suffix");
+  assert.equal(second!.querySelectorAll("u br").length, 1);
+  assert.equal(third!.textContent, "<!----> and <!---->");
+  assert.equal(third!.querySelector("code")?.textContent, "<!---->");
 });
 
 test("Markdown preview never creates executable or resource-loading DOM", async () => {

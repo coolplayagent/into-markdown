@@ -5,8 +5,41 @@ use super::super::schema::{A_NS, P_NS, REL_NS, REL_PREFIX, SEEN_CHILD_EXTENT, SE
 use super::super::text::plain_text;
 use super::support::{convert, convert_strict, fixture, rewrite_part};
 use into_markdown_core::{
-    Block, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions, ListKind,
+    Block, ConversionError, ConversionOptions, ExecutionContext, ExecutionOptions, Inline,
+    InlineMark, ListKind,
 };
+
+#[test]
+fn table_cell_keeps_paragraphs_breaks_and_lists_distinct() {
+    let original = fixture(
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
+        &[],
+    );
+    let slide = format!(
+        r#"<p:sld xmlns:p="{p}" xmlns:a="{a}"><p:cSld><p:spTree><p:graphicFrame><a:graphic><a:graphicData><a:tbl><a:tr><a:tc><a:txBody>
+        <a:p><a:r><a:t>one</a:t></a:r><a:r><a:rPr b="1"/><a:t>two</a:t></a:r><a:br/><a:r><a:t>three</a:t></a:r></a:p>
+        <a:p><a:r><a:t>four</a:t></a:r><a:br><a:rPr/></a:br></a:p>
+        <a:p><a:pPr><a:buChar char="•"/></a:pPr><a:r><a:t>item</a:t></a:r></a:p>
+        </a:txBody></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>"#,
+        p = String::from_utf8_lossy(P_NS),
+        a = String::from_utf8_lossy(A_NS),
+    );
+    let output =
+        convert(&rewrite_part(&original, "ppt/slides/slide1.xml", slide.as_bytes())).unwrap();
+    let Block::Slide { blocks, .. } = &output.document.blocks[0].block else { panic!() };
+    let Block::Table { rows, .. } = &blocks[0].block else { panic!() };
+    let content = &rows[0].cells[0].blocks;
+    assert_eq!(content.len(), 3);
+    assert!(matches!(&content[0].block, Block::Paragraph(v) if matches!(v.as_slice(),
+        [Inline::Text { value: one, marks: plain }, Inline::Text { value: two, marks: bold }, Inline::LineBreak, Inline::Text { value: three, .. }]
+        if one == "one" && plain.is_empty() && two == "two" && bold == &[InlineMark::Bold] && three == "three")));
+    assert!(
+        matches!(&content[1].block, Block::Paragraph(v) if matches!(v.as_slice(), [Inline::Text { value, .. }, Inline::LineBreak] if value == "four"))
+    );
+    assert!(matches!(&content[2].block, Block::List { items, .. } if items.len() == 1
+        && matches!(&items[0].blocks[0].block, Block::Paragraph(v) if plain_text(v).unwrap() == "item")));
+    output.document.validate().unwrap();
+}
 
 #[test]
 #[allow(clippy::too_many_lines)]

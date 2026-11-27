@@ -19,7 +19,7 @@ impl StructuredSpool {
             .as_ref()
             .ok_or_else(|| CliError::internal("provenance representation is absent"))?;
         destination.write_all(b"{\n  \"schemaVersion\": 1,\n  \"markdown\": ")?;
-        copy_spool(&self.context, &markdown_json.file, destination)?;
+        markdown_json.file.copy_to(&self.context, destination)?;
         destination.write_all(b",\n  \"document\": ")?;
         copy_spool_indented(&self.context, ir, destination, b"  ", true)?;
         destination.write_all(b"  \"assets\": [")?;
@@ -64,11 +64,8 @@ impl StructuredSpool {
             .payload_records
             .get(payload_index)
             .ok_or_else(|| CliError::internal("asset payload index is inconsistent"))?;
-        let mut reader = payload.file.as_file().map_err(CliError::from)?.try_clone()?;
-        reader.seek(SeekFrom::Start(0))?;
-        let mut limited = reader.take(payload.size);
         let mut encoder = base64::write::EncoderWriter::new(destination, &STANDARD);
-        copy_reader(&self.context, &mut limited, &mut encoder)?;
+        payload.file.copy_to(&self.context, &mut encoder)?;
         encoder.finish()?;
         Ok(())
     }
@@ -84,15 +81,12 @@ fn write_json_value<W: Write, T: Serialize + ?Sized>(
 
 fn copy_spool_indented<W: Write>(
     context: &ExecutionContext,
-    spool: &TemporaryFile,
+    spool: &ReplaySpool,
     destination: &mut W,
     indent: &[u8],
     trailing_comma: bool,
 ) -> Result<(), CliError> {
-    let mut reader = spool.as_file().map_err(CliError::from)?.try_clone()?;
-    reader.seek(SeekFrom::Start(0))?;
-    let length = reader.metadata()?.len().saturating_sub(1);
-    let mut reader = reader.take(length);
+    let mut reader = spool.reader()?.take(spool.len()?.saturating_sub(1));
     let _buffer_lease = context
         .reserve_memory(u64::try_from(COPY_BUFFER_BYTES).unwrap_or(u64::MAX))
         .map_err(CliError::from)?;

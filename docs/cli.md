@@ -134,8 +134,11 @@ into-md <INPUT...>
   本身失败则返回 `rollbackFailed` 并保留 journal/备份，`overwrite` 不产生新旧混合
   集合。stdout 的外部资源使用同一事务，先 stage，stdout 成功或 EPIPE 后提交；非
   EPIPE 失败不落资源，但已经写出的 stdout 字节无法撤回。跨文件系统、符号链接、
-  非 regular file 提前拒绝。安全输出事务当前在 Unix 可用；Windows 返回稳定
-  `componentUnavailable`，但路径规划与 bundle 编码仍可使用。
+  非 regular file 提前拒绝。Windows 工作区写入沙箱可直接使用 `-o`、`--output-dir` 和 `--report`。
+  输出事务目录 `.into-md-output-transactions-01` 位于输出目标的共同父目录下。
+  如果之前失败的运行留下无法加锁的私有目录，`transactionRegistryLock` 会给出锁路径和系统错误。
+  可指定新的输出目录和报告路径。复用原位置时，请先关闭活动转换，仅在确认该事务目录为空后由目录所有者移除；
+  含有 journal 或备份的目录应保留以供恢复。
 - CLI 先按 POSIX、Windows drive 或 UNC 语法对 Markdown 基准目录和资源目录做词法
   规范化，再在同一 root/drive/share 内生成相对 URI path reference；合法的同卷上级
   目录使用 `../`。不同 drive/share/root、drive-relative 路径或不完整 UNC 返回稳定
@@ -282,8 +285,9 @@ markdown-postprocess
   达到后保留已接纳 payload 并截断后续 payload。`strict` 在第一个同类错误处失败。
 - 源文件读取失败、加密、越界访问、共享内存无法容纳固定诊断或
   最终渲染、provider 崩溃/协议错误、取消、超时以及输出提交 I/O 保持终止。CLI 流式产物
-  在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM；
-  临时空间不足时 best-effort 保留引用并省略后续 payload，strict 失败。
+  在渲染后把资产 payload 暂存到受 `max_temporary_bytes` 计费的临时文件并释放对应 RAM。
+  临时目录不可写时，CLI 可以在 `max_memory_bytes` 内保留资产和报告，并将其提交到指定的可写输出目录。
+  使用文件暂存达到 `max_temporary_bytes` 时，best-effort 保留引用并省略后续 payload，strict 失败。
 - `--zip-charset` 只在 ZIP 缺少有效 Unicode Path extra field 和 UTF-8 标志时生效；支持
   `encoding_rs` 标签（包括 GB18030 与 Shift-JIS），未指定时使用 CP437。
 - `--timeout-ms` 是覆盖解析、检测、探测、转换、OCR、AI 与渲染的总时限；超时返回

@@ -64,7 +64,7 @@ pub(super) fn assemble_at(
     needs: InvocationCapabilities,
 ) -> Result<Services, CliError> {
     let context = ExecutionContext::new(execution.clone(), loaded.options.limits.clone());
-    assemble_with_context(loaded, &context, cwd, needs)
+    assemble_services(loaded, &context, cwd, needs, None)
 }
 
 pub(crate) fn assemble_with_context(
@@ -73,6 +73,16 @@ pub(crate) fn assemble_with_context(
     cwd: &Path,
     needs: InvocationCapabilities,
 ) -> Result<Services, CliError> {
+    assemble_services(loaded, context, cwd, needs, Some(context))
+}
+
+fn assemble_services(
+    loaded: &LoadedConfig,
+    context: &ExecutionContext,
+    cwd: &Path,
+    needs: InvocationCapabilities,
+    source: Option<&ExecutionContext>,
+) -> Result<Services, CliError> {
     context.checkpoint().map_err(CliError::from)?;
     let mut services = Services::default();
     if needs.ocr
@@ -80,7 +90,7 @@ pub(crate) fn assemble_with_context(
             || loaded.options.ai.vision_ocr != AiMode::Off
             || configured_route_is_active(&loaded.effective.capability_routes.ocr))
     {
-        match assemble_ocr(loaded, context, cwd) {
+        match assemble_ocr(loaded, context, cwd, source) {
             Ok(engine) => services.ocr = Some(engine),
             Err(error) if can_degrade_ocr(loaded.options.ocr.policy, &error) => {}
             Err(error) => return Err(CliError::from(error)),

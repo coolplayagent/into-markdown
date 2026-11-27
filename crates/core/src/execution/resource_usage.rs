@@ -2,6 +2,89 @@
 use super::*;
 
 impl ExecutionContext {
+    /// Whether this context already spends from an enclosing preflight credit.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn has_memory_credit(&self) -> bool {
+        self.memory_credit.is_some()
+    }
+
+    /// Borrow a same-context memory reservation as an SPI credit while
+    /// cancellation, deadline, progress, and temporary storage remain
+    /// request-scoped. The derived context cannot outlive or detach from the
+    /// authentic reservation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable internal error when the reservation is not a memory
+    /// charge from this exact context.
+    ///
+    /// The mutable borrow prevents one parent permit from backing concurrent
+    /// credits and statically prevents dropping the permit before its child:
+    ///
+    /// ```compile_fail
+    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
+    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    /// let mut permit = context.reserve_memory(1).unwrap();
+    /// let first = context.with_memory_credit(&mut permit).unwrap();
+    /// let second = context.with_memory_credit(&mut permit).unwrap();
+    /// let _ = (first, second);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
+    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    /// let mut permit = context.reserve_memory(1).unwrap();
+    /// let credit = context.with_memory_credit(&mut permit).unwrap();
+    /// drop(permit);
+    /// let _ = credit.reserve_memory(1);
+    /// ```
+    ///
+    /// ```compile_fail
+    /// # use into_markdown_core::{ExecutionContext, ExecutionOptions, ResourceLimits};
+    /// let context = ExecutionContext::new(ExecutionOptions::default(), ResourceLimits::default());
+    /// let forged = context.with_memory_credit(u64::MAX).unwrap();
+    /// # let _ = forged;
+    /// ```
+    #[doc(hidden)]
+    pub fn with_memory_credit<'a>(
+        &self,
+        reservation: &'a mut ResourceReservation,
+    ) -> Result<PreflightMemoryCredit<'a>, ConversionError> {
+        if !reservation.belongs_to_memory_context(self) {
+            return Err(ConversionError::Internal {
+                detail: "preflight credit requires an authentic same-context memory reservation"
+                    .into(),
+            });
+        }
+        // A reservation drawn from an outer credit is already charged to that parent.
+        // Promote it to a backing only if it is actually divided. Detached children retain
+        // the entire chain of charges until the last child releases its allocation.
+        let backing = reservation.memory_backing.get_or_insert_with(|| {
+            Arc::new(MemoryBacking {
+                shared: Arc::clone(&self.shared),
+                parent_credit: self.memory_credit.clone(),
+                bytes: AtomicU64::new(reservation.bytes),
+            })
+        });
+        if reservation.active_memory_credit.as_ref().and_then(Weak::upgrade).is_some() {
+            return Err(ConversionError::Internal {
+                detail: "preflight reservation already backs a live memory credit".into(),
+            });
+        }
+        let memory_credit =
+            Arc::new(MemoryCredit { backing: Arc::clone(backing), bytes: AtomicU64::new(0) });
+        reservation.active_memory_credit = Some(Arc::downgrade(&memory_credit));
+        Ok(PreflightMemoryCredit {
+            context: Self {
+                shared: Arc::clone(&self.shared),
+                memory_credit: Some(memory_credit),
+                ignore_request_controls: self.ignore_request_controls,
+            },
+            _reservation: reservation,
+        })
+    }
+
     /// Return the invocation-wide historical resource accounting shared with every fork.
     #[doc(hidden)]
     #[must_use]

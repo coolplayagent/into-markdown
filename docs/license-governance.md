@@ -28,6 +28,20 @@ The following files are projections or evidence and must agree with the componen
   metadata and requires both the dependency-kind partition and workspace-manifest set to match
   exactly. Bazel's `into-md` graph must consume that same normal
   authority through named production targets.
+- Windows portable Core embeds a separately linked OCR guest targeting
+  `wasm32-unknown-unknown`. Its `tools/ocr-wasm/Cargo.lock` is independent of
+  the host workspace. `third_party/licenses/ocr-wasm-inventory.json` pins
+  the guest manifest, lock, source archive checksums, crate licenses and
+  upstream notice sources. Hash the repository inventory, manifest, lock and notice text
+  as UTF-8 with LF line endings. Hash the downloaded crates and compiled WebAssembly
+  module byte for byte. The portable assembler adds the compiled module's
+  SHA-256, target dependencies and host build dependencies to the Windows
+  SBOM and source manifest before authenticating the archive. It includes
+  the complete upstream notices in the archive's `THIRD_PARTY_NOTICES.md`.
+  For an update, compare the locked Cargo tree for the guest target with
+  `--edges normal,no-proc-macro` (runtime) and `--edges normal,build`
+  (runtime and build). Verify upstream license files against the exact crate
+  archives or their recorded source revision.
 - `pnpm-lock.yaml`, `third_party/licenses/npm-inventory.json`, checked-in license texts, and the npm
   SPDX document describe console assets shipped by Bazel. Runtime packages are distributed Core
   components; build and test packages remain explicit non-distributed source records.
