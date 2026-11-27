@@ -3,15 +3,15 @@ use super::budget::{ASSET_INDEX_ENTRY_CHARGE, MAX_ASSET_DIGEST_CANDIDATES};
 use super::charts_notes::parse_chart_text;
 use super::error::{limit, malformed};
 use super::images::{PresentationImage, asset_digest, find_duplicate_asset};
-use super::model::{Package, ParseState, Relationships, Shape, TextParagraph};
+use super::model::{Package, ParseState, Relationships, Shape};
 use super::relationships::{relationship_by_id, require_content_type, resolve_target};
 use super::schema::{CHART_REL, IMAGE_REL};
 use super::shape_elements::shape_block_count;
 use super::tables::table_block;
+use super::text::ParagraphSource;
 use into_markdown_core::{
     Asset, AssetId, Block, BlockNode, ConversionError, ConversionOptions, Diagnostic,
-    DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, ListItem, ListKind, Rect,
-    SourceLocator,
+    DiagnosticSeverity, ErrorPolicy, ExecutionContext, Inline, Rect, SourceLocator,
 };
 use std::fmt::Write as _;
 use std::path::Path;
@@ -32,7 +32,7 @@ pub(super) fn shapes_to_blocks(
     result.try_reserve_exact(block_capacity).map_err(|error| {
         limit("max_memory_bytes", format!("cannot reserve slide blocks: {error}"))
     })?;
-    for shape in shapes {
+    for mut shape in shapes {
         context.checkpoint()?;
         let bounds = Some(shape.geometry.bounds()?);
         let z_order = shape.z_order;
@@ -282,35 +282,8 @@ pub(super) fn shapes_to_blocks(
                 table_block(rows, part, slide, bounds, z_order, &languages, options, state)?;
             result.push(state.node(table, part, slide, bounds, Some(z_order), Some(&languages))?);
         }
-        let mut paragraphs = shape.paragraphs;
-        let mut paragraph_index = 0_usize;
-        while paragraph_index < paragraphs.len() {
-            if !shape.title && paragraphs[paragraph_index].bullet.is_some() {
-                let level = paragraphs[paragraph_index].level;
-                result.push(build_list_level(
-                    &mut paragraphs,
-                    &mut paragraph_index,
-                    level,
-                    part,
-                    slide,
-                    bounds,
-                    z_order,
-                    &languages,
-                    state,
-                )?);
-                continue;
-            }
-            let paragraph = &mut paragraphs[paragraph_index];
-            state.add_inlines(paragraph.text.len())?;
-            let text = std::mem::take(&mut paragraph.text);
-            let block = if shape.title {
-                Block::Heading { level: 3, content: text }
-            } else {
-                Block::Paragraph(text)
-            };
-            result.push(state.node(block, part, slide, bounds, Some(z_order), Some(&languages))?);
-            paragraph_index += 1;
-        }
+        let source = ParagraphSource { part, slide, bounds, z_order, languages: &languages };
+        source.append_blocks(&mut shape.paragraphs, shape.title, &mut result, state)?;
     }
     Ok(result)
 }
@@ -384,109 +357,4 @@ fn push_omitted_image(
         Some(languages),
     )?);
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_list_level(
-    paragraphs: &mut [TextParagraph],
-    index: &mut usize,
-    level: u8,
-    part: &str,
-    slide: u32,
-    bounds: Option<Rect>,
-    z_order: usize,
-    languages: &[String],
-    state: &mut ParseState,
-) -> Result<BlockNode, ConversionError> {
-    let kind = paragraphs[*index]
-        .bullet
-        .ok_or_else(|| malformed(Some(part), "list builder started at a plain paragraph"))?;
-    let start = paragraphs[*index].start;
-    let mut items = Vec::<ListItem>::new();
-    while *index < paragraphs.len() {
-        let paragraph_level = paragraphs[*index].level;
-        let Some(paragraph_kind) = paragraphs[*index].bullet else { break };
-        if paragraph_level < level || (paragraph_level == level && paragraph_kind != kind) {
-            break;
-        }
-        if paragraph_level > level {
-            let last = items
-                .last_mut()
-                .ok_or_else(|| malformed(Some(part), "nested list lacks a parent item"))?;
-            let nested = build_list_level(
-                paragraphs,
-                index,
-                paragraph_level,
-                part,
-                slide,
-                bounds,
-                z_order,
-                languages,
-                state,
-            )?;
-            last.blocks.try_reserve(1).map_err(|error| {
-                limit("max_memory_bytes", format!("cannot reserve nested list: {error}"))
-            })?;
-            last.blocks.push(nested);
-            continue;
-        }
-        state.add_inlines(paragraphs[*index].text.len())?;
-        let text = std::mem::take(&mut paragraphs[*index].text);
-        let numbering = paragraphs[*index].numbering.take();
-        let paragraph = state.node(
-            Block::Paragraph(text),
-            part,
-            slide,
-            bounds,
-            Some(z_order),
-            Some(languages),
-        )?;
-        let mut blocks = Vec::new();
-        blocks.try_reserve_exact(2).map_err(|error| {
-            limit("max_memory_bytes", format!("cannot reserve list item blocks: {error}"))
-        })?;
-        blocks.push(paragraph);
-        items.try_reserve(1).map_err(|error| {
-            limit("max_memory_bytes", format!("cannot reserve list item: {error}"))
-        })?;
-        items.push(ListItem {
-            checked: None,
-            marker_label: Some(list_marker(level, kind, numbering.as_deref())?),
-            blocks,
-        });
-        *index += 1;
-    }
-    state.node(
-        Block::List { kind, start, items },
-        part,
-        slide,
-        bounds,
-        Some(z_order),
-        Some(languages),
-    )
-}
-
-fn list_marker(
-    level: u8,
-    kind: ListKind,
-    numbering: Option<&str>,
-) -> Result<String, ConversionError> {
-    let capacity = 8_usize
-        .checked_add(numbering.map_or(0, |value| value.len().saturating_add(8)))
-        .ok_or_else(|| limit("max_memory_bytes", "list marker capacity overflow"))?;
-    let mut marker = String::new();
-    marker.try_reserve_exact(capacity).map_err(|error| {
-        limit("max_memory_bytes", format!("cannot reserve list marker: {error}"))
-    })?;
-    write!(marker, "level:{level}")
-        .map_err(|_| malformed(None, "cannot format list level marker"))?;
-    if let Some(numbering) = numbering {
-        marker.push_str(match kind {
-            ListKind::Bullet => ";character:",
-            ListKind::Ordered => ";scheme:",
-            ListKind::Task => ";marker:",
-        });
-        marker.push_str(numbering);
-    }
-    Ok(marker)
 }

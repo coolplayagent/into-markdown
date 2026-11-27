@@ -10,7 +10,6 @@ use super::shape_elements::{
     mark_semantic_once, marks_for_style, parse_rich_style, record_language,
     reject_merged_table_cell,
 };
-use super::text::trim_breaks;
 use super::xml::{XmlProfile, preflight_xml};
 use super::xml_base::{local, optional_xml_bool, required_attr_ns};
 use crate::docx::{decode_cdata, decode_reference, decode_text};
@@ -194,14 +193,12 @@ pub(super) fn parse_shapes(
                         paragraph_default_properties_seen = false;
                         paragraph_default_marks.clear();
                         paragraph_default_style = RichStyle::default();
-                        if cell.is_none() {
-                            let current = shape.as_mut().expect("present");
-                            current.level = 0;
-                            current.bullet = None;
-                            current.paragraph_explicit = 0;
-                            current.list_start = 1;
-                            current.numbering = None;
-                        }
+                        let current = shape.as_mut().expect("present");
+                        current.level = 0;
+                        current.bullet = None;
+                        current.paragraph_explicit = 0;
+                        current.list_start = 1;
+                        current.numbering = None;
                     }
                     paragraph_depth = paragraph_depth.saturating_add(1);
                 }
@@ -378,11 +375,7 @@ pub(super) fn parse_shapes(
                 }
                 "br" if shape.is_some() => {
                     add_parsed_inline(&mut parsed_inlines)?;
-                    let destination = if let Some(cell) = cell.as_mut() {
-                        &mut cell.inlines
-                    } else {
-                        &mut shape.as_mut().expect("present").text
-                    };
+                    let destination = &mut shape.as_mut().expect("present").text;
                     destination.try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve line break: {error}"))
                     })?;
@@ -485,40 +478,21 @@ pub(super) fn parse_shapes(
                     inline_marks.extend_from_slice(&marks);
                     let inline =
                         Inline::Text { value: std::mem::take(&mut text), marks: inline_marks };
-                    if let Some(cell) = cell.as_mut() {
-                        cell.inlines.try_reserve(1).map_err(|error| {
-                            limit(
-                                "max_memory_bytes",
-                                format!("cannot reserve table inline: {error}"),
-                            )
+                    let current = shape.as_mut().expect("present");
+                    current.text.try_reserve(1).map_err(|error| {
+                        limit("max_memory_bytes", format!("cannot reserve shape inline: {error}"))
+                    })?;
+                    current.text.push(inline);
+                    if cell.is_none() {
+                        current.run_styles.try_reserve(1).map_err(|error| {
+                            limit("max_memory_bytes", format!("cannot reserve run style: {error}"))
                         })?;
-                        cell.inlines.push(inline);
-                    } else {
-                        shape.as_mut().expect("present").text.try_reserve(1).map_err(|error| {
-                            limit(
-                                "max_memory_bytes",
-                                format!("cannot reserve shape inline: {error}"),
-                            )
-                        })?;
-                        shape.as_mut().expect("present").text.push(inline);
-                        shape.as_mut().expect("present").run_styles.try_reserve(1).map_err(
-                            |error| {
-                                limit(
-                                    "max_memory_bytes",
-                                    format!("cannot reserve run style: {error}"),
-                                )
-                            },
-                        )?;
-                        shape.as_mut().expect("present").run_styles.push(run_style);
+                        current.run_styles.push(run_style);
                     }
                 }
                 "br" if shape.is_some() && run_container == Some(3) => {
                     add_parsed_inline(&mut parsed_inlines)?;
-                    let destination = if let Some(cell) = cell.as_mut() {
-                        &mut cell.inlines
-                    } else {
-                        &mut shape.as_mut().expect("present").text
-                    };
+                    let destination = &mut shape.as_mut().expect("present").text;
                     destination.try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve line break: {error}"))
                     })?;
@@ -540,23 +514,8 @@ pub(super) fn parse_shapes(
                     paragraph_depth = paragraph_depth.checked_sub(1).ok_or_else(|| {
                         malformed(Some(part), "paragraph end without paragraph start")
                     })?;
-                    if let Some(cell) = cell.as_mut() {
-                        if paragraph_depth != 0 || !cell.inlines.is_empty() {
-                            add_parsed_inline(&mut parsed_inlines)?;
-                            cell.inlines.try_reserve(1).map_err(|error| {
-                                limit(
-                                    "max_memory_bytes",
-                                    format!("cannot reserve table line break: {error}"),
-                                )
-                            })?;
-                            cell.inlines.push(Inline::LineBreak);
-                        }
-                    } else if paragraph_depth == 0 {
+                    if paragraph_depth == 0 {
                         let current = shape.as_mut().expect("present");
-                        trim_breaks(&mut current.text);
-                        while current.run_styles.len() > current.text.len() {
-                            current.run_styles.pop();
-                        }
                         let retain_style =
                             matches!(profile, XmlProfile::Layout | XmlProfile::Master)
                                 && (current.bullet.is_some()
@@ -565,19 +524,23 @@ pub(super) fn parse_shapes(
                                     || !paragraph_default_marks.is_empty()
                                     || !paragraph_default_style.is_absent());
                         if !current.text.is_empty() || retain_style {
-                            if current.paragraphs.len() >= MAX_DOCUMENT_NODES {
+                            let paragraphs = match cell.as_mut() {
+                                Some(cell) => &mut cell.paragraphs,
+                                None => &mut current.paragraphs,
+                            };
+                            if paragraphs.len() >= MAX_DOCUMENT_NODES {
                                 return Err(limit(
                                     "max_document_nodes",
                                     "shape paragraph count exceeds IR budget",
                                 ));
                             }
-                            current.paragraphs.try_reserve(1).map_err(|error| {
+                            paragraphs.try_reserve(1).map_err(|error| {
                                 limit(
                                     "max_memory_bytes",
                                     format!("cannot reserve text paragraph: {error}"),
                                 )
                             })?;
-                            current.paragraphs.push(TextParagraph {
+                            paragraphs.push(TextParagraph {
                                 text: std::mem::take(&mut current.text),
                                 default_marks: std::mem::take(&mut paragraph_default_marks),
                                 default_style: paragraph_default_style,
@@ -605,7 +568,6 @@ pub(super) fn parse_shapes(
                             "table cell without a text body was preserved as empty",
                         )?;
                     }
-                    trim_breaks(&mut cell.as_mut().expect("cell present").inlines);
                     row.as_mut().expect("row present").try_reserve(1).map_err(|error| {
                         limit("max_memory_bytes", format!("cannot reserve table cell: {error}"))
                     })?;
@@ -726,7 +688,7 @@ fn presentation_cell(
         return Err(malformed(Some(part), "table spans must be positive"));
     }
     Ok(PresentationCell {
-        inlines: Vec::new(),
+        paragraphs: Vec::new(),
         row_span,
         column_span,
         horizontal_continuation: optional_xml_bool(element, "hMerge", part)?.unwrap_or(false),

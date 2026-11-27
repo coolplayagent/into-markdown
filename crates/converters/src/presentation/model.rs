@@ -201,7 +201,7 @@ pub(super) struct Shape {
 
 #[derive(Default)]
 pub(super) struct PresentationCell {
-    pub(super) inlines: Vec<Inline>,
+    pub(super) paragraphs: Vec<TextParagraph>,
     pub(super) row_span: u32,
     pub(super) column_span: u32,
     pub(super) horizontal_continuation: bool,

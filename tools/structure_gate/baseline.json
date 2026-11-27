@@ -1190,14 +1190,10 @@
       "functions": [
         {
           "symbol": "shapes_to_blocks",
-          "lines": 292
+          "lines": 265
         }
       ],
       "allowances": [
-        {
-          "key": "item|build_list_level|too_many_arguments",
-          "count": 1
-        },
         {
           "key": "item|push_omitted_image|too_many_arguments",
           "count": 1
@@ -1250,7 +1246,7 @@
       "functions": [
         {
           "symbol": "parse_shapes",
-          "lines": 599
+          "lines": 562
         }
       ],
       "allowances": [
@@ -1282,7 +1278,7 @@
       "functions": [
         {
           "symbol": "table_block",
-          "lines": 126
+          "lines": 115
         }
       ],
       "allowances": [

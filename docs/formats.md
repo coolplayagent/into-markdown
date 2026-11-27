@@ -248,6 +248,7 @@ EMF/WMF 只产生安全降级诊断。object、objdata、filetbl、datastore、f
 
 PPTX、PPTM、PPSX、PPSM 与 POTX 共用严格的离线 OPC/PresentationML 转换器。幻灯片标题、
 文本框、富文本、列表、表格、PNG/JPEG、图表缓存文字与 speaker notes 进入统一 Document IR。
+文本框和表格单元格中的 `a:p` 保留源段落和列表边界。`a:br` 保留为段落内的显式换行，包括段末的换行。
 EMF 图片通过扩展名、内容类型和记录边界校验后保留原始字节，Markdown 提供原图链接。
 有效的 `EMR_EXTTEXTOUTW` 记录以原始 Unicode 文字呈现在链接旁，保留对应幻灯片和图形位置。
 使用字体字形编号的记录保存在原图中。
